@@ -20151,7 +20151,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
-      const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
+      const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 60)));
       const args = [location.id];
       const where = ["c.is_active=true", "c.location_id=$1"];
       if (search) {
@@ -21265,8 +21265,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
           OR COALESCE(m.gender,'') ILIKE ${pattern}
+          OR COALESCE(b.name,'') ILIKE ${pattern}
+          OR COALESCE(c.name_ro,'') ILIKE ${pattern}
+          OR COALESCE(c.name_hu,'') ILIKE ${pattern}
+          OR COALESCE(subc.name_ro,'') ILIKE ${pattern}
+          OR COALESCE(subc.name_hu,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
+          OR COALESCE(v.color_name,'') ILIKE ${pattern}
+          OR COALESCE(v.color_code,'') ILIKE ${pattern}
+          OR COALESCE(v.size,'') ILIKE ${pattern}
         )`);
         orderPrefix = `CASE
           WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
@@ -21361,7 +21369,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
-      const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 600)));
+      const full = ["1", "true", "yes", "all"].includes(text(req.query.full || req.query.all).toLowerCase());
+      const limit = Math.min(10000, Math.max(1, Number(req.query.limit || 600)));
       const args = [location.id];
       const where = [
         `s.location_id=$1`,
@@ -21379,13 +21388,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
           OR COALESCE(m.gender,'') ILIKE ${pattern}
+          OR COALESCE(b.name,'') ILIKE ${pattern}
+          OR COALESCE(c.name_ro,'') ILIKE ${pattern}
+          OR COALESCE(c.name_hu,'') ILIKE ${pattern}
+          OR COALESCE(subc.name_ro,'') ILIKE ${pattern}
+          OR COALESCE(subc.name_hu,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
           OR COALESCE(v.color_name,'') ILIKE ${pattern}
+          OR COALESCE(v.color_code,'') ILIKE ${pattern}
           OR COALESCE(v.size,'') ILIKE ${pattern}
         )`);
       }
-      args.push(limit);
+      let limitSql = "";
+      if (!full) {
+        args.push(limit);
+        limitSql = `LIMIT $${args.length}`;
+      }
 
       const [summaryResult, itemResult] = await Promise.all([
         pool.query(
@@ -21445,7 +21464,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              lower(COALESCE(m.title_ro,m.shopify_title,m.model_code,'')) ASC,
              lower(COALESCE(v.color_name,'')) ASC,
              lower(COALESCE(v.size,'')) ASC
-           LIMIT $${args.length}`,
+           ${limitSql}`,
           args
         ),
       ]);
@@ -21486,6 +21505,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         },
         items,
         count: items.length,
+        complete: full,
       });
     } catch (error) {
       console.error("AIF shop stock overview failed", error);
