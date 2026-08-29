@@ -2657,7 +2657,7 @@ export default function AllInReceptions(_props: Props) {
 
                 <div className="hidden xl:block">
                   <div className="p-2.5">
-                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(0,2.65fr)_56px_minmax(132px,0.68fr)_48px_116px_124px_102px] items-center gap-2 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] uppercase tracking-[0.065em] text-white/[0.70] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(390px,2.2fr)_54px_126px_46px_104px_112px_106px_118px_98px] items-center gap-1.5 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] font-normal uppercase tracking-[0.055em] text-white/[0.74] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                       <span className="text-center">✓</span>
                       <span className="text-center">Sor</span>
                       <span>Termék / azonosítók</span>
@@ -2665,7 +2665,9 @@ export default function AllInReceptions(_props: Props) {
                       <span>Szín</span>
                       <span className="text-center">Db</span>
                       <span className="text-right">Vételár / db</span>
-                      <span className="text-right">Eladási ár / db <span className="ml-1 normal-case tracking-normal text-[#8fe9e5]/[0.65]">TVA {salesTvaShort(salesTvaSettings)}</span></span>
+                      <span className="text-right text-[#dffefd]">Vételár össz.</span>
+                      <span className="text-right">Eladási ár / db</span>
+                      <span className="text-right text-[#aef5f1]">Eladási érték <span className="block text-[8px] normal-case tracking-normal text-[#8fe9e5]/70">TVA {salesTvaShort(salesTvaSettings)}</span></span>
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
 
@@ -2705,7 +2707,7 @@ export default function AllInReceptions(_props: Props) {
                         return (
                           <article
                             key={r.id}
-                            className={`relative grid min-h-[92px] grid-cols-[32px_44px_minmax(0,2.65fr)_56px_minmax(132px,0.68fr)_48px_116px_124px_102px] items-center gap-2 border-b border-white/[0.10] px-3 py-2.5 transition-colors last:border-b-0 ${rowTone}`}
+                            className={`relative grid min-h-[88px] grid-cols-[32px_44px_minmax(390px,2.2fr)_54px_126px_46px_104px_112px_106px_118px_98px] items-center gap-1.5 border-b border-white/[0.10] px-3 py-2.5 transition-colors last:border-b-0 ${rowTone}`}
                           >
                             <span className={`absolute inset-y-0 left-0 w-[3px] ${r.status === "committed" ? "bg-[#2a8d8b]" : hasRowError ? "bg-rose-400" : checked ? "bg-[#7bd7d4]" : "bg-transparent"}`} />
 
@@ -2831,30 +2833,40 @@ export default function AllInReceptions(_props: Props) {
                             <div className="min-w-0">
                               <div className="relative">
                                 <input
-                                  className="h-9 w-full rounded-lg border border-white/[0.14] bg-[#263a4e] pr-9 pl-2 text-right text-[12px] tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.48] focus:ring-1 focus:ring-[#7bd7d4]/[0.14] disabled:opacity-100"
+                                  className="h-9 w-full rounded-lg border border-white/[0.14] bg-[#263a4e] pr-8 pl-2 text-right text-[12px] tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.48] focus:ring-1 focus:ring-[#7bd7d4]/[0.14] disabled:opacity-100"
                                   value={String(draft.buyPrice ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)}
+                                  title="Vételár darabonként"
                                 />
-                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-white/[0.50]">{sourceCurrency}</span>
+                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.03em] text-white/[0.48]">{sourceCurrency}</span>
                               </div>
-                              <div className="mt-1.5 text-right leading-tight">
-                                <p className="text-[11px] tabular-nums text-white/[0.82]">{rowQty || 0} db = {money(buyLineTotal, sourceCurrency)}</p>
-                                {showBuyConversion ? <p className="mt-0.5 text-[10px] tabular-nums text-[#d9fffd]/[0.70]">≈ {money(buyLineTotalRon, "RON")}</p> : null}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex min-h-9 items-center justify-end rounded-lg border border-white/[0.14] bg-[#20384b] px-2 text-right text-[13px] tabular-nums text-[#f4ffff]">
+                                {money(buyLineTotal, sourceCurrency)}
                               </div>
+                              {showBuyConversion ? <p className="mt-1 text-right text-[9px] tabular-nums text-[#d9fffd]/[0.68]">≈ {money(buyLineTotalRon, "RON")}</p> : null}
                             </div>
 
                             <div className="min-w-0">
                               <div className="relative">
                                 <input
-                                  className="h-9 w-full rounded-lg border border-[#8ee6e2]/[0.28] bg-[#285159] pr-9 pl-2 text-right text-[12px] tabular-nums text-[#f0ffff] outline-none focus:border-[#7bd7d4]/[0.58] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
+                                  className="h-9 w-full rounded-lg border border-[#8ee6e2]/[0.22] bg-[#285159] pr-8 pl-2 text-right text-[12px] tabular-nums text-[#f0ffff] outline-none focus:border-[#7bd7d4]/[0.58] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
                                   value={String(draft.sellPrice ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowSellPrice(r.id, e.target.value)}
+                                  title="Eladási ár darabonként"
                                 />
-                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-[#d9fffd]/[0.62]">RON</span>
+                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.03em] text-[#d9fffd]/[0.60]">RON</span>
                               </div>
-                              <p className="mt-1.5 text-right text-[11px] leading-tight tabular-nums text-[#e6fffd]/[0.84]">{rowQty || 0} db = {money(sellLineTotalRon, "RON")}</p>
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex min-h-9 items-center justify-end rounded-lg border border-[#7bd7d4]/[0.30] bg-[#236169] px-2 text-right text-[13px] tabular-nums text-[#f1ffff]">
+                                {money(sellLineTotalRon, "RON")}
+                              </div>
                             </div>
 
                             <div className="flex items-center justify-end gap-1">
@@ -2950,9 +2962,21 @@ export default function AllInReceptions(_props: Props) {
                             </div>
                             <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
                           </div>
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            <label className={rowLabel}>Vételár / db<div className="relative mt-1"><input className={`${rowCompactInput} pr-10 text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-white/34">{sourceCurrency}</span></div><span className="mt-1 text-right text-[11px] normal-case tracking-normal text-white/80">{rowQty || 0} db = {money(buyLineTotal, sourceCurrency)}</span>{showBuyConversion ? <span className="mt-0.5 text-right text-[10px] normal-case tracking-normal text-[#cffffd]/62">≈ {money(buyLineTotalRon, "RON")}</span> : null}</label>
-                            <label className={rowLabel}>Eladási ár / db<div className="relative mt-1"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/45">RON</span></div><span className="mt-1 text-right text-[11px] normal-case tracking-normal text-[#e6fffd]/82">{rowQty || 0} db = {money(sellLineTotalRon, "RON")}</span><span className="mt-0.5 text-right text-[9px] normal-case tracking-normal text-[#cffffd]/46">TVA {salesTvaShort(salesTvaSettings)}</span></label>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            <div className="rounded-xl border border-white/[0.08] bg-[#2b4054] p-2.5">
+                              <p className="text-[10px] uppercase tracking-[0.06em] text-white/58">Vételár</p>
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <label className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46">Darabár<div className="relative"><input className={`${rowCompactInput} pr-10 text-right text-[12px]`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-white/42">{sourceCurrency}</span></div></label>
+                                <div className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46"><span>Összesen</span><div className="flex h-8 items-center justify-end rounded-lg border border-white/[0.12] bg-[#20384b] px-2 text-[12px] normal-case tabular-nums tracking-normal text-white">{money(buyLineTotal, sourceCurrency)}</div>{showBuyConversion ? <span className="text-right text-[9px] normal-case tracking-normal text-[#cffffd]/62">≈ {money(buyLineTotalRon, "RON")}</span> : null}</div>
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-[#7bd7d4]/[0.14] bg-[#2c4d59] p-2.5">
+                              <p className="text-[10px] uppercase tracking-[0.06em] text-[#d9fffd]/72">Eladás <span className="normal-case tracking-normal text-[#8fe9e5]/60">TVA {salesTvaShort(salesTvaSettings)}</span></p>
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <label className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46">Darabár<div className="relative"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right text-[12px]`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/50">RON</span></div></label>
+                                <div className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46"><span>Összesen</span><div className="flex h-8 items-center justify-end rounded-lg border border-[#7bd7d4]/[0.26] bg-[#236169] px-2 text-[12px] normal-case tabular-nums tracking-normal text-[#f1ffff]">{money(sellLineTotalRon, "RON")}</div></div>
+                              </div>
+                            </div>
                           </div>
                           <div className="mt-3 flex justify-end gap-1.5 border-t border-white/[0.06] pt-3">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
