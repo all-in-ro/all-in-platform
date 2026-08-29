@@ -103,6 +103,8 @@ function normalizeGender(value?: string | null) {
   if (["women", "woman", "female", "femei", "femeie", "noi", "no", "dama"].includes(compact)) return "women";
   if (["men", "man", "male", "barbati", "barbat", "ferfi", "ffi"].includes(compact)) return "men";
   if (["kids", "kid", "copii", "copil", "gyerek", "junior", "youth", "children"].includes(compact)) return "kids";
+  if (["boy", "boys", "baiat", "baieti", "kisfiu"].includes(compact)) return "boys";
+  if (["girl", "girls", "fata", "fete", "kislany"].includes(compact)) return "girls";
   if (["unisex", "universal", "mixt", "mixed"].includes(compact)) return "unisex";
   return compact || "unisex";
 }
@@ -111,6 +113,8 @@ function genderLabel(value: string) {
   if (value === "women") return "Női";
   if (value === "men") return "Férfi";
   if (value === "kids") return "Gyerek";
+  if (value === "boys") return "Kisfiú";
+  if (value === "girls") return "Kislány";
   if (value === "unisex") return "Unisex";
   return value || "Nincs megadva";
 }
@@ -143,6 +147,20 @@ function applyProductFilters<T extends AifShopSaleCatalogItem>(items: T[], filte
     const value = productFilterValue(item, key).toLocaleLowerCase("hu-HU");
     return selected.some((candidate) => candidate.toLocaleLowerCase("hu-HU") === value);
   }));
+}
+
+function productMatchesOtherFilters(
+  item: AifShopSaleCatalogItem,
+  filters: ProductFilters,
+  exceptKey: ProductFilterKey,
+) {
+  return FILTER_META.every(({ key }) => {
+    if (key === exceptKey) return true;
+    const selected = filters[key];
+    if (!selected.length) return true;
+    const value = productFilterValue(item, key).toLocaleLowerCase("hu-HU");
+    return selected.some((candidate) => candidate.toLocaleLowerCase("hu-HU") === value);
+  });
 }
 
 function TouchFilterBar({
@@ -214,6 +232,11 @@ function TouchFilterBar({
           <div className="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {options[openKey].map((value) => {
               const selected = filters[openKey].some((item) => item.toLocaleLowerCase("hu-HU") === value.toLocaleLowerCase("hu-HU"));
+              const normalizedValue = value.toLocaleLowerCase("hu-HU");
+              const optionCount = items.reduce((count, item) => {
+                if (!productMatchesOtherFilters(item, filters, openKey)) return count;
+                return productFilterValue(item, openKey).toLocaleLowerCase("hu-HU") === normalizedValue ? count + 1 : count;
+              }, 0);
               return (
                 <button
                   key={value}
@@ -226,7 +249,12 @@ function TouchFilterBar({
                   }`}
                 >
                   <span className="truncate">{openKey === "gender" ? genderLabel(value) : value}</span>
-                  {selected ? <Check size={17} className="shrink-0" /> : null}
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="inline-flex min-w-7 items-center justify-center rounded-full border border-white/15 bg-black/10 px-2 py-0.5 text-[10px] text-white/70">
+                      {optionCount}
+                    </span>
+                    {selected ? <Check size={17} className="shrink-0" /> : null}
+                  </span>
                 </button>
               );
             })}
@@ -532,7 +560,7 @@ export default function AllInShopOperations({
     setSearchRan(true);
     setError("");
     try {
-      const response = await apiAifShopSaleCatalog({ location: locationCode, search: query, limit: 150 });
+      const response = await apiAifShopSaleCatalog({ location: locationCode, search: query, limit: 5000 });
       const exact = (response.items || []).filter((item) => exactCatalogMatch(item, query));
       setSearchItems(exact.length === 1 ? exact : response.items || []);
     } catch (caught) {
@@ -550,7 +578,7 @@ export default function AllInShopOperations({
       const response = await apiAifShopStockOverview({
         location: locationCode,
         search: value.trim() || undefined,
-        limit: 1000,
+        full: true,
       });
       setStockData(response);
     } catch (caught) {
@@ -993,12 +1021,29 @@ export default function AllInShopOperations({
               </div>
 
               {stockItems.length ? (
-                <TouchFilterBar
-                  items={stockItems}
-                  filters={productFilters}
-                  onToggle={toggleProductFilter}
-                  onClear={clearProductFilters}
-                />
+                <>
+                  <TouchFilterBar
+                    items={stockItems}
+                    filters={productFilters}
+                    onToggle={toggleProductFilter}
+                    onClear={clearProductFilters}
+                  />
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-white/52">
+                    <span>
+                      <strong className="font-normal text-[#d7fffd]">{filteredStockItems.length}</strong>
+                      {stockQuery.trim() ? " találat" : " készletes variáns"}
+                      {filteredStockItems.length !== stockItems.length ? ` • ${stockItems.length} betöltött találatból` : ""}
+                    </span>
+                    <span>
+                      Teljes eladható üzleti készlet: <strong className="font-normal text-white">{stockSummary.variantCount} variáns</strong>
+                    </span>
+                  </div>
+                  {!stockQuery.trim() && stockData?.complete === true && stockItems.length !== numberValue(stockSummary.variantCount) ? (
+                    <div className="mt-2 rounded-xl border border-red-300/45 bg-red-600/18 px-3 py-2 text-xs text-red-50">
+                      Figyelem: a szerver {stockSummary.variantCount} készletes variánst jelez, de csak {stockItems.length} érkezett vissza. A lista nem teljes.
+                    </div>
+                  ) : null}
+                </>
               ) : null}
 
               {stockLoading && !stockData ? <div className="flex min-h-[380px] items-center justify-center gap-3 text-white/55"><Loader2 className="animate-spin" /> Készlet betöltése…</div> : (
