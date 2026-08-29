@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   History,
   Loader2,
@@ -38,6 +40,90 @@ function currentMonth() {
   } catch {
     return new Date().toISOString().slice(0, 7);
   }
+}
+
+const HU_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+
+function HungarianMonthPicker({ value, onChange, ariaLabel }: { value: string; onChange: (value: string) => void; ariaLabel: string }) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  const initialYear = match ? Number(match[1]) : new Date().getFullYear();
+  const [open, setOpen] = useState(false);
+  const [yearMode, setYearMode] = useState(false);
+  const [year, setYear] = useState(initialYear);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const currentYear = Number(currentMonth().slice(0, 4));
+  const yearChoices = Array.from({ length: 16 }, (_, index) => currentYear + 1 - index);
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(360, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    if (roomBelow < 350 && roomAbove > roomBelow) setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    else setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = String(value || "").match(/^(\d{4})-(\d{2})$/);
+    if (current) setYear(Number(current[1]));
+    setYearMode(false);
+    updatePosition();
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const selectedMonth = match ? Number(match[2]) - 1 : -1;
+  const selectedYear = match ? Number(match[1]) : -1;
+  const label = match ? `${match[1]}. ${HU_MONTHS[Number(match[2]) - 1]}` : "Hónap választása";
+
+  return (
+    <>
+      <button ref={triggerRef} type="button" aria-label={ariaLabel} onClick={() => { if (!open) updatePosition(); setOpen((current) => !current); }} className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition ${open ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14" : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"}`}>
+        <span className="flex min-w-0 items-center gap-2.5"><CalendarDays size={16} className="shrink-0 text-[#8fe9e5]" /><span className="truncate">{label}</span></span><ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && position ? createPortal(
+        <div ref={menuRef} className="fixed z-[1140] overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl" style={{ left: position.left, width: position.width, top: position.top, bottom: position.bottom }}>
+          <div className="flex items-center justify-between rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button type="button" onClick={() => setYear((current) => current - 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18"><ChevronLeft size={17} /></button>
+            <button type="button" onClick={() => setYearMode((current) => !current)} className={`min-w-[150px] rounded-lg border px-3 py-1.5 text-sm font-medium transition ${yearMode ? "border-[#8ce7e2]/42 bg-[#2a8d8b]/24" : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"}`}>{year}</button>
+            <button type="button" onClick={() => setYear((current) => current + 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18"><ChevronRight size={17} /></button>
+          </div>
+          {yearMode ? (
+            <div className="mt-3 grid grid-cols-4 gap-1.5">{yearChoices.map((candidate) => <button key={candidate} type="button" onClick={() => { setYear(candidate); setYearMode(false); }} className={`h-10 rounded-lg border text-xs transition ${candidate === year ? "border-[#bff8f5]/60 bg-[#2a8d8b] text-white" : "border-white/8 bg-[#2e3b4f] text-white/76 hover:border-[#7bd7d4]/28 hover:bg-[#3a4a61]"}`}>{candidate}</button>)}</div>
+          ) : (
+            <div className="mt-3 grid grid-cols-3 gap-2">{HU_MONTHS.map((monthName, index) => { const active = selectedYear === year && selectedMonth === index; return <button key={monthName} type="button" onClick={() => { onChange(`${year}-${String(index + 1).padStart(2, "0")}`); setOpen(false); }} className={`min-h-12 rounded-xl border px-2 text-xs transition ${active ? "border-[#bff8f5]/60 bg-[#2a8d8b] text-white" : "border-white/8 bg-[#2e3b4f] text-white/76 hover:border-[#7bd7d4]/28 hover:bg-[#3a4a61] hover:text-white"}`}>{monthName}</button>; })}</div>
+          )}
+          <p className="mt-3 border-t border-white/8 pt-3 text-[10px] text-white/40">Az évszámra kattintva közvetlenül választhatsz évet.</p>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
 }
 
 function formatDateTime(value?: string | null) {
@@ -198,7 +284,16 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
             <div>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Havi visszanézés</p><h3 className="mt-1 text-lg">Mikor milyen áru érkezett?</h3></div>
-                <div className="flex gap-2"><input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293548] px-3" /><button onClick={() => void loadHistory(month)} className="h-11 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm">Betöltés</button></div>
+                <div className="w-full sm:w-[300px]">
+                  <HungarianMonthPicker
+                    value={month}
+                    onChange={(value) => {
+                      setMonth(value);
+                      void loadHistory(value);
+                    }}
+                    ariaLabel="Beérkezési előzmény hónapja"
+                  />
+                </div>
               </div>
               {loading ? <Loading /> : groupedHistory.length ? (
                 <div className="space-y-3">
