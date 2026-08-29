@@ -2897,6 +2897,7 @@ export type AifShopStockOverviewItem = AifShopSaleCatalogItem & {
 export type AifShopStockOverviewResponse = {
   ok: true;
   location: { id: string; code: string; name: string };
+  complete?: boolean;
   summary: {
     variantCount: number;
     totalQty: number;
@@ -2913,11 +2914,13 @@ export function apiAifShopStockOverview(options: {
   location: string;
   search?: string;
   limit?: number;
+  full?: boolean;
 }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   if (options.search?.trim()) q.set("q", options.search.trim());
-  q.set("limit", String(options.limit || 600));
+  if (options.full) q.set("full", "1");
+  else q.set("limit", String(options.limit || 600));
   return fetchAifJSON<AifShopStockOverviewResponse>(`/shop-operations/stock?${q.toString()}`);
 }
 
