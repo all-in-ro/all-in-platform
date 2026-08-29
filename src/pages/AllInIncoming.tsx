@@ -60,6 +60,7 @@ import {
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
   apiAifListImportBatches,
+  apiAifListLegacyImports,
   apiAifMeta,
   apiAifGetSalesTvaSettings,
   apiAifSaveSalesTvaSettings,
@@ -1884,14 +1885,70 @@ function importBarcodeConflictMessage(conflicts: AifImportBarcodeConflict[]) {
 }
 
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
+const AIF_LEGACY_ACTIVE_MIGRATION_KEY = "allinfashion:legacy-import:active:v1";
 
 function legacyImportModeRequested() {
   if (typeof window === "undefined") return false;
   try { return window.sessionStorage.getItem(AIF_LEGACY_IMPORT_MODE_KEY) === "1"; } catch { return false; }
 }
 
+function AllInLegacyImportAutoload() {
+  const [ready, setReady] = useState(false);
+  const [autoloadError, setAutoloadError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const response = await apiAifListLegacyImports(20);
+        const history = response.items || [];
+        let stored = "";
+        try { stored = window.sessionStorage.getItem(AIF_LEGACY_ACTIVE_MIGRATION_KEY) || ""; } catch {}
+
+        const storedStillExists = Boolean(stored && history.some((item) => String(item.id) === String(stored)));
+        const latest = history.find((item) => String(item.status || "").toLowerCase() !== "cancelled") || history[0];
+
+        if (!storedStillExists && latest?.id) {
+          try { window.sessionStorage.setItem(AIF_LEGACY_ACTIVE_MIGRATION_KEY, String(latest.id)); } catch {}
+        } else if (!storedStillExists && !latest?.id) {
+          try { window.sessionStorage.removeItem(AIF_LEGACY_ACTIVE_MIGRATION_KEY); } catch {}
+        }
+      } catch (error: any) {
+        if (alive) setAutoloadError(error?.message || "A legutóbbi régi rendszer import nem tölthető be automatikusan.");
+      } finally {
+        if (alive) setReady(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  if (!ready) {
+    return (
+      <main className={page}>
+        <div className={wrap}>
+          <div className="rounded-[22px] border border-[#9be9e5]/20 bg-[#303b4d] px-4 py-6 text-center text-sm text-white/72 shadow-lg">
+            <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-[#8fe9e5]" />
+            Legutóbbi régi rendszer import megnyitása…
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <>
+      {autoloadError ? (
+        <div className="fixed left-1/2 top-3 z-[2100] w-[min(92vw,720px)] -translate-x-1/2 rounded-xl border border-amber-200/30 bg-[#3d3542]/95 px-3 py-2 text-sm text-amber-50 shadow-2xl backdrop-blur">
+          {autoloadError}
+        </div>
+      ) : null}
+      <AllInLegacyImport />
+    </>
+  );
+}
+
 export default function AllInIncoming(props: Props) {
-  return legacyImportModeRequested() ? <AllInLegacyImport /> : <AllInIncomingReception {...props} />;
+  return legacyImportModeRequested() ? <AllInLegacyImportAutoload /> : <AllInIncomingReception {...props} />;
 }
 
 function AllInIncomingReception(_props: Props) {
