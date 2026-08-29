@@ -150,6 +150,13 @@ function prettyDate(value: string) {
   return date.toLocaleDateString("hu-HU", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 }
 
+function receivedByLabel(value?: string | null) {
+  const raw = String(value || "").trim();
+  if (!raw) return "–";
+  if (raw.toUpperCase() === "LEGACY_BACKFILL") return "Korábban átvéve";
+  return raw;
+}
+
 export default function AllInShopIncoming({ open, actor, locationCode, locationName, onClose }: Props) {
   const [mode, setMode] = useState<Mode>("waiting");
   const [items, setItems] = useState<AifShopIncomingDocument[]>([]);
@@ -458,7 +465,7 @@ function IncomingDocument({
                   </p>
                   {line.received ? (
                     <p className="mt-2 text-xs text-emerald-100">
-                      Átvette: {line.receivedBy || "–"} • {formatDateTime(line.receivedAt)}
+                      Átvette: {receivedByLabel(line.receivedBy)} • {formatDateTime(line.receivedAt)}
                     </p>
                   ) : (
                     <p className="mt-2 text-xs text-white/42">{line.qty} db érkezik</p>
@@ -506,7 +513,7 @@ function IncomingDocument({
 }
 
 function HistoryRow({ item }: { item: AifShopIncomingHistoryItem }) {
-  return <div className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{item.product.imageUrl ? <img src={item.product.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{item.product.title}</p><p className="mt-1 text-[11px] text-white/48">{[item.product.brandName,item.product.colorName,item.product.size,item.product.productCode].filter(Boolean).join(" • ")}</p><p className="mt-1 text-[11px] text-[#d7fffd]">{item.document.documentNumber} • {item.document.sourceName} → {item.document.targetName}</p></div><div className="text-right"><p className="text-lg text-[#d7fffd]">{item.qty} db</p><p className="text-[11px] text-white/45">{formatDateTime(item.receivedAt)}</p><p className="mt-1 text-[10px] text-white/42">{item.receivedBy || "–"}</p></div></div>;
+  return <div className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{item.product.imageUrl ? <img src={item.product.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{item.product.title}</p><p className="mt-1 text-[11px] text-white/48">{[item.product.brandName,item.product.colorName,item.product.size,item.product.productCode].filter(Boolean).join(" • ")}</p><p className="mt-1 text-[11px] text-[#d7fffd]">{item.document.documentNumber} • {item.document.sourceName} → {item.document.targetName}</p></div><div className="text-right"><p className="text-lg text-[#d7fffd]">{item.qty} db</p><p className="text-[11px] text-white/45">{formatDateTime(item.receivedAt)}</p><p className="mt-1 text-[10px] text-white/42">{receivedByLabel(item.receivedBy)}</p></div></div>;
 }
 
 function Loading() {
