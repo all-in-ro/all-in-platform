@@ -2618,8 +2618,8 @@ export default function AllInReceptions(_props: Props) {
                       <span className="text-center">Méret</span>
                       <span>Szín</span>
                       <span className="text-center">Db</span>
-                      <span className="text-right">Vételár</span>
-                      <span className="text-right">Eladási ár <span className="ml-1 normal-case tracking-normal text-[#8fe9e5]/[0.65]">TVA {salesTvaShort(salesTvaSettings)}</span></span>
+                      <span className="text-right">Vételár / db</span>
+                      <span className="text-right">Eladási ár / db <span className="ml-1 normal-case tracking-normal text-[#8fe9e5]/[0.65]">TVA {salesTvaShort(salesTvaSettings)}</span></span>
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
 
@@ -2631,7 +2631,13 @@ export default function AllInReceptions(_props: Props) {
                         const checked = canCommitOrMove && selectedRows.has(r.id);
                         const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                         const sourceCurrency = String(receptionDraft.currencyCode || detail.item.currency_code || "RON").toUpperCase() || "RON";
-                        const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
+                        const rowQty = n(draft.qty ?? r.qty ?? r.normalized?.qty);
+                        const buyUnitPrice = n(draft.buyPrice ?? r.buy_price);
+                        const buyLineTotal = rowQty * buyUnitPrice;
+                        const buyPriceRonPreview = buyUnitPrice * exchangeRate;
+                        const buyLineTotalRon = buyLineTotal * exchangeRate;
+                        const sellUnitPriceRon = rowSellGrossPriceRon(r, draft, salesTvaSettings);
+                        const sellLineTotalRon = rowQty * sellUnitPriceRon;
                         const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
                         const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                         const resolvedColorName = receptionResolvedColorName(r, draft, meta);
@@ -2687,40 +2693,44 @@ export default function AllInReceptions(_props: Props) {
 
                             <div className="min-w-0 pr-1">
                               <input
-                                className="h-8 w-full min-w-0 border-0 bg-transparent px-0 text-[14px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
+                                className="h-8 w-full min-w-0 border-0 bg-transparent px-0 text-[15px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
                                 value={String(draft.titleRo ?? "")}
                                 disabled={!editable}
                                 onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
                                 title={String(draft.titleRo ?? "")}
                                 placeholder="Terméknév"
                               />
-                              <div className="mt-1.5 flex min-w-0 items-center gap-2.5 overflow-hidden text-[11px] leading-none">
-                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#aaf5f1]/[0.72]">Kód</span>
-                                <input
-                                  className="w-[102px] min-w-0 border-0 bg-transparent p-0 text-[12px] text-white/[0.95] outline-none focus:text-white disabled:opacity-100"
-                                  value={String(draft.supplierProductCode ?? "")}
-                                  disabled={!editable}
-                                  onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
-                                  title={String(draft.supplierProductCode ?? "")}
-                                />
-                                <span className="h-3 w-px shrink-0 bg-white/[0.11]" />
-                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#aaf5f1]/[0.72]">S/N</span>
-                                <input
-                                  className="w-[86px] min-w-0 border-0 bg-transparent p-0 font-mono text-[12px] text-white/[0.95] outline-none focus:text-white disabled:opacity-100"
-                                  value={String(draft.snCod ?? draft.sn_cod ?? "")}
-                                  disabled={!editable}
-                                  onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
-                                  title={String(draft.snCod ?? draft.sn_cod ?? "")}
-                                />
-                                <span className="h-3 w-px shrink-0 bg-white/[0.11]" />
-                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#b8faf7]/[0.82]">EAN</span>
-                                <input
-                                  className="min-w-[128px] flex-1 border-0 bg-transparent p-0 font-mono text-[11px] tracking-[0.012em] text-[#e3fffd] outline-none focus:text-white disabled:opacity-100"
-                                  value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
-                                  disabled={!editable}
-                                  onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
-                                  title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
-                                />
+                              <div className="mt-2 grid min-w-0 grid-cols-[minmax(0,1.05fr)_minmax(0,0.85fr)_minmax(0,1.35fr)] gap-3">
+                                <label className="flex min-w-0 items-center gap-2 border-r border-white/[0.10] pr-3">
+                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#aaf5f1]/[0.78]">Kód</span>
+                                  <input
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[13px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
+                                    value={String(draft.supplierProductCode ?? "")}
+                                    disabled={!editable}
+                                    onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
+                                    title={String(draft.supplierProductCode ?? "")}
+                                  />
+                                </label>
+                                <label className="flex min-w-0 items-center gap-2 border-r border-white/[0.10] pr-3">
+                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#aaf5f1]/[0.78]">S/N</span>
+                                  <input
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
+                                    value={String(draft.snCod ?? draft.sn_cod ?? "")}
+                                    disabled={!editable}
+                                    onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
+                                    title={String(draft.snCod ?? draft.sn_cod ?? "")}
+                                  />
+                                </label>
+                                <label className="flex min-w-0 items-center gap-2">
+                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#b8faf7]/[0.90]">EAN</span>
+                                  <input
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] tracking-[0.018em] text-[#eaffff] outline-none focus:text-white disabled:opacity-100"
+                                    value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
+                                    disabled={!editable}
+                                    onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
+                                    title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
+                                  />
+                                </label>
                               </div>
                             </div>
 
@@ -2778,9 +2788,10 @@ export default function AllInReceptions(_props: Props) {
                                 />
                                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-white/[0.50]">{sourceCurrency}</span>
                               </div>
-                              {showBuyConversion ? (
-                                <p className="mt-1 text-right text-[10px] tabular-nums text-[#d9fffd]/[0.68]">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p>
-                              ) : null}
+                              <div className="mt-1.5 text-right leading-tight">
+                                <p className="text-[11px] tabular-nums text-white/[0.82]">{rowQty || 0} db = {money(buyLineTotal, sourceCurrency)}</p>
+                                {showBuyConversion ? <p className="mt-0.5 text-[10px] tabular-nums text-[#d9fffd]/[0.70]">≈ {money(buyLineTotalRon, "RON")}</p> : null}
+                              </div>
                             </div>
 
                             <div className="min-w-0">
@@ -2793,6 +2804,7 @@ export default function AllInReceptions(_props: Props) {
                                 />
                                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-[#d9fffd]/[0.62]">RON</span>
                               </div>
+                              <p className="mt-1.5 text-right text-[11px] leading-tight tabular-nums text-[#e6fffd]/[0.84]">{rowQty || 0} db = {money(sellLineTotalRon, "RON")}</p>
                             </div>
 
                             <div className="flex items-center justify-end gap-1">
@@ -2840,7 +2852,12 @@ export default function AllInReceptions(_props: Props) {
                     const checked = canCommitOrMove && selectedRows.has(r.id);
                     const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                     const sourceCurrency = String(receptionDraft.currencyCode || detail.item.currency_code || "RON").toUpperCase() || "RON";
-                    const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
+                    const rowQty = n(draft.qty ?? r.qty ?? r.normalized?.qty);
+                    const buyUnitPrice = n(draft.buyPrice ?? r.buy_price);
+                    const buyLineTotal = rowQty * buyUnitPrice;
+                    const buyPriceRonPreview = buyUnitPrice * exchangeRate;
+                    const buyLineTotalRon = buyLineTotal * exchangeRate;
+                    const sellLineTotalRon = rowQty * rowSellGrossPriceRon(r, draft, salesTvaSettings);
                     const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
                     const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                     const resolvedColorName = receptionResolvedColorName(r, draft, meta);
@@ -2862,7 +2879,7 @@ export default function AllInReceptions(_props: Props) {
                               ["EAN", String(draft.barcode ?? receptionRowBarcode(r) ?? ""), "barcode", true],
                             ].map(([labelText, fieldValue, key, mono]) => (
                               <label key={String(key)} className="rounded-xl border border-white/[0.06] bg-[#2b4054] px-2.5 py-2">
-                                <span className="text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/48">{labelText}</span>
+                                <span className="text-[10px] uppercase tracking-[0.08em] text-[#b8faf7]/72">{labelText}</span>
                                 <input className={`mt-1 w-full bg-transparent text-[12px] text-white/92 outline-none ${mono ? "font-mono" : ""}`} value={String(fieldValue)} disabled={!editable} onChange={(e) => updateRowDraft(r.id, String(key), e.target.value)} />
                               </label>
                             ))}
@@ -2880,8 +2897,8 @@ export default function AllInReceptions(_props: Props) {
                             <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
                           </div>
                           <div className="mt-3 grid grid-cols-2 gap-2">
-                            <label className={rowLabel}>Vételár<div className="relative mt-1"><input className={`${rowCompactInput} pr-10 text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-white/34">{sourceCurrency}</span></div>{showBuyConversion ? <span className="mt-1 text-right text-[9px] text-[#cffffd]/46">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span> : null}</label>
-                            <label className={rowLabel}>Eladási ár<div className="relative mt-1"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/45">RON</span></div><span className="mt-1 text-right text-[9px] text-[#cffffd]/46">TVA {salesTvaShort(salesTvaSettings)}</span></label>
+                            <label className={rowLabel}>Vételár / db<div className="relative mt-1"><input className={`${rowCompactInput} pr-10 text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-white/34">{sourceCurrency}</span></div><span className="mt-1 text-right text-[11px] normal-case tracking-normal text-white/80">{rowQty || 0} db = {money(buyLineTotal, sourceCurrency)}</span>{showBuyConversion ? <span className="mt-0.5 text-right text-[10px] normal-case tracking-normal text-[#cffffd]/62">≈ {money(buyLineTotalRon, "RON")}</span> : null}</label>
+                            <label className={rowLabel}>Eladási ár / db<div className="relative mt-1"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/45">RON</span></div><span className="mt-1 text-right text-[11px] normal-case tracking-normal text-[#e6fffd]/82">{rowQty || 0} db = {money(sellLineTotalRon, "RON")}</span><span className="mt-0.5 text-right text-[9px] normal-case tracking-normal text-[#cffffd]/46">TVA {salesTvaShort(salesTvaSettings)}</span></label>
                           </div>
                           <div className="mt-3 flex justify-end gap-1.5 border-t border-white/[0.06] pt-3">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
