@@ -9,13 +9,13 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle,
-  Download,
   Eye,
   FileText,
   RefreshCw,
   Save,
   Search,
   MoveRight,
+  MoreVertical,
   Trash2,
   X,
 } from "lucide-react";
@@ -32,7 +32,6 @@ import {
   apiAifMoveImportRow,
   apiAifUpdateReception,
   apiAifUpdateImportRow,
-  apiAifReceptionExportCsvUrl,
 } from "../lib/aif/api";
 
 type Props = { onLogout?: () => void };
@@ -201,7 +200,6 @@ const primaryBtn = `${btnBase} border-[#2a8d8b]/55 bg-[#2a8d8b] text-white hover
 const neutralBtn = `${btnBase} border-white/15 bg-white/[0.08] text-white hover:bg-[#404a5b]/[0.12]`;
 const dangerBtn = `${btnBase} border-red-500 bg-red-600 text-white hover:bg-red-500`;
 const tinyBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-[#404a5b]/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tinyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-500 bg-red-600 px-2.5 text-[11px] text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const statCard = "rounded-2xl border border-white/12 bg-white/[0.06] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const lightPanel = "rounded-2xl border border-white/14 bg-[#404a5b] p-4 text-white shadow-lg";
 const lightLabel = "grid gap-1.5 text-xs text-white/70 font-normal";
@@ -341,6 +339,124 @@ function SmartSelect({
         document.body,
       ) : null}
     </div>
+  );
+}
+
+function ReceptionActionsMenu({
+  disabled = false,
+  canDelete,
+  onVerification,
+  onPdf,
+  onDelete,
+}: {
+  disabled?: boolean;
+  canDelete: boolean;
+  onVerification: () => void;
+  onPdf: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const node = triggerRef.current;
+    if (!node || typeof window === "undefined") return;
+    const rect = node.getBoundingClientRect();
+    const edge = 8;
+    const gap = 6;
+    const width = 190;
+    const estimatedHeight = 148;
+    const left = Math.max(edge, Math.min(rect.right - width, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUpward = roomBelow < estimatedHeight + gap && rect.top > roomBelow;
+    setPosition(openUpward
+      ? { left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) }
+      : { left, width, top: rect.bottom + gap });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  const run = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="További műveletek"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition ${
+          open
+            ? "border-[#8fe9e5]/55 bg-[#2a8d8b] text-white"
+            : "border-white/16 bg-white/[0.08] text-white/78 hover:bg-[#465264]"
+        } disabled:cursor-not-allowed disabled:opacity-45`}
+        title="További műveletek"
+      >
+        <MoreVertical size={16} />
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          className="overflow-hidden rounded-xl border border-[#7bd7d4]/42 bg-[#26364c] p-1.5 shadow-[0_18px_46px_rgba(2,6,23,0.64)] ring-1 ring-white/[0.04]"
+          style={{ position: "fixed", zIndex: 930, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+        >
+          <button type="button" role="menuitem" onClick={() => run(onVerification)} className="flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs text-white/90 transition hover:bg-[#415064]">
+            <CheckCircle size={15} className="text-[#8fe9e5]" /> Ellenőrző
+          </button>
+          <button type="button" role="menuitem" onClick={() => run(onPdf)} className="flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs text-white/90 transition hover:bg-[#415064]">
+            <FileText size={15} className="text-[#8fe9e5]" /> PDF
+          </button>
+          <div className="my-1 border-t border-white/10" />
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!canDelete}
+            onClick={() => run(onDelete)}
+            className="flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs text-rose-100 transition hover:bg-rose-500/14 disabled:cursor-not-allowed disabled:opacity-35"
+            title={canDelete ? "Receptió törlése" : "Ez a receptió már nem törölhető"}
+          >
+            <Trash2 size={15} /> Törlés
+          </button>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -551,6 +667,24 @@ function cell(v: unknown) {
   return s || "-";
 }
 
+function supplierDisplayName(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  return raw
+    .replace(/\s*-\s*Besz[aá]ll[ií]t[oó]\s*$/i, "")
+    .replace(/\s*-\s*Forgalmaz[oó]\s*$/i, "")
+    .trim() || raw;
+}
+
+function receptionNetInvoiceValue(item: any) {
+  const gross = n(item?.invoice_gross);
+  const rate = n(item?.tva_rate);
+  const mode = String(item?.tva_mode || "no_tva").toLowerCase();
+  if (gross <= 0 || rate <= 0 || mode === "no_tva") return gross;
+  const factor = 1 + rate / 100;
+  return factor > 0 ? gross / factor : gross;
+}
+
 function statusText(s?: string | null) {
   const v = String(s || "").toLowerCase();
   if (v === "draft") return "Vázlat";
@@ -748,10 +882,6 @@ function SectionTitle(props: { title: string; icon?: React.ReactNode; right?: Re
       {props.right}
     </div>
   );
-}
-
-function exportCsv(id: string) {
-  window.open(apiAifReceptionExportCsvUrl(id), "_blank", "noopener,noreferrer");
 }
 
 function pdfEscape(v: unknown) {
@@ -2037,18 +2167,30 @@ export default function AllInReceptions(_props: Props) {
           <SectionTitle title="Receptió lista" right={<span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-xs text-white/62">{items.length} találat</span>} />
           <div className="overflow-hidden">
             <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-full text-left text-xs">
-                <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72 [&_th]:font-normal">
+              <table className="w-full table-fixed text-left text-xs">
+                <colgroup>
+                  <col className="w-[11%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[5%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[10%]" />
+                </colgroup>
+                <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
                     <th className="px-2 py-1.5">UIT kód</th>
                     <th className="px-2 py-1.5">Beszállító</th>
-                    <th className="px-2 py-1.5">Beszerzési rendelés</th>
-                    <th className="px-2 py-1.5">Cél hely</th>
-                    <th className="px-2 py-1.5">Dátum</th>
-                    <th className="px-2 py-1.5">Pénznem</th>
+                    <th className="px-2 py-1.5 text-center">Cél hely</th>
+                    <th className="px-2 py-1.5 text-center">Dátum</th>
+                    <th className="px-2 py-1.5 text-center">Pénznem</th>
+                    <th className="px-2 py-1.5 text-right">Nettó érték</th>
                     <th className="px-2 py-1.5 text-right">Végösszeg</th>
-                    <th className="px-2 py-1.5 text-right">Sorszám</th>
                     <th className="px-2 py-1.5 text-right">Darab</th>
                     <th className="px-2 py-1.5">Állapot</th>
                     <th className="px-2 py-1.5 text-right">Művelet</th>
@@ -2057,29 +2199,31 @@ export default function AllInReceptions(_props: Props) {
                 <tbody className="divide-y divide-white/10 bg-transparent">
                   {items.map((r) => (
                     <tr key={r.id} className="hover:bg-white/[0.04]">
-                      <td className="px-3 py-2 text-white">{cell(r.invoice_number)}</td>
-                      <td className="px-2 py-1.5 font-mono text-[11px] text-[#cffffd]">{cell((r as any).uit_code || (r as any).uitCode)}</td>
-                      <td className="px-2 py-1.5 text-white/82">{cell(r.supplier_name)}</td>
-                      <td className="px-2 py-1.5 text-white/82">{r.purchase_order_id ? <button className="rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button> : <span className="text-white/35">-</span>}</td>
-                      <td className="px-2 py-1.5 text-white/82">{cell(r.location_name)}</td>
-                      <td className="px-2 py-1.5 text-white/82">{dateText(r.reception_date)}</td>
-                      <td className="px-2 py-1.5 text-white/82">{cell(r.currency_code)}</td>
-                      <td className="px-3 py-2 text-right text-white">{money(r.invoice_gross, r.currency_code)}</td>
-                      <td className="px-3 py-2 text-right text-white/82">{r.line_count || 0}</td>
-                      <td className="px-3 py-2 text-right text-white/82">{r.total_qty || 0}</td>
-                      <td className="px-2 py-1.5 text-white/82">{statusText(r.status)}</td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex justify-end gap-1.5">
+                      <td className="px-2 py-2 text-white"><span className="block truncate whitespace-nowrap" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
+                      <td className="px-2 py-2 font-mono text-[11px] text-[#cffffd]"><span className="block truncate whitespace-nowrap" title={cell((r as any).uit_code || (r as any).uitCode)}>{cell((r as any).uit_code || (r as any).uitCode)}</span></td>
+                      <td className="px-2 py-2 text-white/82"><span className="block truncate whitespace-nowrap" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span></td>
+                      <td className="px-2 py-2 text-center text-white/82"><span className="block truncate whitespace-nowrap" title={cell(r.location_name)}>{cell(r.location_name)}</span></td>
+                      <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-white/82">{dateText(r.reception_date)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-center text-white/82">{cell(r.currency_code)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{money(receptionNetInvoiceValue(r), r.currency_code)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white">{money(r.invoice_gross, r.currency_code)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{r.total_qty || 0}</td>
+                      <td className="px-2 py-2 text-white/82"><span className="block truncate whitespace-nowrap" title={statusText(r.status)}>{statusText(r.status)}</span></td>
+                      <td className="px-2 py-2">
+                        <div className="flex items-center justify-end gap-1.5">
                           <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
-                          <button className={tinyBtn} onClick={() => exportReceptionVerificationPdf(r.id)} disabled={busy} type="button"><CheckCircle size={13} /> Ellenőrző</button>
-                          <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
-                          <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
-                          <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
+                          <ReceptionActionsMenu
+                            disabled={busy}
+                            canDelete={Boolean(r.can_delete)}
+                            onVerification={() => void exportReceptionVerificationPdf(r.id)}
+                            onPdf={() => void exportReceptionPdf(r.id)}
+                            onDelete={() => setDeleteTarget(r)}
+                          />
                         </div>
                       </td>
                     </tr>
                   ))}
-                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={12}>Nincs receptió a megadott szűrés szerint.</td></tr>}
+                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={11}>Nincs receptió a megadott szűrés szerint.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -2090,23 +2234,25 @@ export default function AllInReceptions(_props: Props) {
                     <div>
                       <p className="text-xs text-white">{cell(r.invoice_number)}</p>
                       {(r as any).uit_code || (r as any).uitCode ? <p className="mt-1 font-mono text-[11px] text-[#cffffd]">UIT: {String((r as any).uit_code || (r as any).uitCode)}</p> : null}
-                      <p className="mt-1 text-xs text-white/62">{cell(r.supplier_name)} • {cell(r.location_name)}</p>
-                      {r.purchase_order_id && <button className="mt-2 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button>}
+                      <p className="mt-1 text-xs text-white/62">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
                     <span className="rounded-full border border-[#2a8d8b]/40 bg-[#2a8d8b]/10 px-2 py-1 text-xs text-white">{statusText(r.status)}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Dátum</p><p>{dateText(r.reception_date)}</p></div>
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Érték</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Sorszám</p><p>{r.line_count || 0}</p></div>
+                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
+                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="mt-2 flex items-center justify-end gap-2">
                     <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
-                    <button className={tinyBtn} onClick={() => exportReceptionVerificationPdf(r.id)} disabled={busy} type="button"><CheckCircle size={13} /> Ellenőrző</button>
-                    <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
-                          <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
-                    <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
+                    <ReceptionActionsMenu
+                      disabled={busy}
+                      canDelete={Boolean(r.can_delete)}
+                      onVerification={() => void exportReceptionVerificationPdf(r.id)}
+                      onPdf={() => void exportReceptionPdf(r.id)}
+                      onDelete={() => setDeleteTarget(r)}
+                    />
                   </div>
                 </div>
               ))}
@@ -2132,14 +2278,13 @@ export default function AllInReceptions(_props: Props) {
               <div className="flex gap-2">
                 <button className={neutralBtn} onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button"><CheckCircle size={15} /> Ellenőrző PDF</button>
                 <button className={neutralBtn} onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button"><FileText size={15} /> PDF</button>
-                <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> CSV</button>
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-3 px-3 pt-3 pb-6">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">UIT kód</p><p className="mt-0.5 truncate font-mono text-xs text-[#cffffd]" title={String((detail.item as any).uit_code || (detail.item as any).uitCode || "")}>{cell((detail.item as any).uit_code || (detail.item as any).uitCode)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.supplier_name)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{supplierDisplayName(detail.item.supplier_name)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszerzési rendelés</p>{detail.item.purchase_order_id ? <button className="mt-1 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(detail.item.purchase_order_id)} type="button">{detail.item.purchase_order_number || "Kapcsolt rendelés"}</button> : <p className="mt-0.5 text-xs text-white/40">-</p>}</div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Pénznem</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.currency_code)}</p></div>
@@ -2740,7 +2885,7 @@ export default function AllInReceptions(_props: Props) {
                   return {
                     value: r.id,
                     disabled: isCurrent,
-                    label: `${cell(r.invoice_number)} • ${cell(r.supplier_name)} • ${dateText(r.reception_date)} • ${stateLabel}`,
+                    label: `${cell(r.invoice_number)} • ${supplierDisplayName(r.supplier_name)} • ${dateText(r.reception_date)} • ${stateLabel}`,
                   };
                 })}
               />
@@ -2779,7 +2924,7 @@ export default function AllInReceptions(_props: Props) {
             <h2 className="text-base text-white font-normal">Receptió törlése</h2>
             <p className="mt-2 text-sm text-white/76">A törlés a receptióhoz tartozó mentett import sorokat is eltávolítja, ha még nem történt készletre vétel.</p>
             <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
-              {cell(deleteTarget.invoice_number)} • {cell(deleteTarget.supplier_name)} • {money(deleteTarget.invoice_gross, deleteTarget.currency_code)}
+              {cell(deleteTarget.invoice_number)} • {supplierDisplayName(deleteTarget.supplier_name)} • {money(deleteTarget.invoice_gross, deleteTarget.currency_code)}
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button className={neutralBtn} onClick={() => setDeleteTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
