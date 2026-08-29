@@ -70,6 +70,7 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
   const [history, setHistory] = useState<AifShopIncomingHistoryItem[]>([]);
   const [month, setMonth] = useState(currentMonth());
   const [expandedHistoryDate, setExpandedHistoryDate] = useState<string | null>(null);
+  const [expandedDocumentId, setExpandedDocumentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
@@ -81,6 +82,7 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
     setError("");
     setSuccess("");
     setExpandedHistoryDate(null);
+    setExpandedDocumentId(null);
     void loadWaiting();
   }, [open, locationCode]);
 
@@ -101,7 +103,11 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
     setError("");
     try {
       const response = await apiAifShopIncoming({ location: locationCode });
-      setItems(response.items || []);
+      const nextItems = response.items || [];
+      setItems(nextItems);
+      setExpandedDocumentId((current) =>
+        current && nextItems.some((item) => item.id === current) ? current : null,
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A beérkező áru nem tölthető be.");
     } finally {
@@ -177,8 +183,8 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => { setMode("waiting"); void loadWaiting(); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${mode === "waiting" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"}`}><Truck size={15} /> Érkezésre vár</button>
-            <button type="button" onClick={() => { setMode("history"); void loadHistory(); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${mode === "history" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"}`}><History size={15} /> Beérkezési előzmény</button>
+            <button type="button" onClick={() => { setMode("waiting"); setExpandedDocumentId(null); void loadWaiting(); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${mode === "waiting" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"}`}><Truck size={15} /> Érkezésre vár</button>
+            <button type="button" onClick={() => { setMode("history"); setExpandedDocumentId(null); void loadHistory(); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${mode === "history" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"}`}><History size={15} /> Beérkezési előzmény</button>
             <button type="button" onClick={() => mode === "waiting" ? void loadWaiting() : void loadHistory()} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05]"><RefreshCw size={16} /></button>
             <button type="button" onClick={onClose} disabled={Boolean(busyKey)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-50"><X size={18} /></button>
           </div>
@@ -226,7 +232,19 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
               ) : <Empty text="Ebben a hónapban még nincs rögzített átvétel." />}
             </div>
           ) : loading ? <Loading /> : items.length ? (
-            <div className="space-y-4">{items.map((document) => <IncomingDocument key={document.id} document={document} busyKey={busyKey} onReceiveLine={receiveLine} onReceiveAll={receiveAll} />)}</div>
+            <div className="space-y-3">
+              {items.map((document) => (
+                <IncomingDocument
+                  key={document.id}
+                  document={document}
+                  expanded={expandedDocumentId === document.id}
+                  busyKey={busyKey}
+                  onToggle={() => setExpandedDocumentId((current) => current === document.id ? null : document.id)}
+                  onReceiveLine={receiveLine}
+                  onReceiveAll={receiveAll}
+                />
+              ))}
+            </div>
           ) : <Empty text="Nincs átvételre váró Aviz ennél az üzletnél." />}
         </div>
       </section>
@@ -235,19 +253,161 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
   );
 }
 
-function IncomingDocument({ document, busyKey, onReceiveLine, onReceiveAll }: { document: AifShopIncomingDocument; busyKey: string; onReceiveLine: (id: string) => void; onReceiveAll: (doc: AifShopIncomingDocument) => void }) {
+function IncomingDocument({
+  document,
+  expanded,
+  busyKey,
+  onToggle,
+  onReceiveLine,
+  onReceiveAll,
+}: {
+  document: AifShopIncomingDocument;
+  expanded: boolean;
+  busyKey: string;
+  onToggle: () => void;
+  onReceiveLine: (id: string) => void;
+  onReceiveAll: (doc: AifShopIncomingDocument) => void;
+}) {
   const issued = document.status === "issued";
   const pendingLines = document.lines.filter((line) => !line.received);
   const legacy = document.inventoryMode !== "in_transit_until_received";
-  return <article className={`overflow-hidden rounded-[26px] border ${issued ? "border-[#7bd7d4]/30 bg-[#374357]" : "border-amber-200/24 bg-[#414454]"}`}>
-    <header className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4 ${issued ? "border-white/10 bg-[#303b4e]" : "border-amber-100/12 bg-amber-400/8"}`}>
-      <div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg">{document.documentNumber}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${issued ? "border-emerald-300/30 bg-emerald-500/12 text-emerald-50" : "border-amber-200/35 bg-amber-400/10 text-amber-50"}`}>{issued ? "LEZÁRT AVIZ • átvehető" : "ELŐKÉSZÍTÉS • még nem vehető át"}</span>{legacy ? <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/50">Korábbi készletlogika</span> : null}</div><p className="mt-2 text-xs text-white/50">{document.sourceLocation.name} → {document.targetLocation.name} • {formatDateTime(document.createdAt)}</p>{document.note ? <p className="mt-1 text-xs text-white/55">{document.note}</p> : null}</div>
-      <div className="text-right"><p className="text-[10px] uppercase tracking-[0.1em] text-white/40">Állapot</p><p className="mt-1 text-lg text-[#d7fffd]">{document.receivedCount}/{document.lineCount} tétel átvéve</p><p className="text-xs text-white/45">{document.totalQty} db az Avizon</p></div>
-    </header>
-    {!issued ? <div className="flex items-start gap-3 border-b border-amber-200/15 bg-amber-400/8 px-4 py-3 text-sm text-amber-50"><Clock3 className="mt-0.5 shrink-0" size={18} /><div><p>Az áru látszik, de még nem pipálható ki.</p><p className="mt-1 text-xs text-amber-100/65">A „Megjött” csak akkor aktiválódik, amikor a főnök lezárta az Avizt.</p></div></div> : null}
-    <div className="space-y-2 p-3">{document.lines.map((line) => <div key={line.id} className={`grid grid-cols-[64px_1fr_auto] items-center gap-3 rounded-2xl border p-3 ${line.received ? "border-emerald-300/18 bg-emerald-500/8" : "border-white/10 bg-[#293548]"}`}><span className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/95">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-[11px] text-white/48">{[line.brandName,line.colorName,line.size,line.productCode].filter(Boolean).join(" • ")}</p>{line.received ? <p className="mt-2 text-xs text-emerald-100">Átvette: {line.receivedBy || "–"} • {formatDateTime(line.receivedAt)}</p> : <p className="mt-2 text-xs text-white/42">{line.qty} db érkezik</p>}</div>{line.received ? <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-500/12 px-3 text-xs text-emerald-50"><CheckCircle2 size={15} /> Megérkezett</span> : <button disabled={!issued || Boolean(busyKey)} onClick={() => onReceiveLine(line.id)} className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${issued ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"}`}>{busyKey === line.id ? <Loader2 className="animate-spin" size={16} /> : <PackageCheck size={16} />} Megjött</button>}</div>)}</div>
-    {issued && pendingLines.length > 1 ? <footer className="flex justify-end border-t border-white/10 bg-black/5 px-4 py-3"><button disabled={Boolean(busyKey)} onClick={() => onReceiveAll(document)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm disabled:opacity-45">{busyKey === `doc:${document.id}` ? <Loader2 className="animate-spin" size={16} /> : <PackageCheck size={16} />} Minden tétel megjött</button></footer> : null}
-  </article>;
+
+  return (
+    <article className={`overflow-hidden rounded-[24px] border transition ${expanded ? "border-[#7bd7d4]/42 shadow-[0_16px_34px_rgba(15,23,42,0.20)]" : "border-white/14"} ${issued ? "bg-[#374357]" : "bg-[#414454]"}`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3.5 text-left transition ${
+          expanded
+            ? issued ? "border-b border-white/10 bg-[#303b4e]" : "border-b border-amber-100/12 bg-amber-400/8"
+            : issued ? "bg-[#303b4e] hover:bg-[#364459]" : "bg-amber-400/8 hover:bg-amber-400/12"
+        }`}
+        aria-expanded={expanded}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-3">
+          <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${issued ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/14 text-[#a9f3ef]" : "border-amber-200/25 bg-amber-400/10 text-amber-100"}`}>
+            <Truck size={18} />
+          </span>
+
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-[17px] text-white">{document.documentNumber}</span>
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${issued ? "border-emerald-300/30 bg-emerald-500/12 text-emerald-50" : "border-amber-200/35 bg-amber-400/10 text-amber-50"}`}>
+                {issued ? "LEZÁRT AVIZ • átvehető" : "ELŐKÉSZÍTÉS • még nem vehető át"}
+              </span>
+              {legacy ? (
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/50">
+                  Korábbi készletlogika
+                </span>
+              ) : null}
+            </span>
+
+            <span className="mt-1.5 block truncate text-xs text-white/50">
+              {document.sourceLocation.name} → {document.targetLocation.name} • {formatDateTime(document.createdAt)}
+            </span>
+            {document.note ? <span className="mt-1 block truncate text-xs text-white/55">{document.note}</span> : null}
+          </span>
+        </span>
+
+        <span className="flex shrink-0 items-center gap-3">
+          <span className="hidden text-right sm:block">
+            <span className="block text-[9px] uppercase tracking-[0.1em] text-white/38">Állapot</span>
+            <span className="mt-1 block text-base text-[#d7fffd]">
+              {document.receivedCount}/{document.lineCount} tétel átvéve
+            </span>
+            <span className="block text-[11px] text-white/42">{document.totalQty} db az Avizon</span>
+          </span>
+
+          <span className="rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1.5 text-[11px] text-[#d7fffd] sm:hidden">
+            {document.receivedCount}/{document.lineCount} • {document.totalQty} db
+          </span>
+
+          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition ${expanded ? "border-[#9be9e5]/42 bg-[#2a8d8b] text-white" : "border-white/14 bg-black/10 text-white/62"}`}>
+            <ChevronDown size={19} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+          </span>
+        </span>
+      </button>
+
+      {expanded ? (
+        <>
+          {!issued ? (
+            <div className="flex items-start gap-3 border-b border-amber-200/15 bg-amber-400/8 px-4 py-3 text-sm text-amber-50">
+              <Clock3 className="mt-0.5 shrink-0" size={18} />
+              <div>
+                <p>Az áru látszik, de még nem pipálható ki.</p>
+                <p className="mt-1 text-xs text-amber-100/65">A „Megjött” csak akkor aktiválódik, amikor a főnök lezárta az Avizt.</p>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-2 p-3">
+            {document.lines.map((line) => (
+              <div
+                key={line.id}
+                className={`grid grid-cols-[64px_1fr_auto] items-center gap-3 rounded-2xl border p-3 ${
+                  line.received ? "border-emerald-300/18 bg-emerald-500/8" : "border-white/10 bg-[#293548]"
+                }`}
+              >
+                <span className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/95">
+                  {line.imageUrl ? (
+                    <img src={line.imageUrl} alt="" className="h-full w-full object-contain" />
+                  ) : (
+                    <ShoppingBag className="text-slate-500" />
+                  )}
+                </span>
+
+                <div className="min-w-0">
+                  <p className="truncate text-sm">{line.title}</p>
+                  <p className="mt-1 text-[11px] text-white/48">
+                    {[line.brandName, line.colorName, line.size, line.productCode].filter(Boolean).join(" • ")}
+                  </p>
+                  {line.received ? (
+                    <p className="mt-2 text-xs text-emerald-100">
+                      Átvette: {line.receivedBy || "–"} • {formatDateTime(line.receivedAt)}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-white/42">{line.qty} db érkezik</p>
+                  )}
+                </div>
+
+                {line.received ? (
+                  <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-500/12 px-3 text-xs text-emerald-50">
+                    <CheckCircle2 size={15} /> Megérkezett
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!issued || Boolean(busyKey)}
+                    onClick={() => onReceiveLine(line.id)}
+                    className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${
+                      issued ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.05]"
+                    }`}
+                  >
+                    {busyKey === line.id ? <Loader2 className="animate-spin" size={16} /> : <PackageCheck size={16} />}
+                    Megjött
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {issued && pendingLines.length > 1 ? (
+            <footer className="flex justify-end border-t border-white/10 bg-black/5 px-4 py-3">
+              <button
+                type="button"
+                disabled={Boolean(busyKey)}
+                onClick={() => onReceiveAll(document)}
+                className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm disabled:opacity-45"
+              >
+                {busyKey === `doc:${document.id}` ? <Loader2 className="animate-spin" size={16} /> : <PackageCheck size={16} />}
+                Minden tétel megjött
+              </button>
+            </footer>
+          ) : null}
+        </>
+      ) : null}
+    </article>
+  );
 }
 
 function HistoryRow({ item }: { item: AifShopIncomingHistoryItem }) {
