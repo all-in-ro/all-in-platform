@@ -2946,6 +2946,72 @@ export type AifShopDailyProductItem = {
   transactions: number;
 };
 
+
+export type AifShopSaleDetailPayment = {
+  method: string;
+  label: string;
+  amount: number;
+  paidAt?: string | null;
+};
+
+export type AifShopSaleDetailLine = {
+  id: string;
+  lineNo: number;
+  variantId?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  colorHex?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  listPrice: number;
+  unitPrice: number;
+  discountAmount: number;
+  discountPercent: number;
+  lineTotal: number;
+};
+
+export type AifShopSaleDetailResponse = {
+  ok: true;
+  recordType: "sale" | "exchange" | string;
+  id: string;
+  saleNumber: string;
+  soldAt?: string | null;
+  actor?: string | null;
+  status?: string | null;
+  paymentStatus?: string | null;
+  saleType?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  note?: string | null;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  lineCount: number;
+  itemCount: number;
+  paymentLabel: string;
+  payments: AifShopSaleDetailPayment[];
+  lines: AifShopSaleDetailLine[];
+  returnedLine?: AifShopSaleDetailLine | null;
+  exchange?: {
+    returnedQty: number;
+    returnCredit: number;
+    replacementTotal: number;
+    difference: number;
+    settlementDirection?: string | null;
+    settlementMethod?: string | null;
+    settlementAmount: number;
+  } | null;
+  location: { id: string; code: string; name: string };
+};
+
 export type AifShopDailySaleItem = {
   id: string;
   saleNumber: string;
@@ -3000,6 +3066,20 @@ export function apiAifShopDailySummary(options: {
   if (options.date) q.set("date", options.date);
   if (options.employee?.trim()) q.set("employee", options.employee.trim());
   return fetchAifJSON<AifShopDailySummaryResponse>(`/shop-operations/daily-summary?${q.toString()}`);
+}
+
+
+export function apiAifShopSaleDetail(options: {
+  location: string;
+  id: string;
+  recordType?: "sale" | "exchange" | string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.recordType) q.set("recordType", options.recordType);
+  return fetchAifJSON<AifShopSaleDetailResponse>(
+    `/shop-operations/sale-detail/${encodeURIComponent(options.id)}?${q.toString()}`,
+  );
 }
 
 export type AifShopShiftPaymentItem = {
