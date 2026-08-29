@@ -22702,6 +22702,366 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  router.get("/shop-operations/sale-detail/:id", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const id = text(req.params.id);
+      const requestedType = normCode(req.query.recordType || req.query.record_type || "sale");
+      const recordType = requestedType === "exchange" ? "exchange" : "sale";
+      const sessionRole = normCode(req.session?.role);
+      const sessionActor = actorFrom(req);
+      const restrictToActor = sessionRole === "shop";
+
+      if (!id) return res.status(400).json({ error: "Az eladás azonosítója hiányzik." });
+
+      const commonLineSelect = (tableAlias, variantAlias = "v") => `
+        ${tableAlias}.id,
+        ${tableAlias}.line_no,
+        ${tableAlias}.variant_id,
+        COALESCE(NULLIF(${tableAlias}.product_title,''), NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), 'Ismeretlen termék') AS product_title,
+        COALESCE(NULLIF(${tableAlias}.product_code,''), NULLIF(sc.supplier_product_code,''), NULLIF(m.model_code,''), NULLIF(${variantAlias}.internal_sku,'')) AS product_code,
+        COALESCE(NULLIF(${tableAlias}.barcode,''), NULLIF(${variantAlias}.barcode,''), NULLIF(sc.supplier_barcode,'')) AS barcode,
+        COALESCE(NULLIF(${tableAlias}.brand_name,''), NULLIF(b.name,'')) AS brand_name,
+        COALESCE(NULLIF(c.name_hu,''), NULLIF(c.name_ro,'')) AS category_name,
+        COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+        COALESCE(NULLIF(ct.name_hu,''), NULLIF(ct.name_ro,''), NULLIF(${tableAlias}.color_name,''), NULLIF(${variantAlias}.color_name,''), NULLIF(${variantAlias}.color_code,'')) AS color_name,
+        COALESCE(NULLIF(ct.hex,''), NULLIF(${variantAlias}.color_hex,'')) AS color_hex,
+        COALESCE(NULLIF(${tableAlias}.size,''), NULLIF(${variantAlias}.size,'')) AS size,
+        COALESCE(
+          NULLIF(${tableAlias}.image_url,''),
+          NULLIF(${variantAlias}.image_url,''),
+          NULLIF(model_image.image_url,'')
+        ) AS image_url
+      `;
+
+      if (recordType === "exchange") {
+        const header = await pool.query(
+          `SELECT
+             e.*,
+             l.code AS location_code,
+             l.name AS location_name
+           FROM aif_shop_exchanges e
+           JOIN aif_locations l ON l.id=e.location_id
+           WHERE e.id::text=$1
+             AND e.location_id=$2
+             AND ($3::boolean=false OR lower(regexp_replace(btrim(COALESCE(e.actor,'')), '[[:space:]]+', ' ', 'g'))
+                 = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g')))
+           LIMIT 1`,
+          [id, location.id, restrictToActor, sessionActor]
+        );
+        if (!header.rowCount) return res.status(404).json({ error: "A csere nem található ennél az üzletnél vagy eladónál." });
+        const e = header.rows[0];
+
+        const [linesResult, returnedResult, paymentsResult] = await Promise.all([
+          pool.query(
+            `SELECT
+               ${commonLineSelect("el")},
+               el.quantity,
+               el.unit_price AS list_price,
+               el.unit_price,
+               0::numeric AS discount_amount,
+               0::numeric AS discount_percent,
+               el.line_total
+             FROM aif_shop_exchange_lines el
+             LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN aif_categories c ON c.id=m.category_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+             LEFT JOIN aif_brand_color_codes bcc
+               ON bcc.brand_id=m.brand_id
+              AND bcc.is_active=true
+              AND lower(btrim(COALESCE(bcc.color_code,'')))=lower(btrim(COALESCE(v.color_code,'')))
+             LEFT JOIN aif_color_types ct ON ct.id=bcc.color_type_id AND ct.is_active=true
+             LEFT JOIN LATERAL (
+               SELECT sc2.supplier_product_code, sc2.supplier_barcode
+               FROM aif_variant_supplier_codes sc2
+               WHERE sc2.variant_id=v.id AND COALESCE(sc2.is_active,true)=true
+               ORDER BY sc2.updated_at DESC NULLS LAST, sc2.created_at DESC NULLS LAST
+               LIMIT 1
+             ) sc ON true
+             LEFT JOIN LATERAL (
+               SELECT v2.image_url
+               FROM aif_product_variants v2
+               WHERE v2.model_id=v.model_id
+                 AND NULLIF(btrim(COALESCE(v2.image_url,'')),'') IS NOT NULL
+               ORDER BY
+                 CASE WHEN lower(btrim(COALESCE(v2.color_code,'')))=lower(btrim(COALESCE(v.color_code,''))) THEN 0 ELSE 1 END,
+                 CASE WHEN lower(btrim(COALESCE(v2.size,'')))=lower(btrim(COALESCE(v.size,''))) THEN 0 ELSE 1 END,
+                 v2.updated_at DESC NULLS LAST
+               LIMIT 1
+             ) model_image ON true
+             WHERE el.exchange_id=$1
+             ORDER BY el.line_no ASC`,
+            [e.id]
+          ),
+          pool.query(
+            `SELECT
+               ${commonLineSelect("sl")},
+               sl.quantity,
+               sl.list_price,
+               sl.unit_price,
+               sl.discount_amount,
+               sl.discount_percent,
+               sl.line_total
+             FROM aif_shop_sale_lines sl
+             LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN aif_categories c ON c.id=m.category_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+             LEFT JOIN aif_brand_color_codes bcc
+               ON bcc.brand_id=m.brand_id
+              AND bcc.is_active=true
+              AND lower(btrim(COALESCE(bcc.color_code,'')))=lower(btrim(COALESCE(v.color_code,'')))
+             LEFT JOIN aif_color_types ct ON ct.id=bcc.color_type_id AND ct.is_active=true
+             LEFT JOIN LATERAL (
+               SELECT sc2.supplier_product_code, sc2.supplier_barcode
+               FROM aif_variant_supplier_codes sc2
+               WHERE sc2.variant_id=v.id AND COALESCE(sc2.is_active,true)=true
+               ORDER BY sc2.updated_at DESC NULLS LAST, sc2.created_at DESC NULLS LAST
+               LIMIT 1
+             ) sc ON true
+             LEFT JOIN LATERAL (
+               SELECT v2.image_url
+               FROM aif_product_variants v2
+               WHERE v2.model_id=v.model_id
+                 AND NULLIF(btrim(COALESCE(v2.image_url,'')),'') IS NOT NULL
+               ORDER BY
+                 CASE WHEN lower(btrim(COALESCE(v2.color_code,'')))=lower(btrim(COALESCE(v.color_code,''))) THEN 0 ELSE 1 END,
+                 CASE WHEN lower(btrim(COALESCE(v2.size,'')))=lower(btrim(COALESCE(v.size,''))) THEN 0 ELSE 1 END,
+                 v2.updated_at DESC NULLS LAST
+               LIMIT 1
+             ) model_image ON true
+             WHERE sl.id=e.source_sale_line_id
+             LIMIT 1`,
+            [e.source_sale_line_id]
+          ),
+          pool.query(
+            `SELECT method, direction, amount, created_at AS paid_at
+             FROM aif_shop_exchange_settlements
+             WHERE exchange_id=$1
+             ORDER BY created_at ASC, id ASC`,
+            [e.id]
+          ),
+        ]);
+
+        const mapLine = (row) => ({
+          id: String(row.id),
+          lineNo: aifNumber(row.line_no),
+          variantId: row.variant_id ? String(row.variant_id) : null,
+          productTitle: row.product_title || null,
+          productCode: row.product_code || null,
+          barcode: row.barcode || null,
+          brandName: row.brand_name || null,
+          categoryName: row.category_name || null,
+          subcategoryName: row.subcategory_name || null,
+          colorName: row.color_name || null,
+          colorHex: row.color_hex || null,
+          size: row.size || null,
+          imageUrl: row.image_url || null,
+          quantity: aifNumber(row.quantity),
+          listPrice: aifNumber(row.list_price),
+          unitPrice: aifNumber(row.unit_price),
+          discountAmount: aifNumber(row.discount_amount),
+          discountPercent: aifNumber(row.discount_percent),
+          lineTotal: aifNumber(row.line_total),
+        });
+
+        const payments = paymentsResult.rows.map((row) => ({
+          method: row.method,
+          label: aifPaymentMethodLabel(row.method),
+          amount: aifNumber(row.amount),
+          paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
+        }));
+        const replacementLines = linesResult.rows.map(mapLine);
+        const returnedLine = returnedResult.rows[0] ? mapLine(returnedResult.rows[0]) : null;
+        const paymentLabel = payments.length
+          ? Array.from(new Set(payments.map((row) => row.label))).join(", ")
+          : e.settlement_direction === "none"
+            ? "Értékazonos csere"
+            : "Csere különbözet";
+
+        return res.json({
+          ok: true,
+          recordType: "exchange",
+          id: String(e.id),
+          saleNumber: e.exchange_number,
+          soldAt: e.created_at ? new Date(e.created_at).toISOString() : null,
+          actor: e.actor || null,
+          status: e.status,
+          paymentStatus: "paid",
+          saleType: "exchange",
+          customerName: e.customer_name || null,
+          customerPhone: e.customer_phone || null,
+          note: e.note || null,
+          subtotal: aifNumber(e.replacement_total),
+          discountTotal: 0,
+          total: aifNumber(e.difference),
+          paidTotal: aifNumber(e.settlement_amount),
+          balanceDue: 0,
+          lineCount: replacementLines.length,
+          itemCount: replacementLines.reduce((sum, line) => sum + aifNumber(line.quantity), 0),
+          paymentLabel,
+          payments,
+          lines: replacementLines,
+          returnedLine,
+          exchange: {
+            returnedQty: aifNumber(e.returned_qty),
+            returnCredit: aifNumber(e.return_credit),
+            replacementTotal: aifNumber(e.replacement_total),
+            difference: aifNumber(e.difference),
+            settlementDirection: e.settlement_direction || null,
+            settlementMethod: e.settlement_method || null,
+            settlementAmount: aifNumber(e.settlement_amount),
+          },
+          location: { id: String(location.id), code: location.code, name: location.name },
+        });
+      }
+
+      const header = await pool.query(
+        `SELECT
+           s.*,
+           l.code AS location_code,
+           l.name AS location_name
+         FROM aif_shop_sales s
+         JOIN aif_locations l ON l.id=s.location_id
+         WHERE s.id::text=$1
+           AND s.location_id=$2
+           AND ($3::boolean=false OR lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g'))
+               = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g')))
+         LIMIT 1`,
+        [id, location.id, restrictToActor, sessionActor]
+      );
+      if (!header.rowCount) return res.status(404).json({ error: "Az eladás nem található ennél az üzletnél vagy eladónál." });
+      const s = header.rows[0];
+
+      const [linesResult, paymentsResult] = await Promise.all([
+        pool.query(
+          `SELECT
+             ${commonLineSelect("sl")},
+             sl.quantity,
+             sl.list_price,
+             sl.unit_price,
+             sl.discount_amount,
+             sl.discount_percent,
+             sl.line_total
+           FROM aif_shop_sale_lines sl
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories c ON c.id=m.category_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           LEFT JOIN aif_brand_color_codes bcc
+             ON bcc.brand_id=m.brand_id
+            AND bcc.is_active=true
+            AND lower(btrim(COALESCE(bcc.color_code,'')))=lower(btrim(COALESCE(v.color_code,'')))
+           LEFT JOIN aif_color_types ct ON ct.id=bcc.color_type_id AND ct.is_active=true
+           LEFT JOIN LATERAL (
+             SELECT sc2.supplier_product_code, sc2.supplier_barcode
+             FROM aif_variant_supplier_codes sc2
+             WHERE sc2.variant_id=v.id AND COALESCE(sc2.is_active,true)=true
+             ORDER BY sc2.updated_at DESC NULLS LAST, sc2.created_at DESC NULLS LAST
+             LIMIT 1
+           ) sc ON true
+           LEFT JOIN LATERAL (
+             SELECT v2.image_url
+             FROM aif_product_variants v2
+             WHERE v2.model_id=v.model_id
+               AND NULLIF(btrim(COALESCE(v2.image_url,'')),'') IS NOT NULL
+             ORDER BY
+               CASE WHEN lower(btrim(COALESCE(v2.color_code,'')))=lower(btrim(COALESCE(v.color_code,''))) THEN 0 ELSE 1 END,
+               CASE WHEN lower(btrim(COALESCE(v2.size,'')))=lower(btrim(COALESCE(v.size,''))) THEN 0 ELSE 1 END,
+               v2.updated_at DESC NULLS LAST
+             LIMIT 1
+           ) model_image ON true
+           WHERE sl.sale_id=$1
+           ORDER BY sl.line_no ASC`,
+          [s.id]
+        ),
+        pool.query(
+          `SELECT method, amount, paid_at
+           FROM aif_shop_sale_payments
+           WHERE sale_id=$1
+           ORDER BY paid_at ASC, id ASC`,
+          [s.id]
+        ),
+      ]);
+
+      const mapLine = (row) => ({
+        id: String(row.id),
+        lineNo: aifNumber(row.line_no),
+        variantId: row.variant_id ? String(row.variant_id) : null,
+        productTitle: row.product_title || null,
+        productCode: row.product_code || null,
+        barcode: row.barcode || null,
+        brandName: row.brand_name || null,
+        categoryName: row.category_name || null,
+        subcategoryName: row.subcategory_name || null,
+        colorName: row.color_name || null,
+        colorHex: row.color_hex || null,
+        size: row.size || null,
+        imageUrl: row.image_url || null,
+        quantity: aifNumber(row.quantity),
+        listPrice: aifNumber(row.list_price),
+        unitPrice: aifNumber(row.unit_price),
+        discountAmount: aifNumber(row.discount_amount),
+        discountPercent: aifNumber(row.discount_percent),
+        lineTotal: aifNumber(row.line_total),
+      });
+
+      const lines = linesResult.rows.map(mapLine);
+      const payments = paymentsResult.rows.map((row) => ({
+        method: row.method,
+        label: aifPaymentMethodLabel(row.method),
+        amount: aifNumber(row.amount),
+        paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
+      }));
+      const paymentLabel = payments.length
+        ? Array.from(new Set(payments.map((row) => row.label))).join(", ")
+        : aifNumber(s.balance_due) > 0
+          ? "Utólag fizet"
+          : "Nincs adat";
+
+      return res.json({
+        ok: true,
+        recordType: "sale",
+        id: String(s.id),
+        saleNumber: s.sale_number,
+        soldAt: s.sold_at ? new Date(s.sold_at).toISOString() : null,
+        actor: s.actor || null,
+        status: s.status,
+        paymentStatus: s.payment_status,
+        saleType: s.sale_type,
+        customerName: s.customer_name || null,
+        customerPhone: s.customer_phone || null,
+        note: s.note || null,
+        subtotal: aifNumber(s.subtotal),
+        discountTotal: aifNumber(s.discount_total),
+        total: aifNumber(s.total),
+        paidTotal: aifNumber(s.paid_total),
+        balanceDue: aifNumber(s.balance_due),
+        lineCount: lines.length,
+        itemCount: lines.reduce((sum, line) => sum + aifNumber(line.quantity), 0),
+        paymentLabel,
+        payments,
+        lines,
+        returnedLine: null,
+        exchange: null,
+        location: { id: String(location.id), code: location.code, name: location.name },
+      });
+    } catch (error) {
+      console.error("AIF shop sale detail failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az eladás részletei nem tölthetők be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
   router.get("/shop-operations/daily-summary", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
