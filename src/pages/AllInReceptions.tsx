@@ -2589,11 +2589,11 @@ export default function AllInReceptions(_props: Props) {
                 <div className="flex flex-col gap-3 border-b border-white/8 bg-gradient-to-r from-[#26384a] to-[#294b52] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-[10px] uppercase tracking-[0.15em] text-[#cffffd]/55">Terméksorok</p>
+                      <p className="text-[11px] uppercase tracking-[0.13em] text-[#d9fffd]/78">Terméksorok</p>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
                       {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
-                    <p className="mt-1 text-sm text-white/78">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
+                    <p className="mt-1 text-[14px] text-white/90">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <select className={`${lightSelect} h-9 min-w-[178px]`} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
@@ -2610,8 +2610,8 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="hidden xl:block">
-                  <div className="p-2">
-                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 rounded-t-[14px] border border-white/[0.08] bg-[#182434]/[0.985] px-3 py-2 text-[9px] font-medium uppercase tracking-[0.075em] text-white/[0.52] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+                  <div className="p-2.5">
+                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] uppercase tracking-[0.065em] text-white/[0.70] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                       <span className="text-center">✓</span>
                       <span className="text-center">Sor</span>
                       <span>Termék / azonosítók</span>
@@ -2623,7 +2623,7 @@ export default function AllInReceptions(_props: Props) {
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
 
-                    <div className="overflow-hidden rounded-b-[14px] border-x border-b border-white/[0.08] bg-[#202b3a]">
+                    <div className="overflow-hidden rounded-b-[14px] border-x border-b border-white/[0.12] bg-[#30465a]">
                       {visibleRows.map((r) => {
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
                         const editable = rowCanEdit(r);
@@ -2639,20 +2639,20 @@ export default function AllInReceptions(_props: Props) {
                         const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
                         const colorSwatch = receptionColorSwatch(displayColorName);
                         const rowTone = r.status === "committed"
-                          ? "bg-[#243445]/[0.72] hover:bg-[#293d50]/[0.88]"
+                          ? "bg-[#344d62] hover:bg-[#3b586f]"
                           : r.status === "ignored"
-                            ? "bg-[#1d2735]/[0.62] opacity-60"
+                            ? "bg-[#2b3e50]/[0.72] opacity-60"
                             : hasRowError
-                              ? "bg-rose-500/[0.075] hover:bg-rose-500/[0.11]"
+                              ? "bg-rose-500/[0.11] hover:bg-rose-500/[0.16]"
                               : checked
-                                ? "bg-[#245056]/[0.72] hover:bg-[#285a60]/[0.78]"
-                                : "bg-[#263647]/[0.68] hover:bg-[#2b3d50]/[0.82]";
+                                ? "bg-[#35646a] hover:bg-[#3b7076]"
+                                : "bg-[#385066] hover:bg-[#405d75]";
                         const statusDot = r.status === "committed" ? "bg-[#4fd1c5]" : r.status === "ignored" ? "bg-slate-400" : hasRowError ? "bg-rose-400" : "bg-amber-300";
                         const statusLabel = r.status === "committed" ? "Kész" : r.status === "ignored" ? "Kihagyva" : hasRowError ? "Hiba" : "Nyitott";
                         return (
                           <article
                             key={r.id}
-                            className={`relative grid min-h-[78px] grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 border-b border-white/[0.055] px-3 py-2 transition-colors last:border-b-0 ${rowTone}`}
+                            className={`relative grid min-h-[86px] grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 border-b border-white/[0.10] px-3 py-2.5 transition-colors last:border-b-0 ${rowTone}`}
                           >
                             <span className={`absolute inset-y-0 left-0 w-[3px] ${r.status === "committed" ? "bg-[#2a8d8b]" : hasRowError ? "bg-rose-400" : checked ? "bg-[#7bd7d4]" : "bg-transparent"}`} />
 
@@ -2670,52 +2670,52 @@ export default function AllInReceptions(_props: Props) {
                             <div className="min-w-0 text-center">
                               <div className="flex items-center justify-center gap-1.5">
                                 <span className={`h-2 w-2 rounded-full ${statusDot}`} />
-                                <span className="text-[12px] font-semibold tabular-nums text-white/[0.94]">{r.row_no}</span>
+                                <span className="text-[13px] tabular-nums text-white/[0.96]">{r.row_no}</span>
                               </div>
                               {hasRowError ? (
                                 <button
                                   type="button"
                                   onClick={() => setRowErrorTarget(r)}
-                                  className="mt-1 rounded-md border border-rose-300/[0.22] bg-rose-500/[0.15] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.04em] text-rose-50 hover:bg-rose-500/[0.24]"
+                                  className="mt-1 rounded-md border border-rose-300/[0.22] bg-rose-500/[0.15] px-1.5 py-0.5 text-[9px] uppercase tracking-[0.04em] text-rose-50 hover:bg-rose-500/[0.24]"
                                 >
                                   Hiba
                                 </button>
                               ) : (
-                                <span className="mt-1 block text-[8px] font-medium uppercase tracking-[0.055em] text-white/[0.38]">{statusLabel}</span>
+                                <span className="mt-1 block text-[9px] uppercase tracking-[0.045em] text-white/[0.58]">{statusLabel}</span>
                               )}
                             </div>
 
                             <div className="min-w-0 pr-1">
                               <input
-                                className="h-7 w-full min-w-0 border-0 bg-transparent px-0 text-[12px] font-semibold tracking-[0.005em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
+                                className="h-8 w-full min-w-0 border-0 bg-transparent px-0 text-[14px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
                                 value={String(draft.titleRo ?? "")}
                                 disabled={!editable}
                                 onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
                                 title={String(draft.titleRo ?? "")}
                                 placeholder="Terméknév"
                               />
-                              <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-[10px] leading-none">
-                                <span className="shrink-0 text-[8px] font-semibold uppercase tracking-[0.07em] text-[#8fe9e5]/[0.55]">Kód</span>
+                              <div className="mt-1.5 flex min-w-0 items-center gap-2.5 overflow-hidden text-[11px] leading-none">
+                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#aaf5f1]/[0.72]">Kód</span>
                                 <input
-                                  className="w-[92px] min-w-0 border-0 bg-transparent p-0 font-semibold text-white/[0.78] outline-none focus:text-white disabled:opacity-100"
+                                  className="w-[102px] min-w-0 border-0 bg-transparent p-0 text-[12px] text-white/[0.95] outline-none focus:text-white disabled:opacity-100"
                                   value={String(draft.supplierProductCode ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
                                   title={String(draft.supplierProductCode ?? "")}
                                 />
                                 <span className="h-3 w-px shrink-0 bg-white/[0.11]" />
-                                <span className="shrink-0 text-[8px] font-semibold uppercase tracking-[0.07em] text-[#8fe9e5]/[0.55]">S/N</span>
+                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#aaf5f1]/[0.72]">S/N</span>
                                 <input
-                                  className="w-[78px] min-w-0 border-0 bg-transparent p-0 font-mono font-semibold text-white/[0.78] outline-none focus:text-white disabled:opacity-100"
+                                  className="w-[86px] min-w-0 border-0 bg-transparent p-0 font-mono text-[12px] text-white/[0.95] outline-none focus:text-white disabled:opacity-100"
                                   value={String(draft.snCod ?? draft.sn_cod ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
                                   title={String(draft.snCod ?? draft.sn_cod ?? "")}
                                 />
                                 <span className="h-3 w-px shrink-0 bg-white/[0.11]" />
-                                <span className="shrink-0 text-[8px] font-semibold uppercase tracking-[0.07em] text-[#9cf0ec]/[0.68]">EAN</span>
+                                <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-[#b8faf7]/[0.82]">EAN</span>
                                 <input
-                                  className="min-w-[118px] flex-1 border-0 bg-transparent p-0 font-mono font-semibold tracking-[0.015em] text-[#d9fffd] outline-none focus:text-white disabled:opacity-100"
+                                  className="min-w-[128px] flex-1 border-0 bg-transparent p-0 font-mono text-[11px] tracking-[0.012em] text-[#e3fffd] outline-none focus:text-white disabled:opacity-100"
                                   value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
@@ -2726,7 +2726,7 @@ export default function AllInReceptions(_props: Props) {
 
                             <div className="flex justify-center">
                               <input
-                                className="h-8 w-[48px] rounded-lg border border-white/[0.09] bg-[#1b2635] px-1 text-center text-[12px] font-semibold text-white outline-none focus:border-[#7bd7d4]/[0.55] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
+                                className="h-9 w-[50px] rounded-lg border border-white/[0.14] bg-[#263a4e] px-1 text-center text-[13px] text-white outline-none focus:border-[#7bd7d4]/[0.55] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
                                 value={String(draft.size ?? "")}
                                 disabled={!editable}
                                 onChange={(e) => updateRowDraft(r.id, "size", e.target.value)}
@@ -2740,7 +2740,7 @@ export default function AllInReceptions(_props: Props) {
                                   style={{ backgroundColor: colorSwatch }}
                                 />
                                 <input
-                                  className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] font-semibold text-white/[0.90] outline-none placeholder:text-white/[0.34] focus:text-white disabled:opacity-100"
+                                  className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] text-white/[0.95] outline-none placeholder:text-white/[0.34] focus:text-white disabled:opacity-100"
                                   value={displayColorName}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)}
@@ -2749,9 +2749,9 @@ export default function AllInReceptions(_props: Props) {
                                 />
                               </div>
                               <div className="mt-1.5 flex items-center gap-1.5">
-                                <span className="text-[8px] font-semibold uppercase tracking-[0.07em] text-white/[0.34]">Kód</span>
+                                <span className="text-[9px] uppercase tracking-[0.06em] text-white/[0.52]">Kód</span>
                                 <input
-                                  className="h-5 w-[74px] rounded-md border border-white/[0.08] bg-[#182433] px-1.5 text-center font-mono text-[10px] font-semibold text-white/[0.72] outline-none focus:border-[#7bd7d4]/[0.42] disabled:opacity-100"
+                                  className="h-6 w-[76px] rounded-md border border-white/[0.12] bg-[#263a4e] px-1.5 text-center font-mono text-[11px] text-white/[0.86] outline-none focus:border-[#7bd7d4]/[0.42] disabled:opacity-100"
                                   value={String(draft.colorCode || resolvedColorCode || "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)}
@@ -2761,7 +2761,7 @@ export default function AllInReceptions(_props: Props) {
 
                             <div className="flex justify-center">
                               <input
-                                className="h-8 w-[42px] rounded-lg border border-white/[0.09] bg-[#1b2635] px-1 text-center text-[12px] font-semibold tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.55] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
+                                className="h-9 w-[44px] rounded-lg border border-white/[0.14] bg-[#263a4e] px-1 text-center text-[13px] tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.55] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
                                 value={String(draft.qty ?? "")}
                                 disabled={!canCommitOrMove}
                                 onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)}
@@ -2771,33 +2771,33 @@ export default function AllInReceptions(_props: Props) {
                             <div className="min-w-0">
                               <div className="relative">
                                 <input
-                                  className="h-8 w-full rounded-lg border border-white/[0.08] bg-[#1b2635] pr-9 pl-2 text-right text-[11px] font-semibold tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.48] focus:ring-1 focus:ring-[#7bd7d4]/[0.14] disabled:opacity-100"
+                                  className="h-9 w-full rounded-lg border border-white/[0.14] bg-[#263a4e] pr-9 pl-2 text-right text-[12px] tabular-nums text-white outline-none focus:border-[#7bd7d4]/[0.48] focus:ring-1 focus:ring-[#7bd7d4]/[0.14] disabled:opacity-100"
                                   value={String(draft.buyPrice ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)}
                                 />
-                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-medium uppercase tracking-[0.04em] text-white/[0.34]">{sourceCurrency}</span>
+                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-white/[0.50]">{sourceCurrency}</span>
                               </div>
                               {showBuyConversion ? (
-                                <p className="mt-1 text-right text-[9px] font-medium tabular-nums text-[#cffffd]/[0.54]">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p>
+                                <p className="mt-1 text-right text-[10px] tabular-nums text-[#d9fffd]/[0.68]">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p>
                               ) : null}
                             </div>
 
                             <div className="min-w-0">
                               <div className="relative">
                                 <input
-                                  className="h-8 w-full rounded-lg border border-[#7bd7d4]/[0.16] bg-[#19343b] pr-9 pl-2 text-right text-[11px] font-semibold tabular-nums text-[#eaffff] outline-none focus:border-[#7bd7d4]/[0.58] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
+                                  className="h-9 w-full rounded-lg border border-[#8ee6e2]/[0.28] bg-[#285159] pr-9 pl-2 text-right text-[12px] tabular-nums text-[#f0ffff] outline-none focus:border-[#7bd7d4]/[0.58] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
                                   value={String(draft.sellPrice ?? "")}
                                   disabled={!editable}
                                   onChange={(e) => updateRowSellPrice(r.id, e.target.value)}
                                 />
-                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-medium uppercase tracking-[0.04em] text-[#cffffd]/[0.44]">RON</span>
+                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-[0.035em] text-[#d9fffd]/[0.62]">RON</span>
                               </div>
                             </div>
 
                             <div className="flex items-center justify-end gap-1">
                               <button
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#7bd7d4]/[0.34] bg-[#2a8d8b] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#a4efeb]/[0.40] bg-[#2a8d8b] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
                                 onClick={() => saveSingleRow(r.id)}
                                 disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id}
                                 type="button"
@@ -2806,7 +2806,7 @@ export default function AllInReceptions(_props: Props) {
                                 <Save size={14} />
                               </button>
                               <button
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.15] bg-[#314052] text-white/[0.68] transition hover:bg-[#3a4a5f] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.22] bg-[#43566b] text-white/[0.84] transition hover:bg-[#3a4a5f] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                                 onClick={() => void openMoveReception(r)}
                                 disabled={!canCommitOrMove || busy || savingRowId === r.id}
                                 type="button"
@@ -2832,7 +2832,7 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                 </div>
 
-                <div className="grid gap-2 bg-[#263143] p-2 xl:hidden">
+                <div className="grid gap-2 bg-[#344b60] p-2.5 xl:hidden">
                   {visibleRows.map((r) => {
                     const draft: any = rowDrafts[r.id] || r.normalized || {};
                     const editable = rowCanEdit(r);
@@ -2848,22 +2848,22 @@ export default function AllInReceptions(_props: Props) {
                     const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
                     const colorSwatch = receptionColorSwatch(displayColorName);
                     return (
-                      <article key={r.id} className={`overflow-hidden rounded-[20px] border ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.075] bg-[#344155]/54"}`}>
+                      <article key={r.id} className={`overflow-hidden rounded-[20px] border ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.12] bg-[#3a5268]"}`}>
                         <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-2.5">
-                          <label className="inline-flex items-center gap-2 text-[11px] text-white/80"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} /><span>Sor {r.row_no}</span></label>
+                          <label className="inline-flex items-center gap-2 text-[12px] text-white/92"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} /><span>Sor {r.row_no}</span></label>
                           {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full border border-rose-300/20 bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/44">{statusText(r.status)}</span>}
                         </div>
                         <div className="p-3">
-                          <input className={`${rowCompactInput} h-10 text-[13px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                          <input className={`${rowCompactInput} h-10 text-[14px]`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
                           <div className="mt-2 grid gap-2 sm:grid-cols-3">
                             {[
                               ["Kód", String(draft.supplierProductCode ?? ""), "supplierProductCode", false],
                               ["S/N", String(draft.snCod ?? draft.sn_cod ?? ""), "snCod", true],
                               ["EAN", String(draft.barcode ?? receptionRowBarcode(r) ?? ""), "barcode", true],
                             ].map(([labelText, fieldValue, key, mono]) => (
-                              <label key={String(key)} className="rounded-xl border border-white/[0.06] bg-[#202c3d]/58 px-2.5 py-2">
+                              <label key={String(key)} className="rounded-xl border border-white/[0.06] bg-[#2b4054] px-2.5 py-2">
                                 <span className="text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/48">{labelText}</span>
-                                <input className={`mt-1 w-full bg-transparent text-[11px] text-white/80 outline-none ${mono ? "font-mono" : ""}`} value={String(fieldValue)} disabled={!editable} onChange={(e) => updateRowDraft(r.id, String(key), e.target.value)} />
+                                <input className={`mt-1 w-full bg-transparent text-[12px] text-white/92 outline-none ${mono ? "font-mono" : ""}`} value={String(fieldValue)} disabled={!editable} onChange={(e) => updateRowDraft(r.id, String(key), e.target.value)} />
                               </label>
                             ))}
                           </div>
@@ -2871,10 +2871,10 @@ export default function AllInReceptions(_props: Props) {
                             <label className={rowLabel}>Méret<input className={`${rowCompactInput} text-center`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
                             <div>
                               <span className="text-[9px] uppercase tracking-[0.05em] text-white/42">Szín</span>
-                              <div className="mt-1 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-[#202c3d]/58 px-2.5 py-2">
+                              <div className="mt-1 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-[#2b4054] px-2.5 py-2">
                                 <span className="h-4 w-4 shrink-0 rounded-full border border-white/35" style={{ backgroundColor: colorSwatch }} />
-                                <input className="min-w-0 flex-1 bg-transparent text-[11px] text-white/82 outline-none" value={displayColorName} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} placeholder="Nincs színnév" />
-                                <input className="w-[54px] rounded-md bg-black/10 px-1.5 py-0.5 text-center font-mono text-[10px] text-white/58 outline-none" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
+                                <input className="min-w-0 flex-1 bg-transparent text-[11px] text-white/94 outline-none" value={displayColorName} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} placeholder="Nincs színnév" />
+                                <input className="w-[54px] rounded-md bg-black/10 px-1.5 py-0.5 text-center font-mono text-[10px] text-white/76 outline-none" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
                               </div>
                             </div>
                             <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
