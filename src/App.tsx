@@ -82,6 +82,8 @@ type Session =
 const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 15 * 1000;
 const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
+const SESSION_REQUIRED_HEADER = "X-AllIn-Auth";
+const SESSION_REQUIRED_VALUE = "session-required";
 
 function rememberLoginMode(session: Session | null) {
   if (typeof window === "undefined" || !session) return;
@@ -304,6 +306,55 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     onHash();
     return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    const nativeFetch = window.fetch.bind(window);
+    let lastForcedLoginAt = 0;
+
+    const forceLogin = () => {
+      const now = Date.now();
+      if (now - lastForcedLoginAt < 2000) return;
+      lastForcedLoginAt = now;
+
+      clearShopBrowserState();
+      setSession(null);
+      setAuthReady(true);
+      setScreen({ name: "login" });
+      setLogoutOpen(false);
+      setLogoutBusy(false);
+      setLogoutError("");
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    };
+
+    const wrappedFetch: typeof window.fetch = async (input, init) => {
+      const response = await nativeFetch(input, init);
+
+      try {
+        const rawUrl = typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+        const url = new URL(rawUrl, window.location.href);
+        const sameOriginApi = url.origin === window.location.origin && url.pathname.startsWith("/api/");
+        const authEndpoint = url.pathname.startsWith("/api/auth/");
+        const sessionRequired = response.headers.get(SESSION_REQUIRED_HEADER) === SESSION_REQUIRED_VALUE;
+
+        if (response.status === 401 && sameOriginApi && !authEndpoint && sessionRequired) {
+          forceLogin();
+        }
+      } catch {
+        // A hálózati válasz ettől még visszamegy az eredeti hívónak.
+      }
+
+      return response;
+    };
+
+    window.fetch = wrappedFetch;
+    return () => {
+      if (window.fetch === wrappedFetch) window.fetch = nativeFetch;
+    };
   }, []);
 
   useEffect(() => {
