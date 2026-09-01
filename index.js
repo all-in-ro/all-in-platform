@@ -227,6 +227,11 @@ function rejectExpiredSession(res) {
   return res.status(401).send("Not authorized");
 }
 
+function rejectForbidden(res) {
+  res.setHeader("X-AllIn-Auth", "forbidden");
+  return res.status(403).send("Forbidden");
+}
+
 async function requireAdminOrSecret(req, res, next) {
   try {
     // allow either admin session cookie OR x-admin-secret header (for server-to-server / curl)
@@ -238,11 +243,10 @@ async function requireAdminOrSecret(req, res, next) {
 
     const sid = getSid(req);
     const s = sid ? await loadSession(sid) : null;
-    if (s && s.role === "admin") {
-      req.session = s;
-      return next();
-    }
-    return rejectExpiredSession(res);
+    if (!s) return rejectExpiredSession(res);
+    if (s.role !== "admin") return rejectForbidden(res);
+    req.session = s;
+    return next();
   } catch (error) {
     return next(error);
   }
@@ -252,7 +256,8 @@ async function requireAdmin(req, res, next) {
   try {
     const sid = getSid(req);
     const s = sid ? await loadSession(sid) : null;
-    if (!s || s.role !== "admin") return rejectExpiredSession(res);
+    if (!s) return rejectExpiredSession(res);
+    if (s.role !== "admin") return rejectForbidden(res);
     req.session = s;
     return next();
   } catch (error) {
