@@ -79,11 +79,31 @@ type Session =
       actor: string;
     };
 
-const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
+const SHOP_INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 15 * 1000;
 const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
+const LAST_ACTIVITY_AT_KEY = "allin:last-activity-at:v1";
 const SESSION_REQUIRED_HEADER = "X-AllIn-Auth";
 const SESSION_REQUIRED_VALUE = "session-required";
+
+function readSharedLastActivityAt() {
+  if (typeof window === "undefined") return 0;
+  try {
+    const value = Number(window.localStorage.getItem(LAST_ACTIVITY_AT_KEY) || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeSharedLastActivityAt(value = Date.now()) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LAST_ACTIVITY_AT_KEY, String(value));
+  } catch {
+    // Ha a localStorage tiltott, az aktuális fül lokális aktivitása továbbra is működik.
+  }
+}
 
 function rememberLoginMode(session: Session | null) {
   if (typeof window === "undefined" || !session) return;
@@ -311,6 +331,7 @@ export default function App() {
   useEffect(() => {
     const nativeFetch = window.fetch.bind(window);
     let lastForcedLoginAt = 0;
+    let sessionCheckPromise: Promise<boolean> | null = null;
 
     const forceLogin = () => {
       const now = Date.now();
@@ -325,6 +346,29 @@ export default function App() {
       setLogoutBusy(false);
       setLogoutError("");
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    };
+
+    const sessionReallyMissing = async () => {
+      if (sessionCheckPromise) return sessionCheckPromise;
+
+      sessionCheckPromise = (async () => {
+        try {
+          const check = await nativeFetch(`${window.location.origin}/api/auth/me`, {
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (!check.ok) return false;
+          const data = await check.json().catch(() => null);
+          return !data?.session;
+        } catch {
+          // Hálózati vagy szerverhiba miatt soha ne dobjuk ki a felhasználót.
+          return false;
+        } finally {
+          window.setTimeout(() => { sessionCheckPromise = null; }, 250);
+        }
+      })();
+
+      return sessionCheckPromise;
     };
 
     const wrappedFetch: typeof window.fetch = async (input, init) => {
@@ -342,7 +386,8 @@ export default function App() {
         const sessionRequired = response.headers.get(SESSION_REQUIRED_HEADER) === SESSION_REQUIRED_VALUE;
 
         if (response.status === 401 && sameOriginApi && !authEndpoint && sessionRequired) {
-          forceLogin();
+          const missing = await sessionReallyMissing();
+          if (missing) forceLogin();
         }
       } catch {
         // A hálózati válasz ettől még visszamegy az eredeti hívónak.
@@ -457,18 +502,29 @@ export default function App() {
   }, [api]);
 
   useEffect(() => {
-    if (!session) return;
+    // Az automatikus inaktivitási kijelentkezés csak az üzleti/shop belépésekre vonatkozik.
+    // Admin munkamenetet munka közben nem zárunk le kliensoldali időzítővel.
+    if (!session || session.role !== "shop") return;
 
-    let lastActivityAt = Date.now();
+    let lastActivityAt = Math.max(Date.now(), readSharedLastActivityAt());
+    let lastStorageWriteAt = 0;
     let logoutStarted = false;
+    writeSharedLastActivityAt(lastActivityAt);
 
     const markActivity = () => {
-      lastActivityAt = Date.now();
+      const now = Date.now();
+      lastActivityAt = now;
+      if (now - lastStorageWriteAt >= 3000) {
+        lastStorageWriteAt = now;
+        writeSharedLastActivityAt(now);
+      }
     };
 
     const checkInactivity = () => {
       if (logoutStarted) return;
-      if (Date.now() - lastActivityAt < INACTIVITY_LOGOUT_MS) return;
+      const sharedActivityAt = readSharedLastActivityAt();
+      const effectiveLastActivityAt = Math.max(lastActivityAt, sharedActivityAt);
+      if (Date.now() - effectiveLastActivityAt < SHOP_INACTIVITY_LOGOUT_MS) return;
       logoutStarted = true;
       void performLogout(true);
     };
@@ -476,7 +532,11 @@ export default function App() {
     const activityEvents = [
       "pointerdown",
       "pointermove",
+      "mousedown",
+      "mousemove",
       "keydown",
+      "input",
+      "change",
       "scroll",
       "wheel",
       "touchstart",
@@ -486,10 +546,17 @@ export default function App() {
       window.addEventListener(eventName, markActivity, { passive: true });
     });
 
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LAST_ACTIVITY_AT_KEY) return;
+      const value = Number(event.newValue || 0);
+      if (Number.isFinite(value) && value > lastActivityAt) lastActivityAt = value;
+    };
+
     const interval = window.setInterval(checkInactivity, INACTIVITY_CHECK_MS);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") checkInactivity();
     };
+    window.addEventListener("storage", onStorage);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
@@ -497,6 +564,7 @@ export default function App() {
       activityEvents.forEach((eventName) => {
         window.removeEventListener(eventName, markActivity);
       });
+      window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [performLogout, session]);
