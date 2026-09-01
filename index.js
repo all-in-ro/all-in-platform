@@ -49,8 +49,118 @@ const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || "";
 
 const r2HttpEnabled = Boolean(R2_ACCOUNT_ID && R2_BUCKET && R2_API_TOKEN);
 const r2PublicBase = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
-// --- in-memory sessions (ok for MVP) ---
-const sessions = new Map();
+
+// --- persistent sessions ----------------------------------------------------
+// A session forrása Postgres. A rövid memória-cache csak gyorsítás, ezért egy
+// Render deploy / restart után a böngésző meglévő sid cookie-ja tovább él.
+const rawSessionTtlHours = Number(process.env.SESSION_TTL_HOURS || 24);
+const SESSION_TTL_HOURS = Number.isFinite(rawSessionTtlHours) && rawSessionTtlHours > 0
+  ? rawSessionTtlHours
+  : 24;
+const SESSION_TTL_MS = Math.round(SESSION_TTL_HOURS * 60 * 60 * 1000);
+const SESSION_CACHE_MS = 60 * 1000;
+const sessionCache = new Map();
+let sessionStoreReadyPromise = null;
+
+function sessionStorageKey(sid) {
+  return crypto
+    .createHmac("sha256", String(SESSION_SECRET))
+    .update(String(sid || ""))
+    .digest("hex");
+}
+
+async function ensureSessionStore() {
+  if (!sessionStoreReadyPromise) {
+    sessionStoreReadyPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS app_sessions (
+          session_key text PRIMARY KEY,
+          session_data jsonb NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          last_seen_at timestamptz NOT NULL DEFAULT now(),
+          expires_at timestamptz NOT NULL
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx
+        ON app_sessions (expires_at)
+      `);
+      await pool.query(`DELETE FROM app_sessions WHERE expires_at <= now()`);
+    })().catch((error) => {
+      sessionStoreReadyPromise = null;
+      throw error;
+    });
+  }
+  return sessionStoreReadyPromise;
+}
+
+function cacheSession(key, session, expiresAt) {
+  const expiresMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresMs)) return;
+  sessionCache.set(key, {
+    session,
+    expiresAt: expiresMs,
+    cacheUntil: Math.min(expiresMs, Date.now() + SESSION_CACHE_MS),
+  });
+}
+
+async function saveSession(sid, session) {
+  await ensureSessionStore();
+  const key = sessionStorageKey(sid);
+  const result = await pool.query(
+    `INSERT INTO app_sessions
+       (session_key, session_data, created_at, last_seen_at, expires_at)
+     VALUES
+       ($1, $2::jsonb, now(), now(), now() + ($3::bigint * interval '1 millisecond'))
+     ON CONFLICT (session_key) DO UPDATE SET
+       session_data=EXCLUDED.session_data,
+       last_seen_at=now(),
+       expires_at=now() + ($3::bigint * interval '1 millisecond')
+     RETURNING expires_at`,
+    [key, JSON.stringify(session), SESSION_TTL_MS]
+  );
+  cacheSession(key, session, result.rows[0].expires_at);
+  return session;
+}
+
+async function loadSession(sid) {
+  if (!sid) return null;
+  const key = sessionStorageKey(sid);
+  const cached = sessionCache.get(key);
+  const now = Date.now();
+  if (cached && cached.cacheUntil > now && cached.expiresAt > now) {
+    return cached.session;
+  }
+  if (cached) sessionCache.delete(key);
+
+  await ensureSessionStore();
+  const result = await pool.query(
+    `UPDATE app_sessions
+     SET last_seen_at=now(),
+         expires_at=now() + ($2::bigint * interval '1 millisecond')
+     WHERE session_key=$1
+       AND expires_at > now()
+     RETURNING session_data, expires_at`,
+    [key, SESSION_TTL_MS]
+  );
+  if (!result.rowCount) return null;
+
+  const session = result.rows[0].session_data;
+  if (!session || typeof session !== "object" || !session.role) {
+    await pool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
+    return null;
+  }
+  cacheSession(key, session, result.rows[0].expires_at);
+  return session;
+}
+
+async function deleteSession(sid) {
+  if (!sid) return;
+  const key = sessionStorageKey(sid);
+  sessionCache.delete(key);
+  await ensureSessionStore();
+  await pool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
+}
 
 const captureShopifyWebhookRawBody = (req, _res, buffer) => {
   const url = String(req.originalUrl || req.url || "");
@@ -82,50 +192,92 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
-function requireAdminOrSecret(req, res, next) {
-  // allow either admin session cookie OR x-admin-secret header (for server-to-server / curl)
-  const sid = getSid(req);
-  const s = sid ? sessions.get(sid) : null;
-  if (s && s.role === "admin") {
-    req.session = s;
-    return next();
-  }
-  const secret = String(req.headers["x-admin-secret"] || "").trim();
-  if (secret && secret === ADMIN_PASSWORD) return next();
-  return res.status(401).send("Not authorized");
-}
-
 // --- helpers ---
 function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(12).toString("hex")}`;
 }
-function setCookie(res, sid) {
-  res.setHeader("Set-Cookie", `sid=${sid}; Path=/; HttpOnly; SameSite=Lax`);
+
+function secureCookieEnabled() {
+  return process.env.NODE_ENV === "production" || process.env.RENDER === "true" || Boolean(process.env.RENDER_SERVICE_ID);
 }
+
+function setCookie(res, sid) {
+  res.setHeader(
+    "Set-Cookie",
+    `sid=${sid}; Path=/; HttpOnly; SameSite=Lax${secureCookieEnabled() ? "; Secure" : ""}`
+  );
+}
+
+function clearCookie(res) {
+  res.setHeader(
+    "Set-Cookie",
+    `sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookieEnabled() ? "; Secure" : ""}`
+  );
+}
+
 function getSid(req) {
   const c = req.headers.cookie || "";
   const m = c.match(/(?:^|;\s*)sid=([^;]+)/);
   return m ? m[1] : null;
 }
-function requireAdmin(req, res, next) {
-  const sid = getSid(req);
-  const s = sid ? sessions.get(sid) : null;
-  if (!s || s.role !== "admin") return res.status(401).send("Not authorized");
-  req.session = s;
-  next();
+
+function rejectExpiredSession(res) {
+  clearCookie(res);
+  res.setHeader("X-AllIn-Auth", "session-required");
+  return res.status(401).send("Not authorized");
 }
 
-function requireAuthed(req, res, next) {
-  // Allow x-admin-secret to bypass login (useful for curl / server-to-server).
-  // UI stays the same; this is mainly for admin diagnostics and automation.
-  const secret = String(req.headers["x-admin-secret"] || "").trim();
-  if (secret && secret === ADMIN_PASSWORD) return next();
+async function requireAdminOrSecret(req, res, next) {
+  try {
+    // allow either admin session cookie OR x-admin-secret header (for server-to-server / curl)
+    const secret = String(req.headers["x-admin-secret"] || "").trim();
+    if (secret && secret === ADMIN_PASSWORD) {
+      req.session = { role: "admin", actor: "ADMIN" };
+      return next();
+    }
 
-  const sid = getSid(req);
-  const s = sid ? sessions.get(sid) : null;
-  if (!s) return res.status(401).send("Not authorized");
-  req.session = s;
-  next();
+    const sid = getSid(req);
+    const s = sid ? await loadSession(sid) : null;
+    if (s && s.role === "admin") {
+      req.session = s;
+      return next();
+    }
+    return rejectExpiredSession(res);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const sid = getSid(req);
+    const s = sid ? await loadSession(sid) : null;
+    if (!s || s.role !== "admin") return rejectExpiredSession(res);
+    req.session = s;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requireAuthed(req, res, next) {
+  try {
+    // Allow x-admin-secret to bypass login (useful for curl / server-to-server).
+    // UI stays the same; this is mainly for admin diagnostics and automation.
+    const secret = String(req.headers["x-admin-secret"] || "").trim();
+    if (secret && secret === ADMIN_PASSWORD) {
+      req.session = { role: "admin", actor: "ADMIN" };
+      return next();
+    }
+
+    const sid = getSid(req);
+    const s = sid ? await loadSession(sid) : null;
+    if (!s) return rejectExpiredSession(res);
+    req.session = s;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 }
 
 // --- Cars (ALL IN) ---
@@ -338,7 +490,7 @@ app.post("/api/auth/login", async (req, res) => {
     if (body.password !== ADMIN_PASSWORD) return res.status(401).send("Hibás admin jelszó");
     const sid = newId("s");
     const session = { role: "admin", actor: "ADMIN" };
-    sessions.set(sid, session);
+    await saveSession(sid, session);
     setCookie(res, sid);
     return res.json({ session });
   }
@@ -409,7 +561,7 @@ app.post("/api/auth/login", async (req, res) => {
       locationName: row.location_name || row.shop_name || row.shop_id,
       actor,
     };
-    sessions.set(sid, session);
+    await saveSession(sid, session);
     setCookie(res, sid);
     return res.json({ session });
   }
@@ -417,17 +569,30 @@ app.post("/api/auth/login", async (req, res) => {
   return res.status(400).send("Bad request");
 });
 
-app.get("/api/auth/me", (req, res) => {
-  const sid = getSid(req);
-  const s = sid ? sessions.get(sid) : null;
-  res.json({ session: s || null });
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const sid = getSid(req);
+    const s = sid ? await loadSession(sid) : null;
+    if (!s && sid) clearCookie(res);
+    return res.json({ session: s || null });
+  } catch (error) {
+    console.error("Auth session lookup failed", error);
+    return res.status(500).json({ error: "A munkamenet ellenőrzése nem sikerült." });
+  }
 });
 
-app.post("/api/auth/logout", (req, res) => {
-  const sid = getSid(req);
-  if (sid) sessions.delete(sid);
-  res.setHeader("Set-Cookie", "sid=; Path=/; Max-Age=0");
-  res.json({ ok: true });
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const sid = getSid(req);
+    if (sid) await deleteSession(sid);
+    clearCookie(res);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Logout session delete failed", error);
+    clearCookie(res);
+    return res.status(500).json({ error: "A kijelentkezés szerveroldali lezárása nem sikerült." });
+  }
 });
 
 // A belépőképernyőnek hitelesítés előtt is tudnia kell, milyen üzletek léteznek.
@@ -794,4 +959,11 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+ensureSessionStore()
+  .then(() => {
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch((error) => {
+    console.error("Session store initialization failed", error);
+    process.exit(1);
+  });
