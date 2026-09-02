@@ -1946,6 +1946,7 @@ type EditForm = {
   categoryCode: string;
   subCategoryCode: string;
   barcode: string;
+  supplierId: string;
   supplierProductCode: string;
   snCod: string;
   customsTariffCode: string;
@@ -4070,8 +4071,10 @@ function activationRequiredMissingFields(it: Partial<InventoryItem> | Record<str
   if (!visibleWarehouseBarcode(it)) out.push("vonalkód");
   if (!String((it as any).title_ro || (it as any).titleRo || "").trim()) out.push("terméknév");
   if (!String((it as any).size || "").trim()) out.push("méret");
-  if (priceNumber((it as any).buy_price ?? (it as any).buyPrice) === null) out.push("vételár");
-  if (priceNumber((it as any).sell_price ?? (it as any).sellPrice) === null) out.push("eladási ár");
+  const buyPrice = priceNumber((it as any).buy_price ?? (it as any).buyPrice);
+  const sellPrice = priceNumber((it as any).sell_price ?? (it as any).sellPrice);
+  if (buyPrice === null || buyPrice <= 0) out.push("vételár");
+  if (sellPrice === null || sellPrice <= 0) out.push("eladási ár");
   return out;
 }
 
@@ -5772,7 +5775,9 @@ const WAREHOUSE_INITIAL_INVENTORY_PAGE_SIZE = 300;
 const WAREHOUSE_BACKGROUND_INVENTORY_PAGE_SIZE = 2200;
 const WAREHOUSE_INVENTORY_MAX_ROWS = 10000;
 const WAREHOUSE_BOOTSTRAP_CACHE_TTL_MS = 120_000;
+const WAREHOUSE_INACTIVE_CACHE_TTL_MS = 300_000;
 let warehouseBootstrapCache: WarehouseBootstrapCache | null = null;
+let warehouseInactiveProductsCache: { items: InventoryItem[]; loadedAt: number } | null = null;
 
 function warehouseBootstrapCacheFresh() {
   return Boolean(
@@ -5872,6 +5877,46 @@ async function apiInventory({
   }
 
   return { items, total };
+}
+
+async function apiInactiveWarehouseProducts(signal?: AbortSignal) {
+  if (warehouseInactiveProductsCache && Date.now() - warehouseInactiveProductsCache.loadedAt <= WAREHOUSE_INACTIVE_CACHE_TTL_MS) {
+    return warehouseInactiveProductsCache.items.slice();
+  }
+
+  const rows: InventoryItem[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  const pageSize = 1200;
+  let total: number | null = null;
+
+  while (offset < 30000) {
+    if (signal?.aborted) throw new DOMException("Az inaktív termékek betöltése megszakadt.", "AbortError");
+    const qs = new URLSearchParams();
+    qs.set("mode", "inactive");
+    qs.set("limit", String(pageSize));
+    qs.set("offset", String(offset));
+    const page = await fetchJSON<{ items?: InventoryItem[]; hasMore?: boolean; total?: number | null }>(
+      `/api/aif/warehouse-products?${qs.toString()}`,
+      { signal }
+    );
+    const pageRows = Array.isArray(page.items) ? page.items : [];
+    const serverTotal = Number(page.total);
+    if (Number.isFinite(serverTotal) && serverTotal >= 0) total = serverTotal;
+    for (const item of pageRows) {
+      const id = selectedVariantIdFromItem(item);
+      if (!id || seen.has(id) || isArchivedInventoryItem(item)) continue;
+      seen.add(id);
+      rows.push({ ...item, variant_id: id });
+    }
+    offset += pageRows.length;
+    if (page.hasMore === false || pageRows.length < pageSize || (total !== null && offset >= total)) break;
+    if (!pageRows.length) break;
+    await warehouseYieldToBrowser();
+  }
+
+  warehouseInactiveProductsCache = { items: rows.slice(), loadedAt: Date.now() };
+  return rows;
 }
 
 async function apiMeta() {
@@ -6362,6 +6407,7 @@ function emptyForm(): EditForm {
     categoryCode: "",
     subCategoryCode: "",
     barcode: "",
+    supplierId: "",
     supplierProductCode: "",
     snCod: "",
     customsTariffCode: "",
@@ -6409,6 +6455,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     categoryCode: x.category_code || "",
     subCategoryCode: x.subcategory_code || x.subCategoryCode || "",
     barcode: visibleWarehouseBarcode(x),
+    supplierId: String(x.supplier_id || x.supplierId || "").trim(),
     supplierProductCode: supplierProductCodeFromDetail(d),
     snCod: x.sn_cod || x.snCod || "",
     customsTariffCode: itemCustomsTariffCode(x),
@@ -6437,6 +6484,7 @@ const editFormComparableKeys: Array<keyof EditForm> = [
   "categoryCode",
   "subCategoryCode",
   "barcode",
+  "supplierId",
   "supplierProductCode",
   "snCod",
   "customsTariffCode",
@@ -6594,6 +6642,8 @@ function overviewOpenByDefault() {
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
+  const [inactiveProductsBusy, setInactiveProductsBusy] = useState(false);
+  const [activationBlockMissing, setActivationBlockMissing] = useState<string[] | null>(null);
   const [catalogSearchBusy, setCatalogSearchBusy] = useState(false);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
   const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
@@ -8647,6 +8697,18 @@ export default function AllInWarehouse() {
   }
 
   useEffect(() => {
+    if (!activationBlockMissing) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActivationBlockMissing(null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [activationBlockMissing]);
+
+  useEffect(() => {
     if (!detail) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -8791,6 +8853,28 @@ export default function AllInWarehouse() {
       return [] as InventoryItem[];
     }
   }
+
+  useEffect(() => {
+    if (stockFilter !== "inactive") return;
+    const controller = new AbortController();
+    setInactiveProductsBusy(true);
+    void apiInactiveWarehouseProducts(controller.signal)
+      .then((rows) => {
+        if (controller.signal.aborted) return;
+        mergeWarehouseCatalogSearchItems(rows);
+        setMessage(`Inaktív termékek betöltve: ${rows.length.toLocaleString("hu-HU")} nem archivált variáns, készlettől függetlenül.`);
+      })
+      .catch((error: any) => {
+        if (controller.signal.aborted || error?.name === "AbortError") return;
+        setMessage(error?.message || "Az inaktív termékek betöltése nem sikerült.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setInactiveProductsBusy(false);
+      });
+    return () => controller.abort();
+    // Csak akkor fut, amikor a felhasználó ténylegesen az Inaktív termékek szűrőt választja.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockFilter]);
 
   useEffect(() => {
     const clean = String(search || "").trim();
@@ -12809,7 +12893,8 @@ export default function AllInWarehouse() {
     };
     const activationMissing = explicitlyActivatingVariant ? activationRequiredMissingFields(activationCandidate) : [];
     if (activationMissing.length) {
-      setMessage(`Ezt a konkrét variánst még nem lehet aktiválni. Hiányzik: ${activationMissing.join(", ")}. A termékkód nem helyettesíti az egyedi vonalkódot.`);
+      setMessage("");
+      setActivationBlockMissing(activationMissing);
       return false;
     }
 
@@ -12877,7 +12962,7 @@ export default function AllInWarehouse() {
         categoryCode: edit.categoryCode || null,
         subCategoryCode: edit.subCategoryCode || null,
         barcode: edit.barcode,
-        supplierId: detail.item.supplier_id || detail.item.supplierId || null,
+        supplierId: edit.supplierId || null,
         supplierProductCode: edit.supplierProductCode,
         productCode: edit.supplierProductCode,
         // A termékkód modell-szintű adat, ezért több színnél és méretnél is azonos lehet.
@@ -13671,7 +13756,7 @@ export default function AllInWarehouse() {
                   { value: "out", label: "Nincs készleten" },
                   { value: "reserved", label: "Van foglalás" },
                   { value: "missing", label: "Hiányzó adat" },
-                  { value: "inactive", label: "Inaktív termékek" },
+                  { value: "inactive", label: inactiveProductsBusy ? "Inaktív termékek • betöltés…" : "Inaktív termékek" },
                   { value: "watch", label: "Aktiválandó készlet" },
                 ]}
                 onChange={(next) => setStockFilter(next as StockFilter)}
@@ -16941,10 +17026,38 @@ export default function AllInWarehouse() {
                   </div>
                 </section>
                 <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                  <p className="mb-3 text-sm text-white/80">Beszállítói kapcsolatok</p>
-                  <div className="space-y-2 text-sm">
-                    {(detail.supplierCodes || []).slice(0, 5).map((s) => <div key={s.id} className="rounded-lg bg-black/10 px-3 py-2"><p>{s.supplier_name || "-"}</p><p className="text-xs text-white/55">Termékkód: {s.supplier_product_code || "-"} • Méret: {s.supplier_size || "-"}</p></div>)}
-                    {!detail.supplierCodes?.length && <p className="text-white/55">Nincs beszállítói kapcsolat.</p>}
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm text-white/80">Beszállítói kapcsolat</p>
+                    <span className="text-[10px] text-white/42">A módosítás a Mentés gombot aktiválja</span>
+                  </div>
+                  <div className="space-y-3 text-sm">
+                    <label className={label}>
+                      Beszállító
+                      <select
+                        className={select}
+                        value={edit.supplierId}
+                        onChange={(e) => setEdit((x) => ({ ...x, supplierId: e.target.value }))}
+                      >
+                        <option value="">Válassz beszállítót...</option>
+                        {suppliers
+                          .filter((row) => row.is_active !== false)
+                          .slice()
+                          .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }))
+                          .map((row) => (
+                            <option key={row.id} value={String(row.id)}>{row.name || row.code || row.id}</option>
+                          ))}
+                      </select>
+                    </label>
+                    <div className="grid gap-2 rounded-xl border border-white/10 bg-black/10 p-3 text-xs text-white/65">
+                      <div className="flex justify-between gap-3"><span>Termékkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.supplierProductCode || "-"}</strong></div>
+                      <div className="flex justify-between gap-3"><span>Színkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.colorCode || detail.item?.supplier_color_code || "-"}</strong></div>
+                      <div className="flex justify-between gap-3"><span>Méret</span><strong className="max-w-[60%] truncate text-right text-white">{edit.size || detail.item?.supplier_size || "-"}</strong></div>
+                    </div>
+                    {!detail.supplierCodes?.length ? (
+                      <p className="rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs text-[#d7fffd]">
+                        Ehhez a variánshoz még nincs beszállítói kapcsolat. Válassz beszállítót, majd mentsd az adatlapot.
+                      </p>
+                    ) : null}
                   </div>
                 </section>
                 <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
@@ -16976,6 +17089,50 @@ export default function AllInWarehouse() {
           </div>
         </div>
       )}
+
+      {activationBlockMissing && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[2147483200] flex items-center justify-center bg-slate-950/72 px-4 py-6 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setActivationBlockMissing(null);
+          }}
+        >
+          <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-rose-200/25 bg-[#4b5362] text-white shadow-[0_28px_90px_rgba(0,0,0,.62)]">
+            <div className="flex items-start gap-3 border-b border-white/12 bg-[#3d4656] px-5 py-4">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/30 bg-rose-500/16 text-rose-100">
+                <AlertTriangle size={21} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/60">Aktiválás blokkolva</p>
+                <h3 className="mt-1 text-xl font-medium text-white">Nem lehet aktiválni</h3>
+              </div>
+              <button className={warehouseListIconButton} type="button" onClick={() => setActivationBlockMissing(null)} aria-label="Bezárás"><X size={16} /></button>
+            </div>
+            <div className="p-5">
+              {activationBlockMissing.length === 1 && activationBlockMissing[0] === "vételár" ? (
+                <p className="rounded-2xl border border-rose-200/20 bg-rose-500/10 px-4 py-3 text-sm leading-relaxed text-rose-50">
+                  A termék nem aktiválható, mert nincs vételár megadva.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm leading-relaxed text-white/76">
+                    A termék aktiválásához még kötelező adat hiányzik. Ezeket töltsd ki az adatlap mögött:
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {activationBlockMissing.map((field) => (
+                      <span key={field} className="rounded-full border border-amber-200/25 bg-amber-500/12 px-3 py-1.5 text-xs text-amber-50">{field}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex justify-end border-t border-white/12 bg-[#3d4656] px-5 py-3">
+              <button className={btn} type="button" onClick={() => setActivationBlockMissing(null)}><X size={15} /> Bezárás</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
 
       <WarehouseInvoiceDetailModal
         option={invoiceDetailTarget}
