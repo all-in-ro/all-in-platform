@@ -10906,7 +10906,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       const supplierCodes = await pool.query(
-        `SELECT sc.id, sc.supplier_product_code, sc.supplier_variant_code,
+        `SELECT sc.id, sc.supplier_id, sc.supplier_product_code, sc.supplier_variant_code,
                 sc.supplier_color_code, sc.supplier_color_name, sc.supplier_size,
                 sc.supplier_barcode, sc.supplier_sku, sc.is_active,
                 s.name AS supplier_name
@@ -10968,8 +10968,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
       const current = await client.query(
-        `SELECT v.id, v.model_id, v.barcode, v.buy_price, v.sell_price, v.compare_at_price
+        `SELECT v.id, v.model_id, v.barcode, v.buy_price, v.sell_price, v.compare_at_price,
+                v.status AS variant_status, v.size, v.image_url,
+                m.status AS model_status, m.title_ro
          FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
          WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
          FOR UPDATE`,
         [id]
@@ -10991,6 +10994,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const nextBuyPrice = buyPriceProvided ? toMoney(body.buyPrice ?? body.buy_price) : previousBuyPrice;
       const nextSellPrice = sellPriceProvided ? toMoney(body.sellPrice ?? body.sell_price) : previousSellPrice;
       const nextCompareAtPrice = compareAtPriceProvided ? toMoney(body.compareAtPrice ?? body.compare_at_price) : previousCompareAtPrice;
+
+      const requestedVariantStatus = body.status !== undefined ? text(body.status).toLowerCase() : String(current.rows[0].variant_status || "active").toLowerCase();
+      const requestedModelStatus = body.modelStatus !== undefined || body.model_status !== undefined
+        ? text(body.modelStatus ?? body.model_status).toLowerCase()
+        : String(current.rows[0].model_status || "active").toLowerCase();
+      const activatingVariant = requestedVariantStatus === "active" && (
+        String(current.rows[0].variant_status || "active").toLowerCase() !== "active" ||
+        String(current.rows[0].model_status || "active").toLowerCase() !== "active"
+      );
+      if (activatingVariant) {
+        const nextBarcodeForActivation = body.barcode !== undefined ? assignedBarcodeValue(body.barcode) : emptyToNull(current.rows[0].barcode);
+        const nextImageForActivation = body.imageUrl !== undefined || body.image_url !== undefined
+          ? emptyToNull(body.imageUrl ?? body.image_url)
+          : emptyToNull(current.rows[0].image_url);
+        const nextTitleForActivation = body.titleRo !== undefined || body.title_ro !== undefined
+          ? text(body.titleRo ?? body.title_ro)
+          : text(current.rows[0].title_ro);
+        const nextSizeForActivation = body.size !== undefined ? text(body.size) : text(current.rows[0].size);
+        const activationMissing = [];
+        if (!nextImageForActivation) activationMissing.push("kép");
+        if (!nextBarcodeForActivation) activationMissing.push("vonalkód");
+        if (!nextTitleForActivation) activationMissing.push("terméknév");
+        if (!nextSizeForActivation) activationMissing.push("méret");
+        if (nextBuyPrice === null || Number(nextBuyPrice) <= 0) activationMissing.push("vételár");
+        if (nextSellPrice === null || Number(nextSellPrice) <= 0) activationMissing.push("eladási ár");
+        if (activationMissing.length) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            error: activationMissing.length === 1 && activationMissing[0] === "vételár"
+              ? "A termék nem aktiválható, mert nincs vételár megadva."
+              : `A termék nem aktiválható. Hiányzó mezők: ${activationMissing.join(", ")}.`,
+            code: "activation_missing_fields",
+            missingFields: activationMissing,
+            requestedModelStatus,
+            requestedVariantStatus,
+          });
+        }
+      }
+
       const moneyChanged = (before, after) => {
         const b = before === null || before === undefined || String(before).trim() === "" ? null : Number(before);
         const a = after === null || after === undefined || String(after).trim() === "" ? null : Number(after);
@@ -11181,13 +11223,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         );
       }
 
+      const supplierIdProvided = body.supplierId !== undefined || body.supplier_id !== undefined;
       const supplierProductCodeProvided =
         body.supplierProductCode !== undefined || body.supplier_product_code !== undefined ||
         body.productCode !== undefined || body.product_code !== undefined;
       const supplierVariantCodeProvided = body.supplierVariantCode !== undefined || body.supplier_variant_code !== undefined;
       const supplierColorCodeProvided = body.supplierColorCode !== undefined || body.supplier_color_code !== undefined;
       const supplierSizeProvided = body.supplierSize !== undefined || body.supplier_size !== undefined;
-      const supplierLinkProvided = supplierProductCodeProvided || supplierVariantCodeProvided || supplierColorCodeProvided || supplierSizeProvided;
+      const supplierLinkProvided = supplierIdProvided || supplierProductCodeProvided || supplierVariantCodeProvided || supplierColorCodeProvided || supplierSizeProvided;
       if (supplierLinkProvided) {
         const supplierProductCode = supplierProductCodeProvided
           ? emptyToNull(body.supplierProductCode ?? body.supplier_product_code ?? body.productCode ?? body.product_code)
@@ -11202,8 +11245,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ? emptyToNull(body.supplierSize ?? body.supplier_size)
           : undefined;
 
+        let requestedSupplierId = null;
+        if (supplierIdProvided) {
+          const supplierInput = emptyToNull(body.supplierId ?? body.supplier_id);
+          if (supplierInput) {
+            const supplierResult = await client.query(
+              `SELECT id FROM aif_suppliers WHERE (id::text=$1 OR code=$1) AND is_active=true LIMIT 1`,
+              [supplierInput]
+            );
+            if (!supplierResult.rowCount) {
+              await client.query("ROLLBACK");
+              return res.status(400).json({ error: "supplier not found or inactive" });
+            }
+            requestedSupplierId = supplierResult.rows[0].id;
+          }
+        }
+
         const existingSupplierCode = await client.query(
-          `SELECT id
+          `SELECT id, supplier_id
            FROM aif_variant_supplier_codes
            WHERE variant_id=$1
            ORDER BY COALESCE(is_active,true) DESC, updated_at DESC NULLS LAST, created_at DESC NULLS LAST
@@ -11215,6 +11274,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           const sets = [`is_active=true`, `updated_at=now()`];
           const args = [existingSupplierCode.rows[0].id];
           let nextArg = 2;
+          if (supplierIdProvided && requestedSupplierId) { sets.push(`supplier_id=$${nextArg++}`); args.push(requestedSupplierId); }
           if (supplierProductCodeProvided) { sets.push(`supplier_product_code=$${nextArg++}`); args.push(supplierProductCode); }
           if (supplierVariantCodeProvided) { sets.push(`supplier_sku=$${nextArg++}`); args.push(supplierVariantCode || null); }
           if (supplierVariantCode !== undefined) { sets.push(`supplier_variant_code=$${nextArg++}`); args.push(supplierVariantCode); }
@@ -11224,17 +11284,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             `UPDATE aif_variant_supplier_codes SET ${sets.join(', ')} WHERE id=$1`,
             args
           );
-        } else if (supplierProductCode || supplierVariantCode || supplierColorCode || supplierSize) {
-          const preferredSupplierId = emptyToNull(body.supplierId || body.supplier_id);
-          let supplierId = preferredSupplierId;
-          if (supplierId) {
-            const okSupplier = await client.query(`SELECT id FROM aif_suppliers WHERE id::text=$1 OR code=$1 LIMIT 1`, [supplierId]);
-            supplierId = okSupplier.rows[0]?.id || null;
-          }
-          if (!supplierId) {
-            const fallbackSupplier = await client.query(`SELECT id FROM aif_suppliers WHERE is_active=true ORDER BY name ASC LIMIT 1`);
-            supplierId = fallbackSupplier.rows[0]?.id || null;
-          }
+        } else if (requestedSupplierId && (supplierProductCode || supplierVariantCode || supplierColorCode || supplierSize)) {
+          const supplierId = requestedSupplierId;
           if (supplierId) {
             await client.query(
               `INSERT INTO aif_variant_supplier_codes (
@@ -11997,8 +12048,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const requestedLimit = Math.max(1, Number(req.query.limit || 300));
     const limit = Math.min(3000, requestedLimit);
     const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
+    const mode = normCode(req.query.mode || req.query.scope || "");
+    const inactiveOnly = mode === "inactive";
     const args = [limit, offset];
     const tariffExpr = customsTariffSql('v');
+    const visibilityWhere = inactiveOnly
+      ? `AND (COALESCE(v0.status,'active') <> 'active' OR COALESCE(m0.status,'active') <> 'active')`
+      : `AND (
+           (COALESCE(v0.status,'active')='active' AND COALESCE(m0.status,'active')='active')
+           OR EXISTS (
+             SELECT 1
+             FROM aif_stock sx
+             WHERE sx.variant_id=v0.id
+               AND (COALESCE(sx.qty,0) <> 0 OR COALESCE(sx.reserved_qty,0) <> 0)
+           )
+         )`;
     try {
       const result = await pool.query(
         `WITH page_variants AS (
@@ -12008,15 +12072,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            LEFT JOIN aif_brands b0 ON b0.id=m0.brand_id
            WHERE COALESCE(v0.status,'active') <> 'archived'
              AND COALESCE(m0.status,'active') <> 'archived'
-             AND (
-               (COALESCE(v0.status,'active')='active' AND COALESCE(m0.status,'active')='active')
-               OR EXISTS (
-                 SELECT 1
-                 FROM aif_stock sx
-                 WHERE sx.variant_id=v0.id
-                   AND (COALESCE(sx.qty,0) <> 0 OR COALESCE(sx.reserved_qty,0) <> 0)
-               )
-             )
+             ${visibilityWhere}
            ORDER BY COALESCE(b0.name,'') ASC NULLS LAST,
                     m0.title_ro ASC,
                     v0.color_name ASC NULLS LAST,
@@ -12193,6 +12249,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         total,
         hasMore: offset + items.length < total,
         warehouseFast: true,
+        mode: inactiveOnly ? "inactive" : "default",
       });
     } catch (error) {
       console.error("AIF warehouse fast products failed", error);
