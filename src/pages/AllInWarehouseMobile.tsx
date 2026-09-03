@@ -1187,25 +1187,26 @@ function MobileSingleSelect({
 
   const picker = open && typeof document !== "undefined" ? createPortal(
     <>
-      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/68 backdrop-blur-[2px]" onClick={closePicker} />
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-slate-950/74 backdrop-blur-[3px]" onClick={closePicker} />
       <section
-        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/20 bg-[#303a4c] shadow-[0_28px_90px_rgba(0,0,0,.62)]"
+        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/28 bg-[#303a4c] shadow-[0_30px_100px_rgba(0,0,0,.68)]"
         style={{ top: "max(8px, env(safe-area-inset-top))", bottom: "max(8px, env(safe-area-inset-bottom))", color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
       >
-        <div className="shrink-0 border-b border-white/10 bg-[#354153] px-3 pb-2.5 pt-3">
+        <div className="shrink-0 border-b border-white/10 bg-gradient-to-br from-[#263246] via-[#354153] to-[#2a8d8b]/35 px-3 pb-3 pt-2.5">
+          <div className="mx-auto mb-2 h-1 w-12 rounded-full bg-white/20" />
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Kiválasztás</p>
-              <h3 className="mt-0.5 truncate text-[17px] font-medium text-white">{labelText}</h3>
-              <p className="mt-0.5 text-[11px] text-white/45">{options.length} választható érték</p>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/70">AllIn választó</p>
+              <h3 className="mt-0.5 truncate text-[18px] font-medium text-white">{labelText}</h3>
+              <p className="mt-0.5 text-[11px] text-white/50">{options.length} választható érték</p>
             </div>
             <button className={iconBtn} type="button" onClick={closePicker} aria-label="Bezárás"><X size={18} /></button>
           </div>
           {searchable ? (
-            <div className="relative mt-2.5">
+            <div className="relative mt-3">
               <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" />
               <input
-                className={`${input} h-10 pl-9 pr-9 !text-white`}
+                className={`${input} h-10 border-[#7bd7d4]/20 bg-[#202b3b] pl-9 pr-9 !text-white shadow-inner`}
                 style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff", caretColor: "#ffffff" }}
                 value={pickerSearch}
                 onChange={(event) => setPickerSearch(event.target.value)}
@@ -1217,16 +1218,20 @@ function MobileSingleSelect({
           ) : null}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 [scrollbar-gutter:stable]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 [scrollbar-gutter:stable]">
           {showEmptyOption ? (
             <button
               type="button"
-              className={`mb-1 flex min-h-11 w-full items-center gap-2 rounded-2xl border px-3 text-left text-sm !text-white transition ${isEmpty ? "border-[#7bd7d4]/55 bg-[#1f7775]" : "border-white/10 bg-[#293548] hover:bg-[#334158]"}`}
+              className={`mb-1.5 flex min-h-12 w-full items-center gap-2 rounded-2xl border px-3 text-left text-sm !text-white transition ${
+                isEmpty
+                  ? "border-[#7bd7d4]/65 bg-[#2a8d8b] shadow-[0_10px_24px_rgba(42,141,139,.22)]"
+                  : "border-white/10 bg-[#354153] hover:border-white/16 hover:bg-[#3f4d62]"
+              }`}
               style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
               onClick={() => { onChange(emptyValue); closePicker(); }}
             >
               <span className="min-w-0 flex-1 truncate">{emptyText}</span>
-              {isEmpty ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
+              {isEmpty ? <CheckCircle2 size={17} className="shrink-0 text-[#d7fffd]" /> : null}
             </button>
           ) : null}
 
@@ -1238,7 +1243,11 @@ function MobileSingleSelect({
                   key={option.value}
                   type="button"
                   disabled={option.disabled}
-                  className={`flex min-h-11 w-full items-center gap-2 rounded-2xl border px-3 py-2 text-left text-sm !text-white transition ${active ? "border-[#7bd7d4]/55 bg-[#1f7775]" : "border-white/[0.07] bg-[#293548] hover:bg-[#334158]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                  className={`flex min-h-12 w-full items-center gap-2 rounded-2xl border px-3 py-2 text-left text-sm !text-white transition ${
+                    active
+                      ? "border-[#7bd7d4]/65 bg-[#2a8d8b] shadow-[0_10px_24px_rgba(42,141,139,.22)]"
+                      : "border-white/[0.08] bg-[#354153] hover:border-white/16 hover:bg-[#3f4d62]"
+                  } disabled:cursor-not-allowed disabled:opacity-40`}
                   style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
                   onClick={() => { if (!option.disabled) { onChange(option.value); closePicker(); } }}
                   title={option.hint || option.label}
@@ -1247,7 +1256,7 @@ function MobileSingleSelect({
                   {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/40 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,.035)]" style={{ backgroundColor: option.swatch }} /> : null}
                   <span className="min-w-0 flex-1 truncate font-medium !text-white" style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}>{option.label}</span>
                   {option.hint ? <span className="max-w-[42%] shrink-0 truncate text-[10px] !text-white/65" style={{ color: "rgba(255,255,255,0.68)", WebkitTextFillColor: "rgba(255,255,255,0.68)" }}>{option.hint}</span> : null}
-                  {active ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
+                  {active ? <CheckCircle2 size={17} className="shrink-0 text-[#d7fffd]" /> : null}
                 </button>
               );
             })}
@@ -1256,7 +1265,7 @@ function MobileSingleSelect({
           {!visibleOptions.length ? <div className="grid min-h-36 place-items-center px-4 text-center text-sm text-white/48">Nincs találat erre a keresésre.</div> : null}
         </div>
 
-        <div className="shrink-0 border-t border-white/10 bg-[#2b3546] p-3">
+        <div className="shrink-0 border-t border-white/10 bg-[#263246] p-3">
           <button className={`${primaryBtn} h-11 w-full !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={closePicker}>Kész</button>
         </div>
       </section>
@@ -1270,7 +1279,11 @@ function MobileSingleSelect({
       <button
         type="button"
         disabled={disabled}
-        className="flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm !text-white outline-none transition hover:bg-[#2e3b50] focus:border-[#7bd7d4]/65 disabled:cursor-not-allowed disabled:opacity-45"
+        className={`flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-2xl border px-3 text-left text-sm !text-white outline-none transition disabled:cursor-not-allowed disabled:opacity-45 ${
+          open
+            ? "border-[#7bd7d4]/60 bg-[#3f4959] shadow-[0_0_0_1px_rgba(123,215,212,.08),0_10px_24px_rgba(15,23,42,.18)]"
+            : "border-white/16 bg-[#3f4959] hover:border-white/22 hover:bg-[#475365]"
+        }`}
         style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
         onClick={() => { setPickerSearch(""); setOpen(true); }}
       >
@@ -1278,7 +1291,7 @@ function MobileSingleSelect({
           {selected?.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/35" style={{ backgroundColor: selected.swatch }} /> : null}
           <span className="min-w-0 flex-1 truncate !text-white" style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}>{summary}</span>
         </span>
-        <ChevronDown size={16} className="shrink-0 text-white/48" />
+        <ChevronDown size={16} className={`shrink-0 transition ${open ? "rotate-180 text-[#d7fffd]" : "text-white/48"}`} />
       </button>
       {picker}
     </div>
@@ -1342,25 +1355,26 @@ function MobileMultiSelect({
 
   const picker = open && typeof document !== "undefined" ? createPortal(
     <>
-      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/68 backdrop-blur-[2px]" onClick={closePicker} />
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-slate-950/74 backdrop-blur-[3px]" onClick={closePicker} />
       <section
-        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/20 bg-[#303a4c] shadow-[0_28px_90px_rgba(0,0,0,.62)]"
+        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/28 bg-[#303a4c] shadow-[0_30px_100px_rgba(0,0,0,.68)]"
         style={{ top: "max(8px, env(safe-area-inset-top))", bottom: "max(8px, env(safe-area-inset-bottom))", color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
       >
-        <div className="shrink-0 border-b border-white/10 bg-[#354153] px-3 pb-2.5 pt-3">
+        <div className="shrink-0 border-b border-white/10 bg-gradient-to-br from-[#263246] via-[#354153] to-[#2a8d8b]/35 px-3 pb-3 pt-2.5">
+          <div className="mx-auto mb-2 h-1 w-12 rounded-full bg-white/20" />
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Több érték</p>
-              <h3 className="mt-0.5 truncate text-[17px] font-medium text-white">{labelText}</h3>
-              <p className="mt-0.5 text-[11px] text-white/45">{selectedRows.length ? `${selectedRows.length} kijelölve • ` : ""}{options.length} választható</p>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/70">AllIn többes választó</p>
+              <h3 className="mt-0.5 truncate text-[18px] font-medium text-white">{labelText}</h3>
+              <p className="mt-0.5 text-[11px] text-white/50">{selectedRows.length ? `${selectedRows.length} kijelölve • ` : ""}{options.length} választható</p>
             </div>
             <button className={iconBtn} type="button" onClick={closePicker} aria-label="Bezárás"><X size={18} /></button>
           </div>
           {searchable ? (
-            <div className="relative mt-2.5">
+            <div className="relative mt-3">
               <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" />
               <input
-                className={`${input} h-10 pl-9 pr-9 !text-white`}
+                className={`${input} h-10 border-[#7bd7d4]/20 bg-[#202b3b] pl-9 pr-9 !text-white shadow-inner`}
                 style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff", caretColor: "#ffffff" }}
                 value={pickerSearch}
                 onChange={(event) => setPickerSearch(event.target.value)}
@@ -1372,12 +1386,12 @@ function MobileMultiSelect({
           ) : null}
         </div>
 
-        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-white/10 bg-[#2f394a] px-3 py-2.5">
-          <button className={`${softBtn} h-9 !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={() => onChange([])}>Összes</button>
-          <button className={`${softBtn} h-9 !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={selectVisible} disabled={!visibleOptions.some((option) => !option.disabled)}>{pickerSearchKey ? "Találatok kijelölése" : "Mind kijelölése"}</button>
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-white/10 bg-[#2b3546] px-3 py-2.5">
+          <button className={`${softBtn} h-9 border-white/14 bg-[#3f4959] !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={() => onChange([])}>Összes</button>
+          <button className={`${softBtn} h-9 border-[#7bd7d4]/24 bg-[#2a8d8b]/20 !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={selectVisible} disabled={!visibleOptions.some((option) => !option.disabled)}>{pickerSearchKey ? "Találatok kijelölése" : "Mind kijelölése"}</button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 [scrollbar-gutter:stable]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 [scrollbar-gutter:stable]">
           <div className="grid gap-1.5">
             {visibleOptions.map((option) => {
               const active = selectedSet.has(String(option.value));
@@ -1386,12 +1400,16 @@ function MobileMultiSelect({
                   key={option.value}
                   type="button"
                   disabled={option.disabled}
-                  className={`flex min-h-11 w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left text-sm !text-white transition ${active ? "border-[#7bd7d4]/55 bg-[#1f7775]" : "border-white/[0.07] bg-[#293548] hover:bg-[#334158]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                  className={`flex min-h-12 w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left text-sm !text-white transition ${
+                    active
+                      ? "border-[#7bd7d4]/65 bg-[#2a8d8b] shadow-[0_10px_24px_rgba(42,141,139,.22)]"
+                      : "border-white/[0.08] bg-[#354153] hover:border-white/16 hover:bg-[#3f4d62]"
+                  } disabled:cursor-not-allowed disabled:opacity-40`}
                   style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
                   onClick={() => !option.disabled && toggle(option.value)}
                   title={option.hint || option.label}
                 >
-                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${active ? "border-[#7bd7d4]/70 bg-[#2a8d8b]" : "border-white/28 bg-[#202b3b]"}`}>{active ? <CheckCircle2 size={14} /> : null}</span>
+                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${active ? "border-[#d7fffd]/70 bg-[#1f7775]" : "border-white/28 bg-[#202b3b]"}`}>{active ? <CheckCircle2 size={14} /> : null}</span>
                   {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/40" style={{ backgroundColor: option.swatch }} /> : null}
                   <span className="min-w-0 flex-1 truncate font-medium !text-white" style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}>{option.label}</span>
                   {option.hint ? <span className="max-w-[42%] shrink-0 truncate text-[10px] !text-white/65" style={{ color: "rgba(255,255,255,0.68)", WebkitTextFillColor: "rgba(255,255,255,0.68)" }}>{option.hint}</span> : null}
@@ -1402,7 +1420,7 @@ function MobileMultiSelect({
           {!visibleOptions.length ? <div className="grid min-h-36 place-items-center px-4 text-center text-sm text-white/48">Nincs találat erre a keresésre.</div> : null}
         </div>
 
-        <div className="shrink-0 border-t border-white/10 bg-[#2b3546] p-3">
+        <div className="shrink-0 border-t border-white/10 bg-[#263246] p-3">
           <button className={`${primaryBtn} h-11 w-full !text-white`} style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} type="button" onClick={closePicker}>Kész{selectedRows.length ? ` • ${selectedRows.length} kijelölve` : ""}</button>
         </div>
       </section>
@@ -1413,9 +1431,21 @@ function MobileMultiSelect({
   return (
     <div className={label}>
       {labelText}
-      <button type="button" className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm !text-white" style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }} onClick={() => { setPickerSearch(""); setOpen(true); }}>
+      <button
+        type="button"
+        className={`flex h-11 w-full items-center justify-between gap-2 rounded-2xl border px-3 text-left text-sm !text-white transition ${
+          open
+            ? "border-[#7bd7d4]/60 bg-[#3f4959] shadow-[0_0_0_1px_rgba(123,215,212,.08),0_10px_24px_rgba(15,23,42,.18)]"
+            : "border-white/16 bg-[#3f4959] hover:border-white/22 hover:bg-[#475365]"
+        }`}
+        style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
+        onClick={() => { setPickerSearch(""); setOpen(true); }}
+      >
         <span className="min-w-0 flex-1 truncate !text-white" style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}>{summary}</span>
-        <span className="flex shrink-0 items-center gap-1.5">{selectedRows.length ? <span className="rounded-full bg-[#2a8d8b]/35 px-1.5 py-0.5 text-[10px] text-[#d7fffd]">{selectedRows.length}</span> : null}<ChevronDown size={16} className="text-white/48" /></span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {selectedRows.length ? <span className="rounded-full border border-[#7bd7d4]/30 bg-[#2a8d8b]/35 px-1.5 py-0.5 text-[10px] text-[#d7fffd]">{selectedRows.length}</span> : null}
+          <ChevronDown size={16} className={`transition ${open ? "rotate-180 text-[#d7fffd]" : "text-white/48"}`} />
+        </span>
       </button>
       {picker}
     </div>
