@@ -4730,9 +4730,9 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
 function ContinuationBadge({ compact = false, className = "" }: { compact?: boolean; className?: string }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border border-amber-100/75 bg-amber-300 px-2.5 py-1 font-medium text-slate-900 shadow-[0_0_18px_rgba(252,211,77,0.38)] ${compact ? "text-[10px] leading-none" : "text-[11px] leading-none"} ${className}`.trim()}
+      className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-amber-200/50 bg-[linear-gradient(180deg,rgba(251,191,36,0.92),rgba(245,158,11,0.88))] px-2.5 font-semibold text-slate-900 shadow-[0_6px_18px_rgba(245,158,11,0.24)] ${compact ? "text-[9px] leading-none" : "text-[10px] leading-none"} ${className}`.trim()}
     >
-      <ArrowRight size={compact ? 10 : 11} />
+      <ArrowRight size={compact ? 9 : 10} />
       Folytatás innen
     </span>
   );
@@ -4746,17 +4746,17 @@ function ProductCodeTooltipButton({ item, openUp = false, mode = "compact" }: { 
       item={item}
       openUp={openUp}
       buttonLabel={isWide ? (
-        <span className="flex min-w-0 items-start gap-2 text-left">
-          <span className="mt-0.5 shrink-0 rounded-full border border-[#5bd0cc]/22 bg-black/12 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#9fe5e2]">
+        <span className="flex min-w-0 w-full items-center gap-1.5 text-left">
+          <span className="shrink-0 rounded-full border border-[#5bd0cc]/22 bg-black/14 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#9fe5e2]">
             Termékkód
           </span>
-          <span className="min-w-0 break-all whitespace-normal text-[11px] leading-[1.2] text-white">
+          <span className="min-w-0 flex-1 truncate text-[11px] text-white/92" title={code || "Nincs termékkód"}>
             {code || "Nincs termékkód"}
           </span>
         </span>
       ) : (code ? `Termékkód: ${code}` : "Nincs termékkód")}
       buttonClassName={isWide
-        ? "inline-flex min-h-[38px] w-full max-w-full shrink items-start justify-start gap-2 overflow-hidden whitespace-normal rounded-2xl border border-[#5bd0cc]/35 bg-[#203f49] px-2.5 py-2 text-[11px] leading-tight text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        ? "group inline-flex h-8 w-full max-w-full shrink items-center justify-start gap-1.5 overflow-hidden rounded-xl border border-[#5bd0cc]/32 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#cffffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/48 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
         : "inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
       }
     />
@@ -14310,11 +14310,11 @@ export default function AllInWarehouse() {
                             </button>
                             <WarehouseShopifyStatusIcon item={it} size="sm" />
                           </div>
-                          <div className="mt-1 space-y-1.5 overflow-visible text-[11px] leading-4">
-                            {isHighlighted ? <ContinuationBadge compact className="align-middle" /> : null}
-                            <div className="relative z-40 min-w-0 overflow-visible">
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-visible text-[11px] leading-4">
+                            <div className="relative z-40 min-w-0 flex-1 overflow-visible">
                               <ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} mode="wide" />
                             </div>
+                            {isHighlighted ? <ContinuationBadge compact className="shrink-0" /> : null}
                           </div>
                           {showPurchaseContext && (invoiceText || purchaseDateText) ? (
                             <div className="mt-1 truncate text-[10px] leading-3 text-white/45" title={[invoiceText ? `Számla: ${invoiceText}` : "", purchaseDateText ? `Beérkezés: ${purchaseDateText}` : ""].filter(Boolean).join(" • ")}>
