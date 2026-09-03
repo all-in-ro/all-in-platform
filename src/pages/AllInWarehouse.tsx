@@ -121,6 +121,7 @@ const warehouseBarcodeReturnStorageKey = "allinfashion:warehouse:barcodeReturn:v
 const warehouseBarcodeChangedStorageKey = "allinfashion:barcode:changed:v1";
 const purchaseOrdersChangedStorageKey = "allinfashion:purchaseOrders:changed:v1";
 const purchaseOrdersChangedEventName = "aif:purchase-orders-changed";
+const warehouseVariantCodesPinnedEventName = "aif:warehouse-variant-codes-pinned";
 const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
 const WAREHOUSE_UIT_WARNING_THRESHOLD_RON = 10000;
 const warehouseUitSuppressedStorageKey = "allinfashion:warehouse:uit-warning-suppressed:v1";
@@ -4576,7 +4577,7 @@ function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
   );
 }
 
-function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók", buttonClassName = "" }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean; buttonLabel?: React.ReactNode; buttonClassName?: string }) {
+function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók", buttonClassName = "", wrapperClassName = "" }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean; buttonLabel?: React.ReactNode; buttonClassName?: string; wrapperClassName?: string }) {
   const barcode = visibleWarehouseBarcode(item);
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
@@ -4589,6 +4590,7 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
   ];
   const hasAny = codeRows.some((row) => String(row.value || "").trim());
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const tooltipInstanceIdRef = useRef(`variant-codes-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`);
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
@@ -4624,11 +4626,14 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
     event?.stopPropagation();
     updateTooltipPosition();
     setCopiedKey("");
-    setPinned((current) => {
-      const next = !current;
-      setTooltipOpen(next);
-      return next;
-    });
+    const nextPinned = !pinned;
+    setPinned(nextPinned);
+    setTooltipOpen(nextPinned);
+    if (nextPinned && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(warehouseVariantCodesPinnedEventName, {
+        detail: { ownerId: tooltipInstanceIdRef.current },
+      }));
+    }
   }
 
   async function copyCode(rowKey: string, value: string) {
@@ -4649,6 +4654,18 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
       window.removeEventListener("resize", onMove);
     };
   }, [tooltipOpen, pinned, openUp]);
+
+  useEffect(() => {
+    const onAnotherTooltipPinned = (event: Event) => {
+      const ownerId = String((event as CustomEvent<{ ownerId?: string }>).detail?.ownerId || "");
+      if (!ownerId || ownerId === tooltipInstanceIdRef.current) return;
+      setPinned(false);
+      setTooltipOpen(false);
+      setCopiedKey("");
+    };
+    window.addEventListener(warehouseVariantCodesPinnedEventName, onAnotherTooltipPinned as EventListener);
+    return () => window.removeEventListener(warehouseVariantCodesPinnedEventName, onAnotherTooltipPinned as EventListener);
+  }, []);
 
   useEffect(() => {
     if (!pinned) return;
@@ -4704,7 +4721,7 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
 
   return (
     <>
-      <span className="relative inline-flex shrink-0 justify-center whitespace-nowrap align-middle">
+      <span className={wrapperClassName || "relative inline-flex shrink-0 justify-center whitespace-nowrap align-middle"}>
         <button
           ref={buttonRef}
           type="button"
@@ -4745,6 +4762,7 @@ function ProductCodeTooltipButton({ item, openUp = false, mode = "compact" }: { 
     <VariantCodesTooltip
       item={item}
       openUp={openUp}
+      wrapperClassName={isWide ? "relative inline-flex min-w-0 w-full max-w-full overflow-hidden align-middle" : ""}
       buttonLabel={isWide ? (
         <span className="flex min-w-0 w-full items-center gap-1.5 text-left">
           <span className="shrink-0 rounded-full border border-[#5bd0cc]/22 bg-black/14 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#9fe5e2]">
@@ -4756,7 +4774,7 @@ function ProductCodeTooltipButton({ item, openUp = false, mode = "compact" }: { 
         </span>
       ) : (code ? `Termékkód: ${code}` : "Nincs termékkód")}
       buttonClassName={isWide
-        ? "group inline-flex h-8 w-full max-w-full shrink items-center justify-start gap-1.5 overflow-hidden rounded-xl border border-[#5bd0cc]/32 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#cffffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/48 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        ? "group inline-flex h-8 min-w-0 w-full max-w-full items-center justify-start gap-1.5 overflow-hidden rounded-xl border border-[#5bd0cc]/32 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#cffffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/48 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
         : "inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
       }
     />
