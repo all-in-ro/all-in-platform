@@ -14314,7 +14314,6 @@ export default function AllInWarehouse() {
                             <div className="relative z-40 min-w-0 flex-1 overflow-visible">
                               <ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} mode="wide" />
                             </div>
-                            {isHighlighted ? <ContinuationBadge compact className="shrink-0" /> : null}
                           </div>
                           {showPurchaseContext && (invoiceText || purchaseDateText) ? (
                             <div className="mt-1 truncate text-[10px] leading-3 text-white/45" title={[invoiceText ? `Számla: ${invoiceText}` : "", purchaseDateText ? `Beérkezés: ${purchaseDateText}` : ""].filter(Boolean).join(" • ")}>
@@ -14351,10 +14350,13 @@ export default function AllInWarehouse() {
                         <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><SellPriceWithMarkup sellPrice={it.sell_price} buyPrice={it.buy_price} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-2 py-2.5 text-center align-middle">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button className={warehouseListIconButton} onClick={() => openProductHistory(it)} title="Termék History" aria-label="Termék History" type="button"><Clock3 size={15} /></button>
-                            <button className={warehouseListIconButton} onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
-                            <button className={warehouseListDangerButton} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
+                          <div className="flex flex-col items-center justify-center gap-1.5">
+                            {isHighlighted ? <ContinuationBadge compact className="shadow-[0_6px_18px_rgba(245,158,11,0.18)]" /> : null}
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button className={warehouseListIconButton} onClick={() => openProductHistory(it)} title="Termék History" aria-label="Termék History" type="button"><Clock3 size={15} /></button>
+                              <button className={warehouseListIconButton} onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
+                              <button className={warehouseListDangerButton} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
+                            </div>
                           </div>
                         </td>
                       </tr>
