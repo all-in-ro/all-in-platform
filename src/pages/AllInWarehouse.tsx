@@ -17240,10 +17240,7 @@ export default function AllInWarehouse() {
                   </div>
                 </section>
                 <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-sm text-white/80">Beszállítói kapcsolat</p>
-                    <span className="text-[10px] text-white/42">A módosítás a Mentés gombot aktiválja</span>
-                  </div>
+                  <p className="mb-3 whitespace-nowrap text-sm text-white/80">Beszállítói kapcsolat</p>
                   <div className="space-y-3 text-sm">
                     <WarehouseSingleSelect
                       labelText="Beszállító"
