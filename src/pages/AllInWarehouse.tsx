@@ -4763,15 +4763,15 @@ function ProductCodeTooltipButton({ item, openUp = false, mode = "compact" }: { 
     <VariantCodesTooltip
       item={item}
       openUp={openUp}
-      wrapperClassName={isWide ? "relative inline-flex min-w-0 w-full max-w-full overflow-hidden align-middle" : ""}
+      wrapperClassName={isWide ? "relative inline-flex min-w-0 w-fit max-w-full overflow-hidden align-middle" : ""}
       buttonLabel={
-        <span className="block min-w-0 max-w-full truncate" title={code || "Nincs termékkód"}>
+        <span className="block min-w-0 max-w-full truncate font-mono tracking-[-0.015em]" title={code || "Nincs termékkód"}>
           {visibleCode}
         </span>
       }
       buttonClassName={isWide
-        ? "inline-flex h-7 min-w-0 max-w-full items-center justify-start overflow-hidden rounded-full border border-[#5bd0cc]/34 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#d7fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/50 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
-        : "inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        ? "inline-flex h-[22px] min-w-0 max-w-[172px] items-center justify-start overflow-hidden rounded-lg border border-[#67c9c5]/28 bg-[#203c47]/88 px-2 text-[10px] leading-none text-[#d9fbf9] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-[#7bd7d4]/46 hover:bg-[#254b55] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/40"
+        : "inline-flex h-[22px] max-w-[172px] shrink-0 items-center justify-start overflow-hidden whitespace-nowrap rounded-lg border border-[#67c9c5]/28 bg-[#203c47]/88 px-2 text-[10px] leading-none text-[#d9fbf9] transition hover:border-[#7bd7d4]/46 hover:bg-[#254b55] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/40"
       }
     />
   );
