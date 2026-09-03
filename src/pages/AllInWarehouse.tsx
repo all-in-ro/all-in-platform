@@ -4758,24 +4758,20 @@ function ContinuationBadge({ compact = false, className = "" }: { compact?: bool
 function ProductCodeTooltipButton({ item, openUp = false, mode = "compact" }: { item: InventoryItem; openUp?: boolean; mode?: "compact" | "wide" }) {
   const code = String(itemProductCode(item) || "").trim();
   const isWide = mode === "wide";
+  const visibleCode = code || "—";
   return (
     <VariantCodesTooltip
       item={item}
       openUp={openUp}
       wrapperClassName={isWide ? "relative inline-flex min-w-0 w-full max-w-full overflow-hidden align-middle" : ""}
-      buttonLabel={isWide ? (
-        <span className="flex min-w-0 w-full items-center gap-1.5 text-left">
-          <span className="shrink-0 rounded-full border border-[#5bd0cc]/22 bg-black/14 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#9fe5e2]">
-            Termékkód
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[11px] text-white/92" title={code || "Nincs termékkód"}>
-            {code || "Nincs termékkód"}
-          </span>
+      buttonLabel={
+        <span className="block min-w-0 max-w-full truncate" title={code || "Nincs termékkód"}>
+          {visibleCode}
         </span>
-      ) : (code ? `Termékkód: ${code}` : "Nincs termékkód")}
+      }
       buttonClassName={isWide
-        ? "group inline-flex h-8 min-w-0 w-full max-w-full items-center justify-start gap-1.5 overflow-hidden rounded-xl border border-[#5bd0cc]/32 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#cffffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/48 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
-        : "inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        ? "inline-flex h-7 min-w-0 max-w-full items-center justify-start overflow-hidden rounded-full border border-[#5bd0cc]/34 bg-[linear-gradient(180deg,rgba(34,62,74,0.98),rgba(27,53,64,0.98))] px-2.5 text-[11px] leading-none text-[#d7fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#78d8d3]/50 hover:bg-[linear-gradient(180deg,rgba(38,72,85,0.98),rgba(31,62,74,0.98))] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        : "inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
       }
     />
   );
