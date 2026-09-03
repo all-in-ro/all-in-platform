@@ -57,10 +57,8 @@ const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl 
 const warehouseListIconButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
 const warehouseListDangerButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
-const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const moveLabel = "grid min-w-0 gap-1 text-[10px] uppercase tracking-[0.05em] text-white/58";
 const moveInput = "h-8 min-w-0 w-full rounded-lg border border-white/18 bg-[#303a4c] px-2 text-xs text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55";
-const moveSelect = `${moveInput} aif-native-select truncate pr-8`;
 const moveQtyBox = "grid h-8 w-full min-w-[132px] grid-cols-[32px,minmax(56px,1fr),32px] overflow-hidden rounded-lg border border-white/18 bg-[#303a4c]";
 const moveQtyButton = "inline-flex h-8 w-8 items-center justify-center text-white/86 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-45";
 const moveTinyBtn = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-[#344257] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#405067] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/30 disabled:cursor-not-allowed disabled:opacity-50";
@@ -1127,6 +1125,9 @@ function WarehouseSingleSelect({
   noOptionsText = "Nincs választható érték.",
   buttonClassName = "",
   title,
+  compact = false,
+  className = "",
+  searchable,
 }: {
   labelText: string;
   options: WarehouseSingleSelectOption[];
@@ -1139,112 +1140,230 @@ function WarehouseSingleSelect({
   noOptionsText?: string;
   buttonClassName?: string;
   title?: string;
+  compact?: boolean;
+  className?: string;
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const selected = useMemo(
     () => options.find((option) => String(option.value) === String(value)) || null,
     [options, value]
   );
   const isEmpty = showEmptyOption && String(value) === String(emptyValue);
   const summary = isEmpty ? emptyText : selected?.label || emptyText;
+  const showSearch = searchable ?? options.length > 12;
+  const searchKey = normalizeSearch(pickerSearch);
+  const visibleOptions = useMemo(
+    () => searchKey
+      ? options.filter((option) => normalizeSearch(`${option.label} ${option.hint || ""}`).includes(searchKey))
+      : options,
+    [options, searchKey],
+  );
+
+  const closePicker = useCallback(() => {
+    setOpen(false);
+    setPickerSearch("");
+  }, []);
+
+  const updateMenuPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const viewportPadding = 10;
+    const gap = 6;
+    const minWidth = compact ? 176 : 250;
+    const width = Math.min(
+      Math.max(rect.width, minWidth),
+      Math.max(minWidth, window.innerWidth - viewportPadding * 2),
+    );
+    const desiredHeight = Math.min(390, 24 + (showSearch ? 52 : 0) + Math.max(1, options.length + (showEmptyOption ? 1 : 0)) * 36);
+    const roomBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+    const roomAbove = Math.max(0, rect.top - viewportPadding);
+    const openUp = roomBelow < Math.min(190, desiredHeight) && roomAbove > roomBelow;
+    const maxHeight = Math.max(128, Math.min(desiredHeight, openUp ? roomAbove - gap : roomBelow - gap));
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+    );
+
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? Math.max(viewportPadding, rect.top - gap) : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
+      width,
+      maxHeight,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [compact, options.length, showEmptyOption, showSearch]);
 
   useEffect(() => {
     if (!open) return;
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      if (!target || rootRef.current?.contains(target)) return;
-      setOpen(false);
+      if (!target || buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      closePicker();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") closePicker();
     };
+    const onMove = () => updateMenuPosition();
     document.addEventListener("mousedown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener("mousedown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
     };
-  }, [open]);
+  }, [open, closePicker, updateMenuPosition]);
 
   useEffect(() => {
-    if (disabled && open) setOpen(false);
-  }, [disabled, open]);
+    if (disabled && open) closePicker();
+  }, [disabled, open, closePicker]);
+
+  useEffect(() => {
+    if (open) updateMenuPosition();
+  }, [open, pickerSearch, visibleOptions.length, updateMenuPosition]);
+
+  const menu = open && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/30 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={menuStyle}
+          role="listbox"
+          aria-label={labelText}
+        >
+          {showSearch ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-2">
+              <div className="relative">
+                <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-white/42" />
+                <input
+                  className="h-9 w-full rounded-xl border border-white/16 bg-[#202b3b] pl-8 pr-8 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
+                  value={pickerSearch}
+                  onChange={(event) => setPickerSearch(event.target.value)}
+                  placeholder={`Keresés: ${labelText.toLowerCase()}`}
+                  autoFocus
+                />
+                {pickerSearch ? (
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/45 hover:bg-white/10 hover:text-white"
+                    onClick={() => setPickerSearch("")}
+                    aria-label="Keresés törlése"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]">
+            {showEmptyOption ? (
+              <button
+                type="button"
+                className={`mb-1 flex min-h-9 w-full items-center justify-between gap-2 rounded-xl border px-2.5 text-left text-xs transition ${
+                  isEmpty
+                    ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
+                    : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                }`}
+                onClick={() => {
+                  onChange(emptyValue);
+                  closePicker();
+                }}
+                role="option"
+                aria-selected={isEmpty}
+              >
+                <span className="min-w-0 flex-1 truncate">{emptyText}</span>
+                {isEmpty ? <CheckCircle2 size={14} className="shrink-0 text-[#d7fffd]" /> : null}
+              </button>
+            ) : null}
+
+            <div className="grid gap-1">
+              {visibleOptions.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={option.disabled}
+                    className={`flex min-h-9 w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
+                      active
+                        ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
+                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    onClick={() => {
+                      if (option.disabled) return;
+                      onChange(option.value);
+                      closePicker();
+                    }}
+                    role="option"
+                    aria-selected={active}
+                    title={option.hint || option.label}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {option.hint ? <span className="max-w-[46%] shrink-0 truncate text-[10px] text-white/42">{option.hint}</span> : null}
+                    {active ? <CheckCircle2 size={14} className="shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {!visibleOptions.length ? (
+              <div className="px-3 py-5 text-center text-xs text-white/45">{pickerSearch ? "Nincs találat erre a keresésre." : noOptionsText}</div>
+            ) : null}
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
+  const wrapperClass = compact
+    ? `inline-flex shrink-0 items-center gap-1.5 text-xs text-white/62 ${className}`
+    : `${label} relative ${className}`;
 
   return (
-    <div ref={rootRef} className={`${label} relative`}>
+    <div className={wrapperClass}>
       <span>{labelText}</span>
       <button
+        ref={buttonRef}
         type="button"
-        className={`flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${buttonClassName}`}
-        onClick={() => setOpen((current) => !current)}
+        className={`flex min-w-0 items-center justify-between gap-2 border text-left text-white outline-none transition focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${
+          compact
+            ? "h-8 min-w-[70px] rounded-lg border-white/18 bg-[#303a4c] px-2 text-xs hover:bg-[#3b485d]"
+            : "h-10 w-full rounded-xl border-white/18 bg-[#3f4959] px-3 text-sm hover:bg-[#475365]"
+        } ${open ? "!border-[#7bd7d4]/55 shadow-[0_0_0_1px_rgba(123,215,212,0.08),0_8px_20px_rgba(15,23,42,0.18)]" : ""} ${buttonClassName}`}
+        onClick={() => {
+          if (open) closePicker();
+          else {
+            setPickerSearch("");
+            updateMenuPosition();
+            setOpen(true);
+          }
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
         title={title || summary}
       >
-        <span className="min-w-0 truncate">{summary}</span>
-        <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+        <span className="min-w-0 flex-1 truncate">{summary}</span>
+        <ChevronDown size={compact ? 13 : 15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
       </button>
-
-      {open ? (
-        <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl">
-          {showEmptyOption ? (
-            <div className="border-b border-white/10 px-2 py-1.5">
-              <button
-                type="button"
-                className={`flex h-7 w-full items-center justify-between rounded-lg px-2 text-left text-[11px] transition ${isEmpty ? "bg-[#2a8d8b]/22 text-white" : "text-white/72 hover:bg-white/[0.08] hover:text-white"}`}
-                onClick={() => onChange(emptyValue)}
-                role="option"
-                aria-selected={isEmpty}
-              >
-                <span className="truncate">{emptyText}</span>
-                {isEmpty ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
-              </button>
-            </div>
-          ) : null}
-
-          <div className="max-h-64 overflow-auto py-1" role="listbox">
-            {options.map((option) => {
-              const active = String(option.value) === String(value);
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  disabled={option.disabled}
-                  className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"} disabled:cursor-not-allowed disabled:opacity-45`}
-                  onClick={() => {
-                    if (option.disabled) return;
-                    onChange(option.value);
-                  }}
-                  role="option"
-                  aria-selected={active}
-                  title={option.hint || option.label}
-                >
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                  {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
-                  {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
-                </button>
-              );
-            })}
-            {!options.length ? <div className="px-3 py-3 text-xs text-white/45">{noOptionsText}</div> : null}
-          </div>
-
-          <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
-            <button
-              type="button"
-              className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]"
-              onClick={() => setOpen(false)}
-            >
-              Kész
-            </button>
-          </div>
-        </div>
-      ) : null}
+      {menu}
     </div>
   );
 }
-
 
 type WarehouseTaxonomySelectOption = {
   value: string;
@@ -9585,19 +9704,18 @@ export default function AllInWarehouse() {
         <span className="ml-2 text-white/45">• oldal {safeProductPage} / {totalProductPages}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <label className="inline-flex items-center gap-1.5 text-white/62">
-          <span>Oldalanként</span>
-          <select
-            className="h-8 rounded-lg border border-white/18 bg-[#303a4c] px-2 text-xs text-white outline-none focus:border-[#7bd7d4]/55"
-            value={productPageSize}
-            onChange={(e) => {
-              setProductPageSize(Number(e.target.value) || WAREHOUSE_PRODUCTS_PER_PAGE);
-              setProductPage(1);
-            }}
-          >
-            {WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
+        <WarehouseSingleSelect
+          compact
+          labelText="Oldalanként"
+          value={String(productPageSize)}
+          showEmptyOption={false}
+          emptyText={String(productPageSize)}
+          options={WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
+          onChange={(next) => {
+            setProductPageSize(Number(next) || WAREHOUSE_PRODUCTS_PER_PAGE);
+            setProductPage(1);
+          }}
+        />
         <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(1)}>Első</button>
         <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(safeProductPage - 1)}><ArrowLeft size={14} /> Előző {productPageSize}</button>
         <span className="rounded-full border border-white/12 bg-white/[0.08] px-3 py-2 text-white">{safeProductPage} / {totalProductPages}</span>
@@ -14499,11 +14617,22 @@ export default function AllInWarehouse() {
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    <label className={`${label} min-w-0`}>{labelPrintMode === "zebra" ? "Gyors címkeméret" : "Gyors sablon"}
-                      <select className={`${select} w-full min-w-0`} onChange={(e) => applyWarehouseLabelPreset(e.target.value)} defaultValue="40x46">
-                        {WAREHOUSE_LABEL_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{labelPrintMode === "zebra" ? `${preset.width} × ${preset.height} mm` : preset.name}</option>)}
-                      </select>
-                    </label>
+                    <WarehouseSingleSelect
+                      className="min-w-0"
+                      labelText={labelPrintMode === "zebra" ? "Gyors címkeméret" : "Gyors sablon"}
+                      value={WAREHOUSE_LABEL_PRESETS.find((preset) =>
+                        preset.width === labelWidth &&
+                        preset.height === labelHeight &&
+                        (labelPrintMode === "zebra" || (preset.cols === labelCols && preset.rows === labelRows))
+                      )?.id || ""}
+                      emptyValue=""
+                      emptyText="Egyedi méret"
+                      options={WAREHOUSE_LABEL_PRESETS.map((preset) => ({
+                        value: preset.id,
+                        label: labelPrintMode === "zebra" ? `${preset.width} × ${preset.height} mm` : preset.name,
+                      }))}
+                      onChange={(next) => { if (next) applyWarehouseLabelPreset(next); }}
+                    />
                     <label className={`${label} min-w-0`}>Címke szélesség mm<input className={`${input} w-full min-w-0`} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} inputMode="decimal" /></label>
                     <label className={`${label} min-w-0`}>Címke magasság mm<input className={`${input} w-full min-w-0`} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} inputMode="decimal" /></label>
                     {labelPrintMode === "a4" ? (
@@ -14519,22 +14648,30 @@ export default function AllInWarehouse() {
                       </div>
                     )}
                     <label className={`${label} min-w-0`}>Cég neve a címkén<input className={`${input} w-full min-w-0`} value={labelCompanyName} onChange={(e) => setLabelCompanyName(e.target.value)} placeholder={WAREHOUSE_LABEL_COMPANY} /></label>
-                    <label className={`${label} min-w-0`}>Pénznem
-                      <select className={`${select} w-full min-w-0`} value={labelCurrency} onChange={(e) => { setLabelCurrency(e.target.value); if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(e.target.value); }}>
-                        <option value="RON">RON</option>
-                        <option value="EUR">EUR</option>
-                        <option value="USD">USD</option>
-                        <option value="HUF">HUF</option>
-                      </select>
-                    </label>
+                    <WarehouseSingleSelect
+                      className="min-w-0"
+                      labelText="Pénznem"
+                      value={labelCurrency}
+                      showEmptyOption={false}
+                      emptyText="RON"
+                      options={["RON", "EUR", "USD", "HUF"].map((code) => ({ value: code, label: code }))}
+                      onChange={(next) => {
+                        setLabelCurrency(next);
+                        if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(next);
+                      }}
+                    />
                     <label className={`${label} min-w-0`}>Ár melletti egység<input className={`${input} w-full min-w-0`} value={labelUnitText} onChange={(e) => setLabelUnitText(e.target.value)} placeholder="RON" /></label>
                     <label className={`${label} min-w-0`}>Sablon neve<input className={`${input} w-full min-w-0`} value={labelTemplateName} onChange={(e) => setLabelTemplateName(e.target.value)} placeholder="Standard 40x46" /></label>
-                    <label className={`${label} min-w-0`}>Mentett sablon
-                      <select className={`${select} w-full min-w-0`} value="" onChange={(e) => loadWarehouseLabelTemplate(e.target.value)}>
-                        <option value="">Betöltés</option>
-                        {labelTemplates.map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}
-                      </select>
-                    </label>
+                    <WarehouseSingleSelect
+                      className="min-w-0"
+                      labelText="Mentett sablon"
+                      value={labelTemplates.some((template) => template.name === labelTemplateName) ? labelTemplateName : ""}
+                      emptyValue=""
+                      emptyText="Betöltés"
+                      noOptionsText="Még nincs mentett sablon."
+                      options={labelTemplates.map((template) => ({ value: template.name, label: template.name }))}
+                      onChange={(next) => { if (next) loadWarehouseLabelTemplate(next); }}
+                    />
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -15690,27 +15827,25 @@ export default function AllInWarehouse() {
                     </div>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <label className={label}>
-                      Ok
-                      <select
-                        className={select}
-                        value={stockEditorReasonCode}
-                        onChange={(event) => {
-                          const next = event.target.value;
-                          setStockEditorReasonCode(next);
-                          if (next !== "other") setStockEditorReasonText("");
-                          if (next) setStockEditorWarning(stockEditorTotalDelta() !== 0 ? `Készletkorrekció mód: a teljes készlet ${stockEditorTotalDelta() > 0 ? "+" : ""}${stockEditorTotalDelta()} db-bal változik.` : "");
-                        }}
-                      >
-                        <option value="">Válassz okot</option>
-                        <option value="inventory_difference">Leltáreltérés</option>
-                        <option value="incorrect_reception">Téves bevételezés</option>
-                        <option value="invoice_correction">Számlakorrekció</option>
-                        <option value="damaged_or_lost">Sérült vagy elveszett termék</option>
-                        <option value="admin_correction">Adminisztrációs javítás</option>
-                        <option value="other">Egyéb</option>
-                      </select>
-                    </label>
+                    <WarehouseSingleSelect
+                      labelText="Ok"
+                      value={stockEditorReasonCode}
+                      emptyValue=""
+                      emptyText="Válassz okot"
+                      options={[
+                        { value: "inventory_difference", label: "Leltáreltérés" },
+                        { value: "incorrect_reception", label: "Téves bevételezés" },
+                        { value: "invoice_correction", label: "Számlakorrekció" },
+                        { value: "damaged_or_lost", label: "Sérült vagy elveszett termék" },
+                        { value: "admin_correction", label: "Adminisztrációs javítás" },
+                        { value: "other", label: "Egyéb" },
+                      ]}
+                      onChange={(next) => {
+                        setStockEditorReasonCode(next);
+                        if (next !== "other") setStockEditorReasonText("");
+                        if (next) setStockEditorWarning(stockEditorTotalDelta() !== 0 ? `Készletkorrekció mód: a teljes készlet ${stockEditorTotalDelta() > 0 ? "+" : ""}${stockEditorTotalDelta()} db-bal változik.` : "");
+                      }}
+                    />
                     {stockEditorReasonCode === "other" ? (
                       <label className={label}>
                         Egyéb ok
@@ -15931,44 +16066,53 @@ export default function AllInWarehouse() {
                       <label className={label}>Terméknév románul<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
                       <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
-                      <label className={label}>Beszállító / forrás
-                        <select className={select} value={newProduct.supplierId} onChange={(e) => setNewProduct((x) => ({ ...x, supplierId: e.target.value }))}>
-                          <option value="">Nincs megadva</option>
-                          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      </label>
-                      <label className={label}>Márka
-                        <select className={select} value={newProduct.brandCode} onChange={(e) => {
-                          const nextBrand = e.target.value;
+                      <WarehouseSingleSelect
+                        labelText="Beszállító / forrás"
+                        value={newProduct.supplierId}
+                        emptyValue=""
+                        emptyText="Nincs megadva"
+                        options={suppliers.map((s) => ({ value: String(s.id), label: String(s.name || s.code || s.id) }))}
+                        onChange={(next) => setNewProduct((x) => ({ ...x, supplierId: next }))}
+                      />
+                      <WarehouseSingleSelect
+                        labelText="Márka"
+                        value={newProduct.brandCode}
+                        emptyValue=""
+                        emptyText="Nincs beállítva"
+                        options={brands.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))}
+                        onChange={(nextBrand) => {
                           const mapped = standardSizeForBrandSize(nextBrand, newProduct.supplierSize);
                           setNewProduct((x) => ({ ...x, brandCode: nextBrand, size: mapped || x.size }));
-                        }}>
-                          <option value="">Nincs beállítva</option>
-                          {brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}
-                        </select>
-                      </label>
-                      <label className={label}>Főkategória
-                        <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}>
-                          <option value="">Nincs beállítva</option>
-                          {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                        </select>
-                      </label>
-                      <label className={label}>Alkategória / terméktípus
-                        <select className={select} value={newProduct.subCategoryCode} onChange={(e) => {
-                          const value = e.target.value;
-                          const found = subCategories.find((c) => categoryValueMatches(c, value));
-                          setNewProduct((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") }));
-                        }}>
-                          <option value="">Nincs beállítva</option>
-                          {newProductSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                        </select>
-                      </label>
-                      <label className={label}>Nem
-                        <select className={select} value={newProduct.gender} onChange={(e) => setNewProduct((x) => ({ ...x, gender: e.target.value }))}>
-                          {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
-                          {!genderTypes.length && <option value="unisex">Unisex</option>}
-                        </select>
-                      </label>
+                        }}
+                      />
+                      <WarehouseSingleSelect
+                        labelText="Főkategória"
+                        value={newProduct.categoryCode}
+                        emptyValue=""
+                        emptyText="Nincs beállítva"
+                        options={categorySelectOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))}
+                        onChange={(next) => setNewProduct((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))}
+                      />
+                      <WarehouseSingleSelect
+                        labelText="Alkategória / terméktípus"
+                        value={newProduct.subCategoryCode}
+                        emptyValue=""
+                        emptyText="Nincs beállítva"
+                        noOptionsText="Nincs alkategória."
+                        options={newProductSubCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))}
+                        onChange={(next) => {
+                          const found = subCategories.find((c) => categoryValueMatches(c, next));
+                          setNewProduct((x) => ({ ...x, subCategoryCode: next, productType: x.productType || (found ? categoryLabel(found) : "") }));
+                        }}
+                      />
+                      <WarehouseSingleSelect
+                        labelText="Nem"
+                        value={newProduct.gender}
+                        showEmptyOption={false}
+                        emptyText="Unisex"
+                        options={(genderTypes.length ? genderTypes : [{ code: "unisex", name: "Unisex" }]).map((g) => ({ value: String(g.code), label: String(g.name || g.code) }))}
+                        onChange={(next) => setNewProduct((x) => ({ ...x, gender: next }))}
+                      />
                       <label className={label}>Import terméktípus / RODESCR<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
                       <label className={label}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
@@ -15995,7 +16139,18 @@ export default function AllInWarehouse() {
                       <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={`${label} md:col-span-2`}>Shopify cím<input className={input} value={newProduct.shopifyTitle} onChange={(e) => setNewProduct((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
-                      <label className={label}>Variáns állapot<select className={select} value={newProduct.variantStatus} onChange={(e) => setNewProduct((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
+                      <WarehouseSingleSelect
+                        labelText="Variáns állapot"
+                        value={newProduct.variantStatus}
+                        showEmptyOption={false}
+                        emptyText="Aktív"
+                        options={[
+                          { value: "active", label: "Aktív" },
+                          { value: "inactive", label: "Inaktív" },
+                          { value: "archived", label: "Archivált" },
+                        ]}
+                        onChange={(next) => setNewProduct((x) => ({ ...x, variantStatus: next }))}
+                      />
                     </div>
                   </section>
                 </div>
@@ -16886,10 +17041,10 @@ export default function AllInWarehouse() {
                       <label className={label}>Terméknév románul<input className={input} value={edit.titleRo} onChange={(e) => setEdit((x) => ({ ...x, titleRo: e.target.value }))} /></label>
                       <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
-                      <label className={label}>Márka<select className={select} value={edit.brandCode} onChange={(e) => setEdit((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs beállítva</option>{brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}</select></label>
-                      <label className={label}>Főkategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs beállítva</option>{categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
-                      <label className={label}>Alkategória / terméktípus<select className={select} value={edit.subCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategories.find((c) => categoryValueMatches(c, value)); setEdit((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") })); }}><option value="">Nincs beállítva</option>{editSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
-                      <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}>{genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}</select></label>
+                      <WarehouseSingleSelect labelText="Márka" value={edit.brandCode} emptyValue="" emptyText="Nincs beállítva" options={brands.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))} onChange={(next) => setEdit((x) => ({ ...x, brandCode: next }))} />
+                      <WarehouseSingleSelect labelText="Főkategória" value={edit.categoryCode} emptyValue="" emptyText="Nincs beállítva" options={categorySelectOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))} onChange={(next) => setEdit((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))} />
+                      <WarehouseSingleSelect labelText="Alkategória / terméktípus" value={edit.subCategoryCode} emptyValue="" emptyText="Nincs beállítva" noOptionsText="Nincs alkategória." options={editSubCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))} onChange={(next) => { const found = subCategories.find((c) => categoryValueMatches(c, next)); setEdit((x) => ({ ...x, subCategoryCode: next, productType: x.productType || (found ? categoryLabel(found) : "") })); }} />
+                      <WarehouseSingleSelect labelText="Nem" value={edit.gender} showEmptyOption={false} emptyText="Unisex" options={(genderTypes.length ? genderTypes : [{ code: "unisex", name: "Unisex" }]).map((g) => ({ value: String(g.code), label: String(g.name || g.code) }))} onChange={(next) => setEdit((x) => ({ ...x, gender: next }))} />
                       <label className={label}>Import terméktípus / RODESCR<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={edit.season} onChange={(e) => setEdit((x) => ({ ...x, season: e.target.value }))} /></label>
                       <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
@@ -16999,15 +17154,36 @@ export default function AllInWarehouse() {
                         </div>
                       </label>
                       <label className={label}>Eladási ár<input className={input} value={edit.sellPrice} onChange={(e) => setEdit((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
-                      <label className={label}>Variáns állapot (csak ez a méret/szín)<select className={select} value={edit.variantStatus} onChange={(e) => {
-                        const value = e.target.value;
-                        setEdit((x) => ({
-                          ...x,
-                          variantStatus: value,
-                          modelStatus: value === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus,
-                        }));
-                      }}><option value="inactive">Inaktív</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
-                      <label className={label}>Modell állapot (közös minden variánsnál)<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="draft">Előkészítés</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
+                      <WarehouseSingleSelect
+                        labelText="Variáns állapot (csak ez a méret/szín)"
+                        value={edit.variantStatus}
+                        showEmptyOption={false}
+                        emptyText="Inaktív"
+                        options={[
+                          { value: "inactive", label: "Inaktív" },
+                          { value: "active", label: "Aktív" },
+                          { value: "archived", label: "Archivált" },
+                        ]}
+                        onChange={(next) => {
+                          setEdit((x) => ({
+                            ...x,
+                            variantStatus: next,
+                            modelStatus: next === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus,
+                          }));
+                        }}
+                      />
+                      <WarehouseSingleSelect
+                        labelText="Modell állapot (közös minden variánsnál)"
+                        value={edit.modelStatus}
+                        showEmptyOption={false}
+                        emptyText="Aktív"
+                        options={[
+                          { value: "draft", label: "Előkészítés" },
+                          { value: "active", label: "Aktív" },
+                          { value: "archived", label: "Archivált" },
+                        ]}
+                        onChange={(next) => setEdit((x) => ({ ...x, modelStatus: next }))}
+                      />
                       <label className={label}>Shopify cím<input className={input} value={edit.shopifyTitle} onChange={(e) => setEdit((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
                       <div className="md:col-span-3 rounded-xl border border-[#7bd7d4]/24 bg-[#203f49] px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]">
                         A Raktárba csak ez a konkrét méret/szín kerül át, amikor a Variáns állapotot Aktívra teszed. Első aktiváláskor a modell többi méretét és színét a rendszer Inaktívként hagyja. Aktiváláshoz valódi vonalkód és kép is kötelező; a termékkód nem számít vonalkódnak.
@@ -17031,23 +17207,18 @@ export default function AllInWarehouse() {
                     <span className="text-[10px] text-white/42">A módosítás a Mentés gombot aktiválja</span>
                   </div>
                   <div className="space-y-3 text-sm">
-                    <label className={label}>
-                      Beszállító
-                      <select
-                        className={select}
-                        value={edit.supplierId}
-                        onChange={(e) => setEdit((x) => ({ ...x, supplierId: e.target.value }))}
-                      >
-                        <option value="">Válassz beszállítót...</option>
-                        {suppliers
-                          .filter((row) => row.is_active !== false)
-                          .slice()
-                          .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }))
-                          .map((row) => (
-                            <option key={row.id} value={String(row.id)}>{row.name || row.code || row.id}</option>
-                          ))}
-                      </select>
-                    </label>
+                    <WarehouseSingleSelect
+                      labelText="Beszállító"
+                      value={edit.supplierId}
+                      emptyValue=""
+                      emptyText="Válassz beszállítót..."
+                      options={suppliers
+                        .filter((row) => row.is_active !== false)
+                        .slice()
+                        .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }))
+                        .map((row) => ({ value: String(row.id), label: String(row.name || row.code || row.id) }))}
+                      onChange={(next) => setEdit((x) => ({ ...x, supplierId: next }))}
+                    />
                     <div className="grid gap-2 rounded-xl border border-white/10 bg-black/10 p-3 text-xs text-white/65">
                       <div className="flex justify-between gap-3"><span>Termékkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.supplierProductCode || "-"}</strong></div>
                       <div className="flex justify-between gap-3"><span>Színkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.colorCode || detail.item?.supplier_color_code || "-"}</strong></div>
