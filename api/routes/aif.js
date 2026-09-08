@@ -779,6 +779,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS document_date date NULL`);
+        await pool.query(`UPDATE aif_stock_transfer_documents
+          SET document_date=(created_at AT TIME ZONE 'Europe/Bucharest')::date
+          WHERE document_date IS NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents
+          ALTER COLUMN document_date SET DEFAULT ((now() AT TIME ZONE 'Europe/Bucharest')::date)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_document_date_idx
+          ON aif_stock_transfer_documents (document_date DESC, created_at DESC)`);
         await pool.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','preparation','issued','cancelled')`);
         await pool.query(`DO $$
           DECLARE c record;
@@ -1187,6 +1195,43 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const compact = text(value).toUpperCase().replace(/\s+/g, "");
     if (!compact) return null;
     return compact.replace(/[^A-Z0-9-]/g, "").slice(0, 64) || null;
+  }
+
+  function cleanAifDocumentDate(value) {
+    const raw = text(value);
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (year < 2000 || year > 2100) return null;
+    const date = new Date(Date.UTC(year, month - 1, day, 12));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+
+  function aifBucharestDateKey(value = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Bucharest',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const get = (type) => parts.find((part) => part.type === type)?.value || '';
+    const key = `${get('year')}-${get('month')}-${get('day')}`;
+    return cleanAifDocumentDate(key);
+  }
+
+  function aifDocumentDateFromRow(item = {}) {
+    const raw = item?.raw && typeof item.raw === 'object' ? item.raw : {};
+    const directRaw = item?.document_date instanceof Date
+      ? aifBucharestDateKey(item.document_date)
+      : cleanAifDocumentDate(String(item?.document_date || '').slice(0, 10));
+    return directRaw
+      || cleanAifDocumentDate(text(raw.documentDate || raw.document_date || raw.avizDate || raw.aviz_date).slice(0, 10))
+      || aifBucharestDateKey(item?.created_at);
   }
 
   const uuidTextRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -12913,7 +12958,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const official = await pool.query(
         `SELECT id::text, transfer_id, document_number, series, sequence_number, sequence_year,
                 title, subtitle, note, status, actor, owner_key, line_count, total_qty,
-                from_location_summary, to_location_summary, raw, created_at, updated_at,
+                from_location_summary, to_location_summary, raw, document_date, created_at, updated_at,
                 document_type, source_location_id, target_location_id,
                 supplier_id, supplier_name, reception_id, external_reference, uit_code,
                 reason_code, reason_text, operation_direction, price_basis,
@@ -12994,6 +13039,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           fromLocationIds: String(row.from_location_ids || '').split(',').filter(Boolean),
           toLocationIds: String(row.to_location_ids || '').split(',').filter(Boolean),
         },
+        document_date: aifBucharestDateKey(row.created_at),
         created_at: row.created_at,
         updated_at: row.created_at,
         document_type: 'internal_transfer',
@@ -13015,8 +13061,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }));
 
       let items = [...officialItems, ...legacyItems];
-      if (from) items = items.filter((item) => new Date(item.created_at).getTime() >= new Date(`${from}T00:00:00`).getTime());
-      if (to) items = items.filter((item) => new Date(item.created_at).getTime() < new Date(`${to}T00:00:00`).getTime() + 86400000);
+      if (from) items = items.filter((item) => { const key = aifDocumentDateFromRow(item); return Boolean(key && key >= from); });
+      if (to) items = items.filter((item) => { const key = aifDocumentDateFromRow(item); return Boolean(key && key <= to); });
       const matchesDocumentParty = (item, rawValue, side) => {
         const value = text(rawValue);
         if (!value) return true;
@@ -13058,7 +13104,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const requestedDocumentType = cleanAifStockDocumentType(type, null);
         if (requestedDocumentType) items = items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
       }
-      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      items.sort((a, b) => {
+        const dateCompare = String(aifDocumentDateFromRow(b) || '').localeCompare(String(aifDocumentDateFromRow(a) || ''));
+        if (dateCompare) return dateCompare;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
       const total = items.length;
       const pages = Math.max(1, Math.ceil(total / limit));
       const safePage = Math.min(page, pages);
@@ -13388,6 +13438,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return createHash("sha256")
       .update(JSON.stringify({
         documentType: payload.documentType,
+        documentDate: payload.documentDate || null,
         sourceLocationId: payload.sourceLocationId,
         targetLocationId: payload.targetLocationId || null,
         supplierId: payload.supplierId || null,
@@ -13500,6 +13551,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
     const uitCode = documentType === 'internal_transfer' ? cleanAifUitCode(body.uitCode || body.uit_code) : null;
     const note = emptyToNull(body.note);
+    const documentDateInput = body.documentDate ?? body.document_date ?? body.avizDate ?? body.aviz_date;
+    const documentDateProvided = documentDateInput !== undefined && documentDateInput !== null && text(documentDateInput) !== '';
+    const requestedDocumentDate = documentDateProvided ? cleanAifDocumentDate(documentDateInput) : null;
+    if (documentDateProvided && !requestedDocumentDate) return res.status(400).json({ error: 'Érvénytelen bizonylatdátum. Használd az ÉÉÉÉ-HH-NN formátumot.' });
     const operationDirection = documentType === 'stock_correction'
       ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
       : documentType === 'internal_transfer' ? 'transfer' : 'decrease';
@@ -13556,7 +13611,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              document_type=$9,source_location_id=$10,target_location_id=$11,
              supplier_id=$12,supplier_name=$13,reception_id=$14,external_reference=$15,uit_code=$16,
              reason_code=$17,reason_text=$18,operation_direction=$19,price_basis=$20,
-             raw=COALESCE(raw,'{}'::jsonb) || $21::jsonb,updated_at=now()
+             document_date=COALESCE($21::date,document_date,(now() AT TIME ZONE 'Europe/Bucharest')::date),
+             raw=COALESCE(raw,'{}'::jsonb) || $22::jsonb,updated_at=now()
            WHERE id=$1 RETURNING *`,
           [
             current.rows[0].id,
@@ -13579,7 +13635,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             reasonText,
             operationDirection,
             AIF_STOCK_DOCUMENT_TYPES[documentType].priceBasis,
-            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
+            requestedDocumentDate,
+            JSON.stringify({ draft: true, documentType, documentDate: requestedDocumentDate || aifDocumentDateFromRow(current.rows[0]) || aifBucharestDateKey(), sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
           ]
         );
         document = updated.rows[0];
@@ -13594,10 +13651,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              document_type,source_location_id,target_location_id,
              supplier_id,supplier_name,reception_id,external_reference,uit_code,
              reason_code,reason_text,operation_direction,price_basis,
-             total_value,currency_code,created_at,updated_at
+             document_date,total_value,currency_code,created_at,updated_at
            ) VALUES (
              $1,$2,'DRAFT',0,$3,$4,$5,$6,'draft',$7,$8,0,0,$9,$10,$11::jsonb,
-             $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,0,'RON',now(),now()
+             $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::date,0,'RON',now(),now()
            ) RETURNING *`,
           [
             ref.transferId,
@@ -13610,7 +13667,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             ownerKey,
             sourceSummary,
             counterpartySummary,
-            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
+            JSON.stringify({ draft: true, documentType, documentDate: requestedDocumentDate || aifBucharestDateKey(), sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
             documentType,
             sourceLocation ? String(sourceLocation.id) : null,
             targetLocation ? String(targetLocation.id) : null,
@@ -13623,6 +13680,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             reasonText,
             operationDirection,
             AIF_STOCK_DOCUMENT_TYPES[documentType].priceBasis,
+            requestedDocumentDate || aifBucharestDateKey(),
           ]
         );
         document = inserted.rows[0];
@@ -13636,6 +13694,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const raw = {
           draft: true,
           documentType,
+          documentDate: aifDocumentDateFromRow(document),
           lineNo: index + 1,
           productTitle: snapshot.variant.title_ro,
           productCode: snapshot.productCode,
@@ -13785,6 +13844,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const note = emptyToNull(body.note);
     const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
     const uitCode = documentType === 'internal_transfer' ? cleanAifUitCode(body.uitCode || body.uit_code) : null;
+    const documentDateInput = body.documentDate ?? body.document_date ?? body.avizDate ?? body.aviz_date;
+    const documentDateProvided = documentDateInput !== undefined && documentDateInput !== null && text(documentDateInput) !== '';
+    const requestedDocumentDate = documentDateProvided ? cleanAifDocumentDate(documentDateInput) : null;
+    if (documentDateProvided && !requestedDocumentDate) return res.status(400).json({ error: 'Érvénytelen bizonylatdátum. Használd az ÉÉÉÉ-HH-NN formátumot.' });
+    const documentDate = requestedDocumentDate || aifBucharestDateKey();
     const operationDirection = documentType === 'stock_correction'
       ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
       : documentType === 'internal_transfer'
@@ -13810,6 +13874,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const ownerKey = selectionOwnerKey(req);
     const requestPayload = {
       documentType,
+      documentDate,
       sourceLocationId: sourceLocationInput,
       targetLocationId: targetLocationInput,
       supplierId: supplierInput,
@@ -13908,10 +13973,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            document_type, source_location_id, target_location_id,
            supplier_id, supplier_name, reception_id, external_reference, uit_code,
            reason_code, reason_text, operation_direction, price_basis,
-           total_value, currency_code, created_at, updated_at
+           document_date, total_value, currency_code, created_at, updated_at
          ) VALUES (
            $1,$2,$3,$4,$5,$6,$7,$8,'issued',$9,$10,0,0,$11,$12,$13::jsonb,
-           $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,0,'RON',now(),now()
+           $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26::date,0,'RON',now(),now()
          )
          RETURNING *`,
         [
@@ -13930,6 +13995,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           JSON.stringify({
             source: 'stock_document',
             documentType,
+            documentDate,
             idempotencyKey: idempotencyKey || null,
             supplierId: supplier?.id || null,
             supplierName: supplier?.name || null,
@@ -13953,6 +14019,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           reasonText,
           operationDirection,
           sequence.priceBasis,
+          documentDate,
         ]
       );
       let document = insertedDocument.rows[0];
@@ -14053,6 +14120,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           reasonCode,
           reasonText,
           documentType,
+          documentDate,
           documentId: document.id,
           documentNumber: document.document_number,
           documentTitle: document.title,
@@ -14205,6 +14273,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           totalValue,
           JSON.stringify({
             documentType,
+            documentDate,
             sourceLocationId: String(sourceLocation.id),
             targetLocationId: targetLocation ? String(targetLocation.id) : null,
             supplierId: supplier ? String(supplier.id) : null,
@@ -14263,7 +14332,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post('/stock-documents', requireAuthed, handleCreateStockDocument);
   router.post('/stock/documents', requireAuthed, handleCreateStockDocument);
 
-  function stockTransferRequestHash(rowsInput, title, note) {
+  function stockTransferRequestHash(rowsInput, title, note, documentDate = null) {
     const lines = (rowsInput || []).map((input = {}) => ({
       variantId: text(input.variantId || input.variant_id || input.variant || input.id),
       fromLocationId: text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id),
@@ -14271,7 +14340,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       qty: toInt(input.qty ?? input.quantity ?? input.count),
     }));
     return createHash("sha256")
-      .update(JSON.stringify({ title: title || null, note: note || null, lines }))
+      .update(JSON.stringify({ title: title || null, note: note || null, documentDate: documentDate || null, lines }))
       .digest("hex");
   }
 
@@ -14749,6 +14818,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     title,
     note,
     idempotencyKey,
+    documentDate,
     routeFrom,
     routeTo,
   }) {
@@ -14786,7 +14856,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              note=COALESCE($3,note), actor=$4,
              source_location_id=$5,target_location_id=$6,
              from_location_summary=$7,to_location_summary=$8,
-             raw=COALESCE(raw,'{}'::jsonb) || $9::jsonb,
+             document_date=COALESCE($9::date,document_date,(now() AT TIME ZONE 'Europe/Bucharest')::date),
+             raw=COALESCE(raw,'{}'::jsonb) || $10::jsonb,
              updated_at=now()
          WHERE id=$1
          RETURNING *`,
@@ -14799,9 +14870,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           String(routeTo.id),
           routeFrom.name || routeFrom.code,
           routeTo.name || routeTo.code,
+          documentDate || null,
           JSON.stringify({
             preparation: true,
             routeSeparated: true,
+            documentDate: documentDate || aifDocumentDateFromRow(current.rows[0]) || aifBucharestDateKey(),
             sourceLocationId: String(routeFrom.id),
             sourceLocationName: routeFrom.name || routeFrom.code,
             targetLocationId: String(routeTo.id),
@@ -14822,11 +14895,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          title, subtitle, note, status, actor, owner_key, raw,
          document_type, operation_direction, price_basis, total_value, currency_code,
          source_location_id,target_location_id,from_location_summary,to_location_summary,
-         created_at, updated_at
+         document_date, created_at, updated_at
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,'preparation',$9,$10,$11::jsonb,
          'internal_transfer','transfer','selling_price',0,'RON',
-         $12,$13,$14,$15,now(),now()
+         $12,$13,$14,$15,$16::date,now(),now()
        )
        RETURNING *`,
       [
@@ -14844,6 +14917,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           preparation: true,
           routeSeparated: true,
           documentType: 'internal_transfer',
+          documentDate: documentDate || aifBucharestDateKey(),
           stockTransferInventoryMode: 'in_transit_until_received',
           idempotencyKey: idempotencyKey || null,
           sourceLocationId: String(routeFrom.id),
@@ -14856,6 +14930,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         String(routeTo.id),
         routeFrom.name || routeFrom.code,
         routeTo.name || routeTo.code,
+        documentDate || aifBucharestDateKey(),
       ]
     );
     return { document: inserted.rows[0], created: true };
@@ -15518,6 +15593,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           : [];
     const note = emptyToNull(body.note);
     const title = emptyToNull(body.title || body.documentTitle || body.document_title);
+    const documentDateInput = body.documentDate ?? body.document_date ?? body.avizDate ?? body.aviz_date;
+    const documentDateProvided = documentDateInput !== undefined && documentDateInput !== null && text(documentDateInput) !== '';
+    const requestedDocumentDate = documentDateProvided ? cleanAifDocumentDate(documentDateInput) : null;
+    if (documentDateProvided && !requestedDocumentDate) return res.status(400).json({ error: 'Érvénytelen Aviz-dátum. Használd az ÉÉÉÉ-HH-NN formátumot.' });
+    const documentDate = requestedDocumentDate || aifBucharestDateKey();
     const idempotencyKey = text(req.get('Idempotency-Key') || body.idempotencyKey || body.idempotency_key).slice(0, 200);
     if (!rowsInput.length) return res.status(400).json({ error: 'Nincs menthető készletmozgatási sor.' });
 
@@ -15532,7 +15612,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     const actor = actorFrom(req);
     const ownerKey = selectionOwnerKey(req);
-    const requestHash = idempotencyKey ? stockTransferRequestHash(rowsInput, title, note) : null;
+    const requestHash = idempotencyKey ? stockTransferRequestHash(rowsInput, title, note, documentDate) : null;
     try {
       await client.query('BEGIN');
       try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
@@ -15604,6 +15684,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           title,
           note,
           idempotencyKey,
+          documentDate,
           routeFrom: group.routeFrom,
           routeTo: group.routeTo,
         });
@@ -15729,6 +15810,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const uitCodeProvided = body.uitCode !== undefined || body.uit_code !== undefined;
     const requestedUitCode = cleanAifUitCode(body.uitCode || body.uit_code);
+    const documentDateInput = body.documentDate ?? body.document_date ?? body.avizDate ?? body.aviz_date;
+    const documentDateProvided = documentDateInput !== undefined && documentDateInput !== null && text(documentDateInput) !== '';
+    const requestedDocumentDate = documentDateProvided ? cleanAifDocumentDate(documentDateInput) : null;
+    if (documentDateProvided && !requestedDocumentDate) return res.status(400).json({ error: 'Érvénytelen Aviz-dátum. Használd az ÉÉÉÉ-HH-NN formátumot.' });
     const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : Array.isArray(body.rows) ? body.rows : [];
     if (!id) return res.status(400).json({ error: 'Előkészítés azonosító szükséges.' });
     const client = await pool.connect();
@@ -15903,6 +15988,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ...(existing?.raw && typeof existing.raw === 'object' ? existing.raw : {}),
           preparation: true,
           documentType: 'internal_transfer',
+          documentDate: requestedDocumentDate || aifDocumentDateFromRow(document),
           transferId: document.transfer_id,
           documentId: String(document.id),
           documentNumber: document.document_number,
@@ -15980,11 +16066,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_stock_transfer_documents
          SET subtitle=COALESCE($2,subtitle),note=$3,actor=$4,owner_key=COALESCE(owner_key,$5),
              uit_code=$6,
-             raw=COALESCE(raw,'{}'::jsonb) || $7::jsonb,
+             document_date=COALESCE($7::date,document_date,(now() AT TIME ZONE 'Europe/Bucharest')::date),
+             raw=COALESCE(raw,'{}'::jsonb) || $8::jsonb,
              updated_at=now()
          WHERE id=$1
          RETURNING *`,
-        [document.id, subtitle, note, actor, ownerKey, uitCodeProvided ? requestedUitCode : document.uit_code, JSON.stringify({ uitCode: uitCodeProvided ? requestedUitCode : document.uit_code, uitUpdatedAt: new Date().toISOString(), uitUpdatedBy: actor })]
+        [document.id, subtitle, note, actor, ownerKey, uitCodeProvided ? requestedUitCode : document.uit_code, requestedDocumentDate, JSON.stringify({ documentDate: requestedDocumentDate || aifDocumentDateFromRow(document), uitCode: uitCodeProvided ? requestedUitCode : document.uit_code, uitUpdatedAt: new Date().toISOString(), uitUpdatedBy: actor })]
       );
       document = header.rows[0] || document;
       const refreshed = await refreshAifPreparationDocument(client, document.id, {
