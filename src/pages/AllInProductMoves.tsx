@@ -11,6 +11,7 @@ import {
   Barcode,
   Boxes,
   Camera,
+  CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronDown,
@@ -176,6 +177,7 @@ type DocumentListItem = {
   operation_direction?: string | null;
   price_basis?: string | null;
   raw?: Record<string, unknown> | null;
+  document_date?: string | null;
   created_at: string;
   updated_at?: string | null;
   isLegacy?: boolean;
@@ -393,6 +395,69 @@ function roDateTime(value?: string | null) {
     minute: "2-digit",
   }).format(date);
 }
+
+function normalizeDateKey(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return "";
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function dateKeyInBucharest(value: unknown = new Date()) {
+  const date = value instanceof Date ? value : new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: "year" | "month" | "day") => parts.find((part) => part.type === type)?.value || "";
+  const year = get("year");
+  const month = get("month");
+  const day = get("day");
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function bucharestTodayKey(offsetDays = 0) {
+  const base = normalizeDateKey(dateKeyInBucharest(new Date()));
+  if (!base) return "";
+  const [year, month, day] = base.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays, 12));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function documentDateKey(item?: Partial<DocumentListItem> | null) {
+  const raw = item?.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return normalizeDateKey(
+    item?.document_date || raw.documentDate || raw.document_date || raw.avizDate || raw.aviz_date,
+  ) || dateKeyInBucharest(item?.created_at);
+}
+
+function formatDateKey(value: unknown, locale: "hu-HU" | "ro-RO" = "hu-HU") {
+  const key = normalizeDateKey(value);
+  if (!key) return "-";
+  const [year, month, day] = key.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function dateOnlyHu(value: unknown) { return formatDateKey(value, "hu-HU"); }
+function dateOnlyRo(value: unknown) { return formatDateKey(value, "ro-RO"); }
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -774,6 +839,167 @@ function CompactSelect({
                 })}
               </div>
             ))}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
+type AllInDatePickerProps = {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  allowClear?: boolean;
+  disabled?: boolean;
+  className?: string;
+};
+
+function AllInDatePicker({
+  value,
+  onChange,
+  placeholder = "Válassz dátumot",
+  allowClear = false,
+  disabled = false,
+  className = "",
+}: AllInDatePickerProps) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const selectedKey = normalizeDateKey(value);
+  const todayKey = bucharestTodayKey();
+  const initialKey = selectedKey || todayKey;
+  const initialParts = initialKey ? initialKey.split("-").map(Number) : [new Date().getFullYear(), new Date().getMonth() + 1, 1];
+  const [monthCursor, setMonthCursor] = useState(() => new Date(Date.UTC(initialParts[0], initialParts[1] - 1, 1, 12)));
+  const [position, setPosition] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const key = selectedKey || todayKey;
+    const parts = key ? key.split("-").map(Number) : [];
+    if (parts.length === 3) setMonthCursor(new Date(Date.UTC(parts[0], parts[1] - 1, 1, 12)));
+  }, [open, selectedKey, todayKey]);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const padding = 8;
+    const width = Math.min(324, window.innerWidth - padding * 2);
+    const left = Math.min(Math.max(padding, rect.left), window.innerWidth - width - padding);
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUp = roomBelow < 390 && rect.top > roomBelow;
+    setPosition(openUp
+      ? { left, width, bottom: Math.max(padding, window.innerHeight - rect.top + 6) }
+      : { left, width, top: Math.min(window.innerHeight - padding, rect.bottom + 6) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  const calendarDays = useMemo(() => {
+    const year = monthCursor.getUTCFullYear();
+    const month = monthCursor.getUTCMonth();
+    const first = new Date(Date.UTC(year, month, 1, 12));
+    const mondayOffset = (first.getUTCDay() + 6) % 7;
+    const start = new Date(Date.UTC(year, month, 1 - mondayOffset, 12));
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(start.getTime() + index * 86400000);
+      return {
+        key: date.toISOString().slice(0, 10),
+        day: date.getUTCDate(),
+        currentMonth: date.getUTCMonth() === month,
+      };
+    });
+  }, [monthCursor]);
+
+  const monthLabel = new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "long",
+  }).format(monthCursor);
+
+  const pick = (next: string) => {
+    onChange(next);
+    setOpen(false);
+  };
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        className="flex h-10 w-full min-w-0 items-center gap-2.5 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-left text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 disabled:cursor-not-allowed disabled:opacity-45"
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#a7f3f0]"><CalendarDays size={14} /></span>
+        <span className={`min-w-0 flex-1 truncate ${selectedKey ? "text-white" : "text-white/42"}`}>{selectedKey ? dateOnlyHu(selectedKey) : placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/50 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={popupRef}
+          className="overflow-hidden rounded-2xl border border-[#7bd7d4]/42 bg-[#26364c] shadow-[0_22px_65px_rgba(2,6,23,.62)]"
+          style={{ position: "fixed", zIndex: 620, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+        >
+          <div className="flex items-center justify-between border-b border-white/10 bg-[#303f53] px-3 py-2.5">
+            <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/75 transition hover:bg-white/[0.10]" onClick={() => setMonthCursor((current) => new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 1, 1, 12)))}><ChevronLeft size={15} /></button>
+            <div className="text-center"><p className="text-[9px] uppercase tracking-[0.14em] text-[#9fe5e2]/60">Dátum</p><p className="mt-0.5 text-sm capitalize text-white">{monthLabel}</p></div>
+            <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/75 transition hover:bg-white/[0.10]" onClick={() => setMonthCursor((current) => new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + 1, 1, 12)))}><ChevronRight size={15} /></button>
+          </div>
+          <div className="p-3">
+            <div className="grid grid-cols-7 gap-1 text-center text-[9px] uppercase tracking-[0.08em] text-white/35">
+              {['H','K','Sze','Cs','P','Szo','V'].map((day) => <span key={day} className="py-1">{day}</span>)}
+            </div>
+            <div className="mt-1 grid grid-cols-7 gap-1">
+              {calendarDays.map((day) => {
+                const selected = day.key === selectedKey;
+                const today = day.key === todayKey;
+                return (
+                  <button
+                    key={day.key}
+                    type="button"
+                    onClick={() => pick(day.key)}
+                    className={`relative h-9 rounded-lg text-xs transition ${selected ? "bg-[#2a8d8b] text-white shadow-[0_7px_18px_rgba(42,141,139,.28)]" : day.currentMonth ? "text-white/82 hover:bg-white/[0.09]" : "text-white/24 hover:bg-white/[0.05]"}`}
+                  >
+                    {day.day}
+                    {today && !selected ? <span className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#6ee7e2]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 border-t border-white/10 bg-[#2e3b50] px-3 py-2.5">
+            <button type="button" className="flex-1 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-2 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/20" onClick={() => pick(todayKey)}>Ma</button>
+            <button type="button" className="flex-1 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-2 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/20" onClick={() => pick(bucharestTodayKey(1))}>Holnap</button>
+            {allowClear ? <button type="button" className="rounded-lg border border-white/12 bg-white/[0.05] px-2.5 py-2 text-[10px] text-white/60 transition hover:bg-white/[0.10]" onClick={() => pick("")}>Törlés</button> : null}
           </div>
         </div>,
         document.body,
@@ -1287,7 +1513,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
 <body>
 <div class="top">
   <div><div class="company">TITAN EURO-COM SRL</div><div class="companyMeta"><div><strong>CUI:</strong> RO17495362</div><div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div><div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div></div></div>
-  <div class="docBox"><h3>Datele documentului</h3><div class="docBoxBody"><div class="docLine"><span>Nr. document</span><strong>${escapeHtml(doc.document_number)}</strong></div><div class="docLine"><span>Data emiterii</span><strong>${escapeHtml(roDateTime(doc.created_at))}</strong></div><div class="docLine"><span>Tip operațiune</span><strong>${escapeHtml(meta.operation)}</strong></div>${reference ? `<div class="docLine"><span>Referință</span><strong>${escapeHtml(reference)}</strong></div>` : ""}</div></div>
+  <div class="docBox"><h3>Datele documentului</h3><div class="docBoxBody"><div class="docLine"><span>Nr. document</span><strong>${escapeHtml(doc.document_number)}</strong></div><div class="docLine"><span>Data emiterii</span><strong>${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</strong></div><div class="docLine"><span>Tip operațiune</span><strong>${escapeHtml(meta.operation)}</strong></div>${reference ? `<div class="docLine"><span>Referință</span><strong>${escapeHtml(reference)}</strong></div>` : ""}</div></div>
 </div>
 <div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(doc.title || documentMeta(type).label)}</h1><div class="subtitle">${escapeHtml(doc.subtitle || meta.operation)}</div>${legacyMark}</div>
 <div class="route"><div class="${routeLeftClass}"><span>${escapeHtml(type === "internal_transfer" ? "Ieșire / gestiune sursă" : meta.leftLabel)}</span><strong>${escapeHtml(meta.leftValue)}</strong></div><div class="${routeRightClass}"><span>${escapeHtml(type === "internal_transfer" ? "Intrare / gestiune destinație" : meta.rightLabel)}</span><strong>${escapeHtml(meta.rightValue)}</strong></div></div>
@@ -1299,7 +1525,7 @@ ${sectionsHtml}
 <div class="total"><span>Total produse: ${lines.length} poziții • ${quantity(totalQty)} buc.</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
 ${missingPrices ? `<div class="valuationNote">Atenție: ${missingPrices} poziții nu au preț disponibil; totalul valoric include numai pozițiile evaluate.</div>` : ""}
 <div class="signatures">${meta.signatures.map((title) => `<div class="signature"><div class="signatureTitle">${escapeHtml(title)}</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>`).join("")}</div>
-<div class="footer"><span>Document generat din sistemul AllInFashion.</span><span>${escapeHtml(doc.document_number)} • ${escapeHtml(roDateTime(doc.created_at))}</span></div>
+<div class="footer"><span>Document generat din sistemul AllInFashion.</span><span>${escapeHtml(doc.document_number)} • ${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</span></div>
 </body></html>`;
 }
 
@@ -1402,6 +1628,7 @@ export default function AllInProductMoves() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [draftType, setDraftType] = useState<DocumentType>("internal_transfer");
+  const [documentDate, setDocumentDate] = useState(() => bucharestTodayKey());
   const [sourceLocationId, setSourceLocationId] = useState("");
   const [targetLocationId, setTargetLocationId] = useState("");
   const [supplierId, setSupplierId] = useState("");
@@ -1728,6 +1955,7 @@ export default function AllInProductMoves() {
 
   function resetDraft(nextType: DocumentType = "internal_transfer") {
     setDraftType(nextType);
+    setDocumentDate(bucharestTodayKey());
     setSourceLocationId("");
     setTargetLocationId("");
     setSupplierId("");
@@ -1791,6 +2019,7 @@ export default function AllInProductMoves() {
       setEditingDraftNumber(displayDocumentNumber(result.document));
       setEditingDocumentStatus(status as "draft" | "preparation");
       setDraftType(docType);
+      setDocumentDate(documentDateKey(result.document) || bucharestTodayKey());
       const firstLine = (result.lines || [])[0] || null;
       setSourceLocationId(String(result.document.source_location_id || firstLine?.from_location_id || ""));
       setTargetLocationId(String(result.document.target_location_id || firstLine?.to_location_id || ""));
@@ -2204,6 +2433,7 @@ export default function AllInProductMoves() {
   }, []);
 
   function validateDraft() {
+    if (draftType === "internal_transfer" && !normalizeDateKey(documentDate)) return "Az Aviz dátuma kötelező.";
     if (!sourceLocationId && !draftLineArray.every((row) => row.fromLocationId)) return "A forráshely kötelező.";
     if (draftType === "internal_transfer" && !targetLocationId && !draftLineArray.every((row) => row.toLocationId)) return "A célhely kötelező.";
     if (draftType === "internal_transfer" && sourceLocationId && targetLocationId && sourceLocationId === targetLocationId) return "A forrás és a cél nem lehet ugyanaz.";
@@ -2225,6 +2455,7 @@ export default function AllInProductMoves() {
   function stockDocumentPayload() {
     return {
       documentType: draftType,
+      documentDate: normalizeDateKey(documentDate) || bucharestTodayKey(),
       sourceLocationId: sourceLocationId || null,
       targetLocationId: draftType === "internal_transfer" ? targetLocationId || null : null,
       supplierId: draftType === "supplier_return" ? supplierId || null : null,
@@ -2711,8 +2942,8 @@ export default function AllInProductMoves() {
           </div>
           <div className="grid gap-3 p-4 lg:grid-cols-4 xl:grid-cols-7">
             <label className={`${label} lg:col-span-2 xl:col-span-2`}>Keresés<div className="relative"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" /><input className={`${input} pl-9`} value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") applySearch(); }} placeholder="Bizonylatszám, termék, vonalkód, beszállító..." /></div></label>
-            <label className={label}>Ettől<input className={input} type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPageNo(1); }} /></label>
-            <label className={label}>Eddig<input className={input} type="date" value={to} onChange={(event) => { setTo(event.target.value); setPageNo(1); }} /></label>
+            <label className={label}>Ettől<AllInDatePicker value={from} allowClear onChange={(next) => { setFrom(next); setPageNo(1); }} placeholder="Kezdő dátum" /></label>
+            <label className={label}>Eddig<AllInDatePicker value={to} allowClear onChange={(next) => { setTo(next); setPageNo(1); }} placeholder="Záró dátum" /></label>
             <label className={label}>Forrás<CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
             <label className={label}>Cél / partner<CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} /></label>
             <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
@@ -2741,7 +2972,7 @@ export default function AllInProductMoves() {
                     <tr key={item.id} className="border-t border-white/10 align-middle text-[12px] leading-tight transition hover:bg-white/[0.035]">
                       <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><div className="mt-0.5 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-1.5 py-0.5 text-[9px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={10} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-1.5 py-0.5 text-[9px] text-white"><CheckCircle2 size={10} /> UIT rögzítve</span> : null}</div></div></div></td>
                       <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
-                      <td className="px-3 py-2 text-[11px] text-white/72">{dateTime(item.created_at)}</td>
+                      <td className="px-3 py-2 text-[11px] text-white/72">{dateOnlyHu(documentDateKey(item))}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
                       <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span></span></td>
                       <td className="px-3 py-2 text-[11px] text-white/65">{item.actor || "-"}</td>
@@ -2764,7 +2995,7 @@ export default function AllInProductMoves() {
               const itemNeedsUit = !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
               return (
                 <article key={item.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
+                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
                   <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
                   <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span>{documentActionButtons(item, true)}</div>
@@ -2834,8 +3065,8 @@ export default function AllInProductMoves() {
                     <p className="mt-2 truncate text-[15px] text-white" title={displayDocumentNumber(doc)}>{displayDocumentNumber(doc)}</p>
                   </div>
                   <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
-                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p>
-                    <p className="mt-2 truncate text-sm text-white/88">{dateTime(doc.updated_at || doc.created_at)}</p>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">{documentTypeOf(doc) === "internal_transfer" ? "Aviz dátuma" : doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p>
+                    <p className="mt-2 truncate text-sm text-white/88">{documentTypeOf(doc) === "internal_transfer" ? dateOnlyHu(documentDateKey(doc)) : dateTime(doc.updated_at || doc.created_at)}</p>
                   </div>
                   <div className="rounded-2xl border border-[#5eead4]/16 bg-[#2a8d8b]/[0.08] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Típus / rögzítette</p>
@@ -2918,6 +3149,7 @@ export default function AllInProductMoves() {
               <div className="mt-3 grid gap-3 rounded-2xl border border-white/12 bg-white/[0.045] p-3 md:grid-cols-2 xl:grid-cols-4">
                 <label className={label}>Forráshely / érintett készlethely<CompactSelect value={sourceLocationId} onChange={setSourceLocationId} placeholder="Válassz helyszínt" options={[{ value: "", label: "Válassz helyszínt" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
                 {draftType === "internal_transfer" ? <label className={label}>Célhely<CompactSelect value={targetLocationId} onChange={setTargetLocationId} placeholder="Válassz célhelyet" options={[{ value: "", label: "Válassz célhelyet" }, ...locations.filter((location) => location.id !== sourceLocationId).map((location) => ({ value: location.id, label: location.name }))]} /></label> : null}
+                {draftType === "internal_transfer" ? <label className={label}>Aviz dátuma<AllInDatePicker value={documentDate} onChange={setDocumentDate} /></label> : null}
                 {draftType === "internal_transfer" ? <label className={label}>UIT kód<input className={`${input} ${internalTransferNeedsUit(draftType, draftTotalValue) && !uitCode ? "border-red-300/80 bg-red-950/30" : ""}`} value={uitCode} onChange={(event) => setUitCode(normalizedUitCode(event.target.value))} placeholder={internalTransferNeedsUit(draftType, draftTotalValue) ? "Kötelező a szállításhoz" : "Ha szükséges"} /></label> : null}
                 {draftType === "supplier_return" ? <><label className={label}>Beszállító<CompactSelect value={supplierId} onChange={(next) => void loadSupplierReceptions(next)} placeholder="Válassz beszállítót" options={[{ value: "", label: "Válassz beszállítót" }, ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))]} /></label><label className={label}>Kapcsolt receptió / számla<CompactSelect value={receptionId} onChange={setReceptionId} placeholder="Nincs megadva" options={[{ value: "", label: "Nincs megadva" }, ...selectedSupplierReceptions.map((reception) => ({ value: reception.id, label: `${reception.invoice_number || "Számla nélkül"} • ${reception.reception_date ? String(reception.reception_date).slice(0, 10) : "-"}` }))]} /></label></> : null}
                 {draftType === "stock_correction" ? <label className={label}>Korrekció iránya<CompactSelect value={correctionDirection} onChange={(next) => { setCorrectionDirection(next as CorrectionDirection); setDraftLines({}); }} options={[{ value: "decrease", label: "Készlet csökkentése" }, { value: "increase", label: "Készlet növelése" }]} /></label> : null}
