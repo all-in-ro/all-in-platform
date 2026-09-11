@@ -46,7 +46,6 @@ import {
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
 
-
 export type AllInAdminMagazinDashboardMobileProps = {
   actor?: string;
   role?: "admin" | "shop";
