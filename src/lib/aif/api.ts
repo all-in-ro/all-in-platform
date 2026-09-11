@@ -3181,6 +3181,27 @@ export type AifShopDayClosure = {
   createdAt?: string | null;
 };
 
+export type AifAdminShopShiftRepairPreview = {
+  ok: true;
+  generatedAt: string;
+  workDate: string;
+  location: { id: string; code: string; name: string };
+  closure: AifShopDayClosure | null;
+  pending: AifShopShiftHandover | null;
+  latestAccepted: AifShopShiftHandover | null;
+  employees: Array<{ name: string }>;
+  postCloseActivityCount: number;
+  canRepair: boolean;
+  reason?: string | null;
+};
+
+export type AifAdminShopShiftRepairResult = {
+  ok: true;
+  item: AifShopShiftHandover;
+  auditId?: string | null;
+  repairedAt?: string | null;
+};
+
 export type AifShopCashMovementType = "manager_handover" | "bank_deposit";
 export type AifShopCashMovementStatus = "pending" | "confirmed" | "rejected" | "cancelled" | string;
 
@@ -3244,6 +3265,22 @@ export type AifShopShiftDayOverview = {
   dayClosure?: AifShopDayClosure | null;
   cashBalance?: AifShopCashBalance | null;
 };
+
+export function apiAifAdminShopShiftRepairPreview(location: string) {
+  const q = new URLSearchParams();
+  q.set("location", location);
+  return fetchAifJSON<AifAdminShopShiftRepairPreview>(`/admin/shop-shifts/repair-preview?${q.toString()}`);
+}
+
+export function apiAifAdminRepairShopDayClosure(input: {
+  location: string;
+  toActor: string;
+}) {
+  return fetchAifJSON<AifAdminShopShiftRepairResult>("/admin/shop-shifts/repair-day-closure", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
 
 export function apiAifShopShiftEmployees(options: { location: string }) {
   const q = new URLSearchParams();
