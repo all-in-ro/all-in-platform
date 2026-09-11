@@ -32,6 +32,7 @@ import {
   TrendingUp,
   UsersRound,
   WalletCards,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -43,6 +44,7 @@ import {
   type AifAdminShopSaleLineDeleteMode,
 } from "../lib/aif/api";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
+import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
 
 
 export type AllInAdminMagazinDashboardMobileProps = {
@@ -615,6 +617,7 @@ export default function AllInAdminMagazinDashboardMobile({
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [imagePreview, setImagePreview] = useState<{ src: string; alt: string } | null>(null);
   const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
+  const [shiftRepairOpen, setShiftRepairOpen] = useState(false);
   const loadIdRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -994,7 +997,7 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
               <WalletCards size={18} className="text-[#8ee6e2]" />
             </div>
-            <div className="grid gap-2 min-[430px]:grid-cols-3">
+            <div className="grid gap-2 grid-cols-2">
               {[
                 { key: "reservations" as const, label: "Félretett", icon: Bookmark },
                 { key: "returns" as const, label: "Visszáru", icon: RotateCcw },
@@ -1012,6 +1015,13 @@ export default function AllInAdminMagazinDashboardMobile({
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => setShiftRepairOpen(true)}
+                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-amber-200/24 bg-amber-400/10 px-3 text-xs text-amber-50 active:scale-[0.98]"
+              >
+                <Wrench size={15} /> Műszak javítás
+              </button>
             </div>
           </section>
 
@@ -1280,6 +1290,18 @@ export default function AllInAdminMagazinDashboardMobile({
         initialMode={shopWorkflowMode || "reservations"}
         actor={actor}
         onClose={() => setShopWorkflowMode(null)}
+      />
+
+      <AllInAdminShiftRepair
+        open={shiftRepairOpen}
+        actor={actor}
+        locations={[
+          { code: locationCode, name: locationName, cityName },
+          { code: otherLocationCode, name: otherLocationName, cityName: otherCityName },
+        ]}
+        initialLocationCode={scope === "primary" ? locationCode : scope === "other" ? otherLocationCode : ""}
+        onClose={() => setShiftRepairOpen(false)}
+        onRepaired={() => load()}
       />
 
       {filtersOpen ? (
