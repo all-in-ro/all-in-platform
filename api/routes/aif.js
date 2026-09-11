@@ -22331,6 +22331,49 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         };
       }
 
+      const handoverResponses = await Promise.all(handoverRows.map(async (row) => {
+        const response = aifShiftHandoverResponse(row);
+        const currentSnapshot = response.snapshot && typeof response.snapshot === "object"
+          ? { ...response.snapshot }
+          : {};
+        const storedShift = currentSnapshot.shift && typeof currentSnapshot.shift === "object"
+          ? currentSnapshot.shift
+          : null;
+        const hasStoredShiftSnapshot = Boolean(storedShift && [
+          "revenue",
+          "transactions",
+          "itemsSold",
+          "payments",
+          "receipts",
+          "fromAt",
+          "toAt",
+        ].some((key) => Object.prototype.hasOwnProperty.call(storedShift, key)));
+
+        // Régi / kézzel helyreállított átadásoknál előfordulhat, hogy maga az
+        // átadás megvan, de a műszak pillanatképe hiányzik. Az Admin napló ne
+        // mutasson emiatt hamis 0 RON forgalmat: a mentett műszakhatárból és
+        // az átadó nevéből biztonságosan újraszámoljuk csak a megjelenítéshez.
+        if (!hasStoredShiftSnapshot && row.shift_start_at && row.cutoff_at && row.from_actor) {
+          try {
+            const rebuiltShift = await aifShopShiftSnapshot(pool, {
+              locationId: location.id,
+              fromAt: row.shift_start_at,
+              toAt: row.cutoff_at,
+              actor: row.from_actor,
+            });
+            response.snapshot = {
+              ...currentSnapshot,
+              shift: rebuiltShift,
+              shiftSnapshotReconstructed: true,
+            };
+          } catch (snapshotError) {
+            console.error("AIF handover shift snapshot rebuild warning", snapshotError);
+          }
+        }
+
+        return response;
+      }));
+
       return res.json({
         ok: true,
         generatedAt: new Date().toISOString(),
@@ -22338,7 +22381,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         location: { id: String(location.id), code: location.code, name: location.name },
         totals,
         employees: employeeSnapshots,
-        handovers: handoverRows.map(aifShiftHandoverResponse),
+        handovers: handoverResponses,
         handoverPreview,
         dayClosure: dayClosure ? aifDayClosureResponse(dayClosure) : null,
         cashBalance,
