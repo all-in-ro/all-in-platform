@@ -21712,7 +21712,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
-      const workDate = aifBucharestIsoDate();
+      const today = aifBucharestIsoDate();
+      const requestedWorkDate = text(req.query.workDate ?? req.query.work_date ?? req.query.date);
+      const workDate = requestedWorkDate ? aifValidIsoDate(requestedWorkDate, "") : today;
+      if (!workDate) {
+        return res.status(400).json({
+          error: "Érvényes üzleti nap szükséges a műszakjavításhoz.",
+          code: "admin_shift_repair_invalid_date",
+        });
+      }
+      if (workDate > today) {
+        return res.status(400).json({
+          error: "Jövőbeli üzleti nap nem javítható.",
+          code: "admin_shift_repair_future_date",
+        });
+      }
       const [closureResult, pendingResult, latestAcceptedResult, employeeNames] = await Promise.all([
         pool.query(
           `SELECT c.*, l.code AS location_code, l.name AS location_name
@@ -21797,7 +21811,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let reason = null;
       if (!closureRow) {
         canRepair = false;
-        reason = "A mai nap nincs lezárva.";
+        reason = "A kiválasztott nap nincs lezárva.";
       } else if (pendingRow) {
         canRepair = false;
         reason = `${pendingRow.from_actor} → ${pendingRow.to_actor} műszakátadás már folyamatban van.`;
@@ -21845,6 +21859,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const body = req.body || {};
     const requestedToActor = text(body.toActor || body.to_actor || body.employee || body.targetEmployee);
+    const today = aifBucharestIsoDate();
+    const requestedWorkDate = text(body.workDate ?? body.work_date ?? body.date);
+    const workDate = requestedWorkDate ? aifValidIsoDate(requestedWorkDate, "") : today;
+    if (!workDate) {
+      return res.status(400).json({
+        error: "Érvényes üzleti nap szükséges a műszakjavításhoz.",
+        code: "admin_shift_repair_invalid_date",
+      });
+    }
+    if (workDate > today) {
+      return res.status(400).json({
+        error: "Jövőbeli üzleti nap nem javítható.",
+        code: "admin_shift_repair_future_date",
+      });
+    }
     if (!requestedToActor) {
       return res.status(400).json({
         error: "Válaszd ki, ki veszi át a műszakot.",
@@ -21859,7 +21888,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await aifResolveShopLocation(req, client, body.location);
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
 
-      const workDate = aifBucharestIsoDate();
       const closureResult = await client.query(
         `SELECT c.*, l.code AS location_code, l.name AS location_name
          FROM aif_shop_day_closures c
@@ -21869,7 +21897,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [location.id, workDate]
       );
       if (!closureResult.rowCount) {
-        const error = new Error("A mai nap nincs lezárva, nincs mit javítani.");
+        const error = new Error("A kiválasztott nap nincs lezárva, nincs mit javítani.");
         error.statusCode = 409;
         error.code = "admin_shift_repair_no_closure";
         throw error;
