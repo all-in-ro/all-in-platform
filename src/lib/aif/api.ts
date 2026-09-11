@@ -3266,15 +3266,17 @@ export type AifShopShiftDayOverview = {
   cashBalance?: AifShopCashBalance | null;
 };
 
-export function apiAifAdminShopShiftRepairPreview(location: string) {
+export function apiAifAdminShopShiftRepairPreview(location: string, workDate?: string) {
   const q = new URLSearchParams();
   q.set("location", location);
+  if (workDate) q.set("date", workDate);
   return fetchAifJSON<AifAdminShopShiftRepairPreview>(`/admin/shop-shifts/repair-preview?${q.toString()}`);
 }
 
 export function apiAifAdminRepairShopDayClosure(input: {
   location: string;
   toActor: string;
+  workDate?: string;
 }) {
   return fetchAifJSON<AifAdminShopShiftRepairResult>("/admin/shop-shifts/repair-day-closure", {
     method: "POST",
