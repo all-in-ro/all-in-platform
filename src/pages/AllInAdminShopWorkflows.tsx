@@ -1381,15 +1381,13 @@ export default function AllInAdminShopWorkflows({
                           <span className="rounded-full border border-emerald-200/28 bg-emerald-500/12 px-2.5 py-1 text-emerald-50">
                             Nap lezárva • {data.dayClosure.actor} • {money(data.dayClosure.countedCash)}
                           </span>
-                          {date === localIsoDate(new Date()) ? (
-                            <button
-                              type="button"
-                              onClick={() => setShiftRepairLocationCode(store.code)}
-                              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-rose-300/70 bg-rose-600 px-3 text-[10px] text-white shadow-[0_8px_20px_rgba(225,29,72,0.32)] transition hover:border-rose-200 hover:bg-rose-500 active:scale-[0.98]"
-                            >
-                              <Wrench size={13} /> Hibás napzárás javítása
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => setShiftRepairLocationCode(store.code)}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-rose-300/70 bg-rose-600 px-3 text-[10px] text-white shadow-[0_8px_20px_rgba(225,29,72,0.32)] transition hover:border-rose-200 hover:bg-rose-500 active:scale-[0.98]"
+                          >
+                            <Wrench size={13} /> Hibás napzárás javítása
+                          </button>
                         </>
                       ) : null}
                     </div>
@@ -1856,6 +1854,7 @@ export default function AllInAdminShopWorkflows({
             cityName: store.city,
           }))}
           initialLocationCode={shiftRepairLocationCode || ""}
+          initialWorkDate={date}
           onClose={() => setShiftRepairLocationCode(null)}
           onRepaired={async () => {
             await load();
