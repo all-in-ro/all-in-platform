@@ -22,8 +22,10 @@ import {
   Store,
   UserRound,
   WalletCards,
+  Wrench,
   X,
 } from "lucide-react";
+import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
 import {
   apiAifCancelShopExchange,
   apiAifConfirmShopCashMovement,
@@ -503,6 +505,7 @@ export default function AllInAdminShopWorkflows({
   const [shiftDays, setShiftDays] = useState<Array<{ store: StoreDef; data: AifShopShiftDayOverview }>>([]);
   const [cashStores, setCashStores] = useState<Array<{ store: StoreDef; data: AifShopCashOverview }>>([]);
   const [cashActionBusyId, setCashActionBusyId] = useState<string | null>(null);
+  const [shiftRepairLocationCode, setShiftRepairLocationCode] = useState<StoreDef["code"] | null>(null);
   const [returnImagePreview, setReturnImagePreview] = useState<{ src: string; title: string } | null>(null);
   const [returnDeleteTarget, setReturnDeleteTarget] = useState<{ store: StoreDef; item: AifShopExchangeHistoryItem } | null>(null);
   const [returnDeleteBusy, setReturnDeleteBusy] = useState(false);
@@ -528,6 +531,10 @@ export default function AllInAdminShopWorkflows({
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (shiftRepairLocationCode) {
+        setShiftRepairLocationCode(null);
+        return;
+      }
       if (returnImagePreview) {
         setReturnImagePreview(null);
         return;
@@ -565,6 +572,7 @@ export default function AllInAdminShopWorkflows({
     returnDeleteBusy,
     returnDeleteTarget,
     returnImagePreview,
+    shiftRepairLocationCode,
   ]);
 
   const load = useCallback(async () => {
@@ -1369,9 +1377,20 @@ export default function AllInAdminShopWorkflows({
                       <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-white/56">{integer(data.handovers.length)} átadás</span>
                       <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2.5 py-1 text-[#cffffd]">Napi forgalom: {money(data.totals.revenue)}</span>
                       {data.dayClosure ? (
-                        <span className="rounded-full border border-emerald-200/28 bg-emerald-500/12 px-2.5 py-1 text-emerald-50">
-                          Nap lezárva • {data.dayClosure.actor} • {money(data.dayClosure.countedCash)}
-                        </span>
+                        <>
+                          <span className="rounded-full border border-emerald-200/28 bg-emerald-500/12 px-2.5 py-1 text-emerald-50">
+                            Nap lezárva • {data.dayClosure.actor} • {money(data.dayClosure.countedCash)}
+                          </span>
+                          {date === localIsoDate(new Date()) ? (
+                            <button
+                              type="button"
+                              onClick={() => setShiftRepairLocationCode(store.code)}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-orange-200/42 bg-orange-500/16 px-3 text-[10px] text-orange-50 transition hover:bg-orange-500/24 active:scale-[0.98]"
+                            >
+                              <Wrench size={13} /> Hibás napzárás javítása
+                            </button>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   </div>
@@ -1827,6 +1846,21 @@ export default function AllInAdminShopWorkflows({
             </section>
           </div>
         ) : null}
+
+        <AllInAdminShiftRepair
+          open={Boolean(shiftRepairLocationCode)}
+          actor={actor}
+          locations={STORES.map((store) => ({
+            code: store.code,
+            name: store.name,
+            cityName: store.city,
+          }))}
+          initialLocationCode={shiftRepairLocationCode || ""}
+          onClose={() => setShiftRepairLocationCode(null)}
+          onRepaired={async () => {
+            await load();
+          }}
+        />
 
         {loading ? (
           <div className="absolute inset-0 z-10 grid place-items-center bg-slate-950/20 backdrop-blur-[1px]">
