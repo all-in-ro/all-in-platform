@@ -40,6 +40,7 @@ import {
   TrendingUp,
   UserRound,
   WalletCards,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -51,6 +52,7 @@ import {
   type AifAdminShopSaleLineDeleteMode,
 } from "../lib/aif/api";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
+import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
 
 
 export type AllInAdminMagazinDashboardProps = {
@@ -1174,6 +1176,7 @@ export default function AllInAdminMagazinDashboard({
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
+  const [shiftRepairOpen, setShiftRepairOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1328,7 +1331,7 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </header>
 
-        <section className="grid gap-2 sm:grid-cols-3">
+        <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {[
             { key: "reservations" as const, label: "Félretett termékek", hint: "Lejáratok és kliensfoglalások", icon: Bookmark },
             { key: "returns" as const, label: "Visszáru", hint: "Cserék, visszavételek, árfeloldások", icon: RotateCcw },
@@ -1352,6 +1355,19 @@ export default function AllInAdminMagazinDashboard({
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={() => setShiftRepairOpen(true)}
+            className="group flex min-h-[74px] items-center gap-3 rounded-[20px] border border-amber-200/20 bg-gradient-to-br from-[#4a4650] to-[#343d4d] px-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:border-amber-200/36 hover:from-[#514b55] hover:to-[#3b4657] active:translate-y-0 active:scale-[0.99]"
+          >
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/26 bg-amber-400/10 text-amber-50">
+              <Wrench size={19} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm text-white">Műszak javítás</span>
+              <span className="mt-1 block truncate text-[10px] text-white/43">Hibás napzárás feloldása</span>
+            </span>
+          </button>
         </section>
 
         <section className={`${card} overflow-visible border-[#9be9e5]/20 bg-gradient-to-br from-[#37475c] via-[#334154] to-[#2d394b] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.20)]`}>
@@ -1995,6 +2011,15 @@ export default function AllInAdminMagazinDashboard({
         initialMode={shopWorkflowMode || "reservations"}
         actor={actor}
         onClose={() => setShopWorkflowMode(null)}
+      />
+
+      <AllInAdminShiftRepair
+        open={shiftRepairOpen}
+        actor={actor}
+        locations={[{ code: locationCode, name: locationName, cityName }]}
+        initialLocationCode={locationCode}
+        onClose={() => setShiftRepairOpen(false)}
+        onRepaired={() => load()}
       />
 
       {loading ? (
