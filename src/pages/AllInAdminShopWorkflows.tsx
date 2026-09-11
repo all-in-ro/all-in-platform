@@ -1385,7 +1385,7 @@ export default function AllInAdminShopWorkflows({
                             <button
                               type="button"
                               onClick={() => setShiftRepairLocationCode(store.code)}
-                              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-orange-200/42 bg-orange-500/16 px-3 text-[10px] text-orange-50 transition hover:bg-orange-500/24 active:scale-[0.98]"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-rose-300/70 bg-rose-600 px-3 text-[10px] text-white shadow-[0_8px_20px_rgba(225,29,72,0.32)] transition hover:border-rose-200 hover:bg-rose-500 active:scale-[0.98]"
                             >
                               <Wrench size={13} /> Hibás napzárás javítása
                             </button>
