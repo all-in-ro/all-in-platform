@@ -31,6 +31,7 @@ type Props = {
   actor: string;
   locations: AllInAdminShiftRepairLocation[];
   initialLocationCode?: string;
+  initialWorkDate?: string;
   onClose: () => void;
   onRepaired?: () => void | Promise<void>;
 };
@@ -66,6 +67,7 @@ export default function AllInAdminShiftRepair({
   actor,
   locations,
   initialLocationCode = "",
+  initialWorkDate = "",
   onClose,
   onRepaired,
 }: Props) {
@@ -89,7 +91,7 @@ export default function AllInAdminShiftRepair({
     setError("");
     setCreated(null);
     try {
-      const response = await apiAifAdminShopShiftRepairPreview(code);
+      const response = await apiAifAdminShopShiftRepairPreview(code, initialWorkDate || undefined);
       setPreview(response);
       setTargetActor((current) => {
         if (response.employees.some((item) => item.name === current)) return current;
@@ -112,6 +114,7 @@ export default function AllInAdminShiftRepair({
       const response = await apiAifAdminRepairShopDayClosure({
         location: locationCode,
         toActor: targetActor,
+        workDate: preview?.workDate || initialWorkDate || undefined,
       });
       setCreated(response.item);
       setPreview((current) => current ? { ...current, closure: null, pending: response.item, canRepair: false, reason: null } : current);
@@ -137,7 +140,7 @@ export default function AllInAdminShiftRepair({
     setLocationCode(nextCode);
     if (nextCode) void loadPreview(nextCode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialLocationCode]);
+  }, [open, initialLocationCode, initialWorkDate]);
 
   useEffect(() => {
     if (!open) return;
@@ -214,6 +217,7 @@ export default function AllInAdminShiftRepair({
                 <div className="min-w-0">
                   <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Üzlet</p>
                   <p className="mt-1 truncate text-sm text-white">{selectedLocation?.cityName || selectedLocation?.name || locationCode}</p>
+                  {(preview?.workDate || initialWorkDate) ? <p className="mt-0.5 text-[10px] text-[#bff8f5]/62">Nap: {preview?.workDate || initialWorkDate}</p> : null}
                 </div>
                 <div className="flex items-center gap-2">
                   {availableLocations.length > 1 ? (
