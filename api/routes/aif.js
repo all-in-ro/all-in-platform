@@ -424,6 +424,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_day_closures_location_date_idx
           ON aif_shop_day_closures (location_id, work_date DESC, closed_at DESC)`);
 
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_shift_admin_repairs (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          work_date date NOT NULL,
+          repair_type text NOT NULL DEFAULT 'day_closure_to_handover',
+          closure_id uuid NULL,
+          handover_id uuid NULL REFERENCES aif_shop_shift_handovers(id) ON DELETE SET NULL,
+          from_actor text NOT NULL,
+          to_actor text NOT NULL,
+          expected_cash numeric(14,2) NOT NULL DEFAULT 0,
+          repaired_by text NOT NULL,
+          closure_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_shift_admin_repairs_location_date_idx
+          ON aif_shop_shift_admin_repairs (location_id, work_date DESC, created_at DESC)`);
+
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_cash_movements (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
@@ -19448,6 +19466,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return result.rows.map((row) => text(row.name)).filter(Boolean);
   }
 
+
+  function aifIsAdminSession(req) {
+    return ["admin", "administrator"].includes(normCode(req.session?.role));
+  }
+
   async function aifShopDayBounds(client, date) {
     const result = await client.query(
       `SELECT
@@ -21675,6 +21698,413 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       console.error("AIF shift employee list failed", error);
       const status = Number(error?.statusCode || 500);
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A dolgozók nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+  router.get("/admin/shop-shifts/repair-preview", requireAdminOrSecret, async (req, res) => {
+    if (!aifIsAdminSession(req)) {
+      return res.status(403).json({
+        error: "Ezt a műveletet csak adminisztrátor használhatja.",
+        code: "admin_shift_repair_admin_only",
+      });
+    }
+
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const workDate = aifBucharestIsoDate();
+      const [closureResult, pendingResult, latestAcceptedResult, employeeNames] = await Promise.all([
+        pool.query(
+          `SELECT c.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_day_closures c
+           JOIN aif_locations l ON l.id=c.location_id
+           WHERE c.location_id=$1 AND c.work_date=$2::date
+           LIMIT 1`,
+          [location.id, workDate]
+        ),
+        pool.query(
+          `SELECT h.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_shift_handovers h
+           JOIN aif_locations l ON l.id=h.location_id
+           WHERE h.location_id=$1 AND h.status='pending'
+           ORDER BY h.created_at DESC
+           LIMIT 1`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT h.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_shift_handovers h
+           JOIN aif_locations l ON l.id=h.location_id
+           WHERE h.location_id=$1 AND h.work_date=$2::date AND h.status='accepted'
+           ORDER BY h.accepted_at DESC NULLS LAST, h.created_at DESC
+           LIMIT 1`,
+          [location.id, workDate]
+        ),
+        aifListActiveShopEmployees(pool, location.code),
+      ]);
+
+      const closureRow = closureResult.rows[0] || null;
+      const pendingRow = pendingResult.rows[0] || null;
+      const latestAcceptedRow = latestAcceptedResult.rows[0] || null;
+      let postCloseActivityCount = 0;
+
+      if (closureRow?.closed_at) {
+        const activityResult = await pool.query(
+          `SELECT count(*)::int AS count
+           FROM (
+             SELECT s.sold_at AS happened_at
+             FROM aif_shop_sales s
+             WHERE s.location_id=$1
+               AND s.status='completed'
+               AND s.sold_at > $2::timestamptz
+
+             UNION ALL
+
+             SELECT cp.paid_at AS happened_at
+             FROM aif_shop_customer_payments cp
+             WHERE cp.location_id=$1
+               AND cp.paid_at > $2::timestamptz
+
+             UNION ALL
+
+             SELECT es.created_at AS happened_at
+             FROM aif_shop_exchange_settlements es
+             JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+             WHERE es.location_id=$1
+               AND es.created_at > $2::timestamptz
+
+             UNION ALL
+
+             SELECT m.requested_at AS happened_at
+             FROM aif_shop_cash_movements m
+             WHERE m.location_id=$1
+               AND m.status <> 'cancelled'
+               AND m.requested_at > $2::timestamptz
+           ) activity`,
+          [location.id, closureRow.closed_at]
+        );
+        postCloseActivityCount = Number(activityResult.rows[0]?.count || 0);
+      }
+
+      const closer = closureRow
+        ? employeeNames.find((name) => aifEmployeeKey(name) === aifEmployeeKey(closureRow.actor)) || null
+        : null;
+      const candidates = closureRow
+        ? employeeNames.filter((name) => aifEmployeeKey(name) !== aifEmployeeKey(closureRow.actor))
+        : employeeNames;
+
+      let canRepair = true;
+      let reason = null;
+      if (!closureRow) {
+        canRepair = false;
+        reason = "A mai nap nincs lezárva.";
+      } else if (pendingRow) {
+        canRepair = false;
+        reason = `${pendingRow.from_actor} → ${pendingRow.to_actor} műszakátadás már folyamatban van.`;
+      } else if (!closer) {
+        canRepair = false;
+        reason = "A napzárást végző személy nem aktív eladó ennél az üzletnél.";
+      } else if (postCloseActivityCount > 0) {
+        canRepair = false;
+        reason = "A napzárás után új üzleti vagy pénzmozgás történt. Automatikus javítás nem biztonságos.";
+      } else if (!candidates.length) {
+        canRepair = false;
+        reason = "Nincs másik aktív eladó, akinek a műszak átadható.";
+      }
+
+      return res.json({
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        workDate,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        closure: closureRow ? aifDayClosureResponse(closureRow) : null,
+        pending: pendingRow ? aifShiftHandoverResponse(pendingRow) : null,
+        latestAccepted: latestAcceptedRow ? aifShiftHandoverResponse(latestAcceptedRow) : null,
+        employees: candidates.map((name) => ({ name })),
+        postCloseActivityCount,
+        canRepair,
+        reason,
+      });
+    } catch (error) {
+      console.error("AIF admin shift repair preview failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A műszakjavítás állapota nem tölthető be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
+  router.post("/admin/shop-shifts/repair-day-closure", requireAdminOrSecret, async (req, res) => {
+    if (!aifIsAdminSession(req)) {
+      return res.status(403).json({
+        error: "Ezt a műveletet csak adminisztrátor használhatja.",
+        code: "admin_shift_repair_admin_only",
+      });
+    }
+
+    const body = req.body || {};
+    const requestedToActor = text(body.toActor || body.to_actor || body.employee || body.targetEmployee);
+    if (!requestedToActor) {
+      return res.status(400).json({
+        error: "Válaszd ki, ki veszi át a műszakot.",
+        code: "admin_shift_repair_target_required",
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, body.location);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+
+      const workDate = aifBucharestIsoDate();
+      const closureResult = await client.query(
+        `SELECT c.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_day_closures c
+         JOIN aif_locations l ON l.id=c.location_id
+         WHERE c.location_id=$1 AND c.work_date=$2::date
+         FOR UPDATE OF c`,
+        [location.id, workDate]
+      );
+      if (!closureResult.rowCount) {
+        const error = new Error("A mai nap nincs lezárva, nincs mit javítani.");
+        error.statusCode = 409;
+        error.code = "admin_shift_repair_no_closure";
+        throw error;
+      }
+      const closure = closureResult.rows[0];
+
+      const pendingResult = await client.query(
+        `SELECT *
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND status='pending'
+         FOR UPDATE`,
+        [location.id]
+      );
+      if (pendingResult.rowCount) {
+        const row = pendingResult.rows[0];
+        const error = new Error(`${row.from_actor} → ${row.to_actor} műszakátadás már folyamatban van.`);
+        error.statusCode = 409;
+        error.code = "admin_shift_repair_handover_pending";
+        throw error;
+      }
+
+      const activeEmployees = await aifListActiveShopEmployees(client, location.code);
+      const fromActor = activeEmployees.find((name) => aifEmployeeKey(name) === aifEmployeeKey(closure.actor));
+      const toActor = activeEmployees.find((name) => aifEmployeeKey(name) === aifEmployeeKey(requestedToActor));
+      if (!fromActor) {
+        const error = new Error("A napzárást végző személy nem aktív eladó ennél az üzletnél.");
+        error.statusCode = 409;
+        error.code = "admin_shift_repair_closer_inactive";
+        throw error;
+      }
+      if (!toActor) {
+        const error = new Error("A kiválasztott átvevő nem aktív eladó ennél az üzletnél.");
+        error.statusCode = 400;
+        error.code = "admin_shift_repair_target_inactive";
+        throw error;
+      }
+      if (aifEmployeeKey(fromActor) === aifEmployeeKey(toActor)) {
+        const error = new Error("A műszak nem adható át ugyanannak a személynek.");
+        error.statusCode = 400;
+        error.code = "admin_shift_repair_same_employee";
+        throw error;
+      }
+
+      const postCloseActivity = await client.query(
+        `SELECT source, actor, happened_at
+         FROM (
+           SELECT 'sale'::text AS source, btrim(s.actor) AS actor, s.sold_at AS happened_at
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at > $2::timestamptz
+
+           UNION ALL
+
+           SELECT 'customer_payment'::text, btrim(cp.actor), cp.paid_at
+           FROM aif_shop_customer_payments cp
+           WHERE cp.location_id=$1
+             AND cp.paid_at > $2::timestamptz
+
+           UNION ALL
+
+           SELECT 'exchange'::text, btrim(es.actor), es.created_at
+           FROM aif_shop_exchange_settlements es
+           JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+           WHERE es.location_id=$1
+             AND es.created_at > $2::timestamptz
+
+           UNION ALL
+
+           SELECT 'cash_movement'::text, btrim(m.requested_by), m.requested_at
+           FROM aif_shop_cash_movements m
+           WHERE m.location_id=$1
+             AND m.status <> 'cancelled'
+             AND m.requested_at > $2::timestamptz
+         ) activity
+         ORDER BY happened_at ASC
+         LIMIT 1`,
+        [location.id, closure.closed_at]
+      );
+      if (postCloseActivity.rowCount) {
+        const error = new Error("A napzárás után új üzleti vagy pénzmozgás történt. A javítás automatikusan nem végezhető el.");
+        error.statusCode = 409;
+        error.code = "admin_shift_repair_activity_after_close";
+        throw error;
+      }
+
+      const bounds = await aifShopDayBounds(client, workDate);
+      const latestAcceptedResult = await client.query(
+        `SELECT *
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND work_date=$2::date AND status='accepted'
+         ORDER BY accepted_at DESC NULLS LAST, created_at DESC
+         LIMIT 1`,
+        [location.id, workDate]
+      );
+      const latestAccepted = latestAcceptedResult.rows[0] || null;
+      const shiftStart = latestAccepted?.accepted_at || latestAccepted?.cutoff_at || bounds.start;
+      const cutoff = closure.closed_at;
+      const expectedCash = aifRoundMoney(closure.counted_cash ?? closure.expected_cash);
+      const originalSnapshot = closure.snapshot && typeof closure.snapshot === "object" ? closure.snapshot : {};
+
+      const [openingBalance, cutoffBalance] = await Promise.all([
+        aifShopCashBalanceAt(client, { locationId: location.id, at: shiftStart }),
+        aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff }),
+      ]);
+      const shiftSnapshot = originalSnapshot.shift || await aifShopShiftSnapshot(client, {
+        locationId: location.id,
+        fromAt: shiftStart,
+        toAt: cutoff,
+        actor: fromActor,
+      });
+      const daySnapshot = originalSnapshot.day || await aifShopShiftSnapshot(client, {
+        locationId: location.id,
+        fromAt: bounds.start,
+        toAt: cutoff,
+      });
+      const previousCash = aifRoundMoney(openingBalance.availableCash);
+      const newCashDuringShift = aifRoundMoney(shiftSnapshot?.receipts?.cash?.amount || 0);
+      const repairedBy = actorFrom(req);
+      const repairedAt = new Date();
+      const snapshot = {
+        version: 2,
+        createdAt: new Date(cutoff).toISOString(),
+        workDate,
+        fromActor,
+        toActor,
+        openingCash: previousCash,
+        newCashDuringShift,
+        expectedCash,
+        cashBalance: cutoffBalance,
+        shift: shiftSnapshot,
+        day: daySnapshot,
+        adminRepair: true,
+        repairReason: "mistaken_day_closure_replaced_with_pending_shift_handover",
+        repairedBy,
+        repairedAt: repairedAt.toISOString(),
+        originalDayClosure: {
+          id: String(closure.id),
+          actor: closure.actor,
+          expectedCash: aifRoundMoney(closure.expected_cash),
+          countedCash: aifRoundMoney(closure.counted_cash),
+          cashDifference: aifRoundMoney(closure.cash_difference),
+          note: closure.note || null,
+          closedAt: closure.closed_at ? new Date(closure.closed_at).toISOString() : null,
+          snapshot: originalSnapshot,
+        },
+      };
+
+      const created = await client.query(
+        `INSERT INTO aif_shop_shift_handovers (
+           location_id, work_date, from_actor, to_actor, status,
+           shift_start_at, cutoff_at, expected_cash, note, snapshot, created_by
+         ) VALUES ($1,$2::date,$3,$4,'pending',$5,$6,$7,$8,$9::jsonb,$10)
+         RETURNING *`,
+        [
+          location.id,
+          workDate,
+          fromActor,
+          toActor,
+          shiftStart,
+          cutoff,
+          expectedCash,
+          "Admin javítás: téves napzárás műszakátadássá alakítva.",
+          JSON.stringify(snapshot),
+          repairedBy,
+        ]
+      );
+
+      const closureAuditSnapshot = {
+        id: String(closure.id),
+        locationId: String(location.id),
+        locationCode: location.code,
+        workDate,
+        actor: closure.actor,
+        expectedCash: aifRoundMoney(closure.expected_cash),
+        countedCash: aifRoundMoney(closure.counted_cash),
+        cashDifference: aifRoundMoney(closure.cash_difference),
+        note: closure.note || null,
+        closedAt: closure.closed_at ? new Date(closure.closed_at).toISOString() : null,
+        snapshot: originalSnapshot,
+      };
+      const auditResult = await client.query(
+        `INSERT INTO aif_shop_shift_admin_repairs (
+           location_id, work_date, repair_type, closure_id, handover_id,
+           from_actor, to_actor, expected_cash, repaired_by, closure_snapshot
+         ) VALUES ($1,$2::date,'day_closure_to_handover',$3,$4,$5,$6,$7,$8,$9::jsonb)
+         RETURNING id, created_at`,
+        [
+          location.id,
+          workDate,
+          closure.id,
+          created.rows[0].id,
+          fromActor,
+          toActor,
+          expectedCash,
+          repairedBy,
+          JSON.stringify(closureAuditSnapshot),
+        ]
+      );
+
+      const deleted = await client.query(
+        `DELETE FROM aif_shop_day_closures
+         WHERE id=$1 AND location_id=$2
+         RETURNING id`,
+        [closure.id, location.id]
+      );
+      if (deleted.rowCount !== 1) {
+        const error = new Error("A hibás napzárás feloldása nem sikerült.");
+        error.statusCode = 409;
+        error.code = "admin_shift_repair_closure_delete_failed";
+        throw error;
+      }
+
+      await client.query("COMMIT");
+      const item = aifShiftHandoverResponse({
+        ...created.rows[0],
+        location_code: location.code,
+        location_name: location.name,
+      });
+      return res.json({
+        ok: true,
+        item,
+        auditId: String(auditResult.rows[0]?.id || "") || null,
+        repairedAt: auditResult.rows[0]?.created_at ? new Date(auditResult.rows[0].created_at).toISOString() : repairedAt.toISOString(),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF admin shift repair failed", error);
+      const status = Number(error?.statusCode || (error?.code === "23505" ? 409 : 500));
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A hibás napzárás javítása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
     }
   });
 
