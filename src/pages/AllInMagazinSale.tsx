@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertTriangle,
   Banknote,
   Barcode,
   CheckCircle2,
@@ -80,6 +81,13 @@ type DiscountEditor = {
 };
 
 type CustomerModalMode = "search" | "new";
+
+type SaleErrorDialog = {
+  title: string;
+  message: string;
+  hint?: string | null;
+  code?: string | null;
+};
 
 const EMPTY_CUSTOMER: CustomerDraft = {
   fullName: "",
@@ -186,6 +194,55 @@ function normalizeEmployeeAccessCode(value: string) {
   return (prefixed?.[1] || normalized.replace(/[^A-Z0-9]/g, "")).slice(0, 64);
 }
 
+function saleErrorDialogFrom(caught: unknown): SaleErrorDialog {
+  const error = caught as Error & { code?: string; status?: number; statusCode?: number };
+  const code = String(error?.code || "");
+  const message = caught instanceof Error
+    ? caught.message
+    : "Az eladás lezárása nem sikerült.";
+
+  if (code === "shop_day_closed") {
+    return {
+      title: "A nap le van zárva",
+      message,
+      hint: "Hívd az Admint. A Műszakátadásoknál a Hibás napzárás javítása gombbal tudja helyreállítani.",
+      code,
+    };
+  }
+  if (code === "shift_handover_incoming_pending") {
+    return {
+      title: "Műszakátadás vár rád",
+      message,
+      hint: "Nyisd meg az Adminisztrációt, számold meg a készpénzt és fogadd el az átadást.",
+      code,
+    };
+  }
+  if (code === "shift_handover_outgoing_pending") {
+    return {
+      title: "A műszakod átadásra vár",
+      message,
+      hint: "Az átvevőnek kell elfogadnia a kasszát. Ha mégsem váltotok, vond vissza az átadást az Adminisztrációban.",
+      code,
+    };
+  }
+  if (code === "shift_handover_location_pending") {
+    return {
+      title: "Műszakátadás folyamatban",
+      message,
+      hint: "A kassza átvételét be kell fejezni, addig új eladás nem rögzíthető.",
+      code,
+    };
+  }
+
+  const status = Number(error?.status || error?.statusCode || 0);
+  return {
+    title: status === 403 ? "Nincs jogosultság" : "Az eladás nem rögzíthető",
+    message,
+    hint: status >= 500 ? "Próbáld újra. Ha ismét jelentkezik, jelezd az Adminnak." : null,
+    code: code || null,
+  };
+}
+
 export default function AllInMagazinSale({
   locationCode,
   locationName,
@@ -240,6 +297,7 @@ export default function AllInMagazinSale({
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [saleErrorDialog, setSaleErrorDialog] = useState<SaleErrorDialog | null>(null);
   const [success, setSuccess] = useState<AifShopSaleResult | null>(null);
   const requestKeyRef = useRef("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -279,6 +337,10 @@ export default function AllInMagazinSale({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (saleErrorDialog) {
+          setSaleErrorDialog(null);
+          return;
+        }
         if (administrationAccessOpen) {
           setAdministrationAccessOpen(false);
           setAdministrationCode("");
@@ -307,16 +369,16 @@ export default function AllInMagazinSale({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [administrationAccessOpen, customerModalOpen, discountEditor, homeHash, success]);
+  }, [administrationAccessOpen, customerModalOpen, discountEditor, homeHash, saleErrorDialog, success]);
 
   useEffect(() => {
-    if (!customerModalOpen && !discountEditor && !administrationAccessOpen) return;
+    if (!customerModalOpen && !discountEditor && !administrationAccessOpen && !saleErrorDialog) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [administrationAccessOpen, customerModalOpen, discountEditor]);
+  }, [administrationAccessOpen, customerModalOpen, discountEditor, saleErrorDialog]);
 
 
   useEffect(() => {
@@ -690,7 +752,11 @@ export default function AllInMagazinSale({
 
   async function completeSale() {
     if (!cart.length) {
-      setError("A kosár üres. Adj hozzá legalább egy terméket az eladás lezárása előtt.");
+      setError("");
+      setSaleErrorDialog({
+        title: "Az eladás nem zárható le",
+        message: "A kosár üres. Adj hozzá legalább egy terméket az eladás lezárása előtt.",
+      });
       return;
     }
     if (paymentMethod === "credit" && !selectedCustomer) {
@@ -736,7 +802,8 @@ export default function AllInMagazinSale({
       requestKeyRef.current = "";
       resetSearchResults();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Az eladás lezárása nem sikerült.");
+      setError("");
+      setSaleErrorDialog(saleErrorDialogFrom(caught));
     } finally {
       setSubmitting(false);
     }
@@ -786,7 +853,7 @@ export default function AllInMagazinSale({
         </header>
 
         {error ? (
-          <div className="rounded-2xl border border-red-300/35 bg-red-500/16 px-4 py-3 text-sm text-red-50">
+          <div className="rounded-2xl border border-red-400 bg-red-600 px-4 py-3 text-sm text-white">
             {error}
           </div>
         ) : null}
@@ -949,7 +1016,7 @@ export default function AllInMagazinSale({
                     type="button"
                     onClick={clearSelectedCustomer}
                     aria-label="Kliens törlése az eladásból"
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-300/25 bg-rose-500/12 text-rose-50 hover:bg-rose-500/22"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-red-400 bg-red-600 text-white hover:bg-red-500"
                   >
                     <X size={17} />
                   </button>
@@ -1115,6 +1182,57 @@ export default function AllInMagazinSale({
         </div>
       </div>
 
+      {saleErrorDialog && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[340] flex items-center justify-center bg-slate-950/86 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setSaleErrorDialog(null);
+          }}
+        >
+          <section className="w-full max-w-[620px] overflow-hidden rounded-[26px] border-2 border-red-500 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+            <header className="flex items-start justify-between gap-3 border-b border-red-500 bg-red-600 px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-red-300 bg-red-700 text-white">
+                  <AlertTriangle size={23} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/80">Eladás leállítva</p>
+                  <h2 className="mt-1 text-xl font-normal text-white">{saleErrorDialog.title}</h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaleErrorDialog(null)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-300 bg-red-700 text-white transition hover:bg-red-500"
+                aria-label="Hibaablak bezárása"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="space-y-3 p-5">
+              <p className="text-[15px] leading-relaxed text-white">{saleErrorDialog.message}</p>
+              {saleErrorDialog.hint ? (
+                <div className="rounded-2xl border border-white/12 bg-[#273243] px-4 py-3 text-sm leading-relaxed text-white/78">
+                  {saleErrorDialog.hint}
+                </div>
+              ) : null}
+            </div>
+
+            <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setSaleErrorDialog(null)}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-400 bg-red-600 px-5 text-sm text-white transition hover:bg-red-500 active:scale-[0.98]"
+              >
+                <X size={16} /> Bezárás
+              </button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+
       {administrationAccessOpen && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[260] flex items-center justify-center bg-[#111827]/82 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !administrationBusy) setAdministrationAccessOpen(false); }}>
           <section className="w-full max-w-[500px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_36px_110px_rgba(0,0,0,0.55)]">
@@ -1149,7 +1267,7 @@ export default function AllInMagazinSale({
                   />
                 </div>
               </label>
-              {administrationError ? <div className="mt-3 rounded-xl border border-rose-300/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">{administrationError}</div> : null}
+              {administrationError ? <div className="mt-3 rounded-xl border border-red-400 bg-red-600 px-3 py-2.5 text-sm text-white">{administrationError}</div> : null}
               <div className="mt-3 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/72">Beolvasás után automatikusan megnyílik. A feloldás 10 percig érvényes ezen a gépen.</div>
             </div>
             <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
@@ -1285,7 +1403,7 @@ export default function AllInMagazinSale({
                             </div>
                             <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
                               <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1">{numberValue(item.saleCount)} vásárlás</span>
-                              <span className={`rounded-full border px-2 py-1 ${numberValue(item.openBalance) > 0 ? "border-rose-300/30 bg-rose-500/14 text-rose-50" : "border-emerald-300/22 bg-emerald-400/10 text-emerald-50"}`}>Hátralék: {formatMoney(numberValue(item.openBalance))}</span>
+                              <span className={`rounded-full border px-2 py-1 ${numberValue(item.openBalance) > 0 ? "border-red-400 bg-red-600 text-white" : "border-emerald-300/22 bg-emerald-400/10 text-emerald-50"}`}>Hátralék: {formatMoney(numberValue(item.openBalance))}</span>
                             </div>
                           </div>
                         </div>
