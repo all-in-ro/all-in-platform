@@ -65,6 +65,7 @@ export type AllInAdminMagazinDashboardProps = {
   otherCityName: string;
 };
 
+
 type SelectOption = { value: string; label: string };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
