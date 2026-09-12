@@ -7,6 +7,7 @@ import {
   useState,
   type ChangeEvent,
   type ComponentType,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -396,11 +397,11 @@ function FilterDatePicker({
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const edge = 8;
+    const edge = 10;
     const gap = 6;
-    const width = Math.min(318, window.innerWidth - edge * 2);
-    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
-    const estimatedHeight = 342;
+    const width = Math.min(300, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.round((window.innerWidth - width) / 2));
+    const estimatedHeight = 326;
     const roomBelow = window.innerHeight - rect.bottom - edge;
     const roomAbove = rect.top - edge;
     const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
@@ -476,7 +477,7 @@ function FilterDatePicker({
           if (!open) updatePosition();
           setOpen((current) => !current);
         }}
-        className={`flex h-10 w-full min-w-0 items-center justify-between rounded-xl border px-2.5 text-left text-[12px] font-normal text-white outline-none transition ${
+        className={`flex h-9 w-full min-w-0 items-center justify-between rounded-xl border px-2.5 text-left text-[11px] font-normal text-white outline-none transition ${
           open
             ? "border-[#8ce7e2]/62 bg-[#30465a] ring-2 ring-[#7bd7d4]/12"
             : "border-white/16 bg-[#293649] hover:border-[#7bd7d4]/38"
@@ -495,7 +496,7 @@ function FilterDatePicker({
           data-allin-filter-date-picker="open"
           role="dialog"
           aria-label={`${ariaLabel} naptár`}
-          className="overflow-hidden rounded-[18px] border border-[#8ce7e2]/38 bg-[#202c3d]/[0.995] p-2.5 text-white shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
+          className="overflow-hidden rounded-[18px] border border-[#8ce7e2]/38 bg-[#202c3d]/[0.995] p-2 text-white shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
           style={{
             position: "fixed",
             zIndex: 420,
@@ -528,7 +529,7 @@ function FilterDatePicker({
             </button>
           </div>
 
-          <div className="mt-2 grid grid-cols-7 gap-1">
+          <div className="mt-2 grid grid-cols-7 gap-0.5">
             {FILTER_WEEKDAYS.map((day, index) => (
               <div key={day} className={`py-0.5 text-center text-[9px] uppercase ${index >= 5 ? "text-rose-100/52" : "text-[#cffffd]/56"}`}>
                 {day}
@@ -545,7 +546,7 @@ function FilterDatePicker({
                   key={iso}
                   type="button"
                   onClick={() => chooseDate(iso)}
-                  className={`relative flex h-8 items-center justify-center rounded-lg border text-[11px] transition active:scale-[0.96] ${
+                  className={`relative flex h-[30px] items-center justify-center rounded-lg border text-[10px] transition active:scale-[0.96] ${
                     selected
                       ? "border-[#bff8f5]/62 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.28)]"
                       : inMonth
@@ -578,6 +579,14 @@ function FilterDatePicker({
   );
 }
 
+function normalizePickerText(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
 function MobileSelect({
   value,
   onChange,
@@ -587,19 +596,179 @@ function MobileSelect({
   onChange: (value: string) => void;
   options: SelectOption[];
 }) {
+  const [open, setOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const selected = options.find((option) => String(option.value) === String(value)) || options[0] || null;
+  const showSearch = options.length > 12;
+  const searchKey = normalizePickerText(pickerSearch);
+  const visibleOptions = searchKey
+    ? options.filter((option) => normalizePickerText(option.label).includes(searchKey))
+    : options;
+
+  const closePicker = useCallback(() => {
+    setOpen(false);
+    setPickerSearch("");
+  }, []);
+
+  const updateMenuPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const viewportPadding = 10;
+    const gap = 6;
+    const minWidth = 190;
+    const width = Math.min(
+      Math.max(rect.width, minWidth),
+      Math.max(minWidth, window.innerWidth - viewportPadding * 2),
+    );
+    const desiredHeight = Math.min(310, 18 + (showSearch ? 48 : 0) + Math.max(1, options.length) * 34);
+    const roomBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+    const roomAbove = Math.max(0, rect.top - viewportPadding);
+    const openUp = roomBelow < Math.min(170, desiredHeight) && roomAbove > roomBelow;
+    const maxHeight = Math.max(110, Math.min(desiredHeight, openUp ? roomAbove - gap : roomBelow - gap));
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+    );
+
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? Math.max(viewportPadding, rect.top - gap) : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
+      width,
+      maxHeight,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [options.length, showSearch]);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      closePicker();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closePicker();
+    };
+    const onMove = () => updateMenuPosition();
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, closePicker, updateMenuPosition]);
+
+  useEffect(() => {
+    if (open) updateMenuPosition();
+  }, [open, pickerSearch, visibleOptions.length, updateMenuPosition]);
+
   return (
-    <div className="relative">
-      <select
-        className={`${inputClass} appearance-none pr-10`}
-        value={value}
-        onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange(event.target.value)}
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border px-2.5 text-left text-[11px] text-white outline-none transition focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 ${
+          open
+            ? "border-[#7bd7d4]/55 bg-[#3f4959] shadow-[0_0_0_1px_rgba(123,215,212,0.08),0_8px_20px_rgba(15,23,42,0.18)]"
+            : "border-white/18 bg-[#3f4959] hover:bg-[#475365]"
+        }`}
+        onClick={() => {
+          if (open) closePicker();
+          else {
+            setPickerSearch("");
+            updateMenuPosition();
+            setOpen(true);
+          }
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={selected?.label || ""}
       >
-        {options.map((option) => (
-          <option key={option.value || "__all"} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-3 top-3 text-white/48" size={15} />
-    </div>
+        <span className="min-w-0 flex-1 truncate">{selected?.label || "-"}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/58 transition ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          data-allin-filter-select="open"
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/30 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={menuStyle}
+          role="listbox"
+        >
+          {showSearch ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-1.5">
+              <div className="relative">
+                <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-white/42" />
+                <input
+                  className="h-8 w-full rounded-xl border border-white/16 bg-[#202b3b] pl-8 pr-8 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
+                  value={pickerSearch}
+                  onChange={(event) => setPickerSearch(event.target.value)}
+                  placeholder="Keresés..."
+                  autoFocus
+                />
+                {pickerSearch ? (
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/45 hover:bg-white/10 hover:text-white"
+                    onClick={() => setPickerSearch("")}
+                    aria-label="Keresés törlése"
+                  >
+                    <X size={11} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]">
+            <div className="grid gap-1">
+              {visibleOptions.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value || "__all"}
+                    type="button"
+                    className={`flex min-h-8 w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${
+                      active
+                        ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
+                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                    }`}
+                    onClick={() => {
+                      onChange(option.value);
+                      closePicker();
+                    }}
+                    role="option"
+                    aria-selected={active}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {!visibleOptions.length ? (
+              <div className="px-3 py-4 text-center text-[11px] text-white/45">Nincs találat.</div>
+            ) : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -916,7 +1085,7 @@ export default function AllInAdminMagazinDashboardMobile({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (document.querySelector('[data-allin-filter-date-picker="open"]')) return;
+      if (document.querySelector('[data-allin-filter-date-picker="open"], [data-allin-filter-select="open"]')) return;
       if (imagePreview) setImagePreview(null);
       else if (shopWorkflowMode) setShopWorkflowMode(null);
       else if (deleteTarget && !deleteSaving) setDeleteTarget(null);
@@ -1238,7 +1407,7 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
               <WalletCards size={18} className="text-[#8ee6e2]" />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid min-w-0 grid-cols-2 gap-1.5">
               {[
                 { key: "reservations" as const, label: "Félretett", icon: Bookmark },
                 { key: "returns" as const, label: "Visszáru", icon: RotateCcw },
@@ -1364,7 +1533,7 @@ export default function AllInAdminMagazinDashboardMobile({
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/52">{recentSales.length} sor</span>
             </div>
 
-            <div className="space-y-2.5 p-3">
+            <div className="space-y-2 p-2.5">
               {visibleSales.map((sale) => (
                 <article key={`${sale.storeKey}-${sale.lineId}`} className="rounded-[20px] border border-white/11 bg-[#2a3648] p-3 shadow-[0_8px_22px_rgba(15,23,42,0.14)]">
                   <div className="flex items-center justify-between gap-3 text-[10px] text-white/44">
@@ -1547,12 +1716,12 @@ export default function AllInAdminMagazinDashboardMobile({
 
       {filtersOpen ? (
         <div
-          className="fixed inset-0 z-[200] flex items-end bg-slate-950/72 backdrop-blur-sm"
+          className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-950/72 backdrop-blur-sm"
           onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
             if (event.currentTarget === event.target) setFiltersOpen(false);
           }}
         >
-          <section className="max-h-[90dvh] w-full overflow-y-auto rounded-t-[24px] border-x border-t border-white/18 bg-[#303c4f] pb-[env(safe-area-inset-bottom)] shadow-[0_-28px_80px_rgba(0,0,0,0.46)]">
+          <section className="max-h-[88dvh] w-full max-w-[420px] overflow-y-auto rounded-t-[24px] border-x border-t border-white/18 bg-[#303c4f] pb-[env(safe-area-inset-bottom)] shadow-[0_-28px_80px_rgba(0,0,0,0.46)]">
             <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f]/96 px-3.5 py-3 backdrop-blur-xl">
               <div>
                 <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
@@ -1568,15 +1737,15 @@ export default function AllInAdminMagazinDashboardMobile({
               </button>
             </header>
 
-            <div className="space-y-2.5 p-3">
+            <div className="space-y-2 p-2.5">
               {filterError ? (
                 <div className="rounded-xl border border-rose-200/28 bg-rose-500/14 px-3 py-2 text-[12px] text-rose-50">{filterError}</div>
               ) : null}
 
-              <div className="rounded-2xl border border-white/10 bg-[#2b3749] p-2.5">
+              <div className="rounded-2xl border border-white/10 bg-[#2b3749] p-2">
                 <p className="mb-2 text-[8px] uppercase tracking-[0.12em] text-white/42">Időszak</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                <div className="grid min-w-0 grid-cols-2 gap-1.5">
+                  <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                     Ettől
                     <FilterDatePicker
                       value={draft.from}
@@ -1584,7 +1753,7 @@ export default function AllInAdminMagazinDashboardMobile({
                       ariaLabel="Kezdő dátum"
                     />
                   </label>
-                  <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                  <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                     Eddig
                     <FilterDatePicker
                       value={draft.to}
@@ -1595,7 +1764,7 @@ export default function AllInAdminMagazinDashboardMobile({
                 </div>
               </div>
 
-              <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                 Eladó
                 <MobileSelect
                   value={draft.employee}
@@ -1604,8 +1773,8 @@ export default function AllInAdminMagazinDashboardMobile({
                 />
               </label>
 
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+              <div className="grid min-w-0 grid-cols-2 gap-1.5">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   Fizetés
                   <MobileSelect
                     value={draft.paymentStatus}
@@ -1620,7 +1789,7 @@ export default function AllInAdminMagazinDashboardMobile({
                     ]}
                   />
                 </label>
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   Típus
                   <MobileSelect
                     value={draft.saleType}
@@ -1635,8 +1804,8 @@ export default function AllInAdminMagazinDashboardMobile({
                 </label>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+              <div className="grid min-w-0 grid-cols-2 gap-1.5">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   Márka
                   <MobileSelect
                     value={draft.brand}
@@ -1644,7 +1813,7 @@ export default function AllInAdminMagazinDashboardMobile({
                     options={[{ value: "", label: "Minden márka" }, ...filterOptions.brands.map((value) => ({ value, label: value }))]}
                   />
                 </label>
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   Alkategória
                   <MobileSelect
                     value={draft.category}
@@ -1654,8 +1823,8 @@ export default function AllInAdminMagazinDashboardMobile({
                 </label>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+              <div className="grid min-w-0 grid-cols-2 gap-1.5">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   S/N/COD
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-3 text-white/34" size={15} />
@@ -1672,7 +1841,7 @@ export default function AllInAdminMagazinDashboardMobile({
                   </div>
                 </label>
 
-                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
                   Keresés
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-3 text-white/34" size={15} />
@@ -1690,7 +1859,7 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
             </div>
 
-            <footer className="sticky bottom-0 grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548]/98 px-3 py-2.5 backdrop-blur-xl">
+            <footer className="sticky bottom-0 grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548]/98 px-2.5 py-2 backdrop-blur-xl">
               <button
                 type="button"
                 onClick={resetFilters}
