@@ -824,30 +824,31 @@ export default function AllInAdminShopWorkflows({
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-3 gap-1 rounded-2xl border border-white/12 bg-[#263244] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
             {([
-              ["reservations", "Félretett termékek", Bookmark],
+              ["reservations", "Félretett", Bookmark],
               ["returns", "Visszáru", RotateCcw],
-              ["shifts", "Műszakátadások", WalletCards],
+              ["shifts", "Műszakátadás", WalletCards],
             ] as Array<[AllInAdminShopWorkflowMode, string, typeof Bookmark]>).map(([value, label, Icon]) => {
               const reservationAlert = value === "reservations" && reservationAlertCount > 0;
+              const active = mode === value;
               return (
                 <button
                   key={value}
                   type="button"
                   onClick={() => setMode(value)}
-                  className={`relative flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-[11px] transition sm:text-xs ${
+                  className={`relative flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-xl px-1.5 text-[10px] transition active:scale-[0.98] sm:px-2 sm:text-[11px] ${
                     reservationAlert
-                      ? "border-orange-200/62 bg-orange-500/80 text-white shadow-[0_8px_22px_rgba(249,115,22,0.22)] hover:bg-orange-500/90"
-                      : mode === value
-                        ? "border-[#9be9e5]/50 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)]"
-                        : "border-white/14 bg-[#344154] text-white/68 hover:border-[#7bd7d4]/28 hover:text-white"
+                      ? "bg-[#f97316] text-white shadow-[0_6px_16px_rgba(249,115,22,0.20)]"
+                      : active
+                        ? "bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.24)]"
+                        : "text-white/62 hover:bg-white/[0.055] hover:text-white"
                   }`}
                 >
-                  <Icon size={15} />
-                  <span className="truncate">{label}</span>
+                  <Icon size={14} className="shrink-0" />
+                  <span className="min-w-0 truncate whitespace-nowrap">{label}</span>
                   {reservationAlert ? (
-                    <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-white/28 bg-black/12 px-1.5 py-0.5 text-[9px] text-white">
+                    <span className="absolute right-1 top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-white/28 bg-black/16 px-1 text-[8px] leading-none text-white">
                       {reservationAlertCount}
                     </span>
                   ) : null}
