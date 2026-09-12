@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import {
   BarChart3,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleDollarSign,
   Filter,
