@@ -1494,10 +1494,10 @@ function ProductThumb({
             <button
               type="button"
               onClick={() => setCenterPreviewOpen(false)}
-              className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/22 bg-[#263246]/92 text-white shadow-lg backdrop-blur active:scale-[0.96]"
+              className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/70 bg-[#2d394b]/95 text-white shadow-[0_6px_18px_rgba(15,23,42,0.38)] backdrop-blur transition hover:bg-[#3a475a] active:scale-[0.94]"
               aria-label="Kép bezárása"
             >
-              <X size={17} />
+              <X size={15} strokeWidth={2.2} />
             </button>
             <div className="grid min-h-[300px] max-h-[76dvh] place-items-center overflow-hidden rounded-[18px] bg-white p-2">
               <img src={src} alt={item.title_ro || "Termékkép"} className="max-h-[72dvh] w-full object-contain" />
