@@ -1020,7 +1020,7 @@ export default function AllInAdminMagazinDashboardMobile({
               <button
                 type="button"
                 onClick={() => setShiftRepairOpen(true)}
-                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-red-500 bg-red-600 px-3 text-xs text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] active:scale-[0.98]"
+                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#ff5a63] bg-[#E21C2A] px-3 text-xs text-white shadow-[0_8px_18px_rgba(226,28,42,0.30)] transition hover:bg-[#C91522] active:scale-[0.98]"
               >
                 <Wrench size={15} /> Műszak javítás
               </button>
