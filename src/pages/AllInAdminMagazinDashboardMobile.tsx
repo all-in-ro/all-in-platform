@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -15,8 +16,11 @@ import {
   ArrowUpRight,
   Bookmark,
   Building2,
+  CalendarDays,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   Filter,
   Home,
@@ -117,7 +121,7 @@ type CombinedSummary = {
 type SelectOption = { value: string; label: string };
 
 const panel = "rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.18)]";
-const inputClass = "h-12 w-full min-w-0 rounded-2xl border border-white/16 bg-[#293649] px-3.5 text-[15px] font-normal text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
+const inputClass = "h-10 w-full min-w-0 rounded-xl border border-white/16 bg-[#293649] px-3 text-[13px] font-normal text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
 
 function localIsoDate(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -340,6 +344,240 @@ function uniqueOptions(values: Array<string | null | undefined>) {
     .sort((a, b) => a.localeCompare(b, "hu"));
 }
 
+const FILTER_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+const FILTER_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function filterDateParts(value?: string | null) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return null;
+  return { year, month, day, date };
+}
+
+function filterIsoFromUtcDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function filterDateLabel(value?: string | null) {
+  const parsed = filterDateParts(value);
+  if (!parsed) return "Dátum";
+  return `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.`;
+}
+
+function FilterDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const parsed = filterDateParts(value);
+  const [open, setOpen] = useState(false);
+  const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const todayIso = localIsoDate(new Date());
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 8;
+    const gap = 6;
+    const width = Math.min(318, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const estimatedHeight = 342;
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
+
+    if (openUpward) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = filterDateParts(value);
+    if (current) {
+      setViewYear(current.year);
+      setViewMonth(current.month - 1);
+    }
+    updatePosition();
+
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setUTCDate(gridStart.getUTCDate() + index);
+    return day;
+  });
+
+  function shiftMonth(delta: number) {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  }
+
+  function chooseDate(iso: string) {
+    onChange(iso);
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`flex h-10 w-full min-w-0 items-center justify-between rounded-xl border px-2.5 text-left text-[12px] font-normal text-white outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/62 bg-[#30465a] ring-2 ring-[#7bd7d4]/12"
+            : "border-white/16 bg-[#293649] hover:border-[#7bd7d4]/38"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <CalendarDays size={14} className="shrink-0 text-[#8fe9e5]" />
+          <span className="truncate">{filterDateLabel(value)}</span>
+        </span>
+        <ChevronDown size={13} className={`shrink-0 text-white/48 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={popupRef}
+          data-allin-filter-date-picker="open"
+          role="dialog"
+          aria-label={`${ariaLabel} naptár`}
+          className="overflow-hidden rounded-[18px] border border-[#8ce7e2]/38 bg-[#202c3d]/[0.995] p-2.5 text-white shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
+          style={{
+            position: "fixed",
+            zIndex: 420,
+            left: position.left,
+            width: position.width,
+            top: position.top,
+            bottom: position.bottom,
+          }}
+        >
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-[#29374b] px-2 py-1.5">
+            <button
+              type="button"
+              onClick={() => shiftMonth(-1)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/72 active:scale-[0.97]"
+              aria-label="Előző hónap"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div className="text-center">
+              <p className="text-[8px] uppercase tracking-[0.14em] text-[#cffffd]/44">Dátum</p>
+              <p className="mt-0.5 text-[13px] text-white">{viewYear}. {FILTER_MONTHS[viewMonth]}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => shiftMonth(1)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/72 active:scale-[0.97]"
+              aria-label="Következő hónap"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-7 gap-1">
+            {FILTER_WEEKDAYS.map((day, index) => (
+              <div key={day} className={`py-0.5 text-center text-[9px] uppercase ${index >= 5 ? "text-rose-100/52" : "text-[#cffffd]/56"}`}>
+                {day}
+              </div>
+            ))}
+            {days.map((day) => {
+              const iso = filterIsoFromUtcDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const selected = iso === value;
+              const today = iso === todayIso;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  onClick={() => chooseDate(iso)}
+                  className={`relative flex h-8 items-center justify-center rounded-lg border text-[11px] transition active:scale-[0.96] ${
+                    selected
+                      ? "border-[#bff8f5]/62 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.28)]"
+                      : inMonth
+                        ? weekend
+                          ? "border-transparent bg-white/[0.025] text-rose-50/68 hover:bg-white/[0.07]"
+                          : "border-transparent bg-white/[0.025] text-white/86 hover:bg-white/[0.07]"
+                        : "border-transparent text-white/22 hover:bg-white/[0.04]"
+                  }`}
+                >
+                  {day.getUTCDate()}
+                  {today && !selected ? <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-2 flex items-center justify-end border-t border-white/8 pt-2">
+            <button
+              type="button"
+              onClick={() => chooseDate(todayIso)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#8ce7e2]/26 bg-[#2a8d8b]/16 px-3 text-[10px] text-[#d8fffd] active:scale-[0.98]"
+            >
+              <CalendarDays size={12} /> Ma
+            </button>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function MobileSelect({
   value,
   onChange,
@@ -360,7 +598,7 @@ function MobileSelect({
           <option key={option.value || "__all"} value={option.value}>{option.label}</option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-3.5 top-4 text-white/48" size={17} />
+      <ChevronDown className="pointer-events-none absolute right-3 top-3 text-white/48" size={15} />
     </div>
   );
 }
@@ -678,6 +916,7 @@ export default function AllInAdminMagazinDashboardMobile({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector('[data-allin-filter-date-picker="open"]')) return;
       if (imagePreview) setImagePreview(null);
       else if (shopWorkflowMode) setShopWorkflowMode(null);
       else if (deleteTarget && !deleteSaving) setDeleteTarget(null);
@@ -1313,39 +1552,50 @@ export default function AllInAdminMagazinDashboardMobile({
             if (event.currentTarget === event.target) setFiltersOpen(false);
           }}
         >
-          <section className="max-h-[92dvh] w-full overflow-y-auto rounded-t-[28px] border-x border-t border-white/18 bg-[#303c4f] pb-[env(safe-area-inset-bottom)] shadow-[0_-28px_80px_rgba(0,0,0,0.46)]">
-            <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f]/96 px-4 py-4 backdrop-blur-xl">
+          <section className="max-h-[90dvh] w-full overflow-y-auto rounded-t-[24px] border-x border-t border-white/18 bg-[#303c4f] pb-[env(safe-area-inset-bottom)] shadow-[0_-28px_80px_rgba(0,0,0,0.46)]">
+            <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f]/96 px-3.5 py-3 backdrop-blur-xl">
               <div>
-                <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
-                <h2 className="mt-0.5 text-lg text-white">Csak amikor tényleg kell</h2>
+                <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
+                <h2 className="mt-0.5 text-[16px] text-white">Szűrés</h2>
               </div>
               <button
                 type="button"
                 onClick={() => setFiltersOpen(false)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white active:scale-[0.97]"
                 aria-label="Bezárás"
               >
-                <X size={18} />
+                <X size={17} />
               </button>
             </header>
 
-            <div className="space-y-4 p-4">
+            <div className="space-y-2.5 p-3">
               {filterError ? (
-                <div className="rounded-xl border border-rose-200/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">{filterError}</div>
+                <div className="rounded-xl border border-rose-200/28 bg-rose-500/14 px-3 py-2 text-[12px] text-rose-50">{filterError}</div>
               ) : null}
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                  Ettől
-                  <input className={inputClass} type="date" value={draft.from} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, from: event.target.value })} />
-                </label>
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                  Eddig
-                  <input className={inputClass} type="date" value={draft.to} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, to: event.target.value })} />
-                </label>
+              <div className="rounded-2xl border border-white/10 bg-[#2b3749] p-2.5">
+                <p className="mb-2 text-[8px] uppercase tracking-[0.12em] text-white/42">Időszak</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                    Ettől
+                    <FilterDatePicker
+                      value={draft.from}
+                      onChange={(value) => setDraft({ ...draft, from: value })}
+                      ariaLabel="Kezdő dátum"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                    Eddig
+                    <FilterDatePicker
+                      value={draft.to}
+                      onChange={(value) => setDraft({ ...draft, to: value })}
+                      ariaLabel="Záró dátum"
+                    />
+                  </label>
+                </div>
               </div>
 
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+              <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
                 Eladó
                 <MobileSelect
                   value={draft.employee}
@@ -1354,8 +1604,8 @@ export default function AllInAdminMagazinDashboardMobile({
                 />
               </label>
 
-              <div className="grid grid-cols-1 gap-3 min-[390px]:grid-cols-2">
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
                   Fizetés
                   <MobileSelect
                     value={draft.paymentStatus}
@@ -1370,7 +1620,7 @@ export default function AllInAdminMagazinDashboardMobile({
                     ]}
                   />
                 </label>
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
                   Típus
                   <MobileSelect
                     value={draft.saleType}
@@ -1385,72 +1635,75 @@ export default function AllInAdminMagazinDashboardMobile({
                 </label>
               </div>
 
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                Márka
-                <MobileSelect
-                  value={draft.brand}
-                  onChange={(value) => setDraft({ ...draft, brand: value })}
-                  options={[{ value: "", label: "Minden márka" }, ...filterOptions.brands.map((value) => ({ value, label: value }))]}
-                />
-              </label>
-
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                Alkategória
-                <MobileSelect
-                  value={draft.category}
-                  onChange={(value) => setDraft({ ...draft, category: value })}
-                  options={[{ value: "", label: "Minden alkategória" }, ...filterOptions.categories.map((value) => ({ value, label: value }))]}
-                />
-              </label>
-
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                S/N/COD
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3.5 top-4 text-white/36" size={17} />
-                  <input
-                    className={`${inputClass} pl-10`}
-                    value={draft.snCod}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, snCod: event.target.value })}
-                    onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
-                      if (event.key === "Enter") applyFilters();
-                    }}
-                    placeholder="Pl. CAM007"
-                    autoComplete="off"
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                  Márka
+                  <MobileSelect
+                    value={draft.brand}
+                    onChange={(value) => setDraft({ ...draft, brand: value })}
+                    options={[{ value: "", label: "Minden márka" }, ...filterOptions.brands.map((value) => ({ value, label: value }))]}
                   />
-                </div>
-              </label>
-
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                Keresés
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3.5 top-4 text-white/36" size={17} />
-                  <input
-                    className={`${inputClass} pl-10`}
-                    value={draft.search}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, search: event.target.value })}
-                    onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
-                      if (event.key === "Enter") applyFilters();
-                    }}
-                    placeholder="Bizonylat, kliens, termék..."
+                </label>
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                  Alkategória
+                  <MobileSelect
+                    value={draft.category}
+                    onChange={(value) => setDraft({ ...draft, category: value })}
+                    options={[{ value: "", label: "Minden alkategória" }, ...filterOptions.categories.map((value) => ({ value, label: value }))]}
                   />
-                </div>
-              </label>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                  S/N/COD
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-3 text-white/34" size={15} />
+                    <input
+                      className={`${inputClass} pl-9`}
+                      value={draft.snCod}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, snCod: event.target.value })}
+                      onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
+                        if (event.key === "Enter") applyFilters();
+                      }}
+                      placeholder="CAM007"
+                      autoComplete="off"
+                    />
+                  </div>
+                </label>
+
+                <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">
+                  Keresés
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-3 text-white/34" size={15} />
+                    <input
+                      className={`${inputClass} pl-9`}
+                      value={draft.search}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, search: event.target.value })}
+                      onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
+                        if (event.key === "Enter") applyFilters();
+                      }}
+                      placeholder="Kliens, termék..."
+                    />
+                  </div>
+                </label>
+              </div>
             </div>
 
-            <footer className="sticky bottom-0 grid grid-cols-[0.9fr_1.4fr] gap-2 border-t border-white/10 bg-[#293548]/98 px-4 py-3 backdrop-blur-xl">
+            <footer className="sticky bottom-0 grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548]/98 px-3 py-2.5 backdrop-blur-xl">
               <button
                 type="button"
                 onClick={resetFilters}
-                className="h-12 rounded-2xl border border-white/14 bg-white/[0.05] px-3 text-xs text-white active:scale-[0.98]"
+                className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[11px] text-white active:scale-[0.98]"
               >
                 Alaphelyzet
               </button>
               <button
                 type="button"
                 onClick={applyFilters}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-sm text-white active:scale-[0.98]"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[12px] text-white active:scale-[0.98]"
               >
-                <Search size={16} /> Alkalmazás
+                <Search size={15} /> Alkalmazás
               </button>
             </footer>
           </section>
