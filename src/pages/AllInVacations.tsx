@@ -10,6 +10,7 @@ import {
   CalendarPlus,
   CalendarRange,
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
   ClipboardList,
   Clock3,
@@ -141,6 +142,14 @@ function PdfIcon({ className = "h-5 w-5" }: { className?: string }) {
 
 function normBase(s: string) {
   return s.replace(/\/+$/, "");
+}
+
+function normalize(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 }
 
 function yyyymmNow() {
