@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -397,6 +398,266 @@ function useIsMobile(breakpointPx = 640) {
   return isMobile;
 }
 
+
+type AllInSelectOption = { value: string; label: string; disabled?: boolean };
+
+function AllInSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Válassz",
+  ariaLabel,
+  compact = false,
+}: {
+  value: string;
+  options: AllInSelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  ariaLabel: string;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({});
+  const selectedOption = options.find((option) => String(option.value) === String(value)) || null;
+  const searchable = options.length > 10;
+  const normalizedQuery = normalize(String(query || ""));
+  const visibleOptions = normalizedQuery
+    ? options.filter((option) => normalize(option.label).includes(normalizedQuery))
+    : options;
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    const node = triggerRef.current;
+    if (!node || typeof window === "undefined") return;
+    const rect = node.getBoundingClientRect();
+    const edge = 10;
+    const width = Math.min(Math.max(rect.width, 180), Math.max(180, window.innerWidth - edge * 2));
+    const left = Math.min(Math.max(edge, rect.left), Math.max(edge, window.innerWidth - width - edge));
+    const wanted = Math.min(310, 18 + (searchable ? 46 : 0) + Math.max(1, options.length) * 36);
+    const below = Math.max(0, window.innerHeight - rect.bottom - edge);
+    const above = Math.max(0, rect.top - edge);
+    const up = below < Math.min(170, wanted) && above > below;
+    const maxHeight = Math.max(110, Math.min(wanted, up ? above - 6 : below - 6));
+    setStyle({
+      position: "fixed",
+      left,
+      width,
+      top: up ? Math.max(edge, rect.top - 6) : Math.min(window.innerHeight - edge, rect.bottom + 6),
+      maxHeight,
+      transform: up ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [options.length, searchable]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); } };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [close, open, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => {
+          if (open) close();
+          else {
+            setQuery("");
+            updatePosition();
+            setOpen(true);
+          }
+        }}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/18 bg-[#344154] px-3 text-left font-normal text-white outline-none transition hover:bg-[#3d4b5f] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16 ${compact ? "h-9 rounded-xl text-[11px]" : "h-10 rounded-xl text-[12px]"}`}
+      >
+        <span className={`min-w-0 flex-1 truncate ${selectedOption ? "text-white" : "text-white/42"}`}>{selectedOption?.label || placeholder}</span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/52 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/34 bg-[#263246] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={style}
+        >
+          {searchable ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-1.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-8 w-full rounded-xl border border-white/14 bg-[#202b3b] pl-8 pr-8 text-[11px] text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/55"
+                  placeholder="Keresés..."
+                />
+                {query ? <button type="button" onClick={() => setQuery("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/46"><X className="h-3 w-3" /></button> : null}
+              </div>
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            <div className="grid gap-1">
+              {visibleOptions.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value || "__empty"}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    disabled={option.disabled}
+                    onClick={() => {
+                      if (option.disabled) return;
+                      onChange(option.value);
+                      close();
+                    }}
+                    className={`flex min-h-8 w-full items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition disabled:opacity-40 ${active ? "border-[#7bd7d4]/48 bg-[#2a8d8b] text-white" : "border-transparent bg-[#354153] text-white/80 hover:bg-[#415064]"}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {active ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+              {!visibleOptions.length ? <div className="px-3 py-5 text-center text-[11px] text-white/42">Nincs találat.</div> : null}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
+const VAC_MONTHS = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"] as const;
+const VAC_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function VacationDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0, 10);
+  const [year, month] = normalized.split("-").map(Number);
+  const [viewYear, setViewYear] = useState(year);
+  const [viewMonth, setViewMonth] = useState(month - 1);
+
+  useEffect(() => {
+    if (!open) return;
+    const valid = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0, 10);
+    const [y, m] = valid.split("-").map(Number);
+    setViewYear(y);
+    setViewMonth(m - 1);
+    const oldOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } };
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      document.body.style.overflow = oldOverflow;
+      window.removeEventListener("keydown", escape, true);
+    };
+  }, [open, value]);
+
+  const first = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const start = new Date(first);
+  start.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + index);
+    return date;
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  const toIso = (date: Date) => `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  const shiftMonth = (delta: number) => {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        onClick={() => setOpen(true)}
+        className="flex h-10 w-full min-w-0 items-center justify-between gap-2 overflow-hidden rounded-xl border border-white/18 bg-[#344154] px-3 text-left text-[12px] text-white outline-none transition hover:bg-[#3d4b5f] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16"
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2"><CalendarDays className="h-3.5 w-3.5 shrink-0 text-[#8ee6e2]" /><span className="truncate">{formatRequestDate(value)}</span></span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-white/50" />
+      </button>
+      {open && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-[2147483300] grid place-items-center bg-slate-950/72 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setOpen(false); }}>
+          <div className="w-full max-w-[310px] overflow-hidden rounded-[24px] border border-[#8ce7e2]/42 bg-[#202c3d] p-3 text-white shadow-[0_32px_90px_rgba(2,6,23,0.78)]" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-white/9 bg-[#29374b] px-2 py-2">
+              <button type="button" onClick={() => shiftMonth(-1)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/78"><ChevronLeft className="h-4 w-4" /></button>
+              <div className="min-w-0 text-center"><div className="text-[8px] uppercase tracking-[0.14em] text-[#cffffd]/45">Dátum</div><div className="mt-0.5 text-[14px] text-white">{viewYear}. {VAC_MONTHS[viewMonth]}</div></div>
+              <button type="button" onClick={() => shiftMonth(1)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/78"><ChevronRight className="h-4 w-4" /></button>
+            </div>
+            <div className="mt-3 grid grid-cols-7 gap-1">
+              {VAC_WEEKDAYS.map((day) => <div key={day} className="py-1 text-center text-[9px] uppercase text-white/42">{day}</div>)}
+              {days.map((date) => {
+                const iso = toIso(date);
+                const currentMonth = date.getUTCMonth() === viewMonth;
+                const active = iso === value;
+                const isToday = iso === today;
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    onClick={() => { onChange(iso); setOpen(false); }}
+                    className={`relative flex h-9 items-center justify-center rounded-lg border text-[11px] transition ${active ? "border-[#bff8f5]/60 bg-[#2a8d8b] text-white" : currentMonth ? "border-transparent bg-white/[0.025] text-white/82 hover:bg-white/[0.08]" : "border-transparent text-white/22"}`}
+                  >
+                    {date.getUTCDate()}
+                    {isToday && !active ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 border-t border-white/8 pt-3">
+              <button type="button" onClick={() => { onChange(today); setOpen(false); }} className="h-9 rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/18 text-[10px] text-[#d7fffd]">Ma</button>
+              <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-xl border border-white/12 bg-white/[0.04] text-[10px] text-white/70">Bezárás</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 export default function AllInVacations({ api }: { api?: string }) {
   const apiBase = useMemo(() => {
     const fromProp = typeof api === "string" && api.trim() ? api.trim() : "";
@@ -407,8 +668,8 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const isMobile = useIsMobile();
 
-  const card = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
-  const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm";
+  const card = "overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.16)]";
+  const panel = "overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.14)]";
   const panelHead = "flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
   const label = "text-white/65 text-xs";
   const input =
@@ -422,7 +683,7 @@ export default function AllInVacations({ api }: { api?: string }) {
   const iconBtn =
     "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-45";
   const dangerIconBtn =
-    "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-600 text-white transition hover:bg-rose-500";
+    "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,0.24)] transition hover:bg-[#C91522] active:scale-[0.97]";
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [empErr, setEmpErr] = useState("");
@@ -464,8 +725,6 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [day, setDay] = useState<string>(new Date().toISOString().slice(0, 10));
   const [dayTo, setDayTo] = useState<string>(new Date().toISOString().slice(0, 10));
   const [kind, setKind] = useState<TimeEvent["kind"]>("vacation");
-  const [kindOpen, setKindOpen] = useState(false);
-  const kindRef = useRef<HTMLDivElement | null>(null);
   const [shortHours, setShortHours] = useState<number>(4);
   const [note, setNote] = useState<string>("");
   const [saveErr, setSaveErr] = useState("");
@@ -475,13 +734,8 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [compDay, setCompDay] = useState<string>(new Date().toISOString().slice(0, 10));
   const [compUnit, setCompUnit] = useState<"day" | "hour">("hour");
   const [compDir, setCompDir] = useState<"credit" | "debit">("credit");
-  const [compDirOpen, setCompDirOpen] = useState(false);
-  const [compUnitOpen, setCompUnitOpen] = useState(false);
-  const compDirRef = useRef<HTMLDivElement | null>(null);
-  const compUnitRef = useRef<HTMLDivElement | null>(null);
   const [compAmount, setCompAmount] = useState<number>(2);
   const [compNote, setCompNote] = useState<string>("");
-  const [compChecked, setCompChecked] = useState(false);
   const [compErr, setCompErr] = useState<string>("");
   const [compBusy, setCompBusy] = useState(false);
 
@@ -528,10 +782,6 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pdfOpen, setPdfOpen] = useState(false);
   const [pdfYear, setPdfYear] = useState<number>(new Date().getFullYear());
   const [pdfEmployee, setPdfEmployee] = useState<string>(""); // empty = all
-  const [pdfEmpOpen, setPdfEmpOpen] = useState(false);
-  const [pdfYearOpen, setPdfYearOpen] = useState(false);
-  const pdfEmpRef = useRef<HTMLDivElement | null>(null);
-  const pdfYearRef = useRef<HTMLDivElement | null>(null);
 
   const [vacationSettings, setVacationSettings] = useState<VacationSettings>({ workingDays: [1, 2, 3, 4, 5] });
   const [settingsDraft, setSettingsDraft] = useState<number[]>([1, 2, 3, 4, 5]);
@@ -582,12 +832,6 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
-  const [archiveYearOpen, setArchiveYearOpen] = useState(false);
-  const [archiveFromMonthOpen, setArchiveFromMonthOpen] = useState(false);
-  const [archiveToMonthOpen, setArchiveToMonthOpen] = useState(false);
-  const archiveYearRef = useRef<HTMLDivElement | null>(null);
-  const archiveFromMonthRef = useRef<HTMLDivElement | null>(null);
-  const archiveToMonthRef = useRef<HTMLDivElement | null>(null);
 
   const archiveYear = Number(monthFrom.slice(0, 4)) || new Date().getFullYear();
   const archiveYears = useMemo(() => {
@@ -606,14 +850,6 @@ export default function AllInVacations({ api }: { api?: string }) {
       .slice()
       .sort((a, b) => String(a.month || "").localeCompare(String(b.month || ""))),
     [activityMonths, archiveYear]
-  );
-  const activeArchiveFromMonth = useMemo(
-    () => activityMonthsForYear.find((item) => item.month === monthFrom) || activityMonthsForYear[0] || null,
-    [activityMonthsForYear, monthFrom]
-  );
-  const activeArchiveToMonth = useMemo(
-    () => activityMonthsForYear.find((item) => item.month === monthTo) || activityMonthsForYear[activityMonthsForYear.length - 1] || null,
-    [activityMonthsForYear, monthTo]
   );
   const pdfYearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -637,9 +873,6 @@ export default function AllInVacations({ api }: { api?: string }) {
       setMonthFrom(months[0].month);
       setMonthTo(months[months.length - 1].month);
     }
-    setArchiveYearOpen(false);
-    setArchiveFromMonthOpen(false);
-    setArchiveToMonthOpen(false);
   };
 
   const changeArchiveMonthFrom = (nextMonth: string) => {
@@ -647,7 +880,6 @@ export default function AllInVacations({ api }: { api?: string }) {
     rangeInitializedRef.current = true;
     setMonthFrom(nextMonth);
     if (nextMonth > monthTo) setMonthTo(nextMonth);
-    setArchiveFromMonthOpen(false);
   };
 
   const changeArchiveMonthTo = (nextMonth: string) => {
@@ -655,7 +887,6 @@ export default function AllInVacations({ api }: { api?: string }) {
     rangeInitializedRef.current = true;
     setMonthTo(nextMonth);
     if (nextMonth < monthFrom) setMonthFrom(nextMonth);
-    setArchiveToMonthOpen(false);
   };
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -674,61 +905,6 @@ export default function AllInVacations({ api }: { api?: string }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmOpen, summaryOpen, pdfOpen, settingsOpen, decisionTarget, decisionBusy]);
-
-  // Custom dropdowns use only the AllIn palette, never the browser's blue native menu.
-  useEffect(() => {
-    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen && !pdfYearOpen && !archiveYearOpen && !archiveFromMonthOpen && !archiveToMonthOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      if (!t) return;
-      if (compDirOpen && compDirRef.current && !compDirRef.current.contains(t)) setCompDirOpen(false);
-      if (compUnitOpen && compUnitRef.current && !compUnitRef.current.contains(t)) setCompUnitOpen(false);
-      if (pdfEmpOpen && pdfEmpRef.current && !pdfEmpRef.current.contains(t)) setPdfEmpOpen(false);
-      if (pdfYearOpen && pdfYearRef.current && !pdfYearRef.current.contains(t)) setPdfYearOpen(false);
-      if (archiveYearOpen && archiveYearRef.current && !archiveYearRef.current.contains(t)) setArchiveYearOpen(false);
-      if (archiveFromMonthOpen && archiveFromMonthRef.current && !archiveFromMonthRef.current.contains(t)) setArchiveFromMonthOpen(false);
-      if (archiveToMonthOpen && archiveToMonthRef.current && !archiveToMonthRef.current.contains(t)) setArchiveToMonthOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setCompDirOpen(false);
-        setCompUnitOpen(false);
-        setPdfEmpOpen(false);
-        setPdfYearOpen(false);
-        setArchiveYearOpen(false);
-        setArchiveFromMonthOpen(false);
-        setArchiveToMonthOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [compDirOpen, compUnitOpen, pdfEmpOpen, pdfYearOpen, archiveYearOpen, archiveFromMonthOpen, archiveToMonthOpen]);
-
-  // Custom "Típus" dropdown: force ONLY our colors (no OS/browser blue highlight).
-  useEffect(() => {
-    if (!kindOpen) return;
-
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      if (!t) return;
-      if (kindRef.current && !kindRef.current.contains(t)) setKindOpen(false);
-    };
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setKindOpen(false);
-    };
-
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [kindOpen]);
 
   const fetchVacationSettings = async () => {
     try {
@@ -1315,7 +1491,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       return;
     }
     if (!compNote.trim()) {
-      setCompErr("A megjegyzés kötelező (ez a bizonyíték).");
+      setCompErr("A megjegyzés kötelező.");
       return;
     }
 
@@ -1355,7 +1531,6 @@ export default function AllInVacations({ api }: { api?: string }) {
       if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
 
       setCompNote("");
-      setCompChecked(false);
       await fetchList(emp);
     } catch (e: any) {
       setCompErr(String(e?.message || e || "Hiba"));
@@ -1382,9 +1557,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const openSaveCompConfirm = () => {
     setConfirmTitle("Kompenzáció mentése");
-    setConfirmMsg(
-      "Biztos mented? Ez kompenzációs esemény lesz (tartozás / kiegyenlítés), és nem csökkenti a rendes szabadságot."
-    );
+    setConfirmMsg("Mentsem ezt a kompenzációs eseményt?");
     setConfirmId(null);
     setConfirmAction("saveComp");
     setConfirmOpen(true);
@@ -1629,148 +1802,77 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
 
   const DetailsPane = (
-    <div className="relative space-y-4">
-      <section className="relative z-[60] overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm">
-        <div className="flex flex-col gap-3 rounded-2xl bg-gradient-to-r from-[#303a4c] via-[#354153] to-[#2a8d8b]/34 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-white/80 text-sm">Kiválasztva</div>
-          <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-2">
-          <div ref={archiveYearRef} className="relative grid gap-1">
-            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Év</div>
-            <button
-              type="button"
-              className="flex h-11 min-w-[112px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-              onClick={() => {
-                setArchiveYearOpen((value) => !value);
-                setArchiveFromMonthOpen(false);
-                setArchiveToMonthOpen(false);
-              }}
-              aria-haspopup="listbox"
-              aria-expanded={archiveYearOpen}
-            >
-              <span>{archiveYear}</span>
-              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveYearOpen ? "rotate-180" : ""}`} />
-            </button>
-            {archiveYearOpen ? (
-              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                {archiveYears.map((year) => (
-                  <button
-                    key={year}
-                    type="button"
-                    className={`block w-full px-4 py-2.5 text-left text-sm transition ${year === archiveYear ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                    onClick={() => changeArchiveYear(year)}
-                  >
-                    {year}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+    <div className="relative space-y-3 sm:space-y-4">
+      <section className="overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,0.16)]">
+        <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303b4d] px-3.5 py-3">
+          <div className="min-w-0">
+            <div className="text-[8px] uppercase tracking-[0.14em] text-white/38">Kiválasztott dolgozó</div>
+            <div className="mt-0.5 truncate text-[17px] text-white">{selected || "-"}</div>
           </div>
-
-          <div ref={archiveFromMonthRef} className="relative grid gap-1">
-            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Mettől</div>
-            <button
-              type="button"
-              className="flex h-11 min-w-[158px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={!activityMonthsForYear.length}
-              onClick={() => {
-                setArchiveFromMonthOpen((value) => !value);
-                setArchiveYearOpen(false);
-                setArchiveToMonthOpen(false);
-              }}
-              aria-haspopup="listbox"
-              aria-expanded={archiveFromMonthOpen}
-            >
-              <span>{activeArchiveFromMonth ? formatMonthLabel(activeArchiveFromMonth.month).replace(`${archiveYear}. `, "") : "Nincs hónap"}</span>
-              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveFromMonthOpen ? "rotate-180" : ""}`} />
-            </button>
-            {archiveFromMonthOpen && activityMonthsForYear.length ? (
-              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                {activityMonthsForYear.map((item) => (
-                  <button
-                    key={item.month}
-                    type="button"
-                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === monthFrom ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                    onClick={() => changeArchiveMonthFrom(item.month)}
-                  >
-                    <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
-                    <span className="text-[10px] text-white/55">{item.vacationDays} nap</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <div ref={archiveToMonthRef} className="relative grid gap-1">
-            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Meddig</div>
-            <button
-              type="button"
-              className="flex h-11 min-w-[158px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={!activityMonthsForYear.length}
-              onClick={() => {
-                setArchiveToMonthOpen((value) => !value);
-                setArchiveYearOpen(false);
-                setArchiveFromMonthOpen(false);
-              }}
-              aria-haspopup="listbox"
-              aria-expanded={archiveToMonthOpen}
-            >
-              <span>{activeArchiveToMonth ? formatMonthLabel(activeArchiveToMonth.month).replace(`${archiveYear}. `, "") : "Nincs hónap"}</span>
-              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveToMonthOpen ? "rotate-180" : ""}`} />
-            </button>
-            {archiveToMonthOpen && activityMonthsForYear.length ? (
-              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                {activityMonthsForYear.map((item) => (
-                  <button
-                    key={item.month}
-                    type="button"
-                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === monthTo ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                    onClick={() => changeArchiveMonthTo(item.month)}
-                  >
-                    <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
-                    <span className="text-[10px] text-white/55">{item.vacationDays} nap</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <Button type="button" className={btn} onClick={() => fetchList()} disabled={listBusy}>
+          <button type="button" onClick={() => void fetchList()} disabled={listBusy} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés">
             <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
-            {listBusy ? "Frissítés…" : "Frissítés"}
-          </Button>
+          </button>
         </div>
+        <div className="p-3">
+          <div className="grid min-w-0 grid-cols-[78px_minmax(0,1fr)_minmax(0,1fr)] gap-2">
+            <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Év
+              <AllInSelect
+                value={String(archiveYear)}
+                options={archiveYears.map((year) => ({ value: String(year), label: String(year) }))}
+                onChange={(next) => changeArchiveYear(Number(next))}
+                ariaLabel="Év"
+                compact
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Mettől
+              <AllInSelect
+                value={monthFrom}
+                options={activityMonthsForYear.map((item) => ({ value: item.month, label: formatMonthLabel(item.month).replace(`${archiveYear}. `, "") }))}
+                onChange={changeArchiveMonthFrom}
+                placeholder="Hónap"
+                ariaLabel="Kezdő hónap"
+                compact
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Meddig
+              <AllInSelect
+                value={monthTo}
+                options={activityMonthsForYear.map((item) => ({ value: item.month, label: formatMonthLabel(item.month).replace(`${archiveYear}. `, "") }))}
+                onChange={changeArchiveMonthTo}
+                placeholder="Hónap"
+                ariaLabel="Záró hónap"
+                compact
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-[#7bd7d4]/16 bg-[#2a8d8b]/9 px-2.5 py-2">
+            <span className="truncate text-[9px] text-white/48">{monthLabel}</span>
+            {activityMonthsBusy ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-[#8ee6e2]" /> : null}
+          </div>
         </div>
       </section>
 
-      <section className="relative z-0 rounded-2xl border border-[#7bd7d4]/20 bg-[#315c62]/72 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/58">Gyors visszakeresés</div>
-            <div className="mt-1 text-sm text-white">{archiveYear}. év szabadságos hónapjai</div>
-          </div>
-          {activityMonthsBusy ? <span className="text-xs text-white/48"><RefreshCw className="mr-1 inline h-3.5 w-3.5 animate-spin" />Betöltés…</span> : null}
+      <section className="rounded-[20px] border border-[#7bd7d4]/18 bg-[#315c62]/58 p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[9px] uppercase tracking-[0.13em] text-[#d7fffd]/52">Hónapok</div>
+          {activityMonthsBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#8ee6e2]" /> : null}
         </div>
-        <div className="mt-3 flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+        <div className="mt-2 flex flex-wrap gap-1.5">
           {activityMonthsForYear.length ? activityMonthsForYear.map((item) => (
             <button
               key={item.month}
               type="button"
-              className={`rounded-xl border px-3 py-2 text-left text-xs transition ${item.month >= monthFrom && item.month <= monthTo ? "border-white/55 bg-white text-[#236d6b]" : "border-[#b7f1ed]/24 bg-[#2a8d8b]/28 text-[#e5fffd] hover:bg-[#2a8d8b]/45"}`}
+              className={`rounded-xl border px-2.5 py-1.5 text-left text-[10px] transition ${item.month >= monthFrom && item.month <= monthTo ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-[#b7f1ed]/18 bg-white/[0.04] text-white/68 hover:bg-white/[0.08]"}`}
               onClick={() => {
                 rangeInitializedRef.current = true;
                 setMonthFrom(item.month);
                 setMonthTo(item.month);
               }}
-              title={`${item.vacationDays} szabadságnap • kattintásra csak ezt a hónapot mutatja`}
             >
-              <span className="block">{formatMonthLabel(item.month)}</span>
-              <span className={`mt-0.5 block text-[10px] ${item.month >= monthFrom && item.month <= monthTo ? "text-[#236d6b]/70" : "text-white/52"}`}>{item.vacationDays} nap</span>
+              <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
+              <span className="ml-1.5 text-[8px] text-white/48">{item.vacationDays} nap</span>
             </button>
-          )) : !activityMonthsBusy ? <span className="text-xs text-white/48">{archiveYear}-ban ennél a dolgozónál nincs rögzített szabadság.</span> : null}
+          )) : !activityMonthsBusy ? <span className="text-[10px] text-white/38">Nincs adat ebben az évben.</span> : null}
         </div>
       </section>
 
@@ -1791,6 +1893,12 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em] text-[#d7fffd]/60"><Scale className="h-4 w-4" /> Kompenzáció</div>
           <div className="mt-2 text-xl text-white">{selectedComp.balanceDays}n / {selectedComp.balanceHours}ó</div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 rounded-[20px] border border-white/12 bg-[#303a4c] p-1.5">
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-new-entry")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><CalendarPlus className="h-3.5 w-3.5" /> Új</button>
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-compensation")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><Scale className="h-3.5 w-3.5" /> Kompenzáció</button>
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-history")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><History className="h-3.5 w-3.5" /> Előzmények</button>
       </div>
 
       {selectedPendingRequests.length ? (
@@ -1845,119 +1953,53 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
         <div className="p-4">
 
-        <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
+        <div className="grid gap-2.5 sm:grid-cols-3">
+          <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 sm:col-span-1">Típus
+            <AllInSelect
+              value={kind}
+              options={[{ value: "vacation", label: "Szabadság" }, { value: "short", label: "Elkérezés" }]}
+              onChange={(next) => setKind(next as TimeEvent["kind"])}
+              ariaLabel="Távollét típusa"
+            />
+          </label>
+
           {kind === "vacation" ? (
             <>
-              <div className="grid gap-2">
-                <div className={label}>Kezdő nap</div>
-                <input
-                  type="date"
-                  className={input}
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Kezdő nap
+                <VacationDatePicker
                   value={day}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setDay(v);
-                    if (!dayTo || dayTo.trim() === "" || (dayTo.trim() && dayTo.trim() < v)) setDayTo(v);
+                  ariaLabel="Kezdő nap"
+                  onChange={(value) => {
+                    setDay(value);
+                    if (!dayTo || dayTo < value) setDayTo(value);
                   }}
                 />
-              </div>
-              <div className="grid gap-2">
-                <div className={label}>Vége</div>
-                <input type="date" className={input} value={dayTo} onChange={(e) => setDayTo(e.target.value)} />
-              </div>
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Vége
+                <VacationDatePicker value={dayTo} ariaLabel="Szabadság vége" onChange={setDayTo} />
+              </label>
             </>
           ) : (
-            <div className="grid gap-2">
-              <div className={label}>Dátum</div>
-              <input type="date" className={input} value={day} onChange={(e) => setDay(e.target.value)} />
-            </div>
+            <>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Dátum
+                <VacationDatePicker value={day} ariaLabel="Elkérezés dátuma" onChange={setDay} />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Óra
+                <input type="number" min={1} max={12} step={1} className={input} value={shortHours} onChange={(event) => setShortHours(Number(event.target.value))} />
+              </label>
+            </>
           )}
 
-          <div className="grid gap-2">
-            <div className={label}>Típus</div>
-            <div ref={kindRef} className="relative">
-              <button
-                type="button"
-                className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
-                onClick={() => setKindOpen((v) => !v)}
-                aria-haspopup="listbox"
-                aria-expanded={kindOpen}
-              >
-                <span className="text-sm">{kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)"}</span>
-                <span className="text-white/70 text-xs">▾</span>
-              </button>
-
-              {kindOpen && (
-                <div
-                  role="listbox"
-                  className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
-                  style={{ backgroundColor: "#354153" }}
-                >
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={kind === "vacation"}
-                    className={
-                      "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0 "
-                    }
-                    style={{ backgroundColor: kind === "vacation" ? "#208d8b" : "#354153" }}
-                    onClick={() => {
-                      setKind("vacation");
-                      setKindOpen(false);
-                    }}
-                  >
-                    Szabadság nap
-                  </button>
-
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={kind === "short"}
-                    className={"w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"}
-                    style={{ backgroundColor: kind === "short" ? "#208d8b" : "#354153" }}
-                    onClick={() => {
-                      setKind("short");
-                      setKindOpen(false);
-                    }}
-                  >
-                    Elkérezés (óra)
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {kind === "vacation" ? (
-            <div className="sm:col-span-3 text-white/50 text-xs">Kezdő nap · Vége. Ha ugyanaz, egy napot jelent.</div>
-          ) : null}
-
-          {kind === "short" ? (
-            <div className="grid gap-2">
-              <div className={label}>Óra</div>
-              <input
-                type="number"
-                min={1}
-                max={12}
-                step={1}
-                className={input}
-                value={shortHours}
-                onChange={(e) => setShortHours(Number(e.target.value))}
-              />
-            </div>
-          ) : null}
-
-          <div className="grid gap-2 sm:col-span-3">
-            <div className={label}>Megjegyzés (opcionális)</div>
-            <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Pl. orvos" />
-          </div>
+          <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 sm:col-span-3">Megjegyzés
+            <input className={input} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Opcionális" />
+          </label>
         </div>
 
         {kind === "vacation" ? (
-          <div className="mt-3 grid gap-2 rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/52 p-3 sm:grid-cols-3">
-            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Naptári időszak</div><div className="mt-1 text-lg text-white">{vacationPreview.calendarDays} nap</div></div>
-            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Elszámolt szabadság</div><div className="mt-1 text-lg text-[#d7fffd]">{vacationPreview.workingDays} nap</div></div>
-            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Kihagyott pihenőnap</div><div className="mt-1 text-lg text-white">{vacationPreview.excludedDays} nap</div></div>
-            <div className="sm:col-span-3 text-[11px] text-white/58">Munkanapok: {WEEK_DAYS.filter((item) => vacationSettings.workingDays.includes(item.id)).map((item) => item.label).join(", ")}.</div>
+          <div className="mt-2.5 grid grid-cols-3 gap-1.5 rounded-2xl border border-[#7bd7d4]/18 bg-[#174c55]/42 p-2.5 text-center">
+            <div className="rounded-xl bg-black/10 px-2 py-2"><div className="text-[7px] uppercase tracking-[0.08em] text-white/38">Naptári</div><div className="mt-1 text-[15px] text-white">{vacationPreview.calendarDays}</div></div>
+            <div className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/12 px-2 py-2"><div className="text-[7px] uppercase tracking-[0.08em] text-[#d7fffd]/52">Szabadság</div><div className="mt-1 text-[15px] text-[#d7fffd]">{vacationPreview.workingDays}</div></div>
+            <div className="rounded-xl bg-black/10 px-2 py-2"><div className="text-[7px] uppercase tracking-[0.08em] text-white/38">Pihenőnap</div><div className="mt-1 text-[15px] text-white">{vacationPreview.excludedDays}</div></div>
           </div>
         ) : null}
 
@@ -1980,185 +2022,50 @@ export default function AllInVacations({ api }: { api?: string }) {
 
       <section id="vacation-compensation" className={panel}>
         <div className={panelHead}>
-        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <div className="text-white/80 text-sm">Kompenzáció (tartozás)</div>
-            <div className="text-white/50 text-xs mt-1">
-              Ha hivatalos szabadság alatt dolgozik vagy túlórázik: te tartozol. Ha kiadod/kompenzálod: kiegyenlítés.
+            <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Kompenzáció</div>
+            <div className="mt-1 flex items-center gap-2 text-base"><Scale className="h-4 w-4" /> Tartozás / kiegyenlítés</div>
+          </div>
+          <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedComp.balanceDays}n / {selectedComp.balanceHours}ó</span>
+        </div>
+        <div className="p-3 sm:p-4">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            <label className="col-span-2 grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 sm:col-span-1">Dátum
+              <VacationDatePicker value={compDay} ariaLabel="Kompenzáció dátuma" onChange={setCompDay} />
+            </label>
+            <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Típus
+              <AllInSelect
+                value={compDir}
+                options={[{ value: "credit", label: "Tartozunk (+)" }, { value: "debit", label: "Kiegyenlítés (-)" }]}
+                onChange={(next) => setCompDir(next as "credit" | "debit")}
+                ariaLabel="Kompenzáció típusa"
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Mérték
+              <AllInSelect
+                value={compUnit}
+                options={[{ value: "hour", label: "Óra" }, { value: "day", label: "Nap" }]}
+                onChange={(next) => {
+                  const unit = next as "hour" | "day";
+                  setCompUnit(unit);
+                  if (unit === "hour" && compAmount > 12) setCompAmount(2);
+                  if (unit === "day" && compAmount > 31) setCompAmount(1);
+                }}
+                ariaLabel="Kompenzáció mértéke"
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Mennyiség
+              <input type="number" min={1} max={compUnit === "hour" ? 12 : 31} step={1} className={input} value={compAmount} onChange={(event) => setCompAmount(Number(event.target.value))} />
+            </label>
+            <label className="col-span-2 grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 sm:col-span-4">Megjegyzés
+              <input className={input} value={compNote} onChange={(event) => setCompNote(event.target.value)} placeholder="Kötelező rövid indok" />
+            </label>
+            <div className="col-span-2 sm:col-span-4">
+              <Button type="button" className={`${btnPrimary} w-full sm:w-auto`} disabled={compBusy || !selected} onClick={() => { setCompErr(""); openSaveCompConfirm(); }}>
+                <Save className="h-4 w-4" /> {compBusy ? "Mentés…" : "Kompenzáció mentése"}
+              </Button>
             </div>
           </div>
-          <div className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">
-            Egyenleg: {selectedComp.balanceDays} nap, {selectedComp.balanceHours} óra
-          </div>
-        </div>
-        <div className="p-4">
-
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-4">
-          <div className="grid gap-2">
-            <div className={label}>Dátum</div>
-            <input type="date" className={input} value={compDay} onChange={(e) => setCompDay(e.target.value)} />
-          </div>
-
-          <div className="grid gap-2">
-            <div className={label}>Típus</div>
-	          <div ref={compDirRef} className="relative">
-	            <button
-	              type="button"
-	              className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
-	              onClick={() => setCompDirOpen((v) => !v)}
-	              aria-haspopup="listbox"
-	              aria-expanded={compDirOpen}
-	            >
-	              <span className="text-sm">{compDir === "credit" ? "Tartozunk neki (+)" : "Kiegyenlítve (-)"}</span>
-	              <span className="text-white/70 text-xs">▾</span>
-	            </button>
-
-	            {compDirOpen && (
-	              <div
-	                role="listbox"
-	                className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
-	                style={{ backgroundColor: "#354153" }}
-	              >
-	                <button
-	                  type="button"
-	                  role="option"
-	                  aria-selected={compDir === "credit"}
-	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-	                  style={{ backgroundColor: compDir === "credit" ? "#208d8b" : "#354153" }}
-	                  onClick={() => {
-	                    setCompDir("credit");
-	                    setCompDirOpen(false);
-	                  }}
-	                >
-	                  Tartozunk neki (+)
-	                </button>
-	
-	                <button
-	                  type="button"
-	                  role="option"
-	                  aria-selected={compDir === "debit"}
-	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-	                  style={{ backgroundColor: compDir === "debit" ? "#208d8b" : "#354153" }}
-	                  onClick={() => {
-	                    setCompDir("debit");
-	                    setCompDirOpen(false);
-	                  }}
-	                >
-	                  Kiegyenlítve (-)
-	                </button>
-	              </div>
-	            )}
-	          </div>
-          </div>
-
-          <div className="grid gap-2">
-            <div className={label}>Mérték</div>
-	          <div ref={compUnitRef} className="relative">
-	            <button
-	              type="button"
-	              className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
-	              onClick={() => setCompUnitOpen((v) => !v)}
-	              aria-haspopup="listbox"
-	              aria-expanded={compUnitOpen}
-	            >
-	              <span className="text-sm">{compUnit === "hour" ? "Óra" : "Nap"}</span>
-	              <span className="text-white/70 text-xs">▾</span>
-	            </button>
-
-	            {compUnitOpen && (
-	              <div
-	                role="listbox"
-	                className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
-	                style={{ backgroundColor: "#354153" }}
-	              >
-	                <button
-	                  type="button"
-	                  role="option"
-	                  aria-selected={compUnit === "hour"}
-	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-	                  style={{ backgroundColor: compUnit === "hour" ? "#208d8b" : "#354153" }}
-	                  onClick={() => {
-	                    const u = "hour" as const;
-	                    setCompUnit(u);
-	                    if (compAmount > 12) setCompAmount(2);
-	                    setCompUnitOpen(false);
-	                  }}
-	                >
-	                  Óra
-	                </button>
-	
-	                <button
-	                  type="button"
-	                  role="option"
-	                  aria-selected={compUnit === "day"}
-	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-	                  style={{ backgroundColor: compUnit === "day" ? "#208d8b" : "#354153" }}
-	                  onClick={() => {
-	                    const u = "day" as const;
-	                    setCompUnit(u);
-	                    if (compAmount > 31) setCompAmount(1);
-	                    setCompUnitOpen(false);
-	                  }}
-	                >
-	                  Nap
-	                </button>
-	              </div>
-	            )}
-	          </div>
-          </div>
-
-          <div className="grid gap-2">
-            <div className={label}>Mennyiség</div>
-            <input
-              type="number"
-              min={1}
-              max={compUnit === "hour" ? 12 : 31}
-              step={1}
-              className={input}
-              value={compAmount}
-              onChange={(e) => setCompAmount(Number(e.target.value))}
-            />
-          </div>
-
-          <div className="grid gap-2 sm:col-span-4">
-            <div className={label}>Megjegyzés (kötelező)</div>
-            <input
-              className={input}
-              value={compNote}
-              onChange={(e) => setCompNote(e.target.value)}
-              placeholder="Pl. behívva szabadság alatt / túlóra / kompenzáció kiadva"
-            />
-          </div>
-
-          <div className="sm:col-span-4 flex items-center justify-between gap-3 flex-wrap">
-            <label className="inline-flex items-center gap-2 text-white/80 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={compChecked}
-                onChange={(e) => setCompChecked(e.target.checked)}
-                className="h-4 w-4 accent-[#208d8b]"
-              />
-              Kompenzációs esemény (nem csökkenti a rendes szabadságot)
-            </label>
-
-            <Button
-              type="button"
-              className={`${btnPrimary} w-full sm:w-auto`}
-              disabled={compBusy || !selected}
-              onClick={() => {
-                setCompErr("");
-                if (!compChecked) {
-                  setCompErr("Előbb pipáld ki, hogy ez kompenzáció (külön tábla), majd mentés.");
-                  return;
-                }
-                openSaveCompConfirm();
-              }}
-            >
-              <Save className="h-4 w-4" />
-              {compBusy ? "Mentés…" : "Kompenzáció mentése"}
-            </Button>
-          </div>
-        </div>
 
         {compErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{compErr}</div> : null}
 
@@ -2192,7 +2099,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               return isMobile ? (
                 <div key={it.id} className="border-t border-white/10 px-3 py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="text-white text-sm">{it.day}</div>
+                    <div className="text-white text-sm">{formatRequestDate(it.day)}</div>
                     <button
                       type="button"
                       aria-label="Törlés"
@@ -2215,7 +2122,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               ) : (
                 <div key={it.id} className="border-t border-white/10 px-3 py-3">
                   <div className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-3 text-white text-sm">{it.day}</div>
+                    <div className="col-span-3 text-white text-sm">{formatRequestDate(it.day)}</div>
                     <div className="col-span-3 text-white/80 text-sm">{labelType}</div>
                     <div className="col-span-2 text-right text-white/80 text-sm">{dayVal || "-"}</div>
                     <div className="col-span-2 text-right text-white/80 text-sm">{hourVal || "-"}</div>
@@ -2242,8 +2149,6 @@ export default function AllInVacations({ api }: { api?: string }) {
           )}
         </div>
       </div>
-
-        </div>
       </section>
 
       <section id="vacation-history" className={panel}>
@@ -2315,7 +2220,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 {g.items.map((it) => (
                   isMobile ? (
                     <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
-                      <div className="col-span-4 text-white text-sm">{it.day}</div>
+                      <div className="col-span-4 text-white text-sm">{formatRequestDate(it.day)}</div>
                       <div className="col-span-7 text-white/80 text-sm">
                         <div>
                           {fmtKind(it.kind)}
@@ -2341,7 +2246,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </div>
                   ) : (
                     <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
-                      <div className="col-span-4 text-white text-sm">{it.day}</div>
+                      <div className="col-span-4 text-white text-sm">{formatRequestDate(it.day)}</div>
                       <div className="col-span-4 text-white/80 text-sm">
                         {fmtKind(it.kind)}
                         {it.kind === "short" ? <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span> : null}
@@ -2375,65 +2280,55 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
 
   return (
-    <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5">
-      <style>{`
-        input[type="date"], input[type="month"] { color-scheme: dark; }
-        select.allin-select { color-scheme: dark; accent-color: #2a8d8b; }
-        select.allin-select option { background-color: #354153 !important; color: #ffffff !important; }
-        select.allin-select option:checked { background-color: #2a8d8b !important; color: #ffffff !important; }
-      `}</style>
-
-      <div className="mx-auto max-w-[1500px] space-y-4">
-        <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex min-w-[240px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+    <div className="min-h-screen bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] px-3 pb-6 pt-0 text-white font-normal sm:px-4 sm:py-5">
+      <div className="mx-auto max-w-[1500px] space-y-3 sm:space-y-4">
+        <header className="sticky top-0 z-40 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:top-2 sm:mx-0 sm:rounded-2xl sm:border sm:border-white/20 sm:px-4 sm:py-3">
+          <div className="sm:hidden">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
                 <CalendarDays className="h-5 w-5" />
               </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/58">AllInFashion • személyzet</div>
+                <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Szabadságok</h1>
+                <div className="mt-0.5 truncate text-[10px] text-white/44">{pendingRequests.length ? `${pendingRequests.length} függő kérelem` : "Távollét és kompenzáció"}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => { void fetchEmployees(); void fetchList(); void fetchPendingRequests(); }}
+                  disabled={empBusy || listBusy}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45"
+                  aria-label="Frissítés"
+                >
+                  <RefreshCw className={`h-4 w-4 ${empBusy || listBusy ? "animate-spin" : ""}`} />
+                </button>
+                <button type="button" onClick={() => (window.location.hash = "#allin")} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Kezdőlap">
+                  <Home className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-2xl border border-white/10 bg-[#263246]/72 p-1">
+              <button type="button" onClick={openYearSummary} disabled={yearBusy} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-transparent bg-transparent px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-45"><BarChart3 className="h-3.5 w-3.5" /> Összesítés</button>
+              <button type="button" onClick={() => { setSettingsDraft(vacationSettings.workingDays); setSettingsOpen(true); }} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-transparent bg-transparent px-2 text-[10px] text-white/72 transition active:scale-[0.98]"><Settings2 className="h-3.5 w-3.5" /> Munkanapok</button>
+            </div>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-3 sm:flex">
+            <div className="flex min-w-[240px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]"><CalendarDays className="h-5 w-5" /></span>
               <div>
                 <div className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</div>
                 <h1 className="mt-0.5 text-xl leading-tight">Szabadságok</h1>
                 <div className="mt-0.5 text-[11px] text-white/48">Távollét, elkérezés és kompenzáció kezelése</div>
               </div>
             </div>
-
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-              <Button className={btnSoft} type="button" onClick={openYearSummary} disabled={yearBusy}>
-                <BarChart3 className="h-4 w-4" />
-                <span className="hidden sm:inline">Éves összesítés</span>
-                <span className="sm:hidden">Összesítés</span>
-              </Button>
-              <Button className={`${btnSoft} hidden sm:inline-flex`} type="button" onClick={openPdf} disabled={yearBusy}>
-                <PdfIcon className="h-5 w-5" />
-                PDF
-              </Button>
-              <Button
-                className={btnSoft}
-                type="button"
-                title="Munkanapok és hétvégi elszámolás beállítása"
-                aria-label="Munkanapok beállítása"
-                onClick={() => { setSettingsDraft(vacationSettings.workingDays); setSettingsOpen(true); }}
-              >
-                <Settings2 className="h-4 w-4" />
-                <span>Munkanapok</span>
-              </Button>
-              <Button
-                className={btnSoft}
-                type="button"
-                onClick={() => {
-                  void fetchEmployees();
-                  void fetchList();
-                  void fetchPendingRequests();
-                }}
-                disabled={empBusy || listBusy}
-              >
-                <RefreshCw className={`h-4 w-4 ${empBusy || listBusy ? "animate-spin" : ""}`} />
-                <span className="hidden sm:inline">Frissítés</span>
-              </Button>
-              <Button className={btn} onClick={() => (window.location.hash = "#allin")} type="button">
-                <Home className="h-4 w-4" />
-                <span className="hidden sm:inline">Kezdőlap</span>
-              </Button>
+              <Button className={btnSoft} type="button" onClick={openYearSummary} disabled={yearBusy}><BarChart3 className="h-4 w-4" /> Éves összesítés</Button>
+              <Button className={btnSoft} type="button" onClick={openPdf} disabled={yearBusy}><PdfIcon className="h-5 w-5" /> PDF</Button>
+              <Button className={btnSoft} type="button" onClick={() => { setSettingsDraft(vacationSettings.workingDays); setSettingsOpen(true); }}><Settings2 className="h-4 w-4" /> Munkanapok</Button>
+              <Button className={btnSoft} type="button" onClick={() => { void fetchEmployees(); void fetchList(); void fetchPendingRequests(); }} disabled={empBusy || listBusy}><RefreshCw className={`h-4 w-4 ${empBusy || listBusy ? "animate-spin" : ""}`} /> Frissítés</Button>
+              <Button className={btn} onClick={() => (window.location.hash = "#allin")} type="button"><Home className="h-4 w-4" /> Kezdőlap</Button>
             </div>
           </div>
         </header>
@@ -2583,48 +2478,6 @@ export default function AllInVacations({ api }: { api?: string }) {
           </section>
         ) : null}
 
-        <section className={card}>
-          <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.15em] text-white/40">Munkafolyamat</div>
-              <div className="mt-1 text-base text-white">1. Dolgozó kiválasztása → 2. Művelet → 3. Mentés vagy visszakeresés</div>
-              <div className="mt-1 text-xs text-white/42">A kiválasztott időszak és dolgozó minden kapcsolódó adatot együtt tart.</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 sm:flex">
-              <button
-                type="button"
-                className={btnSoft}
-                disabled={!selected}
-                onClick={() => document.getElementById("vacation-new-entry")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              >
-                <CalendarPlus className="h-4 w-4" />
-                <span className="hidden sm:inline">Új távollét</span>
-                <span className="sm:hidden">Új</span>
-              </button>
-              <button
-                type="button"
-                className={btnSoft}
-                disabled={!selected}
-                onClick={() => document.getElementById("vacation-compensation")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              >
-                <Scale className="h-4 w-4" />
-                <span className="hidden sm:inline">Kompenzáció</span>
-                <span className="sm:hidden">Komp.</span>
-              </button>
-              <button
-                type="button"
-                className={btnSoft}
-                disabled={!selected}
-                onClick={() => document.getElementById("vacation-history")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              >
-                <History className="h-4 w-4" />
-                <span className="hidden sm:inline">Előzmények</span>
-                <span className="sm:hidden">Előz.</span>
-              </button>
-            </div>
-          </div>
-        </section>
-
         <div className="grid gap-2 rounded-2xl border border-white/12 bg-[#303a4c] p-1.5 sm:hidden">
           <div className="grid grid-cols-2 gap-1.5">
             <button
@@ -2724,11 +2577,11 @@ export default function AllInVacations({ api }: { api?: string }) {
                       <div className="mt-4 grid gap-3 sm:grid-cols-2">
                         <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
                           Kezdő nap
-                          <input type="date" value={requestEditDayFrom} onChange={(event) => { const value = event.target.value; setRequestEditDayFrom(value); if (!requestEditDayTo || requestEditDayTo < value) setRequestEditDayTo(value); }} className={input} />
+                          <VacationDatePicker value={requestEditDayFrom} ariaLabel="Kezdő nap" onChange={(value) => { setRequestEditDayFrom(value); if (!requestEditDayTo || requestEditDayTo < value) setRequestEditDayTo(value); }} />
                         </label>
                         <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
                           Utolsó szabadságnap
-                          <input type="date" value={requestEditDayTo} min={requestEditDayFrom || undefined} onChange={(event) => setRequestEditDayTo(event.target.value)} className={input} />
+                          <VacationDatePicker value={requestEditDayTo} ariaLabel="Utolsó szabadságnap" onChange={setRequestEditDayTo} />
                         </label>
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/52 p-3 text-center">
@@ -2742,7 +2595,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
                         Dátum
-                        <input type="date" value={requestEditDayFrom} onChange={(event) => { setRequestEditDayFrom(event.target.value); setRequestEditDayTo(event.target.value); }} className={input} />
+                        <VacationDatePicker value={requestEditDayFrom} ariaLabel="Elkérezés dátuma" onChange={(value) => { setRequestEditDayFrom(value); setRequestEditDayTo(value); }} />
                       </label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
                         Óra
@@ -2979,84 +2832,29 @@ export default function AllInVacations({ api }: { api?: string }) {
             <div className="flex items-start justify-between gap-3 rounded-t-[24px] border-b border-white/12 bg-[#303a4c] px-4 py-3.5">
               <div>
                 <div className="flex items-center gap-2 text-base text-white"><PdfIcon className="h-6 w-6" /> PDF generálás</div>
-                <div className="mt-1 text-xs text-white/55">Éves kimutatás minden dolgozóról vagy egy kiválasztott alkalmazottról.</div>
+                
               </div>
               <button type="button" className={iconBtn} onClick={() => setPdfOpen(false)} aria-label="Bezárás"><X className="h-4 w-4" /></button>
             </div>
 
-            <div className="grid gap-3 p-4 sm:grid-cols-[132px_minmax(220px,1fr)_44px] sm:items-end">
-              <div ref={pdfYearRef} className="relative grid gap-1">
-                <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Év</div>
-                <button
-                  type="button"
-                  className="flex h-10 w-full items-center justify-between rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-                  onClick={() => { setPdfYearOpen((value) => !value); setPdfEmpOpen(false); }}
-                  aria-haspopup="listbox"
-                  aria-expanded={pdfYearOpen}
-                >
-                  <span>{pdfYear}</span>
-                  <ChevronDown className={`h-4 w-4 text-white/55 transition ${pdfYearOpen ? "rotate-180" : ""}`} />
-                </button>
-                {pdfYearOpen ? (
-                  <div className="absolute bottom-full left-0 z-[300] mb-2 max-h-64 min-w-full overflow-y-auto rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                    {pdfYearOptions.map((year) => (
-                      <button
-                        key={year}
-                        type="button"
-                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${year === pdfYear ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                        onClick={() => { setPdfYear(year); setPdfYearOpen(false); }}
-                      >
-                        {year}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <div ref={pdfEmpRef} className="relative grid gap-1">
-                <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Alkalmazott</div>
-                <button
-                  type="button"
-                  className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-                  onClick={() => { setPdfEmpOpen((value) => !value); setPdfYearOpen(false); }}
-                  aria-haspopup="listbox"
-                  aria-expanded={pdfEmpOpen}
-                >
-                  <span className="truncate">{pdfEmployee.trim() ? pdfEmployee.trim() : "Összes dolgozó"}</span>
-                  <ChevronDown className={`h-4 w-4 shrink-0 text-white/55 transition ${pdfEmpOpen ? "rotate-180" : ""}`} />
-                </button>
-                {pdfEmpOpen ? (
-                  <div className="absolute bottom-full left-0 z-[300] mb-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                    <button
-                      type="button"
-                      className={`block w-full px-4 py-2.5 text-left text-sm transition ${!pdfEmployee.trim() ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                      onClick={() => { setPdfEmployee(""); setPdfEmpOpen(false); }}
-                    >
-                      Összes dolgozó
-                    </button>
-                    {employees.map((employee) => (
-                      <button
-                        key={employee.name}
-                        type="button"
-                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${pdfEmployee.trim() === employee.name ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                        onClick={() => { setPdfEmployee(employee.name); setPdfEmpOpen(false); }}
-                      >
-                        {employee.name}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] transition hover:bg-[#319c99]"
-                onClick={downloadPdf}
-                title="PDF létrehozása"
-                aria-label="PDF létrehozása"
-              >
-                <PdfIcon className="h-6 w-6" />
-              </button>
+            <div className="grid gap-2.5 p-4 sm:grid-cols-[132px_minmax(220px,1fr)_44px] sm:items-end">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Év
+                <AllInSelect
+                  value={String(pdfYear)}
+                  options={pdfYearOptions.map((year) => ({ value: String(year), label: String(year) }))}
+                  onChange={(next) => setPdfYear(Number(next))}
+                  ariaLabel="PDF év"
+                />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Alkalmazott
+                <AllInSelect
+                  value={pdfEmployee}
+                  options={[{ value: "", label: "Összes dolgozó" }, ...employees.map((employee) => ({ value: employee.name, label: employee.name }))]}
+                  onChange={setPdfEmployee}
+                  ariaLabel="PDF alkalmazott"
+                />
+              </label>
+              <button type="button" className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] transition hover:bg-[#319c99] sm:w-10" onClick={downloadPdf} title="PDF létrehozása" aria-label="PDF létrehozása"><PdfIcon className="h-6 w-6" /></button>
             </div>
 
             {yearErr ? <div className="mx-4 mb-4 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{yearErr}</div> : null}
