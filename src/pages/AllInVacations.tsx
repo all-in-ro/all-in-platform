@@ -505,7 +505,7 @@ function AllInSelect({
             setOpen(true);
           }
         }}
-        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/18 bg-[#344154] px-3 text-left font-normal text-white outline-none transition hover:bg-[#3d4b5f] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16 ${compact ? "h-9 rounded-xl text-[11px]" : "h-10 rounded-xl text-[12px]"}`}
+        className={`flex w-full min-w-0 items-center justify-between border border-white/18 bg-[#344154] text-left font-normal text-white outline-none transition hover:bg-[#3d4b5f] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16 ${compact ? "h-9 gap-1.5 rounded-xl px-2 text-[10px]" : "h-10 gap-2 rounded-xl px-3 text-[12px]"}`}
       >
         <span className={`min-w-0 flex-1 truncate ${selectedOption ? "text-white" : "text-white/42"}`}>{selectedOption?.label || placeholder}</span>
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/52 transition ${open ? "rotate-180" : ""}`} />
@@ -1823,7 +1823,7 @@ export default function AllInVacations({ api }: { api?: string }) {
           </button>
         </div>
         <div className="min-w-0 p-3">
-          <div className="grid min-w-0 grid-cols-[74px_minmax(0,1fr)] gap-2 sm:grid-cols-[78px_minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="grid min-w-0 grid-cols-[82px_minmax(0,1fr)_minmax(0,1fr)] gap-1.5">
             <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Év
               <AllInSelect
                 value={String(archiveYear)}
@@ -1843,7 +1843,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 compact
               />
             </label>
-            <label className="col-span-2 grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42 sm:col-span-1">Meddig
+            <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Meddig
               <AllInSelect
                 value={monthTo}
                 options={activityMonthsForYear.map((item) => ({ value: item.month, label: formatMonthLabel(item.month).replace(`${archiveYear}. `, "") }))}
@@ -2080,10 +2080,10 @@ export default function AllInVacations({ api }: { api?: string }) {
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.035]">
           {isMobile ? (
-            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
-              <div className="col-span-4">Dátum</div>
-              <div className="col-span-7">Típus</div>
-              <div className="col-span-1 text-right"> </div>
+            <div className="grid grid-cols-[86px_minmax(0,1fr)_36px] items-center gap-2 bg-white/5 px-2.5 py-2 text-[10px] text-white/58">
+              <div>Dátum</div>
+              <div>Típus</div>
+              <div />
             </div>
           ) : (
             <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
@@ -2106,27 +2106,21 @@ export default function AllInVacations({ api }: { api?: string }) {
               const dayVal = isDay ? Math.abs(Number(it.amount) || 0) : 0;
               const hourVal = !isDay ? Math.abs(Number(it.amount) || 0) : 0;
               return isMobile ? (
-                <div key={it.id} className="border-t border-white/10 px-3 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="text-white text-sm">{formatRequestDate(it.day)}</div>
-                    <button
-                      type="button"
-                      aria-label="Törlés"
-                      title="Törlés"
-                      className={dangerIconBtn}
-                      onClick={() => openDeleteComp(it.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                <div key={it.id} className="grid grid-cols-[86px_minmax(0,1fr)_36px] items-start gap-2 border-t border-white/10 px-2.5 py-2.5">
+                  <div className="whitespace-nowrap pt-1 text-[11px] text-white">{formatRequestDate(it.day)}</div>
+                  <div className="min-w-0 pt-1">
+                    <div className="truncate text-[11px] text-white/82">{labelType} · {isDay ? `${dayVal} nap` : `${hourVal} óra`}</div>
+                    {it.note ? <div className="mt-1 line-clamp-2 text-[9px] leading-snug text-white/48">{it.note}</div> : null}
                   </div>
-
-                  <div className="mt-1 text-white/80 text-sm">
-                    {labelType} · {isDay ? `${dayVal} nap` : `${hourVal} óra`}
-                  </div>
-
-                  {it.note ? (
-                    <div className="mt-2 text-white/60 text-xs whitespace-normal break-words">{it.note}</div>
-                  ) : null}
+                  <button
+                    type="button"
+                    aria-label="Törlés"
+                    title="Törlés"
+                    className={dangerIconBtn}
+                    onClick={() => openDeleteComp(it.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               ) : (
                 <div key={it.id} className="border-t border-white/10 px-3 py-3">
@@ -2168,7 +2162,7 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
           <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/55">{items.length + compItems.length} esemény</span>
         </div>
-        <div className="p-4">
+        <div className="p-3 sm:p-4">
         {listErr ? <div className="mt-2 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{listErr}</div> : null}
 
         {savedVacationPeriods.length ? (
@@ -2182,22 +2176,23 @@ export default function AllInVacations({ api }: { api?: string }) {
             </div>
             <div className="grid gap-2 p-2 sm:grid-cols-2">
               {savedVacationPeriods.map((period) => (
-                <div key={period.key} className="flex items-center gap-3 rounded-xl border border-white/12 bg-white/[0.07] px-3 py-2.5">
+                <div key={period.key} className="grid min-w-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 rounded-xl border border-white/12 bg-white/[0.07] px-2.5 py-2.5 sm:grid-cols-[36px_minmax(0,1fr)_auto]">
                   <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/22 text-[#d7fffd]">
                     <CalendarRange className="h-4 w-4" />
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm text-white">{period.dayFrom === period.dayTo ? period.dayFrom : `${period.dayFrom} – ${period.dayTo}`}</div>
-                    <div className="mt-0.5 truncate text-[10px] text-white/48">{period.workingDays} szabadságnap{period.calendarDays > period.workingDays ? ` • ${period.calendarDays - period.workingDays} pihenőnap kihagyva` : ""}{period.note ? ` • ${period.note}` : ""}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[12px] text-white sm:text-sm" title={period.dayFrom === period.dayTo ? period.dayFrom : `${period.dayFrom} – ${period.dayTo}`}>{period.dayFrom === period.dayTo ? period.dayFrom : `${period.dayFrom} – ${period.dayTo}`}</div>
+                    <div className="mt-0.5 truncate text-[9px] text-white/48 sm:text-[10px]">{period.workingDays} szabadságnap{period.calendarDays > period.workingDays ? ` • ${period.calendarDays - period.workingDays} pihenőnap kihagyva` : ""}{period.note ? ` • ${period.note}` : ""}</div>
                   </div>
                   <button
                     type="button"
-                    className={btnSoft}
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.07] text-white transition hover:bg-white/[0.11] sm:w-auto sm:gap-2 sm:px-3 sm:text-xs"
                     onClick={() => openVacationRequestPdfForPeriod(period.dayFrom, period.dayTo, period.note)}
                     title="Szabadságkérés PDF újranyomtatása"
+                    aria-label="PDF"
                   >
                     <PdfIcon className="h-5 w-5" />
-                    PDF
+                    <span className="hidden sm:inline">PDF</span>
                   </button>
                 </div>
               ))}
@@ -2207,10 +2202,10 @@ export default function AllInVacations({ api }: { api?: string }) {
 
         <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
           {isMobile ? (
-            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
-              <div className="col-span-4">Dátum</div>
-              <div className="col-span-7">Típus</div>
-              <div className="col-span-1 text-right"> </div>
+            <div className="grid grid-cols-[86px_minmax(0,1fr)_36px] items-center gap-2 bg-white/5 px-2.5 py-2 text-[10px] text-white/58">
+              <div>Dátum</div>
+              <div>Típus</div>
+              <div />
             </div>
           ) : (
             <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
@@ -2225,33 +2220,27 @@ export default function AllInVacations({ api }: { api?: string }) {
             <div className="px-3 py-6 text-white/60 text-sm">Nincs bejegyzés ebben a hónapban.</div>
           ) : (
             grouped.map((g) => (
-              <div key={g.day} className="border-t border-white/10">
+              <div key={g.day} className="sm:border-t sm:border-white/10">
                 {g.items.map((it) => (
                   isMobile ? (
-                    <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
-                      <div className="col-span-4 text-white text-sm">{formatRequestDate(it.day)}</div>
-                      <div className="col-span-7 text-white/80 text-sm">
-                        <div>
+                    <div key={it.id} className="grid grid-cols-[86px_minmax(0,1fr)_36px] items-start gap-2 border-t border-white/10 px-2.5 py-2.5">
+                      <div className="whitespace-nowrap pt-1 text-[11px] text-white">{formatRequestDate(it.day)}</div>
+                      <div className="min-w-0 pt-1 text-[11px] text-white/82">
+                        <div className="truncate">
                           {fmtKind(it.kind)}
-                          {it.kind === "short" ? (
-                            <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span>
-                          ) : null}
+                          {it.kind === "short" ? <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span> : null}
                         </div>
-                        {it.note ? (
-                          <div className="text-white/60 text-xs mt-1 break-words">{it.note}</div>
-                        ) : null}
+                        {it.note ? <div className="mt-1 line-clamp-2 text-[9px] leading-snug text-white/48">{it.note}</div> : null}
                       </div>
-                      <div className="col-span-1 text-right">
-                        <button
-                          type="button"
-                          aria-label="Törlés"
-                          title="Törlés"
-                          className={dangerIconBtn}
-                          onClick={() => openDeleteTime(it.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        aria-label="Törlés"
+                        title="Törlés"
+                        className={dangerIconBtn}
+                        onClick={() => openDeleteTime(it.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
                   ) : (
                     <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
