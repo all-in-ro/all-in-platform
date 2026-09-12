@@ -2,8 +2,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type ComponentType,
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
@@ -62,7 +64,7 @@ type FilterDraft = {
 const FIRE_RED = "#c30d1c";
 const panel = "rounded-[22px] border border-white/16 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.20)]";
 const iconButton = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-white/[0.055] text-white transition active:scale-[0.96]";
-const selectClass = "h-12 w-full rounded-xl border border-white/16 bg-[#273243] px-3 text-sm font-normal text-white outline-none [color-scheme:dark] focus:border-[#78ded9]/65 focus:ring-2 focus:ring-[#78ded9]/15";
+type MobileSelectOption = { value: string; label: string };
 
 function numberValue(value: unknown) {
   const parsed = Number(value);
@@ -132,6 +134,197 @@ function StoreBadge({ code, name }: { code?: string | null; name?: string | null
   );
 }
 
+function normalizeSelectText(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function MobileSelect({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  compact = false,
+}: {
+  value: string;
+  options: MobileSelectOption[];
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const selected = options.find((item) => String(item.value) === String(value)) || options[0] || null;
+  const showSearch = options.length > 10;
+  const searchKey = normalizeSelectText(search);
+  const visibleOptions = searchKey
+    ? options.filter((item) => normalizeSelectText(item.label).includes(searchKey))
+    : options;
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setSearch("");
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const gap = 6;
+    const minWidth = compact ? 120 : 210;
+    const width = Math.min(
+      Math.max(rect.width, minWidth),
+      Math.max(minWidth, window.innerWidth - edge * 2),
+    );
+    const desiredHeight = Math.min(310, 18 + (showSearch ? 48 : 0) + Math.max(1, options.length) * 34);
+    const roomBelow = Math.max(0, window.innerHeight - rect.bottom - edge);
+    const roomAbove = Math.max(0, rect.top - edge);
+    const openUp = roomBelow < Math.min(170, desiredHeight) && roomAbove > roomBelow;
+    const maxHeight = Math.max(110, Math.min(desiredHeight, openUp ? roomAbove - gap : roomBelow - gap));
+    const left = Math.min(
+      Math.max(edge, rect.left),
+      Math.max(edge, window.innerWidth - width - edge),
+    );
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? Math.max(edge, rect.top - gap) : Math.min(window.innerHeight - edge, rect.bottom + gap),
+      width,
+      maxHeight,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [compact, options.length, showSearch]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", outside);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [close, open, updatePosition]);
+
+  useEffect(() => {
+    if (open) updatePosition();
+  }, [open, search, visibleOptions.length, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => {
+          if (open) close();
+          else {
+            setSearch("");
+            updatePosition();
+            setOpen(true);
+          }
+        }}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border text-left font-normal text-white outline-none transition focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 ${
+          compact ? "h-10 px-2.5 text-[12px]" : "h-10 px-3 text-[12px]"
+        } ${
+          open
+            ? "border-[#7bd7d4]/58 bg-[#3f4959] shadow-[0_0_0_1px_rgba(123,215,212,0.08),0_8px_20px_rgba(15,23,42,0.18)]"
+            : "border-white/18 bg-[#3f4959] hover:bg-[#475365]"
+        }`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        title={selected?.label || ariaLabel}
+      >
+        <span className="min-w-0 flex-1 truncate">{selected?.label || "–"}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/58 transition ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          data-allin-client-select="open"
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/30 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={menuStyle}
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          {showSearch ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-1.5">
+              <div className="relative">
+                <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-white/42" />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  className="h-8 w-full rounded-xl border border-white/16 bg-[#202b3b] pl-8 pr-8 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
+                  placeholder="Keresés..."
+                />
+                {search ? (
+                  <button type="button" onClick={() => setSearch("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Keresés törlése">
+                    <X size={11} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]">
+            <div className="grid gap-1">
+              {visibleOptions.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value || "__all"}
+                    type="button"
+                    onClick={() => {
+                      onChange(option.value);
+                      close();
+                    }}
+                    className={`flex min-h-8 w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${
+                      active
+                        ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
+                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                    }`}
+                    role="option"
+                    aria-selected={active}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {!visibleOptions.length ? <div className="px-3 py-4 text-center text-[11px] text-white/45">Nincs találat.</div> : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function BrightDebt({
   amount,
   caption,
@@ -167,10 +360,14 @@ function HeroSummary({
   year,
   location,
   data,
+  debtActive,
+  onDebtClick,
 }: {
   year: number;
   location: LocationScope;
   data: AifAdminCustomersOverviewResponse | null;
+  debtActive: boolean;
+  onDebtClick: () => void;
 }) {
   const summary = data?.summary;
   const debt = numberValue(summary?.currentOpenBalance);
@@ -195,13 +392,26 @@ function HeroSummary({
             <p className="text-[8px] uppercase tracking-[0.1em] text-white/48">Vásárlás</p>
             <p className="mt-1 text-lg text-white">{integer(summary?.transactions)}</p>
           </div>
-          <div className={`rounded-2xl border px-2.5 py-2.5 text-center ${debt > 0.005
-            ? "border-red-200/80 text-white shadow-[0_8px_20px_rgba(195,13,28,0.30)]"
-            : "border-white/14 bg-black/10 text-white"
-          }`} style={debt > 0.005 ? { backgroundColor: FIRE_RED } : undefined}>
-            <p className={`text-[8px] uppercase tracking-[0.1em] ${debt > 0.005 ? "text-white/80" : "text-white/48"}`}>Tartozás</p>
-            <p className="mt-1 truncate text-[13px] text-white" title={money(debt)}>{money(debt)}</p>
-          </div>
+          {debt > 0.005 ? (
+            <button
+              type="button"
+              onClick={onDebtClick}
+              className={`rounded-2xl border px-2.5 py-2.5 text-center text-white shadow-[0_8px_20px_rgba(195,13,28,0.30)] transition active:scale-[0.97] ${debtActive ? "border-white ring-2 ring-white/20" : "border-white/80 hover:border-white"}`}
+              style={{ backgroundColor: FIRE_RED }}
+              aria-label="Tartozó kliensek megjelenítése"
+              title="Tartozó kliensek megjelenítése"
+            >
+              <span className="flex items-center justify-center gap-1 text-[8px] uppercase tracking-[0.1em] text-white/82">
+                Tartozás {debtActive ? <CheckCircle2 size={10} /> : null}
+              </span>
+              <span className="mt-1 block truncate text-[13px] text-white" title={money(debt)}>{money(debt)}</span>
+            </button>
+          ) : (
+            <div className="rounded-2xl border border-white/14 bg-black/10 px-2.5 py-2.5 text-center text-white">
+              <p className="text-[8px] uppercase tracking-[0.1em] text-white/48">Tartozás</p>
+              <p className="mt-1 truncate text-[13px] text-white" title={money(debt)}>{money(debt)}</p>
+            </div>
+          )}
         </div>
       </div>
     </section>
@@ -230,7 +440,9 @@ function MobileFilterSheet({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[data-allin-client-select="open"]')) return;
+      onClose();
     };
     window.addEventListener("keydown", close, true);
     return () => {
@@ -241,62 +453,81 @@ function MobileFilterSheet({
 
   if (!open) return null;
 
+  const employeeOptions: MobileSelectOption[] = [
+    { value: "", label: "Minden eladó" },
+    ...employees.map((name) => ({ value: name, label: name })),
+  ];
+  const activityOptions: MobileSelectOption[] = [
+    { value: "all", label: "Minden kliens" },
+    { value: "buyers", label: "Vásárolt ebben az évben" },
+    { value: "repeat", label: "Visszatérő kliens" },
+    { value: "inactive", label: "Nem vásárolt ebben az évben" },
+    { value: "debt", label: "Jelenleg tartozik" },
+  ];
+  const sortOptions: MobileSelectOption[] = [
+    { value: "revenue", label: "Forgalom szerint" },
+    { value: "transactions", label: "Vásárlások szerint" },
+    { value: "items", label: "Darabszám szerint" },
+    { value: "average", label: "Átlagkosár szerint" },
+    { value: "last_sale", label: "Utolsó vásárlás szerint" },
+    { value: "debt", label: "Tartozás szerint" },
+    { value: "name", label: "Név szerint" },
+  ];
+
   return createPortal(
     <div
-      className="fixed inset-0 z-[520] flex items-end bg-slate-950/78 backdrop-blur-sm"
+      className="fixed inset-0 z-[520] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-sm"
       onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
         if (event.currentTarget === event.target) onClose();
       }}
     >
-      <section className="max-h-[88vh] w-full overflow-hidden rounded-t-[28px] border border-white/18 bg-[#303a4c] text-white shadow-[0_-28px_80px_rgba(0,0,0,0.50)]">
-        <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-4 py-4">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/20 text-[#d7fffd]"><SlidersHorizontal size={18} /></span>
-            <div>
-              <p className="text-[9px] uppercase tracking-[0.14em] text-white/45">Részletes szűrés</p>
-              <h2 className="mt-1 text-lg">Mit mutasson a lista?</h2>
+      <section className="flex max-h-[82dvh] w-[calc(100%-28px)] max-w-[356px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+        <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/20 text-[#d7fffd]"><SlidersHorizontal size={17} /></span>
+            <div className="min-w-0">
+              <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
+              <h2 className="mt-0.5 truncate text-[16px] text-white">Mit mutasson a lista?</h2>
             </div>
           </div>
-          <button type="button" onClick={onClose} className={iconButton} aria-label="Bezárás"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white active:scale-[0.97]" aria-label="Bezárás"><X size={17} /></button>
         </header>
 
-        <div className="max-h-[calc(88vh-150px)] space-y-3 overflow-y-auto p-4">
-          <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
+          <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
             Eladó
-            <select value={draft.employee} onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange({ ...draft, employee: event.target.value })} className={selectClass}>
-              <option value="">Minden eladó</option>
-              {employees.map((name) => <option key={name} value={name}>{name}</option>)}
-            </select>
+            <MobileSelect
+              value={draft.employee}
+              onChange={(value) => onChange({ ...draft, employee: value })}
+              options={employeeOptions}
+              ariaLabel="Eladó"
+            />
           </label>
 
-          <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+          <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
             Aktivitás
-            <select value={draft.activity} onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange({ ...draft, activity: event.target.value as AifAdminCustomerActivityFilter })} className={selectClass}>
-              <option value="all">Minden kliens</option>
-              <option value="buyers">Vásárolt ebben az évben</option>
-              <option value="repeat">Visszatérő kliens</option>
-              <option value="inactive">Nem vásárolt ebben az évben</option>
-              <option value="debt">Jelenleg tartozik</option>
-            </select>
+            <MobileSelect
+              value={draft.activity}
+              onChange={(value) => onChange({ ...draft, activity: value as AifAdminCustomerActivityFilter })}
+              options={activityOptions}
+              ariaLabel="Aktivitás"
+            />
           </label>
 
-          <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+          <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">
             Rendezés
-            <select value={draft.sort} onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange({ ...draft, sort: event.target.value as AifAdminCustomerSort })} className={selectClass}>
-              <option value="revenue">Forgalom szerint</option>
-              <option value="transactions">Vásárlások szerint</option>
-              <option value="items">Darabszám szerint</option>
-              <option value="average">Átlagkosár szerint</option>
-              <option value="last_sale">Utolsó vásárlás szerint</option>
-              <option value="debt">Tartozás szerint</option>
-              <option value="name">Név szerint</option>
-            </select>
+            <MobileSelect
+              value={draft.sort}
+              onChange={(value) => onChange({ ...draft, sort: value as AifAdminCustomerSort })}
+              options={sortOptions}
+              ariaLabel="Rendezés"
+            />
           </label>
         </div>
 
-        <footer className="grid grid-cols-[auto_1fr] gap-2 border-t border-white/12 bg-[#293548] px-4 py-4" style={{ paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}>
-          <button type="button" onClick={onClear} className="h-12 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white/72">Alaphelyzet</button>
-          <button type="button" onClick={onApply} className="h-12 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)]">Szűrés alkalmazása</button>
+        <footer className="grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548] p-2.5">
+          <button type="button" onClick={onClear} className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[11px] text-white active:scale-[0.98]">Alaphelyzet</button>
+          <button type="button" onClick={onApply} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] active:scale-[0.98]"><Filter size={14} />Szűrés alkalmazása</button>
         </footer>
       </section>
     </div>,
@@ -650,6 +881,22 @@ export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
     setFilterOpen(false);
   }
 
+  function showDebtors() {
+    setTopTen(false);
+    setEmployee("");
+    setActivity("debt");
+    setSort("debt");
+    setSearchDraft("");
+    setSearch("");
+    setFilterDraft({ employee: "", activity: "debt", sort: "debt" });
+    setView("clients");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("aif-client-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSearch(searchDraft.trim());
@@ -687,13 +934,17 @@ export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
       </header>
 
       <div className="mx-auto max-w-xl space-y-3 px-3 py-3.5">
-        <HeroSummary year={year} location={location} data={data} />
+        <HeroSummary year={year} location={location} data={data} debtActive={activity === "debt"} onDebtClick={showDebtors} />
 
         <section className={`${panel} p-3`}>
           <div className="grid grid-cols-[92px_1fr_auto] gap-2">
-            <select value={year} onChange={(event: ChangeEvent<HTMLSelectElement>) => setYear(Number(event.target.value))} className="h-10 rounded-xl border border-white/16 bg-[#293548] px-2 text-sm text-white outline-none [color-scheme:dark]">
-              {years.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
+            <MobileSelect
+              value={String(year)}
+              onChange={(value) => setYear(Number(value))}
+              options={years.map((option) => ({ value: String(option), label: String(option) }))}
+              ariaLabel="Év"
+              compact
+            />
             <button type="button" onClick={toggleTopTen} className={`inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 text-xs transition ${topTen ? "border-amber-200/50 bg-[#7b6124] text-white" : "border-white/16 bg-[#3b485b] text-white/70"}`}>
               <Trophy size={15} /> Top 10 {topTen ? <CheckCircle2 size={13} /> : null}
             </button>
@@ -719,6 +970,13 @@ export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
               <button type="button" onClick={() => setEmployee("")} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/14 bg-black/10"><X size={13} /></button>
             </div>
           ) : null}
+
+          {activity === "debt" ? (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-white/32 px-3 py-2 text-white shadow-[0_8px_20px_rgba(195,13,28,0.22)]" style={{ backgroundColor: FIRE_RED }}>
+              <span className="inline-flex min-w-0 items-center gap-2 truncate text-[11px]"><WalletCards size={13} /> Csak tartozó kliensek</span>
+              <button type="button" onClick={() => { setActivity("all"); setSort("revenue"); setFilterDraft({ employee, activity: "all", sort: "revenue" }); }} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/28 bg-black/10 text-white"><X size={13} /></button>
+            </div>
+          ) : null}
         </section>
 
         {error ? <div className="rounded-2xl border border-red-200/45 bg-red-600 px-4 py-3 text-sm text-white">{error}</div> : null}
@@ -734,11 +992,11 @@ export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
         </nav>
 
         {view === "clients" ? (
-          <section className="space-y-2.5">
+          <section id="aif-client-list" className="scroll-mt-28 space-y-2.5">
             <div className="flex items-end justify-between gap-3 px-1">
               <div>
-                <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">{topTen ? "Rangsor" : "Klienslista"}</p>
-                <h2 className="mt-1 text-lg">{topTen ? `Top 10 • ${year}` : `${year}. évi kliensek`}</h2>
+                <p className={`text-[9px] uppercase tracking-[0.13em] ${activity === "debt" ? "text-red-100/72" : "text-white/42"}`}>{activity === "debt" ? "Tartozás" : topTen ? "Rangsor" : "Klienslista"}</p>
+                <h2 className="mt-1 text-lg">{activity === "debt" ? `Tartozó kliensek • ${year}` : topTen ? `Top 10 • ${year}` : `${year}. évi kliensek`}</h2>
               </div>
               <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/55">{integer(data?.totalFilteredCustomers || 0)} rekord</span>
             </div>
