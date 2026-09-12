@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Barcode,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -207,22 +209,20 @@ declare global {
   }
 }
 
-const page = "min-h-screen bg-[#4b5362] pb-28 text-white font-normal";
-const shell = "mx-auto max-w-3xl space-y-3 px-3 py-3";
-const card = "rounded-[24px] border border-white/14 bg-white/[0.07] p-3 shadow-lg shadow-black/10";
-const input = "h-11 w-full rounded-2xl border border-white/16 bg-[#263246] px-3 text-sm text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/65";
-const select = `${input} pr-8`;
-const label = "grid gap-1.5 text-[11px] uppercase tracking-[0.06em] text-white/62";
-const iconBtn = "inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/16 bg-white/[0.08] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
-const headerIconBtn = "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/16 bg-white/[0.08] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
-const headerIconBtnActive = "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
-const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
-const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-white/16 bg-white/[0.08] px-3 text-xs font-medium text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
-const dangerBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#ff6678] bg-[#e3132c] px-3 text-xs font-semibold text-white shadow-[0_10px_24px_rgba(227,19,44,0.30)] transition hover:bg-[#ff1935] disabled:cursor-not-allowed disabled:opacity-50";
-const chipBase = "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-2xl border px-3 text-xs transition-colors";
-const chipActive = `${chipBase} border-[#7bd7d4]/55 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.20)]`;
-const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hover:bg-white/[0.10]`;
-const sheetPanel = "fixed inset-x-0 bottom-0 z-[70] max-h-[86vh] overflow-auto rounded-t-[28px] border border-white/18 bg-[#303a4c] p-4 shadow-2xl shadow-black/50";
+const page = "min-h-screen bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] pb-28 text-white font-normal";
+const shell = "mx-auto max-w-[760px] space-y-3 px-3 pb-3";
+const card = "rounded-[22px] border border-white/14 bg-[#344154] p-3.5 shadow-[0_14px_34px_rgba(15,23,42,0.18)]";
+const input = "h-10 w-full min-w-0 rounded-xl border border-white/16 bg-[#293649] px-3 text-[13px] font-normal text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15";
+const label = "grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46";
+const iconBtn = "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.055] text-white transition hover:bg-white/[0.10] disabled:cursor-not-allowed disabled:opacity-50";
+const headerIconBtn = "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white transition active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45";
+const headerIconBtnActive = "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.22)] transition active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45";
+const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-3 text-[11px] font-normal text-white shadow-[0_10px_24px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
+const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/16 bg-white/[0.055] px-3 text-[11px] font-normal text-white transition hover:bg-white/[0.10] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
+const dangerBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/75 bg-[#E21C2A] px-3 text-[11px] font-normal text-white shadow-[0_10px_24px_rgba(226,28,42,0.30)] transition hover:bg-[#C91522] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
+const chipBase = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-xl border px-2.5 text-[10px] transition-colors";
+const chipActive = `${chipBase} border-[#7bd7d4]/55 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]`;
+const chipIdle = `${chipBase} border-white/14 bg-white/[0.05] text-white/68 hover:bg-white/[0.10]`;
 
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
@@ -440,9 +440,192 @@ function signedQty(value: number) {
   return `${value > 0 ? "+" : ""}${formatQty(value)}`;
 }
 
+type InventorySelectOption = { value: string; label: string };
+
+function normalizeInventorySelectText(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function InventoryMobileSelect({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  options: InventorySelectOption[];
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selectSearch, setSelectSearch] = useState("");
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const selected = options.find((item) => String(item.value) === String(value)) || options[0] || null;
+  const showSearch = options.length > 10;
+  const searchKey = normalizeInventorySelectText(selectSearch);
+  const visibleOptions = searchKey
+    ? options.filter((item) => normalizeInventorySelectText(item.label).includes(searchKey))
+    : options;
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setSelectSearch("");
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const gap = 6;
+    const minWidth = 190;
+    const width = Math.min(Math.max(rect.width, minWidth), Math.max(minWidth, window.innerWidth - edge * 2));
+    const desiredHeight = Math.min(310, 18 + (showSearch ? 48 : 0) + Math.max(1, options.length) * 34);
+    const roomBelow = Math.max(0, window.innerHeight - rect.bottom - edge);
+    const roomAbove = Math.max(0, rect.top - edge);
+    const openUp = roomBelow < Math.min(170, desiredHeight) && roomAbove > roomBelow;
+    const maxHeight = Math.max(110, Math.min(desiredHeight, openUp ? roomAbove - gap : roomBelow - gap));
+    const left = Math.min(Math.max(edge, rect.left), Math.max(edge, window.innerWidth - width - edge));
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? Math.max(edge, rect.top - gap) : Math.min(window.innerHeight - edge, rect.bottom + gap),
+      width,
+      maxHeight,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [options.length, showSearch]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", outside);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [close, open, updatePosition]);
+
+  useEffect(() => {
+    if (open) updatePosition();
+  }, [open, selectSearch, visibleOptions.length, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => {
+          if (open) close();
+          else {
+            setSelectSearch("");
+            updatePosition();
+            setOpen(true);
+          }
+        }}
+        className={`flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left text-[12px] font-normal text-white outline-none transition focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 ${
+          open
+            ? "border-[#7bd7d4]/58 bg-[#3f4959] shadow-[0_0_0_1px_rgba(123,215,212,0.08),0_8px_20px_rgba(15,23,42,0.18)]"
+            : "border-white/18 bg-[#3f4959] hover:bg-[#475365]"
+        }`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        title={selected?.label || ariaLabel}
+      >
+        <span className="min-w-0 flex-1 truncate">{selected?.label || "–"}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/58 transition ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          data-allin-inventory-select="open"
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/30 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={menuStyle}
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          {showSearch ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-1.5">
+              <div className="relative">
+                <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-white/42" />
+                <input
+                  autoFocus
+                  value={selectSearch}
+                  onChange={(event) => setSelectSearch(event.target.value)}
+                  className="h-8 w-full rounded-xl border border-white/16 bg-[#202b3b] pl-8 pr-8 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
+                  placeholder="Keresés..."
+                />
+                {selectSearch ? (
+                  <button type="button" onClick={() => setSelectSearch("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Keresés törlése">
+                    <X size={11} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]">
+            <div className="grid gap-1">
+              {visibleOptions.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value || "__all"}
+                    type="button"
+                    onClick={() => {
+                      onChange(option.value);
+                      close();
+                    }}
+                    className={`flex min-h-8 w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${
+                      active
+                        ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
+                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                    }`}
+                    role="option"
+                    aria-selected={active}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {!visibleOptions.length ? <div className="px-3 py-4 text-center text-[11px] text-white/45">Nincs találat.</div> : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function ProductImage({ src, title, onPreview, size = "normal" }: { src?: string; title?: string; onPreview?: () => void; size?: "normal" | "large" }) {
   const clean = String(src || "").trim();
-  const cls = size === "large" ? "h-28 w-24" : "h-[90px] w-[72px]";
+  const cls = size === "large" ? "h-28 w-24" : "h-[72px] w-[58px]";
   return (
     <button
       type="button"
@@ -465,10 +648,10 @@ function MiniStat({ label: labelText, value, hint, tone = "neutral" }: { label: 
         ? "border-sky-300/30 bg-sky-500/12"
         : "border-white/14 bg-white/[0.07]";
   return (
-    <div className={`rounded-2xl border px-3 py-2 ${cls}`}>
-      <p className="text-[10px] uppercase tracking-[0.08em] text-white/50">{labelText}</p>
-      <p className="mt-1 text-xl leading-none text-white">{value}</p>
-      {hint ? <p className="mt-1 truncate text-[10px] text-white/48">{hint}</p> : null}
+    <div className={`min-w-0 rounded-[20px] border px-3 py-2.5 ${cls}`}>
+      <p className="truncate text-[8px] uppercase tracking-[0.1em] text-white/42">{labelText}</p>
+      <p className="mt-1.5 break-words text-[17px] leading-tight text-white">{value}</p>
+      {hint ? <p className="mt-1 truncate text-[9px] text-white/42">{hint}</p> : null}
     </div>
   );
 }
@@ -477,7 +660,7 @@ function MobileBackdrop({ onClose }: { onClose: () => void }) {
   return <button type="button" aria-label="Bezárás" className="fixed inset-0 z-[60] bg-black/55 backdrop-blur-sm" onClick={onClose} />;
 }
 
-export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
+export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN" }: Props) {
   const aifBase = `${apiBase.replace(/\/$/, "")}/aif`;
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [location, setLocation] = useState("");
@@ -633,6 +816,23 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [confirmDialog, saving]);
+
+  useEffect(() => {
+    if (!filtersOpen && !countsOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[data-allin-inventory-select="open"]')) return;
+      if (countsOpen) setCountsOpen(false);
+      else if (filtersOpen) setFiltersOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [filtersOpen, countsOpen]);
 
   const categories = useMemo(() => {
     const set = new Map<string, string>();
@@ -1279,47 +1479,49 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
   return (
     <div className={page}>
       <div className={shell}>
-        <header className="sticky top-2 z-40 rounded-[28px] border border-white/20 bg-[#303a4c]/95 p-3 shadow-[0_16px_36px_rgba(15,23,42,0.32),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
-          <div className="absolute left-3 top-3 bottom-3 w-1 rounded-full bg-[#7bd7d4] opacity-90" />
-          <div className="pl-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.22em] text-[#9ee4e2]/80">AllInFashion</p>
-                <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Leltár mobil</h1>
-                <p className="mt-0.5 text-[11px] text-white/78">
-                  {active ? `${formatQty(activeStats.countedLines)} / ${formatQty(activeStats.lines)} sor · ${formatQty(activeStats.counted)} / ${formatQty(activeStats.expected)} db` : `${formatQty(stockStats.lines)} készletsor · ${currentLocation?.name || "válassz helyet"}`}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                {active && <button className={headerIconBtn} type="button" onClick={() => printPdf("result")} title="Eredmény PDF"><Download size={16} /></button>}
-                {active && <button className={headerIconBtnActive} type="button" onClick={() => void saveLines()} disabled={saving || !canEditActive} title="Mentés"><Save size={16} /></button>}
-                <button className={headerIconBtn} type="button" onClick={() => void refresh(true)} disabled={loading || saving} title="Frissítés"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
-                <button className={headerIconBtn} type="button" onClick={goHome} title="Kezdőlap"><Home size={16} /></button>
-              </div>
+        <header className="sticky top-0 z-40 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
+              <ClipboardCheck size={22} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/58">AllInFashion • készletellenőrzés</p>
+              <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Leltár</h1>
+              <p className="mt-0.5 truncate text-[11px] text-white/48">
+                {active
+                  ? `${formatQty(activeStats.countedLines)} / ${formatQty(activeStats.lines)} sor • ${activeStats.progress}% kész • ${actor}`
+                  : `${currentLocation?.name || "Válassz helyet"} • ${formatQty(stockStats.lines)} készletsor • ${actor}`}
+              </p>
             </div>
-
-            {active && (
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/[0.08]">
-                <div className="h-full rounded-full bg-[#2a8d8b] shadow-[0_0_14px_rgba(42,141,139,0.65)]" style={{ width: `${Math.min(100, Math.max(0, activeStats.progress))}%` }} />
-              </div>
-            )}
-
-            <div className="mt-3 grid grid-cols-[1fr_44px] gap-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" size={17} />
-                <input
-                  ref={searchInputRef}
-                  className={`${input} pl-10 pr-9`}
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Termék, márka, vonalkód"
-                />
-                {search && (
-                  <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/48 hover:bg-white/10 hover:text-white" onClick={() => setSearch("")}> <X size={15} /> </button>
-                )}
-              </div>
-              <button className={headerIconBtnActive} type="button" onClick={startCameraScanner} title="Bárkód scanner"><Barcode size={18} /></button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {active ? <button className={headerIconBtn} type="button" onClick={() => printPdf("result")} title="Eredmény PDF"><Download size={16} /></button> : null}
+              {active ? <button className={headerIconBtnActive} type="button" onClick={() => void saveLines()} disabled={saving || !canEditActive} title="Mentés"><Save size={16} /></button> : null}
+              <button className={headerIconBtn} type="button" onClick={() => void refresh(true)} disabled={loading || saving} title="Frissítés"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
+              <button className={headerIconBtn} type="button" onClick={goHome} title="Kezdőlap"><Home size={16} /></button>
             </div>
+          </div>
+
+          {active ? (
+            <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+              <div className="h-full rounded-full bg-[#2a8d8b] shadow-[0_0_12px_rgba(42,141,139,0.55)]" style={{ width: `${Math.min(100, Math.max(0, activeStats.progress))}%` }} />
+            </div>
+          ) : null}
+
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_40px] gap-2">
+            <div className="relative min-w-0">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/34" size={15} />
+              <input
+                ref={searchInputRef}
+                className={`${input} pl-9 pr-9`}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Termék, márka, vonalkód..."
+              />
+              {search ? (
+                <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/45 hover:bg-white/10 hover:text-white" onClick={() => setSearch("")} aria-label="Keresés törlése"><X size={13} /></button>
+              ) : null}
+            </div>
+            <button className={headerIconBtnActive} type="button" onClick={startCameraScanner} title="Bárkód scanner"><Barcode size={17} /></button>
           </div>
         </header>
 
@@ -1327,21 +1529,24 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
 
         {!active ? (
           <>
-            <section className={card}>
+            <section className="overflow-hidden rounded-[24px] border border-[#9be9e5]/30 bg-gradient-to-br from-[#227c72] via-[#2d6968] to-[#344154] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.24)]">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#9ee4e2]">Leltár előkészítés</p>
-                  <h2 className="mt-1 text-base text-white">Indíts vagy folytass leltárt</h2>
-                  <p className="mt-1 text-xs text-white/62">Helyszín, keresés, majd indulhat a számolás. Mobilon itt végre nem táblázat-szatyor van.</p>
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-[#d7fffd]/62">Leltár előkészítés</p>
+                  <h2 className="mt-1 text-[18px] leading-tight text-white">Új leltár indítása</h2>
+                  <p className="mt-1 text-[10px] text-white/46">Helyszín, cím, indulás. Ennyi kell.</p>
                 </div>
-                <span className="rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/16 p-2 text-[#d7fffe]"><ClipboardCheck size={20} /></span>
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-black/10 text-[#d7fffd]"><ClipboardCheck size={18} /></span>
               </div>
 
-              <div className="mt-3 grid gap-3">
+              <div className="mt-3 grid gap-2.5">
                 <label className={label}>Üzlet / helyszín
-                  <select className={select} value={location} onChange={(event) => { setLocation(event.target.value); setActive(null); setDrafts({}); }}>
-                    {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-                  </select>
+                  <InventoryMobileSelect
+                    value={location}
+                    options={locations.map((loc) => ({ value: loc.id, label: loc.name }))}
+                    onChange={(value) => { setLocation(value); setActive(null); setDrafts({}); }}
+                    ariaLabel="Üzlet / helyszín"
+                  />
                 </label>
                 <label className={label}>Leltár címe
                   <input className={input} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Pl. Júliusi üzlet leltár" />
@@ -1349,7 +1554,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 <label className={label}>Megjegyzés
                   <input className={input} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Pl. ellenőrző leltár" />
                 </label>
-                <button className={primaryBtn} type="button" onClick={createCount} disabled={saving || !location}><ClipboardCheck size={16} /> Új leltár indítása</button>
+                <button className={`${primaryBtn} mt-0.5 w-full`} type="button" onClick={createCount} disabled={saving || !location}><ClipboardCheck size={15} /> Leltár indítása</button>
               </div>
             </section>
 
@@ -1382,13 +1587,13 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                       <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${count.status === "committed" ? "bg-[#2a8d8b] text-white" : "bg-white/[0.10] text-white/75"}`}>{statusLabel(count.status)}</span>
                     </div>
                     <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] text-white/64">
-                      <span><b className="block text-white">{formatQty(count.line_count)}</b>sor</span>
-                      <span><b className="block text-white">{formatQty(count.counted_lines)}</b>számolt</span>
-                      <span><b className={selected ? "block text-white" : n(count.diff_qty) < 0 ? "block text-red-200" : n(count.diff_qty) > 0 ? "block text-emerald-200" : "block text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                      <span><b className="block font-normal text-white">{formatQty(count.line_count)}</b>sor</span>
+                      <span><b className="block font-normal text-white">{formatQty(count.counted_lines)}</b>számolt</span>
+                      <span><b className={selected ? "block font-normal text-white" : n(count.diff_qty) < 0 ? "block font-normal text-red-200" : n(count.diff_qty) > 0 ? "block font-normal text-emerald-200" : "block font-normal text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
                     </div>
                     <div className={`mt-2 rounded-xl border px-2.5 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10"}`}>
                       <div className="text-[10px] text-white/50">Számolt eladási érték</div>
-                      <div className="mt-0.5 text-sm font-semibold text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</div>
+                      <div className="mt-0.5 text-sm font-normal text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</div>
                     </div>
                   </button>
                   );
@@ -1398,33 +1603,33 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
             </section>
 
             <section className={card}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-white/50">Aktuális készlet</p>
-                  <p className="mt-1 text-sm text-white">{formatQty(filteredStockRows.length)} sor előnézet</p>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Aktuális készlet</p>
+                  <h2 className="mt-0.5 text-base text-white">{formatQty(filteredStockRows.length)} készletsor</h2>
                 </div>
-                <button className={softBtn} type="button" onClick={() => setFiltersOpen(true)}><Filter size={15} /> Szűrő</button>
+                <button className={softBtn} type="button" onClick={() => setFiltersOpen(true)}><Filter size={14} /> Szűrő</button>
               </div>
               <div className="grid gap-2">
                 {filteredStockRows.slice(0, 12).map((row) => {
                   const img = getImageSrc(row);
                   return (
-                    <div key={`${row.location_id}-${row.variant_id}`} className="rounded-2xl border border-white/12 bg-white/[0.055] p-2.5">
-                      <div className="grid grid-cols-[58px_1fr_auto] gap-2">
+                    <div key={`${row.location_id}-${row.variant_id}`} className="rounded-[18px] border border-white/10 bg-[#293548] p-2.5 shadow-[0_8px_20px_rgba(15,23,42,0.10)]">
+                      <div className="grid grid-cols-[58px_minmax(0,1fr)_auto] items-center gap-2.5">
                         <ProductImage src={img} title={productTitle(row)} onPreview={() => setImagePreview({ src: img, title: productTitle(row) })} />
                         <div className="min-w-0">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9ee4e2]">{row.brand_name || "-"}</p>
+                          <p className="text-[10px] font-normal uppercase tracking-wide text-[#9ee4e2]">{row.brand_name || "-"}</p>
                           <p className="mt-0.5 line-clamp-2 text-sm text-white">{productTitle(row)}</p>
-                          <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-white/68">
-                            <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{row.color_name || row.color_code || "-"}</span>
-                            <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{row.size || "-"}</span>
-                            <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{row.display_barcode || row.barcode || "-"}</span>
+                          <div className="mt-1.5 flex flex-wrap gap-1 text-[9px] text-white/58">
+                            <span className="rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{row.color_name || row.color_code || "-"}</span>
+                            <span className="rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{row.size || "-"}</span>
+                            <span className="max-w-[130px] truncate rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{row.display_barcode || row.barcode || "-"}</span>
                           </div>
                         </div>
-                        <div className="text-right text-xs">
-                          <div className="text-white/45">Készlet</div>
-                          <div className="text-lg text-white">{formatQty(row.qty)}</div>
-                          <div className="text-[#9ee4e2]">{formatQty(row.available_qty)} elérhető</div>
+                        <div className="min-w-[70px] rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-2 text-right">
+                          <div className="text-[8px] uppercase tracking-[0.08em] text-white/38">Készlet</div>
+                          <div className="mt-0.5 text-[18px] leading-none text-white">{formatQty(row.qty)}</div>
+                          <div className="mt-1 text-[9px] text-[#9ee4e2]">{formatQty(row.available_qty)} elérhető</div>
                         </div>
                       </div>
                     </div>
@@ -1436,27 +1641,27 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
           </>
         ) : (
           <>
-            <section className="rounded-[26px] border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 p-3 shadow-lg shadow-black/10">
+            <section className="overflow-hidden rounded-[24px] border border-[#9be9e5]/30 bg-gradient-to-br from-[#227c72] via-[#2d6968] to-[#344154] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.24)]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-[#9ee4e2]">Aktív leltár</p>
-                  <h2 className="mt-1 truncate text-lg text-white">{active.item.title}</h2>
-                  <p className="mt-1 text-xs text-white/64">{active.item.location_name || currentLocation?.name || "-"} · {statusLabel(active.item.status)}</p>
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-[#d7fffd]/62">Aktív leltár</p>
+                  <h2 className="mt-1 truncate text-[18px] leading-tight text-white">{active.item.title}</h2>
+                  <p className="mt-1 text-[10px] text-white/48">{active.item.location_name || currentLocation?.name || "-"} • {statusLabel(active.item.status)}</p>
                 </div>
-                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] ${active.item.status === "committed" ? "border-[#7bd7d4]/45 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.09] text-white/75"}`}>{activeStats.progress}%</span>
+                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${active.item.status === "committed" ? "border-white/24 bg-white/12 text-white" : "border-white/16 bg-black/10 text-white/78"}`}>{activeStats.progress}%</span>
               </div>
-              <div className="mt-3 grid grid-cols-4 gap-1.5 text-center text-[11px]">
-                <div className="rounded-xl bg-white/[0.07] p-2"><div className="text-white/46">Rendszer</div><div className="font-semibold text-white">{formatQty(activeStats.expected)}</div></div>
-                <div className="rounded-xl bg-white/[0.07] p-2"><div className="text-white/46">Talált</div><div className="font-semibold text-white">{formatQty(activeStats.counted)}</div></div>
-                <div className="rounded-xl bg-red-500/10 p-2"><div className="text-white/46">Hiány</div><div className="font-semibold text-red-100">{formatQty(activeStats.missing)}</div></div>
-                <div className="rounded-xl bg-[#2a8d8b]/14 p-2"><div className="text-white/46">Többlet</div><div className="font-semibold text-emerald-100">{formatQty(activeStats.extra)}</div></div>
+              <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
+                <div className="rounded-xl border border-white/12 bg-black/10 px-1.5 py-2"><div className="text-[8px] uppercase text-white/38">Rendszer</div><div className="mt-1 text-[14px] text-white">{formatQty(activeStats.expected)}</div></div>
+                <div className="rounded-xl border border-white/12 bg-black/10 px-1.5 py-2"><div className="text-[8px] uppercase text-white/38">Talált</div><div className="mt-1 text-[14px] text-white">{formatQty(activeStats.counted)}</div></div>
+                <div className="rounded-xl border border-red-200/18 bg-red-500/12 px-1.5 py-2"><div className="text-[8px] uppercase text-white/38">Hiány</div><div className="mt-1 text-[14px] text-red-100">{formatQty(activeStats.missing)}</div></div>
+                <div className="rounded-xl border border-emerald-200/18 bg-emerald-400/10 px-1.5 py-2"><div className="text-[8px] uppercase text-white/38">Többlet</div><div className="mt-1 text-[14px] text-emerald-100">{formatQty(activeStats.extra)}</div></div>
               </div>
-              <div className="mt-2 flex items-center justify-between rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/18 px-3 py-2.5">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-white/55">Számolt eladási érték</p>
-                  <p className="mt-0.5 text-xs text-white/46">Rendszerérték: {formatMoney(activeStats.expectedSellValue)} RON</p>
+              <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-black/10 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.09em] text-white/40">Számolt eladási érték</p>
+                  <p className="mt-1 truncate text-[9px] text-white/42">Rendszer: {formatMoney(activeStats.expectedSellValue)} RON</p>
                 </div>
-                <strong className="text-base text-white">{formatMoney(activeStats.countedSellValue)} RON</strong>
+                <strong className="shrink-0 text-[14px] font-normal text-white">{formatMoney(activeStats.countedSellValue)} RON</strong>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button className={primaryBtn} type="button" onClick={startCameraScanner} disabled={!canEditActive}><Barcode size={15} /> Kamera</button>
@@ -1491,32 +1696,35 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 const counted = drafts[line.id]?.countedQty || "";
                 const diffClass = diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white";
                 return (
-                  <div key={line.id} className="rounded-[24px] border border-white/14 bg-white/[0.055] p-2.5 shadow-sm shadow-black/10">
-                    <div className="grid grid-cols-[76px_1fr_auto] gap-2">
+                  <div key={line.id} className="rounded-[20px] border border-white/10 bg-[#293548] p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+                    <div className="grid grid-cols-[58px_minmax(0,1fr)_70px] items-center gap-2.5">
                       <ProductImage src={img} title={productTitle(line)} onPreview={() => setImagePreview({ src: img, title: productTitle(line) })} />
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9ee4e2]">{line.brand_name || "-"}</p>
-                        <p className="mt-0.5 line-clamp-2 text-sm text-white">{productTitle(line)}</p>
-                        <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-white/68">
-                          <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.color_name || line.color_code || "-"}</span>
-                          <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.size || "-"}</span>
-                          <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.display_barcode || line.barcode || "-"}</span>
+                        <p className="text-[9px] uppercase tracking-[0.08em] text-[#9ee4e2]/82">{line.brand_name || "-"}</p>
+                        <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-white">{productTitle(line)}</p>
+                        <div className="mt-1.5 flex flex-wrap gap-1 text-[9px] text-white/58">
+                          <span className="rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{line.color_name || line.color_code || "-"}</span>
+                          <span className="rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{line.size || "-"}</span>
+                          <span className="max-w-[120px] truncate rounded-lg border border-white/8 bg-white/[0.04] px-1.5 py-0.5">{line.display_barcode || line.barcode || "-"}</span>
                         </div>
                       </div>
-                      <div className="text-right text-xs">
-                        <div className="text-white/45">Rendszer</div>
-                        <div className="text-lg font-semibold text-white">{formatQty(line.expected_qty)}</div>
-                        <div className={`font-semibold ${diffClass}`}>{diff === null ? "-" : signedQty(diff)}</div>
+                      <div className="rounded-xl border border-white/10 bg-black/10 px-2 py-2 text-right">
+                        <div className="text-[8px] uppercase tracking-[0.08em] text-white/34">Rendszer</div>
+                        <div className="mt-0.5 text-[18px] leading-none text-white">{formatQty(line.expected_qty)}</div>
+                        <div className={`mt-1 text-[10px] ${diffClass}`}>{diff === null ? "nincs" : signedQty(diff)}</div>
                       </div>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-[44px_1fr_44px] gap-2">
-                      <button className="h-11 rounded-2xl border border-white/14 bg-white/[0.08] text-xl text-white disabled:opacity-40" type="button" disabled={!canEditActive} onClick={() => incrementLine(line.id, -1)}><Minus className="mx-auto" size={16} /></button>
-                      <input className="h-11 w-full rounded-2xl border border-white/18 bg-[#202a3a] px-3 text-center text-lg font-semibold text-white outline-none focus:border-[#2a8d8b]/70" disabled={!canEditActive} inputMode="numeric" value={counted} onChange={(event) => updateDraft(line.id, { countedQty: event.target.value.replace(/[^0-9]/g, "") })} placeholder="Talált" />
-                      <button className="h-11 rounded-2xl border border-white/14 bg-white/[0.08] text-xl text-white disabled:opacity-40" type="button" disabled={!canEditActive} onClick={() => incrementLine(line.id, 1)}><Plus className="mx-auto" size={16} /></button>
+                    <div className="mt-2.5 grid grid-cols-[40px_minmax(0,1fr)_40px] gap-1.5">
+                      <button className="h-10 rounded-xl border border-white/14 bg-white/[0.055] text-white disabled:opacity-40" type="button" disabled={!canEditActive} onClick={() => incrementLine(line.id, -1)}><Minus className="mx-auto" size={15} /></button>
+                      <div className="relative">
+                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.08em] text-white/30">Talált</span>
+                        <input className="h-10 w-full rounded-xl border border-[#7bd7d4]/24 bg-[#202a3a] px-3 pl-[58px] text-center text-[17px] font-normal text-white outline-none focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/12" disabled={!canEditActive} inputMode="numeric" value={counted} onChange={(event) => updateDraft(line.id, { countedQty: event.target.value.replace(/[^0-9]/g, "") })} placeholder="0" />
+                      </div>
+                      <button className="h-10 rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/16 text-[#d7fffd] disabled:opacity-40" type="button" disabled={!canEditActive} onClick={() => incrementLine(line.id, 1)}><Plus className="mx-auto" size={15} /></button>
                     </div>
 
-                    <input className="mt-2 h-10 w-full rounded-2xl border border-white/14 bg-white/[0.06] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55" disabled={!canEditActive} value={drafts[line.id]?.note || ""} onChange={(event) => updateDraft(line.id, { note: event.target.value })} placeholder="Megjegyzés, hiány oka, sérülés..." />
+                    <input className="mt-1.5 h-9 w-full rounded-xl border border-white/10 bg-white/[0.035] px-3 text-[10px] text-white outline-none placeholder:text-white/30 focus:border-[#7bd7d4]/45" disabled={!canEditActive} value={drafts[line.id]?.note || ""} onChange={(event) => updateDraft(line.id, { note: event.target.value })} placeholder="Megjegyzés / hiány oka / sérülés..." />
                   </div>
                 );
               })}
@@ -1546,124 +1754,169 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       </div>
 
       <div className="fixed inset-x-0 bottom-3 z-50 px-3">
-        <div className="mx-auto grid max-w-3xl grid-cols-4 gap-2 rounded-[24px] border border-white/16 bg-[#303a4c]/95 p-2 shadow-2xl shadow-black/35 backdrop-blur">
-          <button className={softBtn} type="button" onClick={() => setFiltersOpen(true)}><Filter size={15} /> Szűrő</button>
-          <button className={active ? primaryBtn : softBtn} type="button" onClick={active ? startCameraScanner : createCount} disabled={active ? !canEditActive : saving || !location}>{active ? <Barcode size={15} /> : <ClipboardCheck size={15} />} {active ? "Kamera" : "Új"}</button>
-          <button className={softBtn} type="button" onClick={() => active ? void saveLines() : setCountsOpen(true)} disabled={active ? saving || !canEditActive : false}>{active ? <Save size={15} /> : <ClipboardCheck size={15} />} {active ? "Ment" : "Lista"}</button>
-          <button className={active ? primaryBtn : softBtn} type="button" onClick={active ? commitCount : () => void refresh(true)} disabled={active ? saving || !canEditActive || !activeStats.complete : loading}>{active ? <CheckCircle2 size={15} /> : <RefreshCw size={15} />} {active ? "Kész" : "Friss"}</button>
+        <div className="mx-auto grid max-w-[736px] grid-cols-4 gap-1.5 rounded-[22px] border border-white/16 bg-[#2d394b]/96 p-1.5 shadow-[0_20px_50px_rgba(15,23,42,0.38)] backdrop-blur-xl">
+          <button type="button" onClick={() => setFiltersOpen(true)} className="flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-white/12 bg-white/[0.045] px-1 text-[9px] text-white/72 active:scale-[0.98]"><Filter size={15} /><span>Szűrő</span></button>
+          <button type="button" onClick={active ? startCameraScanner : createCount} disabled={active ? !canEditActive : saving || !location} className="flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-[#8ce7e2]/38 bg-[#2a8d8b] px-1 text-[9px] text-white active:scale-[0.98] disabled:opacity-45">{active ? <Barcode size={15} /> : <ClipboardCheck size={15} />}<span>{active ? "Kamera" : "Új leltár"}</span></button>
+          <button type="button" onClick={() => active ? void saveLines() : setCountsOpen(true)} disabled={active ? saving || !canEditActive : false} className="flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-white/12 bg-white/[0.045] px-1 text-[9px] text-white/72 active:scale-[0.98] disabled:opacity-45">{active ? <Save size={15} /> : <ClipboardCheck size={15} />}<span>{active ? "Mentés" : "Leltárak"}</span></button>
+          <button type="button" onClick={active ? commitCount : () => void refresh(true)} disabled={active ? saving || !canEditActive || !activeStats.complete : loading} className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 text-[9px] active:scale-[0.98] disabled:opacity-45 ${active ? "border-[#8ce7e2]/38 bg-[#2a8d8b] text-white" : "border-white/12 bg-white/[0.045] text-white/72"}`}>{active ? <CheckCircle2 size={15} /> : <RefreshCw size={15} className={loading ? "animate-spin" : ""} />}<span>{active ? "Bevezetés" : "Frissítés"}</span></button>
         </div>
       </div>
 
-      {filtersOpen && (
-        <>
-          <MobileBackdrop onClose={() => setFiltersOpen(false)} />
-          <div className={sheetPanel}>
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-[#9ee4e2]">Szűrés</p>
-                <h2 className="mt-1 text-lg text-white">Mit számoljunk?</h2>
+      {filtersOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setFiltersOpen(false); }}
+        >
+          <section className="flex max-h-[84dvh] w-full max-w-[356px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><Filter size={16} /></span>
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
+                  <h2 className="mt-0.5 truncate text-[16px] text-white">Mit számoljunk?</h2>
+                </div>
               </div>
-              <button className={iconBtn} type="button" onClick={() => setFiltersOpen(false)}><X size={18} /></button>
-            </div>
-            <div className="grid gap-3">
-              <label className={label}>Helyszín
-                <select className={select} value={location} onChange={(event) => { setLocation(event.target.value); setActive(null); setDrafts({}); }}>
-                  {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-                </select>
-              </label>
-              <label className={label}>Keresés
-                <input className={input} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Termék, márka, vonalkód" />
-              </label>
-              <label className={label}>Kategória
-                <select className={select} value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-                  <option value="all">Minden kategória</option>
-                  {categories.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-                </select>
-              </label>
-              {active && (
-                <label className={label}>Sor állapot
-                  <select className={select} value={lineFilter} onChange={(event) => setLineFilter(event.target.value as LineFilter)}>
-                    <option value="all">Minden sor</option>
-                    <option value="uncounted">Nincs számolva</option>
-                    <option value="ok">Egyezik</option>
-                    <option value="missing">Hiány</option>
-                    <option value="extra">Többlet</option>
-                  </select>
-                </label>
-              )}
-              <button className={primaryBtn} type="button" onClick={() => setFiltersOpen(false)}><CheckCircle2 size={15} /> Alkalmaz</button>
-              <button className={softBtn} type="button" onClick={() => { setSearch(""); setCategoryFilter("all"); setLineFilter("all"); }}><X size={15} /> Szűrők törlése</button>
-              {active && canEditActive && <button className={dangerBtn} type="button" onClick={deleteCount}><Trash2 size={15} /> Aktív leltár törlése</button>}
-            </div>
-          </div>
-        </>
-      )}
+              <button className={iconBtn} type="button" onClick={() => setFiltersOpen(false)} aria-label="Bezárás"><X size={17} /></button>
+            </header>
 
-      {countsOpen && (
-        <>
-          <MobileBackdrop onClose={() => setCountsOpen(false)} />
-          <div className={sheetPanel}>
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-[#9ee4e2]">Leltár lista</p>
-                <h2 className="mt-1 text-lg text-white">Korábbi / nyitott leltárak</h2>
-              </div>
-              <button className={iconBtn} type="button" onClick={() => setCountsOpen(false)}><X size={18} /></button>
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
+              <label className={label}>Helyszín
+                <InventoryMobileSelect
+                  value={location}
+                  options={locations.map((loc) => ({ value: loc.id, label: loc.name }))}
+                  onChange={(value) => { setLocation(value); setActive(null); setDrafts({}); }}
+                  ariaLabel="Helyszín"
+                />
+              </label>
+
+              <label className={label}>Keresés
+                <div className="relative">
+                  <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/34" />
+                  <input className={`${input} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Termék, márka, vonalkód..." />
+                </div>
+              </label>
+
+              <label className={label}>Kategória
+                <InventoryMobileSelect
+                  value={categoryFilter}
+                  options={[{ value: "all", label: "Minden kategória" }, ...categories.map(([code, name]) => ({ value: code, label: name }))]}
+                  onChange={setCategoryFilter}
+                  ariaLabel="Kategória"
+                />
+              </label>
+
+              {active ? (
+                <label className={label}>Sor állapot
+                  <InventoryMobileSelect
+                    value={lineFilter}
+                    options={[
+                      { value: "all", label: "Minden sor" },
+                      { value: "uncounted", label: "Nincs számolva" },
+                      { value: "ok", label: "Egyezik" },
+                      { value: "missing", label: "Hiány" },
+                      { value: "extra", label: "Többlet" },
+                    ]}
+                    onChange={(value) => setLineFilter(value as LineFilter)}
+                    ariaLabel="Sor állapot"
+                  />
+                </label>
+              ) : null}
+
+              {active && canEditActive ? (
+                <button className={`${dangerBtn} mt-1 w-full`} type="button" onClick={() => { setFiltersOpen(false); deleteCount(); }}><Trash2 size={14} /> Aktív leltár törlése</button>
+              ) : null}
             </div>
-            <div className="grid gap-2">
+
+            <footer className="grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548] p-2.5">
+              <button className={softBtn} type="button" onClick={() => { setSearch(""); setCategoryFilter("all"); setLineFilter("all"); }}><X size={14} /> Alaphelyzet</button>
+              <button className={primaryBtn} type="button" onClick={() => setFiltersOpen(false)}><CheckCircle2 size={14} /> Alkalmazás</button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+
+      {countsOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[910] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setCountsOpen(false); }}
+        >
+          <section className="flex max-h-[84dvh] w-full max-w-[390px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><ClipboardCheck size={16} /></span>
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Leltárlista</p>
+                  <h2 className="mt-0.5 truncate text-[16px] text-white">Korábbi és nyitott leltárak</h2>
+                </div>
+              </div>
+              <button className={iconBtn} type="button" onClick={() => setCountsOpen(false)} aria-label="Bezárás"><X size={17} /></button>
+            </header>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
               {visibleCounts.map((count) => {
                 const selected = active?.item.id === count.id;
                 const valueSnapshot = selected ? { countedSellValue: activeStats.countedSellValue, expectedSellValue: activeStats.expectedSellValue } : countValueCache[count.id];
                 const progress = Math.max(0, Math.min(100, n(count.line_count) ? (n(count.counted_lines) / n(count.line_count)) * 100 : 0));
                 return (
-                  <button key={count.id} type="button" onClick={() => { setCountsOpen(false); void loadCount(count.id); }} className={`rounded-2xl border p-3 text-left transition ${selected ? "border-[#9ee4e2]/70 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.06] hover:border-[#7bd7d4]/30 hover:bg-white/[0.10]"}`}>
+                  <button
+                    key={count.id}
+                    type="button"
+                    onClick={() => { setCountsOpen(false); void loadCount(count.id); }}
+                    className={`w-full rounded-[18px] border p-3 text-left transition ${selected ? "border-[#9ee4e2]/70 bg-[#2a8d8b]" : "border-white/12 bg-[#293548] hover:border-[#7bd7d4]/30 hover:bg-[#334257]"}`}
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-white">{count.title}</p>
-                        <p className={`mt-1 text-[11px] ${selected ? "text-white/72" : "text-white/52"}`}>{count.code} · {formatDateTime(count.created_at)}</p>
+                        <p className="truncate text-[12px] text-white">{count.title}</p>
+                        <p className={`mt-1 text-[9px] ${selected ? "text-white/72" : "text-white/46"}`}>{count.code} • {formatDateTime(count.created_at)}</p>
                       </div>
-                      <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${selected ? "border-white/30 bg-white/14 text-white" : count.status === "committed" ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/28 text-white" : "border-white/10 bg-white/[0.10] text-white/75"}`}>{statusLabel(count.status)}</span>
+                      <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] ${selected ? "border-white/30 bg-white/14 text-white" : count.status === "committed" ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/28 text-white" : "border-white/10 bg-white/[0.08] text-white/68"}`}>{statusLabel(count.status)}</span>
                     </div>
-                    <div className={`mt-2 h-1.5 overflow-hidden rounded-full ${selected ? "bg-white/20" : "bg-slate-950/30"}`}><div className={selected ? "h-full rounded-full bg-white" : "h-full rounded-full bg-[#63d8d3]"} style={{ width: `${progress}%` }} /></div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[10px] text-white/60">
-                      <span><b className="block text-sm text-white">{formatQty(count.line_count)}</b>sor</span>
-                      <span><b className="block text-sm text-white">{formatQty(count.counted_lines)}</b>számolt</span>
-                      <span><b className={selected ? "block text-sm text-white" : n(count.diff_qty) < 0 ? "block text-sm text-red-200" : n(count.diff_qty) > 0 ? "block text-sm text-emerald-200" : "block text-sm text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                    <div className={`mt-2 h-1.5 overflow-hidden rounded-full ${selected ? "bg-white/20" : "bg-slate-950/30"}`}>
+                      <div className={selected ? "h-full rounded-full bg-white" : "h-full rounded-full bg-[#63d8d3]"} style={{ width: `${progress}%` }} />
                     </div>
-                    <div className={`mt-2 flex items-center justify-between rounded-xl border px-2.5 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10"}`}>
-                      <span className="text-[10px] text-white/52">Számolt érték</span>
-                      <strong className="text-sm text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</strong>
+                    <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-[9px] text-white/52">
+                      <span className="rounded-lg bg-black/10 px-1.5 py-1.5"><b className="block text-[12px] font-normal text-white">{formatQty(count.line_count)}</b>sor</span>
+                      <span className="rounded-lg bg-black/10 px-1.5 py-1.5"><b className="block text-[12px] font-normal text-white">{formatQty(count.counted_lines)}</b>számolt</span>
+                      <span className="rounded-lg bg-black/10 px-1.5 py-1.5"><b className={selected ? "block text-[12px] font-normal text-white" : n(count.diff_qty) < 0 ? "block text-[12px] font-normal text-red-200" : n(count.diff_qty) > 0 ? "block text-[12px] font-normal text-emerald-200" : "block text-[12px] font-normal text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                    </div>
+                    <div className={`mt-2 flex items-center justify-between rounded-xl border px-2.5 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/18 bg-[#2a8d8b]/9"}`}>
+                      <span className="text-[9px] text-white/46">Számolt érték</span>
+                      <strong className="text-[12px] font-normal text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</strong>
                     </div>
                   </button>
                 );
               })}
-              {!counts.length && <p className="rounded-2xl border border-white/12 bg-white/[0.05] px-3 py-5 text-center text-sm text-white/62">Nincs mentett leltár ezen a helyen.</p>}
+              {!counts.length ? <p className="rounded-2xl border border-dashed border-white/12 bg-[#293548] px-3 py-7 text-center text-[11px] text-white/48">Nincs mentett leltár ezen a helyen.</p> : null}
             </div>
+
             {counts.length > countsPageSize ? (
-              <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3">
-                <button className={iconBtn} type="button" disabled={countsPage <= 1} onClick={() => setCountsPage((value) => Math.max(1, value - 1))}><ChevronLeft size={18} /></button>
-                <span className="text-xs text-white/58">{countsPage} / {countsTotalPages}. oldal · 10 / oldal</span>
-                <button className={iconBtn} type="button" disabled={countsPage >= countsTotalPages} onClick={() => setCountsPage((value) => Math.min(countsTotalPages, value + 1))}><ChevronRight size={18} /></button>
-              </div>
+              <footer className="flex items-center justify-between gap-2 border-t border-white/10 bg-[#293548] p-2.5">
+                <button className={iconBtn} type="button" disabled={countsPage <= 1} onClick={() => setCountsPage((value) => Math.max(1, value - 1))}><ChevronLeft size={17} /></button>
+                <span className="text-[10px] text-white/50">{countsPage} / {countsTotalPages}. oldal</span>
+                <button className={iconBtn} type="button" disabled={countsPage >= countsTotalPages} onClick={() => setCountsPage((value) => Math.min(countsTotalPages, value + 1))}><ChevronRight size={17} /></button>
+              </footer>
             ) : null}
-          </div>
-        </>
-      )}
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       {scannerOpen && (
-        <div className="fixed inset-0 z-[80] overflow-auto bg-[#202838] text-white">
-          <div className="sticky top-0 z-10 border-b border-white/12 bg-[#303a4c]/95 p-3 backdrop-blur">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-[#9ee4e2]">Bárkód scanner</p>
-                <h2 className="text-lg text-white">{active ? "Leltár számolás" : "Keresés vonalkóddal"}</h2>
+        <div className="fixed inset-0 z-[940] overflow-auto bg-[#202838] text-white">
+          <div className="sticky top-0 z-10 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/32 bg-[#2a8d8b]/20 text-[#d7fffd]"><Barcode size={19} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[8px] uppercase tracking-[0.16em] text-[#bff8f5]/58">Bárkódolvasó</p>
+                <h2 className="mt-0.5 truncate text-[16px] text-white">{active ? "Leltár számolás" : "Keresés vonalkóddal"}</h2>
               </div>
-              <button className={iconBtn} type="button" onClick={() => stopCameraScanner(true)}><X size={18} /></button>
+              <button className={iconBtn} type="button" onClick={() => stopCameraScanner(true)} aria-label="Bezárás"><X size={17} /></button>
             </div>
           </div>
 
           <div className="space-y-3 p-3 pb-24">
-            <div className="overflow-hidden rounded-[24px] border border-white/14 bg-black/35">
+            <div className="overflow-hidden rounded-[22px] border border-white/14 bg-black/35 shadow-[0_16px_34px_rgba(15,23,42,0.24)]">
               <video ref={scannerVideoRef} className="aspect-video w-full object-cover" muted playsInline />
               <div className="border-t border-white/10 px-3 py-2 text-xs text-white/62">Tartsd stabilan a kamerát, és igazítsd a vonalkódot középre.</div>
             </div>
@@ -1692,7 +1945,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 </div>
                 <div className="mt-3 grid grid-cols-[48px_1fr_48px] gap-2">
                   <button className={softBtn} type="button" onClick={() => changePendingQty(-1)} disabled={pendingScan.qty <= 1}><Minus size={16} /></button>
-                  <div className="grid place-items-center rounded-2xl border border-white/14 bg-[#202a3a] text-center text-3xl font-semibold text-white">{pendingScan.qty}</div>
+                  <div className="grid place-items-center rounded-2xl border border-white/14 bg-[#202a3a] text-center text-3xl font-normal text-white">{pendingScan.qty}</div>
                   <button className={softBtn} type="button" onClick={() => changePendingQty(1)}><Plus size={16} /></button>
                 </div>
                 <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
@@ -1715,7 +1968,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       )}
 
       {imagePreview && (
-        <div className="fixed inset-0 z-[90] grid place-items-center bg-black/72 p-4 backdrop-blur-sm" onClick={() => setImagePreview(null)}>
+        <div className="fixed inset-0 z-[960] grid place-items-center bg-black/72 p-4 backdrop-blur-sm" onClick={() => setImagePreview(null)}>
           <div className="w-full max-w-sm rounded-[28px] border border-white/22 bg-white p-3 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <img src={imagePreview.src} alt="" className="max-h-[72vh] w-full rounded-2xl bg-white object-contain" />
             <div className="mt-3 flex items-center justify-between gap-2">
@@ -1727,7 +1980,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       )}
 
       {confirmDialog ? (
-        <div className="fixed inset-0 z-[95] grid place-items-center p-4">
+        <div className="fixed inset-0 z-[980] grid place-items-center p-4">
           <button type="button" aria-label="Megerősítés bezárása" className="absolute inset-0 bg-black/62 backdrop-blur-sm" onClick={() => !saving && setConfirmDialog(null)} />
           <div className="relative w-full max-w-md overflow-hidden rounded-[28px] border border-white/18 bg-[#404a5b] text-white shadow-2xl">
             <div className="border-b border-white/12 bg-[#4b5362] px-4 py-4">
