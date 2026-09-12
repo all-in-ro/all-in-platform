@@ -999,29 +999,11 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
               <WalletCards size={18} className="text-[#8ee6e2]" />
             </div>
-            <div className="grid grid-cols-1 gap-2.5 min-[390px]:grid-cols-3">
+            <div className="grid grid-cols-2 gap-2">
               {[
-                {
-                  key: "reservations" as const,
-                  label: "Félretett áru",
-                  icon: Bookmark,
-                  accent: "border-[#9be9e5]/30 bg-[#2a8d8b]/14 text-[#d7fffd] shadow-[0_10px_24px_rgba(42,141,139,0.12)]",
-                  iconAccent: "border-[#8ce7e2]/28 bg-[#2a8d8b]/18 text-[#cffffc]",
-                },
-                {
-                  key: "returns" as const,
-                  label: "Visszáru",
-                  icon: RotateCcw,
-                  accent: "border-white/14 bg-[#2c384a] text-white shadow-[0_10px_24px_rgba(15,23,42,0.14)]",
-                  iconAccent: "border-white/14 bg-white/[0.06] text-white/82",
-                },
-                {
-                  key: "shifts" as const,
-                  label: "Műszakátadás",
-                  icon: WalletCards,
-                  accent: "border-[#9be9e5]/34 bg-gradient-to-r from-[#2a8d8b] to-[#319c98] text-white shadow-[0_12px_26px_rgba(42,141,139,0.24)]",
-                  iconAccent: "border-white/18 bg-black/10 text-white",
-                },
+                { key: "reservations" as const, label: "Félretett", icon: Bookmark },
+                { key: "returns" as const, label: "Visszáru", icon: RotateCcw },
+                { key: "shifts" as const, label: "Műszakátadás", icon: WalletCards },
               ].map((item) => {
                 const Icon = item.icon;
                 return (
@@ -1029,30 +1011,18 @@ export default function AllInAdminMagazinDashboardMobile({
                     key={item.key}
                     type="button"
                     onClick={() => setShopWorkflowMode(item.key)}
-                    className={`group flex min-h-[72px] items-center gap-3 rounded-[20px] border px-3.5 py-3 text-left transition active:scale-[0.98] ${item.accent}`}
+                    className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 text-xs text-[#d7fffd] active:scale-[0.98]"
                   >
-                    <span className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${item.iconAccent}`}>
-                      <Icon size={17} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] leading-tight">{item.label}</span>
-                      <span className="mt-1 block text-[10px] text-white/52">Gyors megnyitás</span>
-                    </span>
+                    <Icon size={15} /> {item.label}
                   </button>
                 );
               })}
               <button
                 type="button"
                 onClick={() => setShiftRepairOpen(true)}
-                className="flex min-h-[72px] items-center gap-3 rounded-[20px] border border-red-500 bg-red-600 px-3.5 py-3 text-left text-white shadow-[0_12px_28px_rgba(220,38,38,0.34)] transition active:scale-[0.98] min-[390px]:col-span-3"
+                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-red-500 bg-red-600 px-3 text-xs text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] active:scale-[0.98]"
               >
-                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/18 bg-black/10 text-white">
-                  <Wrench size={17} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] leading-tight">Műszak javítás</span>
-                  <span className="mt-1 block text-[10px] text-white/80">Hibás napzárás javítása</span>
-                </span>
+                <Wrench size={15} /> Műszak javítás
               </button>
             </div>
           </section>
