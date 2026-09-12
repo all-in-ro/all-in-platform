@@ -46,6 +46,7 @@ import {
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
 
+
 export type AllInAdminMagazinDashboardMobileProps = {
   actor?: string;
   role?: "admin" | "shop";
@@ -903,25 +904,27 @@ export default function AllInAdminMagazinDashboardMobile({
             </div>
           </div>
 
-          <div className="-mx-1 mt-3 flex gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-3 flex w-full gap-1.5 pb-0.5">
             {([
               ["today", "Ma"],
               ["yesterday", "Tegnap"],
               ["last7", "7 nap"],
               ["month", "Hónap"],
               ["lastMonth", "Előző hónap"],
-            ] as Array<[Exclude<PeriodPreset, "custom">, string]>).map(([value, label]) => (
+            ] as Array<[Exclude<PeriodPreset, "custom">, string]>).map(([value, label], index, items) => (
               <button
                 key={value}
                 type="button"
                 onClick={() => applyPreset(value)}
-                className={`h-9 shrink-0 rounded-xl border px-3 text-[11px] transition active:scale-[0.98] ${
+                className={`h-9 min-w-0 rounded-xl border px-3 text-[11px] transition active:scale-[0.98] ${
+                  index === items.length - 1 ? "flex-1" : "shrink-0"
+                } ${
                   preset === value
                     ? "border-[#8ce7e2]/44 bg-[#2a8d8b] text-white"
                     : "border-white/12 bg-white/[0.045] text-white/58"
                 }`}
               >
-                {label}
+                <span className="whitespace-nowrap">{label}</span>
               </button>
             ))}
           </div>
