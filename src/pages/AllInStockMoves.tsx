@@ -559,17 +559,17 @@ function HungarianDatePicker({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
+        className={`group flex h-10 min-w-0 w-full items-center justify-between gap-1.5 overflow-hidden rounded-xl border px-2 text-left text-[11px] font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition lg:h-11 lg:rounded-[13px] lg:px-3 lg:text-sm ${
           open
             ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
             : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
         }`}
       >
-        <span className="flex min-w-0 items-center gap-2.5">
-          <CalendarDays size={16} className="shrink-0 text-[#8fe9e5]" />
-          <span className="truncate tracking-[0.02em]">{huDateLabel(value)}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden lg:gap-2.5">
+          <CalendarDays size={14} className="shrink-0 text-[#8fe9e5] lg:h-4 lg:w-4" />
+          <span className="block min-w-0 flex-1 truncate whitespace-nowrap tracking-[0.01em]">{huDateLabel(value)}</span>
         </span>
-        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown size={13} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && typeof document !== "undefined" ? createPortal(
@@ -1403,12 +1403,28 @@ function ProductThumb({
 }) {
   const src = imageFor(item);
   const sizeClass = compact ? "h-11 w-11 rounded-lg" : "h-14 w-14 rounded-xl";
-  const [preview, setPreview] = useState<{ left: number; top: number; size: number } | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<{ left: number; top: number; size: number } | null>(null);
+  const [centerPreviewOpen, setCenterPreviewOpen] = useState(false);
 
-  const showPreview = (event: React.MouseEvent<HTMLDivElement>) => {
+  useEffect(() => {
+    if (!centerPreviewOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCenterPreviewOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [centerPreviewOpen]);
+
+  const showHoverPreview = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!src || typeof window === "undefined") return;
+    if (window.innerWidth < 1024 || window.matchMedia?.("(pointer: coarse)").matches) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const size = Math.max(160, Math.min(280, window.innerWidth - 24, window.innerHeight - 24));
+    const size = Math.max(180, Math.min(300, window.innerWidth - 24, window.innerHeight - 24));
     const gap = 12;
     const rightSide = rect.right + gap;
     const left = rightSide + size <= window.innerWidth - 8
@@ -1418,39 +1434,75 @@ function ProductThumb({
       Math.max(8, rect.top + rect.height / 2 - size / 2),
       Math.max(8, window.innerHeight - size - 8),
     );
-    setPreview({ left, top, size });
+    setHoverPreview({ left, top, size });
   };
 
   return (
     <>
-      <div
-        className={`${sizeClass} ${src ? "cursor-zoom-in" : ""} shrink-0 overflow-hidden border border-white/12 bg-white/[0.08]`}
-        onMouseEnter={showPreview}
-        onMouseLeave={() => setPreview(null)}
+      <button
+        type="button"
+        disabled={!src}
+        className={`${sizeClass} ${src ? "cursor-zoom-in active:scale-[0.97]" : ""} shrink-0 overflow-hidden border border-white/12 bg-white/[0.08] transition disabled:cursor-default`}
+        onMouseEnter={showHoverPreview}
+        onMouseLeave={() => setHoverPreview(null)}
+        onClick={() => {
+          if (!src) return;
+          setHoverPreview(null);
+          setCenterPreviewOpen(true);
+        }}
+        aria-label={src ? "Termékkép nagyítása" : "Nincs termékkép"}
       >
         {src ? (
           <img src={src} alt={item.title_ro || "Termékkép"} className="h-full w-full object-cover" loading="lazy" />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-white/35">
+          <span className="flex h-full w-full items-center justify-center text-white/35">
             <ImageIcon size={compact ? 17 : 20} />
-          </div>
+          </span>
         )}
-      </div>
-      {src && preview && typeof document !== "undefined" ? createPortal(
+      </button>
+
+      {src && hoverPreview && typeof document !== "undefined" ? createPortal(
         <div
           aria-hidden="true"
           className="overflow-hidden rounded-2xl border border-[#7bd7d4]/55 bg-[#263246] p-2 shadow-[0_22px_60px_rgba(0,0,0,.62)]"
           style={{
             position: "fixed",
             zIndex: 600,
-            left: preview.left,
-            top: preview.top,
-            width: preview.size,
-            height: preview.size,
+            left: hoverPreview.left,
+            top: hoverPreview.top,
+            width: hoverPreview.size,
+            height: hoverPreview.size,
             pointerEvents: "none",
           }}
         >
           <img src={src} alt="" className="h-full w-full rounded-xl bg-white object-contain" />
+        </div>,
+        document.body,
+      ) : null}
+
+      {src && centerPreviewOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[2147483400] grid place-items-center bg-slate-950/74 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setCenterPreviewOpen(false);
+          }}
+        >
+          <div
+            className="relative w-[min(91vw,350px)] overflow-hidden rounded-[24px] border border-[#8ce7e2]/42 bg-[#253449] p-2.5 shadow-[0_34px_100px_rgba(0,0,0,0.72)]"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setCenterPreviewOpen(false)}
+              className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/22 bg-[#263246]/92 text-white shadow-lg backdrop-blur active:scale-[0.96]"
+              aria-label="Kép bezárása"
+            >
+              <X size={17} />
+            </button>
+            <div className="grid min-h-[300px] max-h-[76dvh] place-items-center overflow-hidden rounded-[18px] bg-white p-2">
+              <img src={src} alt={item.title_ro || "Termékkép"} className="max-h-[72dvh] w-full object-contain" />
+            </div>
+          </div>
         </div>,
         document.body,
       ) : null}
@@ -2729,11 +2781,11 @@ export default function AllInStockMoves() {
                     <button key={item.key} type="button" onClick={() => handlePreset(item.key)} className={`h-8 rounded-lg border px-1.5 text-[9px] transition ${preset === item.key ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.035] text-white/54"}`}>{item.label}</button>
                   ))}
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Ettől
+                <div className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                  <label className="grid min-w-0 overflow-hidden gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Ettől
                     <HungarianDatePicker value={from} ariaLabel="Kezdő dátum" onChange={(value) => { setPreset("custom"); setFrom(value); if (to && to < value) setTo(value); }} />
                   </label>
-                  <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Eddig
+                  <label className="grid min-w-0 overflow-hidden gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Eddig
                     <HungarianDatePicker value={to} ariaLabel="Záró dátum" onChange={(value) => { setPreset("custom"); setTo(value); if (from && from > value) setFrom(value); }} />
                   </label>
                 </div>
