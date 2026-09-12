@@ -389,28 +389,16 @@ function FilterDatePicker({
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
-  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const [position, setPosition] = useState<{ width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
   const todayIso = localIsoDate(new Date());
 
   const updatePosition = useCallback(() => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const edge = 10;
-    const gap = 6;
-    const width = Math.min(300, window.innerWidth - edge * 2);
-    const left = Math.max(edge, Math.round((window.innerWidth - width) / 2));
-    const estimatedHeight = 326;
-    const roomBelow = window.innerHeight - rect.bottom - edge;
-    const roomAbove = rect.top - edge;
-    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
-
-    if (openUpward) {
-      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
-    } else {
-      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
-    }
+    if (typeof window === "undefined") return;
+    const edge = 18;
+    const width = Math.min(286, Math.max(260, window.innerWidth - edge * 2));
+    setPosition({ width });
   }, []);
 
   useEffect(() => {
@@ -499,11 +487,12 @@ function FilterDatePicker({
           className="overflow-hidden rounded-[18px] border border-[#8ce7e2]/38 bg-[#202c3d]/[0.995] p-2 text-white shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
           style={{
             position: "fixed",
-            zIndex: 420,
-            left: position.left,
+            zIndex: 2147483300,
+            left: "50%",
+            top: "50%",
             width: position.width,
-            top: position.top,
-            bottom: position.bottom,
+            maxHeight: "78dvh",
+            transform: "translate(-50%, -50%)",
           }}
         >
           <div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-[#29374b] px-2 py-1.5">
@@ -1716,12 +1705,12 @@ export default function AllInAdminMagazinDashboardMobile({
 
       {filtersOpen ? (
         <div
-          className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-950/72 backdrop-blur-sm"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm"
           onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
             if (event.currentTarget === event.target) setFiltersOpen(false);
           }}
         >
-          <section className="max-h-[88dvh] w-full max-w-[420px] overflow-y-auto rounded-t-[24px] border-x border-t border-white/18 bg-[#303c4f] pb-[env(safe-area-inset-bottom)] shadow-[0_-28px_80px_rgba(0,0,0,0.46)]">
+          <section className="max-h-[84dvh] w-[calc(100%-28px)] max-w-[356px] overflow-y-auto rounded-[24px] border border-white/18 bg-[#303c4f] shadow-[0_28px_90px_rgba(0,0,0,0.54)]">
             <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f]/96 px-3.5 py-3 backdrop-blur-xl">
               <div>
                 <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
