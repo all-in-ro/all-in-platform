@@ -40,20 +40,20 @@ import {
   X,
 } from "lucide-react";
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5";
-const shell = "mx-auto max-w-[1540px] space-y-4";
+const page = "min-h-screen bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] text-white font-normal";
+const shell = "mx-auto max-w-[1540px] space-y-3 px-3 pb-5 lg:space-y-4 lg:px-4 lg:py-5";
 const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
 const panelHead = "flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.11] disabled:cursor-not-allowed disabled:opacity-50";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const iconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
-const dangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/35 bg-rose-600 text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
-const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
+const dangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_7px_18px_rgba(226,28,42,0.24)] transition hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50";
+const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/75 bg-[#E21C2A] px-3 text-xs text-white shadow-[0_8px_20px_rgba(226,28,42,0.25)] transition hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50";
 const rowBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/14 bg-white/[0.07] px-2.5 text-[11px] text-white transition hover:bg-white/[0.11] disabled:cursor-not-allowed disabled:opacity-50";
 const rowPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b] px-2.5 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const rowIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
-const rowDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/35 bg-rose-600 text-white shadow-[0_5px_14px_rgba(225,29,72,0.20)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
+const rowDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/75 bg-[#E21C2A] text-white shadow-[0_5px_14px_rgba(226,28,42,0.22)] transition hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
 const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
 const API_BASE = "/api/aif";
@@ -788,10 +788,11 @@ function CompactSelect({
         <div
           ref={menuRef}
           role="listbox"
+          data-allin-product-select="open"
           className="overflow-hidden rounded-xl border shadow-2xl"
           style={{
             position: "fixed",
-            zIndex: 500,
+            zIndex: 2147483200,
             left: menuPosition.left,
             width: menuPosition.width,
             top: menuPosition.top,
@@ -945,29 +946,41 @@ function AllInDatePicker({
     setOpen(false);
   };
 
+  const mobileCalendar = typeof window !== "undefined" && window.innerWidth < 1024;
+
   return (
     <div className={`min-w-0 ${className}`}>
       <button
         ref={triggerRef}
         type="button"
         disabled={disabled}
-        className="flex h-10 w-full min-w-0 items-center gap-2.5 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-left text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 disabled:cursor-not-allowed disabled:opacity-45"
+        className="flex h-10 w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-xl border border-white/18 bg-[#3f4959] px-2 text-left text-[11px] text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 disabled:cursor-not-allowed disabled:opacity-45 lg:gap-2.5 lg:px-3 lg:text-sm"
         onClick={() => {
           if (disabled) return;
           if (!open) updatePosition();
           setOpen((current) => !current);
         }}
       >
-        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#a7f3f0]"><CalendarDays size={14} /></span>
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#a7f3f0] lg:h-7 lg:w-7"><CalendarDays size={13} /></span>
         <span className={`min-w-0 flex-1 truncate ${selectedKey ? "text-white" : "text-white/42"}`}>{selectedKey ? dateOnlyHu(selectedKey) : placeholder}</span>
         <ChevronDown size={14} className={`shrink-0 text-white/50 transition ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && position && typeof document !== "undefined" ? createPortal(
         <div
+          className={mobileCalendar ? "fixed inset-0 z-[2147483300] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm" : "contents"}
+          onMouseDown={(event) => {
+            if (mobileCalendar && event.currentTarget === event.target) setOpen(false);
+          }}
+        >
+        <div
           ref={popupRef}
+          data-allin-product-date="open"
           className="overflow-hidden rounded-2xl border border-[#7bd7d4]/42 bg-[#26364c] shadow-[0_22px_65px_rgba(2,6,23,.62)]"
-          style={{ position: "fixed", zIndex: 620, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+          style={mobileCalendar
+            ? { width: Math.min(316, window.innerWidth - 28), maxWidth: "calc(100vw - 28px)" }
+            : { position: "fixed", zIndex: 620, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+          onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="flex items-center justify-between border-b border-white/10 bg-[#303f53] px-3 py-2.5">
             <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/75 transition hover:bg-white/[0.10]" onClick={() => setMonthCursor((current) => new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 1, 1, 12)))}><ChevronLeft size={15} /></button>
@@ -1001,6 +1014,7 @@ function AllInDatePicker({
             <button type="button" className="flex-1 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-2 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/20" onClick={() => pick(bucharestTodayKey(1))}>Holnap</button>
             {allowClear ? <button type="button" className="rounded-lg border border-white/12 bg-white/[0.05] px-2.5 py-2 text-[10px] text-white/60 transition hover:bg-white/[0.10]" onClick={() => pick("")}>Törlés</button> : null}
           </div>
+        </div>
         </div>,
         document.body,
       ) : null}
@@ -1050,10 +1064,56 @@ function SummaryCard({ labelText, value, hint, tone = "neutral", active = false,
 
 function ProductThumb({ item, className = "h-12 w-12" }: { item: InventoryItem | DocumentLine; className?: string }) {
   const src = firstText((item as InventoryItem).image_url, (item as DocumentLine).image_url);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [previewOpen]);
+
   return (
-    <span className={`${className} inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white text-slate-400`}>
-      {src ? <img src={src} alt="" className="h-full w-full object-contain p-0.5" loading="lazy" /> : <ImageIcon size={17} />}
-    </span>
+    <>
+      <button
+        type="button"
+        disabled={!src}
+        onClick={() => src && setPreviewOpen(true)}
+        className={`${className} inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white text-slate-400 transition ${src ? "cursor-zoom-in active:scale-[0.97]" : "cursor-default"}`}
+        aria-label={src ? "Termékkép nagyítása" : "Nincs termékkép"}
+      >
+        {src ? <img src={src} alt="" className="h-full w-full object-contain p-0.5" loading="lazy" /> : <ImageIcon size={17} />}
+      </button>
+
+      {src && previewOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[2147483400] grid place-items-center bg-slate-950/76 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setPreviewOpen(false); }}
+        >
+          <div className="relative w-[min(92vw,370px)] overflow-hidden rounded-[24px] border border-[#8ce7e2]/42 bg-[#253449] p-2.5 shadow-[0_34px_100px_rgba(0,0,0,0.72)]">
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(false)}
+              className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/75 bg-[#263246]/96 text-white shadow-[0_8px_20px_rgba(0,0,0,.30)] active:scale-[0.96]"
+              aria-label="Kép bezárása"
+            >
+              <X size={14} />
+            </button>
+            <div className="grid min-h-[300px] max-h-[78dvh] place-items-center overflow-hidden rounded-[18px] bg-white p-2">
+              <img src={src} alt="" className="max-h-[74dvh] w-full object-contain" />
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -1243,7 +1303,25 @@ function DocumentFlowSection({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="grid gap-2 p-2.5 lg:hidden">
+        {rows.map(({ line, index }) => {
+          const routeFrom = lineLocationName(line, "from", locations);
+          const routeTo = lineLocationName(line, "to", locations);
+          return (
+            <article key={line.id || `${line.line_no}-${index}`} className="rounded-[18px] border border-white/10 bg-[#293548] p-2.5 shadow-[0_8px_20px_rgba(15,23,42,.12)]">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <ProductThumb item={line} className="h-14 w-14" />
+                <div className="min-w-0 flex-1"><p className="line-clamp-2 text-[12px] leading-snug text-white">{line.product_title || "Produs"}</p><p className="mt-1 truncate text-[9px] text-white/40">{line.brand_name || "-"} • {[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</p><p className="mt-1 truncate font-mono text-[9px] text-[#bff8f5]/60">{line.barcode || line.product_code || "-"}</p></div>
+                <span className={`inline-flex min-w-10 shrink-0 items-center justify-center rounded-xl border px-2 py-1.5 text-[12px] ${quantityClass}`}>{quantity(line.qty)}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5 text-[9px]"><span className="truncate rounded-lg border border-red-400/18 bg-red-500/[0.07] px-2 py-1.5 text-red-100" title={routeFrom}>{routeFrom}</span><ArrowRight size={11} className="text-white/28" /><span className="truncate rounded-lg border border-[#5eead4]/18 bg-[#2dd4bf]/[0.07] px-2 py-1.5 text-[#ccfbf1]" title={routeTo}>{routeTo}</span></div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px]"><div className="rounded-lg border border-white/8 bg-black/10 px-2 py-1.5"><span className="text-white/34">P.U.</span><span className="float-right text-white/74">{moneyRon(lineUnitPrice(line), false)}</span></div><div className="rounded-lg border border-white/8 bg-black/10 px-2 py-1.5"><span className="text-white/34">Érték</span><span className="float-right text-white">{moneyRon(lineTotalValue(line), false)}</span></div></div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="hidden overflow-x-auto lg:block">
         <table className="min-w-[1220px] w-full text-left text-xs">
           <thead className="bg-[#2d3748] text-[9px] font-normal uppercase tracking-[0.08em] text-white/44">
             <tr>
@@ -1608,6 +1686,7 @@ export default function AllInProductMoves() {
   const [fromLocation, setFromLocation] = useState("");
   const [toLocation, setToLocation] = useState("");
   const [type, setType] = useState<ArchiveFilter>("all");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [baseLoading, setBaseLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1749,19 +1828,21 @@ export default function AllInProductMoves() {
   }, [openDetailById, items.length]);
 
   useEffect(() => {
-    if (!detail && !settingsOpen && !deleteTarget && !createOpen && !cameraOpen) return;
+    if (!detail && !settingsOpen && !deleteTarget && !createOpen && !cameraOpen && !mobileFiltersOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector('[data-allin-product-select="open"], [data-allin-product-date="open"]')) return;
       event.preventDefault();
       if (cameraOpen) setCameraOpen(false);
       else if (deleteTarget && !deleting) setDeleteTarget(null);
       else if (settingsOpen && !settingsSaving) setSettingsOpen(false);
       else if (createOpen && !savingDocument) setCreateOpen(false);
       else if (detail) setDetail(null);
+      else if (mobileFiltersOpen) setMobileFiltersOpen(false);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cameraOpen, createOpen, deleteTarget, deleting, detail, savingDocument, settingsOpen, settingsSaving]);
+  }, [cameraOpen, createOpen, deleteTarget, deleting, detail, mobileFiltersOpen, savingDocument, settingsOpen, settingsSaving]);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem>();
@@ -2887,11 +2968,23 @@ export default function AllInProductMoves() {
     const isPreparation = item.status === "preparation";
     const isDraft = item.status === "draft";
     const canReopen = item.status === "issued" && ["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(item));
+
+    if (compact) {
+      return (
+        <div className="grid w-full grid-cols-2 gap-1.5">
+          <button type="button" onClick={() => void openDetailById(item.id)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white active:scale-[0.98]"><PackageCheck size={13} /> Részletek</button>
+          {(isPreparation || isDraft) ? <button type="button" onClick={() => void openDraftForEdit(item)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white active:scale-[0.98]"><Edit3 size={13} /> Szerkesztés</button> : <button type="button" onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current, inventory); }} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white active:scale-[0.98]"><Printer size={13} /> PDF</button>}
+          {isPreparation ? <button type="button" onClick={() => void closePreparationById(item)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/18 px-2 text-[10px] text-[#d7fffd] active:scale-[0.98]"><CheckCircle2 size={13} /> Lezárás</button> : canReopen ? <button type="button" onClick={() => void reopenAsPreparation(item)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white active:scale-[0.98]"><RotateCcw size={13} /> Előkészítésre</button> : <span />}
+          <button type="button" onClick={() => setDeleteTarget(item)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-2 text-[10px] text-white shadow-[0_8px_18px_rgba(226,28,42,.22)] active:scale-[0.98]"><Trash2 size={13} /> Törlés</button>
+        </div>
+      );
+    }
+
     return (
       <div className="flex justify-end gap-1">
-        <button type="button" className={rowBtnSoft} onClick={() => void openDetailById(item.id)}>{compact ? null : <PackageCheck size={13} />} Részletek</button>
-        {(isPreparation || isDraft) ? <button type="button" className={rowPrimaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={13} /> {compact ? "Szerk." : "Szerkesztés"}</button> : null}
-        {isPreparation ? <button type="button" className={rowPrimaryBtn} onClick={() => void closePreparationById(item)} title="Előkészítés lezárása"><CheckCircle2 size={13} /> {compact ? "Lezár" : "Lezárás"}</button> : null}
+        <button type="button" className={rowBtnSoft} onClick={() => void openDetailById(item.id)}><PackageCheck size={13} /> Részletek</button>
+        {(isPreparation || isDraft) ? <button type="button" className={rowPrimaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={13} /> Szerkesztés</button> : null}
+        {isPreparation ? <button type="button" className={rowPrimaryBtn} onClick={() => void closePreparationById(item)} title="Előkészítés lezárása"><CheckCircle2 size={13} /> Lezárás</button> : null}
         {!isPreparation && !isDraft ? <button type="button" className={rowIconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current, inventory); }} title="PDF / nyomtatás"><Printer size={14} /></button> : null}
         {canReopen ? <button type="button" className={rowIconBtn} onClick={() => void reopenAsPreparation(item)} title="Visszaállítás Előkészítésre"><RotateCcw size={14} /></button> : null}
         <button type="button" className={rowDangerIconBtn} onClick={() => setDeleteTarget(item)} title="Törlés"><Trash2 size={14} /></button>
@@ -2902,8 +2995,27 @@ export default function AllInProductMoves() {
   return (
     <div className={page}>
       <div className={shell}>
-        <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3">
+        <header className="sticky top-0 z-40 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl lg:top-2 lg:mx-0 lg:rounded-[22px] lg:border lg:border-white/20 lg:px-4 lg:py-3">
+          <div className="lg:hidden">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/22 text-[#d7fffd]"><FileText size={21} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/58">AllInFashion • készlet</p>
+                <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Készletbizonylatok</h1>
+                <p className="mt-0.5 truncate text-[10px] text-white/44">{quantity(totals.total)} találat{activeFilterCount ? ` • ${activeFilterCount} szűrő` : ""}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button type="button" onClick={() => void loadList()} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /></button>
+                <button type="button" onClick={goHome} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Kezdőlap"><Home size={17} /></button>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_40px] gap-2">
+              <button type="button" onClick={() => openCreate("internal_transfer")} className="inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_18px_rgba(42,141,139,.18)] active:scale-[0.98]"><Plus size={15} /><span>Új bizonylat</span>{settings?.internal_transfer ? <span className="truncate text-[9px] text-white/65">• {settings.internal_transfer.previewNumber}</span> : null}</button>
+              <button type="button" onClick={() => openSettings("internal_transfer")} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Admin beállítások"><Settings size={16} /></button>
+            </div>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-3 lg:flex">
             <div className="flex min-w-[280px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
               <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]"><FileText size={20} /></span>
               <div>
@@ -2925,7 +3037,26 @@ export default function AllInProductMoves() {
         {error ? <div className="rounded-2xl border border-rose-200/25 bg-rose-500/12 px-4 py-3 text-sm text-rose-50">{error}</div> : null}
         {message ? <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#174c55]/72 px-4 py-3 text-sm text-cyan-50">{message}</div> : null}
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <section className="grid grid-cols-2 gap-2 lg:hidden">
+          <button type="button" onClick={() => applyTypeFilter("all")} className={`col-span-2 flex items-center justify-between gap-3 rounded-[20px] border px-3.5 py-3 text-left shadow-[0_12px_28px_rgba(15,23,42,.14)] ${type === "all" ? "border-[#8ce7e2]/42 bg-[#2a8d8b]/18" : "border-white/14 bg-[#344154]"}`}>
+            <div><p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Összes bizonylat</p><p className="mt-1 text-[22px] leading-none text-white">{quantity(totals.all ?? totals.total)}</p><p className="mt-1 text-[9px] text-white/38">{quantity(totals.totalQty)} db összesen</p></div>
+            <div className="text-right"><p className="text-[8px] uppercase tracking-[0.12em] text-[#bff8f5]/48">Összérték</p><p className="mt-1 text-[16px] text-white">{moneyRon(totals.totalValue || 0)}</p></div>
+          </button>
+          {([
+            ["preparation", "Előkészítés", totals.preparation || 0, "bg-[#E21C2A]", Edit3],
+            ["internal_transfer", "Belső átadás", totals.internalTransfer ?? totals.official, "bg-[#2a8d8b]", ArrowRightLeft],
+            ["supplier_return", "Beszállítói retur", totals.supplierReturn || 0, "bg-sky-500/18", Undo2],
+            ["damaged_writeoff", "Sérült termék", totals.damagedWriteoff || 0, "bg-[#E21C2A]/22", PackageX],
+            ["stock_correction", "Korrekció", totals.stockCorrection || 0, "bg-amber-500/18", SlidersHorizontal],
+            ["legacy", "Régi archívum", totals.legacy || 0, "bg-white/[0.05]", Archive],
+          ] as const).map(([key, labelText, value, toneClass, Icon]) => (
+            <button key={key} type="button" onClick={() => applyTypeFilter(key as ArchiveFilter)} className={`min-w-0 rounded-[18px] border p-3 text-left transition active:scale-[0.98] ${type === key ? "border-[#8ce7e2]/48 ring-1 ring-[#7bd7d4]/18" : "border-white/12"} ${toneClass}`}>
+              <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-[9px] text-white/60">{labelText}</p><p className="mt-1 text-[18px] leading-none text-white">{quantity(value)}</p></div><Icon size={15} className="shrink-0 text-white/72" /></div>
+            </button>
+          ))}
+        </section>
+
+        <div className="hidden gap-3 sm:grid-cols-2 lg:grid xl:grid-cols-7">
           <SummaryCard labelText="Összes bizonylat" value={quantity(totals.all ?? totals.total)} hint="Kattints a teljes listához" active={type === "all"} onClick={() => applyTypeFilter("all")} />
           <SummaryCard labelText="Előkészítés" value={quantity((totals.preparation || 0))} hint="Nyitott, még szerkeszthető dokumentumok" tone="red" active={type === "preparation"} onClick={() => applyTypeFilter("preparation")} />
           <SummaryCard labelText="Belső átadás" value={quantity(totals.internalTransfer ?? totals.official)} hint="Aviz / proces-verbal" tone="green" active={type === "internal_transfer"} onClick={() => applyTypeFilter("internal_transfer")} />
@@ -2935,7 +3066,19 @@ export default function AllInProductMoves() {
           <SummaryCard labelText="Összérték" value={moneyRon(totals.totalValue || 0)} hint={`${quantity(totals.totalQty)} db összesen`} tone="green" />
         </div>
 
-        <section className={panel}>
+        <section className="rounded-[22px] border border-white/14 bg-[#344154] p-3 shadow-[0_14px_34px_rgba(15,23,42,.16)] lg:hidden">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><SlidersHorizontal size={16} /></span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[8px] uppercase tracking-[0.14em] text-white/40">Aktív szűrés</p>
+              <p className="mt-0.5 truncate text-[12px] text-white">{type === "all" ? "Minden bizonylat" : type === "preparation" ? "Előkészítés" : documentMeta((type === "legacy" || type === "cancelled" || type === "official" || type === "draft") ? "internal_transfer" : type as DocumentType).shortLabel}{from || to ? ` • ${from ? dateOnlyHu(from) : "…"} – ${to ? dateOnlyHu(to) : "…"}` : ""}</p>
+            </div>
+            <button type="button" onClick={() => setMobileFiltersOpen(true)} className="relative inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-3 text-[10px] text-white shadow-[0_8px_18px_rgba(42,141,139,.18)] active:scale-[0.98]"><SlidersHorizontal size={14} /> Szűrők{activeFilterCount ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-black/14 px-1 text-[8px]">{activeFilterCount}</span> : null}</button>
+          </div>
+          {search ? <button type="button" onClick={() => { setSearchDraft(""); setSearch(""); }} className="mt-2 flex h-8 w-full min-w-0 items-center gap-2 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/9 px-2.5 text-left text-[9px] text-[#d7fffd]"><Search size={11} className="shrink-0" /><span className="min-w-0 flex-1 truncate">{search}</span><X size={11} className="shrink-0" /></button> : null}
+        </section>
+
+        <section className={`${panel} hidden lg:block`}>
           <div className={panelHead}>
             <div><p className="text-[10px] uppercase tracking-[0.17em] text-white/40">Szűrés és keresés</p><h2 className="mt-1 flex items-center gap-2 text-base"><SlidersHorizontal size={17} /> Bizonylatok gyors visszakeresése</h2></div>
             {activeFilterCount ? <span className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-50">{activeFilterCount} aktív szűrő</span> : null}
@@ -2952,7 +3095,11 @@ export default function AllInProductMoves() {
         </section>
 
         <section className={panel}>
-          <div className={panelHead}>
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303b4d] px-3 py-3 lg:hidden">
+            <div className="min-w-0"><p className="text-[8px] uppercase tracking-[0.14em] text-white/38">Bizonylati archívum</p><h2 className="mt-0.5 truncate text-base text-white">{quantity(totals.total)} bizonylat</h2></div>
+            <div className="flex items-center gap-1.5"><CompactSelect className="w-[104px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} /><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]"><FileText size={16} /></span></div>
+          </div>
+          <div className={`${panelHead} hidden lg:flex`}>
             <div><p className="text-[10px] uppercase tracking-[0.17em] text-white/40">Bizonylati archívum</p><h2 className="mt-1 flex items-center gap-2 text-base"><FileText size={17} /> Hivatalos készletbizonylatok és előzmények</h2></div>
             <div className="flex items-center gap-2 text-xs text-white/55"><span>{quantity(totals.total)} találat</span><CompactSelect className="w-[112px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} /></div>
           </div>
@@ -2998,7 +3145,7 @@ export default function AllInProductMoves() {
                   <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
                   <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span>{documentActionButtons(item, true)}</div>
+                  <div className="mt-3 border-t border-white/10 pt-2.5"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-[9px] uppercase tracking-[0.08em] text-white/34">Rögzítette</span><span className="truncate text-[10px] text-white/56">{item.actor || "-"}</span></div>{documentActionButtons(item, true)}</div>
                 </article>
               );
             })}
@@ -3011,6 +3158,52 @@ export default function AllInProductMoves() {
           </div>
         </section>
       </div>
+
+      {mobileFiltersOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setMobileFiltersOpen(false); }}
+        >
+          <section className="flex max-h-[86dvh] w-[calc(100%-24px)] max-w-[356px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><SlidersHorizontal size={16} /></span>
+                <div className="min-w-0"><p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p><h2 className="mt-0.5 truncate text-[16px] text-white">Bizonylatok szűrése</h2></div>
+              </div>
+              <button type="button" onClick={() => setMobileFiltersOpen(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white active:scale-[0.97]" aria-label="Bezárás"><X size={17} /></button>
+            </header>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Keresés
+                <div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/34" /><input className={`${input} pl-9 pr-9`} value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Bizonylat, termék, vonalkód..." />{searchDraft ? <button type="button" onClick={() => setSearchDraft("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/44 active:bg-white/10"><X size={13} /></button> : null}</div>
+              </label>
+
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 rounded-2xl border border-white/9 bg-[#293548] p-2">
+                <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Ettől<AllInDatePicker value={from} allowClear onChange={(next) => { setFrom(next); setPageNo(1); }} placeholder="Kezdő dátum" /></label>
+                <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Eddig<AllInDatePicker value={to} allowClear onChange={(next) => { setTo(next); setPageNo(1); }} placeholder="Záró dátum" /></label>
+              </div>
+
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Típus
+                <CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} />
+              </label>
+
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Forrás
+                <CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} />
+              </label>
+
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Cél / partner
+                <CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} />
+              </label>
+            </div>
+
+            <footer className="grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548] p-2.5">
+              <button type="button" onClick={() => { clearFilters(); setSearchDraft(""); }} className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[10px] text-white active:scale-[0.98]">Alaphelyzet</button>
+              <button type="button" onClick={() => { setPageNo(1); setSearch(searchDraft.trim()); setMobileFiltersOpen(false); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[11px] text-white active:scale-[0.98]"><Search size={14} /> Alkalmazás</button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       {detailLoading ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 backdrop-blur-sm"><div className="rounded-2xl border border-white/18 bg-[#303a4c] px-5 py-4 text-sm text-white shadow-2xl"><RefreshCw size={16} className="mr-2 inline animate-spin" /> Bizonylat betöltése...</div></div> : null}
 
@@ -3053,13 +3246,21 @@ export default function AllInProductMoves() {
             ];
         return (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
-            <div className="flex max-h-[95vh] w-full max-w-[1420px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)]">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-4 py-3.5">
-                <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div></div>
-                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+            <div className="flex max-h-[92dvh] w-[calc(100%-8px)] max-w-[390px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)] lg:max-h-[95vh] lg:max-w-[1420px]">
+              <div className="border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-3.5 py-3 lg:px-4 lg:py-3.5">
+                <div className="flex items-start gap-3">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] lg:h-11 lg:w-11"><TypeIcon size={20} /></span>
+                  <div className="min-w-0 flex-1"><p className="text-[8px] uppercase tracking-[0.16em] text-[#cffffd]/58 lg:text-[10px]">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[17px] text-white lg:text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-0.5 truncate text-[10px] text-white/48 lg:mt-1 lg:text-xs lg:text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div>
+                  <button type="button" onClick={() => setDetail(null)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] lg:hidden" aria-label="Bezárás"><X size={16} /></button>
+                  <div className="hidden flex-wrap gap-2 lg:flex">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5 lg:hidden">
+                  {doc.status === "preparation" ? <><button type="button" onClick={() => void openDraftForEdit(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Folytatás</button><button type="button" onClick={() => void closePreparationById(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/18 px-2 text-[10px] text-[#d7fffd]"><CheckCircle2 size={13} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" onClick={() => void openDraftForEdit(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Előkészítés folytatása</button> : <><button type="button" onClick={() => printDetail(detail, inventory)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Printer size={13} /> PDF</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" onClick={() => void reopenAsPreparation(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white"><RotateCcw size={13} /> Előkészítésre</button> : <span />}</>}
+                  <button type="button" onClick={() => setDeleteTarget(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-2 text-[10px] text-white"><Trash2 size={13} /> Törlés</button>
+                </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3.5">
-                <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="min-h-0 flex-1 overflow-auto p-2.5 lg:p-3.5">
+                <div className="grid grid-cols-2 gap-2 lg:gap-2.5 xl:grid-cols-5">
                   <div className="min-w-0 rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <div className="flex items-center justify-between gap-2"><p className="text-[9px] uppercase tracking-[0.14em] text-white/38">{doc.status === "draft" ? "Előkészítési azonosító" : "Bizonylatszám"}</p>{doc.status === "preparation" || doc.status === "draft" ? <span className="rounded-full border border-red-300/25 bg-red-500/12 px-2 py-0.5 text-[9px] text-red-100">Előkészítés</span> : <span className="rounded-full border border-[#5eead4]/22 bg-[#2dd4bf]/10 px-2 py-0.5 text-[9px] text-[#ccfbf1]">Hivatalos</span>}</div>
                     <p className="mt-2 truncate text-[15px] text-white" title={displayDocumentNumber(doc)}>{displayDocumentNumber(doc)}</p>
@@ -3120,29 +3321,28 @@ export default function AllInProductMoves() {
                   ) : null}
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45"><span>{doc.status === "preparation" ? (documentTypeOf(doc) === "damaged_writeoff" ? "ESC: bezárás • a sérült termék készlete már kivezetve" : "ESC: bezárás • a készlet már a sorok szerint át van mozgatva") : doc.status === "draft" ? "ESC: bezárás • az előkészítés még nem módosította a készletet" : "ESC: bezárás • a PDF román nyelvű hivatalos formátum"}</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
+              <div className="hidden items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45 lg:flex"><span>{doc.status === "preparation" ? (documentTypeOf(doc) === "damaged_writeoff" ? "ESC: bezárás • a sérült termék készlete már kivezetve" : "ESC: bezárás • a készlet már a sorok szerint át van mozgatva") : doc.status === "draft" ? "ESC: bezárás • az előkészítés még nem módosította a készletet" : "ESC: bezárás • a PDF román nyelvű hivatalos formátum"}</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
             </div>
           </div>
         );
       })() : null}
 
       {createOpen ? (
-        <div className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/75 p-2 backdrop-blur-sm lg:items-center lg:p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !savingDocument) setCreateOpen(false); }}>
-          <div className="flex max-h-[96vh] w-full max-w-[1460px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
-              <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><PackagePlus size={21} /></span><div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{editingDocumentStatus === "preparation" || editingDraftId ? "Előkészítés szerkesztése" : "Új készletbizonylat"}</p><h2 className="mt-0.5 text-[22px]">{documentMeta(draftType).label}</h2><p className="mt-1 text-xs text-white/58">{editingDocumentStatus === "preparation" ? `${editingDraftNumber} • a készlet már módosult; mentéskor csak a különbözet rendeződik` : editingDraftId ? `${editingDraftNumber} • a készlet a lezáráskor módosul` : "Vonalkódos termékfelvétel, előkészítés és hivatalos lezárás"}</p></div></div>
-              <div className="flex gap-2"><button type="button" className={btn} onClick={() => setCreateOpen(false)} disabled={savingDocument}><X size={15} /> Bezárás</button></div>
+        <div className="fixed inset-0 z-[110] grid place-items-center bg-slate-950/75 p-2.5 backdrop-blur-sm lg:p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !savingDocument) setCreateOpen(false); }}>
+          <div className="flex max-h-[94dvh] w-[calc(100%-8px)] max-w-[410px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#4b5362] shadow-[0_32px_100px_rgba(0,0,0,.58)] lg:max-h-[96vh] lg:max-w-[1460px] lg:rounded-[24px]">
+            <div className="border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-3.5 py-3 lg:px-4 lg:py-3.5">
+              <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] lg:h-11 lg:w-11"><PackagePlus size={20} /></span><div className="min-w-0 flex-1"><p className="text-[8px] uppercase tracking-[0.16em] text-[#cffffd]/58 lg:text-[10px]">{editingDocumentStatus === "preparation" || editingDraftId ? "Előkészítés szerkesztése" : "Új készletbizonylat"}</p><h2 className="mt-0.5 truncate text-[17px] text-white lg:text-[22px]">{documentMeta(draftType).label}</h2><p className="mt-0.5 truncate text-[10px] text-white/46 lg:mt-1 lg:text-xs lg:text-white/58">{editingDocumentStatus === "preparation" ? `${editingDraftNumber} • a készlet már módosult` : editingDraftId ? `${editingDraftNumber} • nyitott előkészítés` : "Vonalkódos termékfelvétel és hivatalos lezárás"}</p></div><button type="button" onClick={() => setCreateOpen(false)} disabled={savingDocument} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Bezárás"><X size={16} /></button></div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto p-3.5">
+            <div className="min-h-0 flex-1 overflow-auto p-2.5 lg:p-3.5">
               {error ? <div className="mb-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50">{error}</div> : null}
               {baseLoading ? <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-sm text-white/55"><RefreshCw size={15} className="mr-2 inline animate-spin" /> Törzsadatok és készlet betöltése...</div> : null}
 
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-2 gap-1.5 md:grid-cols-2 lg:gap-2 xl:grid-cols-4">
                 {DOCUMENT_TYPES.map((row) => {
                   const Icon = row.icon;
                   const active = draftType === row.type;
-                  return <button key={row.type} type="button" onClick={() => changeDraftType(row.type)} disabled={editingDocumentStatus === "preparation"} className={`rounded-2xl border p-3 text-left transition ${active ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/24 shadow-[0_0_0_1px_rgba(123,215,212,.12)]" : "border-white/12 bg-white/[0.05] hover:bg-white/[0.08]"} ${editingDocumentStatus === "preparation" && !active ? "opacity-35" : ""}`}><div className="flex items-center gap-3"><span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${row.tone}`}><Icon size={19} /></span><span><span className="block text-sm text-white">{row.label}</span><span className="mt-0.5 block text-[10px] leading-snug text-white/45">{row.subtitle}</span></span></div></button>;
+                  return <button key={row.type} type="button" onClick={() => changeDraftType(row.type)} disabled={editingDocumentStatus === "preparation"} className={`rounded-[18px] border p-2.5 text-left transition lg:rounded-2xl lg:p-3 ${active ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/24 shadow-[0_0_0_1px_rgba(123,215,212,.12)]" : "border-white/12 bg-white/[0.05] hover:bg-white/[0.08]"} ${editingDocumentStatus === "preparation" && !active ? "opacity-35" : ""}`}><div className="flex items-center gap-3"><span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${row.tone}`}><Icon size={19} /></span><span><span className="block text-[11px] leading-snug text-white lg:text-sm">{row.label}</span><span className="mt-0.5 hidden text-[10px] leading-snug text-white/45 sm:block">{row.subtitle}</span></span></div></button>;
                 })}
               </div>
 
@@ -3271,6 +3471,33 @@ export default function AllInProductMoves() {
                 <div className="overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5"><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Bizonylat tartalma</p><h3 className="mt-1 flex items-center gap-2 text-sm"><Boxes size={16} /> {draftLineArray.length} terméksor • {draftTotalQty} db</h3></div><span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">Becsült érték: {moneyRon(draftTotalValue)} • {draftPriceBasis}</span></div>
                   <div ref={draftListScrollRef} className="max-h-[520px] overflow-auto">
+                    <div className="grid gap-2 p-2.5 lg:hidden">
+                      {draftLineArray.map((row) => {
+                        const unit = decimalValue(draftType === "internal_transfer" ? row.item.sell_price : row.item.buy_price);
+                        const rowFromId = row.fromLocationId || sourceLocationId;
+                        const rowToId = row.toLocationId || targetLocationId;
+                        const available = maxDraftQty(row.item, rowFromId, row.originalQty);
+                        const fromName = locationById(rowFromId)?.name || "-";
+                        const toName = locationById(rowToId)?.name || "-";
+                        return (
+                          <article key={row.key} className="rounded-[18px] border border-white/10 bg-[#293548] p-2.5 shadow-[0_8px_20px_rgba(15,23,42,.12)]">
+                            <div className="flex min-w-0 items-start gap-2.5">
+                              <ProductThumb item={row.item} className="h-14 w-14" />
+                              <div className="min-w-0 flex-1"><p className="line-clamp-2 text-[12px] leading-snug text-white">{productTitle(row.item)}</p><p className="mt-1 truncate text-[9px] text-white/42">{row.item.brand_name || "-"} • {row.item.color_name || row.item.color_code || "-"} • {row.item.size || "-"}</p><p className="mt-1 truncate font-mono text-[9px] text-[#bff8f5]/60">{visibleBarcode(row.item) || productCode(row.item) || "-"}</p></div>
+                              <button type="button" onClick={() => setDraftLines((current) => { const next = { ...current }; delete next[row.key]; return next; })} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/75 bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,.22)]"><Trash2 size={13} /></button>
+                            </div>
+                            {draftType === "internal_transfer" ? <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5 text-[9px]"><span className="truncate rounded-lg border border-red-400/18 bg-red-500/[0.07] px-2 py-1.5 text-red-100">{fromName}</span><ArrowRight size={11} className="text-white/28" /><span className="truncate rounded-lg border border-[#5eead4]/18 bg-[#2dd4bf]/[0.07] px-2 py-1.5 text-[#ccfbf1]">{toName}</span></div> : null}
+                            <div className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
+                              <span className={`rounded-lg border px-2 py-1.5 text-[9px] ${!outgoingDraft || available >= row.qty ? "border-[#7bd7d4]/25 bg-[#2a8d8b]/12 text-[#d7fffd]" : "border-red-300/28 bg-red-500/12 text-red-100"}`}>{outgoingDraft ? `${available} db max` : "növelés"}</span>
+                              <div className="ml-auto grid h-9 w-full max-w-[150px] grid-cols-[34px_1fr_34px] overflow-hidden rounded-xl border border-white/16 bg-[#202a3a]"><button type="button" onClick={() => adjustDraftQty(row.key, -1)} className="grid place-items-center border-r border-white/10 text-white active:bg-white/10"><Minus size={13} /></button><input className="w-full bg-transparent text-center text-sm text-white outline-none" value={row.qty} onChange={(event) => setDraftQty(row.key, event.target.value)} inputMode="numeric" /><button type="button" onClick={() => adjustDraftQty(row.key, 1)} className="grid place-items-center border-l border-white/10 text-[#d7fffd] active:bg-white/10"><Plus size={13} /></button></div>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px]"><div className="rounded-lg border border-white/8 bg-black/10 px-2 py-1.5"><span className="text-white/34">P.U.</span><span className="float-right text-white/72">{moneyRon(unit, false)}</span></div><div className="rounded-lg border border-[#7bd7d4]/12 bg-[#2a8d8b]/8 px-2 py-1.5"><span className="text-white/34">Érték</span><span className="float-right text-[#d7fffd]">{moneyRon(unit === null ? null : unit * row.qty, false)}</span></div></div>
+                          </article>
+                        );
+                      })}
+                      {!draftLineArray.length ? <div className="rounded-[18px] border border-dashed border-white/12 bg-[#293548] px-4 py-8 text-center text-[11px] text-white/42">Még nincs termék a bizonylaton. Adj hozzá vonalkóddal vagy kereséssel.</div> : null}
+                    </div>
+                    <div className="hidden lg:block">
                     <table className="min-w-[900px] w-full text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Vonalkód</th>{draftType === "internal_transfer" ? <th className="px-2 py-2">Útvonal</th> : null}<th className="px-2 py-2 text-center">Elérhető</th><th className="px-2 py-2 text-center">Db</th><th className="px-2 py-2 text-right">P.U.</th><th className="px-2 py-2 text-right">Érték</th><th className="px-2 py-2 text-right"></th></tr></thead>
                       <tbody>
@@ -3286,12 +3513,16 @@ export default function AllInProductMoves() {
                         {!draftLineArray.length ? <tr><td colSpan={draftType === "internal_transfer" ? 9 : 8} className="px-4 py-12 text-center text-white/42">Még nincs termék a bizonylaton. Adj hozzá terméket vonalkóddal vagy kereséssel.</td></tr> : null}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3"><div className="text-xs text-white/58"><span className="text-white">{draftLineArray.length} sor • {draftTotalQty} db • {moneyRon(draftTotalValue)}</span><span className="ml-2">{editingDocumentStatus === "preparation" ? (draftType === "damaged_writeoff" ? "A sérült termék készlete már kivezetve. Mentéskor csak a különbözet rendeződik." : "A készlet már át van mozgatva. Mentéskor csak a módosítás különbözete rendeződik.") : (draftType === "damaged_writeoff" ? "Mentéskor a sérült termék azonnal kivezetésre kerül és az Előkészítéshez adódik." : "Az előkészítés készletmozgása csak a lezáráskor történik meg.")}</span></div><div className="flex flex-wrap gap-2"><button type="button" className={btnSoft} onClick={() => setCreateOpen(false)} disabled={savingDocument}>Mégse</button><button type="button" className={editingDocumentStatus === "preparation" || draftType === "damaged_writeoff" ? btnSoft : dangerBtn} onClick={() => void saveDraftDocument(true)} disabled={savingDocument}><Save size={15} /> {savingDocument ? "Mentés..." : "Előkészítés mentése"}</button><button type="button" className={primaryBtn} onClick={() => void saveDocument()} disabled={savingDocument || !draftLineArray.length}><CheckCircle2 size={15} /> {savingDocument ? "Feldolgozás..." : editingDocumentStatus === "preparation" || draftType === "damaged_writeoff" ? "Előkészítés lezárása" : "Bizonylat véglegesítése"}</button></div></div>
+            <div className="border-t border-white/12 bg-[#303a4c] px-2.5 py-2.5 lg:flex lg:flex-wrap lg:items-center lg:justify-between lg:gap-3 lg:px-4 lg:py-3">
+              <div className="mb-2 flex items-center justify-between gap-2 text-[10px] text-white/52 lg:mb-0 lg:text-xs"><span className="text-white">{draftLineArray.length} sor • {draftTotalQty} db</span><span className="text-[#d7fffd]">{moneyRon(draftTotalValue)}</span><span className="hidden lg:inline">{editingDocumentStatus === "preparation" ? (draftType === "damaged_writeoff" ? "A sérült termék készlete már kivezetve. Mentéskor csak a különbözet rendeződik." : "A készlet már át van mozgatva. Mentéskor csak a módosítás különbözete rendeződik.") : (draftType === "damaged_writeoff" ? "Mentéskor a sérült termék azonnal kivezetésre kerül és az Előkészítéshez adódik." : "Az előkészítés készletmozgása csak a lezáráskor történik meg.")}</span></div>
+              <div className="grid grid-cols-2 gap-1.5 lg:flex lg:flex-wrap lg:gap-2"><button type="button" className={`${btnSoft} w-full lg:w-auto`} onClick={() => setCreateOpen(false)} disabled={savingDocument}>Mégse</button><button type="button" className={`${editingDocumentStatus === "preparation" || draftType === "damaged_writeoff" ? btnSoft : dangerBtn} w-full lg:w-auto`} onClick={() => void saveDraftDocument(true)} disabled={savingDocument}><Save size={14} /> {savingDocument ? "Mentés..." : "Előkészítés"}</button><button type="button" className={`${primaryBtn} col-span-2 w-full lg:w-auto`} onClick={() => void saveDocument()} disabled={savingDocument || !draftLineArray.length}><CheckCircle2 size={14} /> {savingDocument ? "Feldolgozás..." : editingDocumentStatus === "preparation" || draftType === "damaged_writeoff" ? "Előkészítés lezárása" : "Bizonylat véglegesítése"}</button></div>
+            </div>
           </div>
         </div>
       ) : null}
