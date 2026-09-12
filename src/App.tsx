@@ -19,6 +19,7 @@ import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
 import AllInSalesCommandCenter from "./pages/AllInSalesCommandCenter";
+import AllInSalesCommandCenterMobile from "./pages/AllInSalesCommandCenterMobile";
 import AllInAdminClients from "./pages/AllInAdminClients";
 import AllInAdminClientsMobile from "./pages/AllInAdminClientsMobile";
 
@@ -320,6 +321,7 @@ export default function App() {
   const inventoryMobile = warehouseMobile;
   const adminShopMobile = warehouseMobile;
   const adminClientsMobile = warehouseMobile;
+  const salesCenterMobile = warehouseMobile;
 
   useEffect(() => {
     const onHash = () => setScreen(hashToScreen(window.location.hash || ""));
@@ -669,7 +671,11 @@ export default function App() {
           otherCityName="Csíkszereda"
         />
       ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
-      {screen.name === "salescenter" && <AllInSalesCommandCenter actor={session.actor} role={session.role} />}
+      {screen.name === "salescenter" && (salesCenterMobile ? (
+        <AllInSalesCommandCenterMobile actor={session.actor} role={session.role} />
+      ) : (
+        <AllInSalesCommandCenter actor={session.actor} role={session.role} />
+      ))}
       {screen.name === "adminclients" && (adminClientsMobile ? (
         <AllInAdminClientsMobile actor={session.actor} role={session.role} />
       ) : (
