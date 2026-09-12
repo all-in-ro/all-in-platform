@@ -1811,8 +1811,8 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
 
   const DetailsPane = (
-    <div className="relative space-y-3 sm:space-y-4">
-      <section className="overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,0.16)]">
+    <div className="relative min-w-0 max-w-full space-y-3 overflow-x-hidden sm:space-y-4">
+      <section className="min-w-0 max-w-full overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,0.16)]">
         <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303b4d] px-3.5 py-3">
           <div className="min-w-0">
             <div className="text-[8px] uppercase tracking-[0.14em] text-white/38">Kiválasztott dolgozó</div>
@@ -1822,8 +1822,8 @@ export default function AllInVacations({ api }: { api?: string }) {
             <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
           </button>
         </div>
-        <div className="p-3">
-          <div className="grid min-w-0 grid-cols-[78px_minmax(0,1fr)_minmax(0,1fr)] gap-2">
+        <div className="min-w-0 p-3">
+          <div className="grid min-w-0 grid-cols-[74px_minmax(0,1fr)] gap-2 sm:grid-cols-[78px_minmax(0,1fr)_minmax(0,1fr)]">
             <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Év
               <AllInSelect
                 value={String(archiveYear)}
@@ -1843,7 +1843,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 compact
               />
             </label>
-            <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42">Meddig
+            <label className="col-span-2 grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.08em] text-white/42 sm:col-span-1">Meddig
               <AllInSelect
                 value={monthTo}
                 options={activityMonthsForYear.map((item) => ({ value: item.month, label: formatMonthLabel(item.month).replace(`${archiveYear}. `, "") }))}
@@ -1861,25 +1861,25 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
       </section>
 
-      <section className="rounded-[20px] border border-[#7bd7d4]/18 bg-[#315c62]/58 p-2.5">
+      <section className="min-w-0 max-w-full overflow-hidden rounded-[20px] border border-[#7bd7d4]/18 bg-[#315c62]/58 p-2.5">
         <div className="flex items-center justify-between gap-2">
           <div className="text-[9px] uppercase tracking-[0.13em] text-[#d7fffd]/52">Hónapok</div>
           {activityMonthsBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#8ee6e2]" /> : null}
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2 grid min-w-0 grid-cols-2 gap-1.5 sm:flex sm:flex-wrap">
           {activityMonthsForYear.length ? activityMonthsForYear.map((item) => (
             <button
               key={item.month}
               type="button"
-              className={`rounded-xl border px-2.5 py-1.5 text-left text-[10px] transition ${item.month >= monthFrom && item.month <= monthTo ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-[#b7f1ed]/18 bg-white/[0.04] text-white/68 hover:bg-white/[0.08]"}`}
+              className={`flex min-w-0 items-center justify-between gap-1 rounded-xl border px-2.5 py-1.5 text-left text-[10px] transition sm:w-auto ${item.month >= monthFrom && item.month <= monthTo ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-[#b7f1ed]/18 bg-white/[0.04] text-white/68 hover:bg-white/[0.08]"}`}
               onClick={() => {
                 rangeInitializedRef.current = true;
                 setMonthFrom(item.month);
                 setMonthTo(item.month);
               }}
             >
-              <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
-              <span className="ml-1.5 text-[8px] text-white/48">{item.vacationDays} nap</span>
+              <span className="min-w-0 truncate">{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
+              <span className="shrink-0 text-[8px] text-white/48">{item.vacationDays} nap</span>
             </button>
           )) : !activityMonthsBusy ? <span className="text-[10px] text-white/38">Nincs adat ebben az évben.</span> : null}
         </div>
@@ -1905,9 +1905,9 @@ export default function AllInVacations({ api }: { api?: string }) {
       </div>
 
       <div className="grid grid-cols-3 gap-1.5 rounded-[20px] border border-white/12 bg-[#303a4c] p-1.5">
-        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-new-entry")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><CalendarPlus className="h-3.5 w-3.5" /> Új</button>
-        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-compensation")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><Scale className="h-3.5 w-3.5" /> Kompenzáció</button>
-        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-history")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><History className="h-3.5 w-3.5" /> Előzmények</button>
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-new-entry")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><CalendarPlus className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Új</span></button>
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-compensation")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><Scale className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Kompenzáció</span></button>
+        <button type="button" disabled={!selected} onClick={() => document.getElementById("vacation-history")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2 text-[10px] text-white/72 transition active:scale-[0.98] disabled:opacity-35"><History className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Előzmények</span></button>
       </div>
 
       {selectedPendingRequests.length ? (
@@ -2289,8 +2289,8 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] px-3 pb-6 pt-0 text-white font-normal sm:px-4 sm:py-5">
-      <div className="mx-auto max-w-[1500px] space-y-3 sm:space-y-4">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] px-3 pb-6 pt-0 text-white font-normal sm:px-4 sm:py-5">
+      <div className="mx-auto w-full min-w-0 max-w-[1500px] space-y-3 sm:space-y-4">
         <header className="sticky top-0 z-40 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:top-2 sm:mx-0 sm:rounded-2xl sm:border sm:border-white/20 sm:px-4 sm:py-3">
           <div className="sm:hidden">
             <div className="flex items-center gap-3">
@@ -2515,11 +2515,11 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </div>
 
-        <main className="grid items-start gap-4 sm:grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">
-          <div className={`${mobilePane === "employees" ? "block" : "hidden"} sm:block`}>
+        <main className="grid min-w-0 max-w-full items-start gap-4 sm:grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <div className={`min-w-0 max-w-full ${mobilePane === "employees" ? "block" : "hidden"} sm:block`}>
             {EmployeesPane}
           </div>
-          <div className={`${mobilePane === "details" ? "block" : "hidden"} sm:block`}>
+          <div className={`min-w-0 max-w-full ${mobilePane === "details" ? "block" : "hidden"} sm:block`}>
             {isMobile && selected ? (
               <button type="button" className={`${btnSoft} mb-3`} onClick={() => setMobilePane("employees")}>
                 <ArrowLeft className="h-4 w-4" />
