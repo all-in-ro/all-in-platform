@@ -37,9 +37,9 @@ import {
   apiAifListPurchaseOrders,
 } from "../lib/aif/api";
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
-const shell = "mx-auto max-w-7xl space-y-4";
-const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
+const page = "min-h-screen bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] text-white font-normal";
+const shell = "mx-auto max-w-7xl space-y-3 px-3 pb-5 lg:space-y-4 lg:px-4 lg:py-7";
+const panel = "overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.18)]";
 const panelHead = "flex flex-col gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3 sm:flex-row sm:items-center sm:justify-between";
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -49,9 +49,9 @@ const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 round
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const rowPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const rowSoftBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const rowDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-500 bg-red-600 px-2.5 text-[11px] text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
-const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
+const rowDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/75 bg-[#E21C2A] px-2.5 text-[11px] text-white transition hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/75 bg-[#E21C2A] px-3 text-xs font-normal text-white shadow-[0_10px_24px_rgba(226,28,42,0.28)] hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50";
+const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-3 text-xs font-normal text-white shadow-[0_8px_20px_rgba(226,28,42,0.26)] hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chipBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs transition-colors";
@@ -179,7 +179,7 @@ function CompactSelect({
           className="overflow-hidden rounded-xl border shadow-2xl"
           style={{
             position: "fixed",
-            zIndex: 500,
+            zIndex: 2147483200,
             left: menuPosition.left,
             width: menuPosition.width,
             top: menuPosition.top,
@@ -1026,7 +1026,7 @@ function directionMeta(item: AifStockMoveItem) {
       label: "Kiment",
       sign: "−",
       icon: ArrowUpRight,
-      cls: "border-red-500 bg-red-600 text-white shadow-[0_0_0_1px_rgba(220,38,38,0.28)]",
+      cls: "border-white/70 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,0.24)]",
       dot: "bg-red-400",
     };
   }
@@ -1208,9 +1208,9 @@ function ProductHistoryOverlay({
   const summary = history?.summary || {};
   const events = logicalVariantHistoryEvents(history?.events || []);
   return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm lg:items-center">
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
-        <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
+    <div className="fixed inset-0 z-[920] grid place-items-center bg-black/68 p-3 backdrop-blur-sm">
+      <div className="max-h-[88dvh] w-[calc(100%-10px)] max-w-[390px] overflow-auto rounded-[26px] border border-white/18 bg-[#303c4f] shadow-[0_32px_100px_rgba(0,0,0,0.60)] lg:max-h-[92vh] lg:max-w-4xl lg:rounded-2xl lg:bg-[#404a5b]">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-white/12 bg-[#303a4c]/98 px-3.5 py-3 backdrop-blur lg:flex-wrap lg:px-4">
           <div className="flex min-w-0 gap-3">
             <ProductThumb item={item} />
             <div className="min-w-0">
@@ -1219,14 +1219,14 @@ function ProductHistoryOverlay({
               <p className="mt-1 text-xs text-white/55">{item.brand_name || "-"} • {item.color_name || "-"} • {item.size || "-"}</p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button type="button" onClick={onReload} disabled={loading} className={btnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
-            <button type="button" onClick={onClose} className={btnSoft}><X size={15} /> Bezárás</button>
+          <div className="flex shrink-0 gap-1.5">
+            <button type="button" onClick={onReload} disabled={loading} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white disabled:opacity-45" aria-label="Frissítés"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /></button>
+            <button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white" aria-label="Bezárás"><X size={15} /></button>
           </div>
         </div>
-        <div className="space-y-3 p-4">
+        <div className="space-y-3 p-3 lg:p-4">
           {error ? <div className="rounded-xl border border-red-200/20 bg-red-500/12 px-3 py-2 text-sm text-red-50">{error}</div> : null}
-          <div className="grid gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
             <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Készlet</p><p className="mt-1 text-xl text-white">{formatQty(summary.currentQty || 0)}</p></div>
             <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Bejött</p><p className="mt-1 text-xl text-white">{formatQty(summary.totalIncomingQty || 0)}</p></div>
             <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Kiment</p><p className="mt-1 text-xl text-white">{formatQty(summary.totalOutgoingQty || 0)}</p></div>
@@ -1561,6 +1561,7 @@ export default function AllInStockMoves() {
   const [moveRows, setMoveRows] = useState<AifStockMoveItem[]>([]);
   const [totals, setTotals] = useState<AifStockMoveTotals>({});
   const [activeTab, setActiveTab] = useState<TabKey>("moves");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [preset, setPreset] = useState<RangePreset>("today");
   const [from, setFrom] = useState(initialRange.from);
   const [to, setTo] = useState(initialRange.to);
@@ -1765,6 +1766,22 @@ export default function AllInStockMoves() {
   }, [closeReorder, reorderSaving, reorderTarget]);
 
   useEffect(() => {
+    if (!mobileFiltersOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[role="listbox"]')) return;
+      setMobileFiltersOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [mobileFiltersOpen]);
+
+  useEffect(() => {
     let alive = true;
     fetchAifJSON<AifMeta>("/meta")
       .then((data) => {
@@ -1924,6 +1941,10 @@ export default function AllInStockMoves() {
     return `${from ? formatDateOnly(from) : "kezdettől"} - ${to ? formatDateOnly(to) : "mostanáig"}`;
   }, [from, to]);
 
+  const mobileDirectionLabel = direction === "in" ? "Bejövő" : direction === "out" ? "Kimenő" : direction === "adjust" ? "Korrekció" : "Minden irány";
+  const mobileDocumentLabel = stockDocumentTypeLabel(documentType);
+  const mobileFilterCount = [locationId, search.trim(), direction !== "all" ? direction : "", documentType !== "all" ? documentType : "", preset !== "today" ? preset : ""].filter(Boolean).length;
+
   const handlePreset = (next: RangePreset) => {
     setPreset(next);
     const range = rangeForPreset(next);
@@ -2041,44 +2062,63 @@ export default function AllInStockMoves() {
   return (
     <div className={page}>
       <div className={shell}>
-        <header className="sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3">
+        <header className="sticky top-0 z-50 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl lg:top-2 lg:mx-0 lg:rounded-[22px] lg:border lg:border-white/20 lg:px-4 lg:py-3">
+          <div className="lg:hidden">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
+                {activeTab === "moves" ? <Activity size={21} /> : <Boxes size={21} />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/58">AllInFashion • készlet</p>
+                <h1 className="mt-0.5 truncate text-lg leading-tight text-white">{activeTab === "moves" ? "Raktármozgás" : "Jelenlegi készlet"}</h1>
+                <p className="mt-0.5 truncate text-[10px] text-white/44">{selectedLocationName} • {activeTab === "moves" ? rangeLabel : `${formatQty(stockRows.length)} terméksor`}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button type="button" onClick={() => refresh()} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés">
+                  <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
+                </button>
+                <button type="button" onClick={goHome} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Kezdőlap">
+                  <Home size={17} />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-2xl border border-white/10 bg-[#263246]/72 p-1">
+              <button
+                type="button"
+                onClick={() => setActiveTab("moves")}
+                className={`inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl border px-2 text-[10px] transition active:scale-[0.98] ${activeTab === "moves" ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-transparent bg-transparent text-white/58"}`}
+              >
+                <Activity size={14} /> <span className="truncate">Mozgásnapló</span>
+                <span className={`rounded-full px-1.5 py-0.5 text-[8px] ${activeTab === "moves" ? "bg-black/12 text-white" : "bg-white/[0.07] text-white/48"}`}>{formatQty(totals.movement_count || 0)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("stock")}
+                className={`inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl border px-2 text-[10px] transition active:scale-[0.98] ${activeTab === "stock" ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-transparent bg-transparent text-white/58"}`}
+              >
+                <Boxes size={14} /> <span className="truncate">Jelenlegi készlet</span>
+                <span className={`rounded-full px-1.5 py-0.5 text-[8px] ${activeTab === "stock" ? "bg-black/12 text-white" : "bg-white/[0.07] text-white/48"}`}>{formatQty(stockRows.length)}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-3 lg:flex">
             <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
               <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
               <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Raktármozgás / készlet</h1>
               <p className="mt-0.5 text-[11px] leading-snug text-white/52">Termékes készletnézet és mozgásnapló</p>
             </div>
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => setActiveTab("moves")}
-                className={activeTab === "moves" ? headerPrimaryBtn : headerBtnSoft}
-              >
-                <Activity size={15} /> Mozgásnapló
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("stock")}
-                className={activeTab === "stock" ? headerPrimaryBtn : headerBtnSoft}
-              >
-                <Boxes size={15} /> Jelenlegi készlet
-              </button>
-              <button
-                type="button"
-                onClick={() => refresh()}
-                disabled={loading}
-                className={headerBtnSoft}
-              >
-                <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés
-              </button>
-              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap">
-                <Home size={15} /> Kezdőlap
-              </button>
+              <button type="button" onClick={() => setActiveTab("moves")} className={activeTab === "moves" ? headerPrimaryBtn : headerBtnSoft}><Activity size={15} /> Mozgásnapló</button>
+              <button type="button" onClick={() => setActiveTab("stock")} className={activeTab === "stock" ? headerPrimaryBtn : headerBtnSoft}><Boxes size={15} /> Jelenlegi készlet</button>
+              <button type="button" onClick={() => refresh()} disabled={loading} className={headerBtnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
             </div>
           </div>
         </header>
 
-        <div className={panel}>
+        <div className={`${panel} hidden lg:block`}>
           <div className={panelHead}>
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-white/40">Szűrés</p>
@@ -2224,7 +2264,60 @@ export default function AllInStockMoves() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="rounded-[22px] border border-white/14 bg-[#344154] p-3 shadow-[0_14px_34px_rgba(15,23,42,0.16)] lg:hidden">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><Filter size={16} /></span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[8px] uppercase tracking-[0.14em] text-white/40">Aktív szűrés</p>
+              <p className="mt-0.5 truncate text-[12px] text-white">{selectedLocationName} • {rangeLabel}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen(true)}
+              className="relative inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-3 text-[10px] text-white shadow-[0_8px_18px_rgba(42,141,139,0.18)] active:scale-[0.98]"
+            >
+              <SlidersHorizontal size={14} /> Szűrők
+              {mobileFilterCount ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-black/14 px-1 text-[8px]">{mobileFilterCount}</span> : null}
+            </button>
+          </div>
+          <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[9px]">
+            <div className="min-w-0 rounded-xl border border-white/9 bg-[#293548] px-2.5 py-2">
+              <span className="block text-[7px] uppercase tracking-[0.09em] text-white/34">Irány</span>
+              <span className="mt-0.5 block truncate text-white/76">{mobileDirectionLabel}</span>
+            </div>
+            <div className="min-w-0 rounded-xl border border-white/9 bg-[#293548] px-2.5 py-2">
+              <span className="block text-[7px] uppercase tracking-[0.09em] text-white/34">Művelet</span>
+              <span className="mt-0.5 block truncate text-white/76">{mobileDocumentLabel}</span>
+            </div>
+          </div>
+          {search.trim() ? (
+            <button type="button" onClick={() => setSearch("")} className="mt-1.5 flex h-8 w-full min-w-0 items-center gap-2 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/9 px-2.5 text-left text-[9px] text-[#d7fffd]">
+              <Search size={11} className="shrink-0" /><span className="min-w-0 flex-1 truncate">{search}</span><X size={11} className="shrink-0" />
+            </button>
+          ) : null}
+        </section>
+
+        <section className="grid grid-cols-2 gap-2 lg:hidden">
+          <div className="col-span-2 flex items-center justify-between gap-3 rounded-[20px] border border-white/14 bg-[#344154] px-3.5 py-3 shadow-[0_12px_28px_rgba(15,23,42,0.14)]">
+            <div className="min-w-0"><p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Helyszín</p><p className="mt-1 truncate text-[13px] text-white">{selectedLocation?.name || "Minden helyszín"}</p></div>
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-[#bff8f5]"><MapPin size={15} /></span>
+          </div>
+          <div className="rounded-[20px] border border-[#7bd7d4]/24 bg-[#2a8d8b]/16 p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+            <div className="flex items-start justify-between gap-2"><div><p className="text-[8px] uppercase tracking-[0.1em] text-white/42">Bejött</p><p className="mt-1.5 text-[18px] leading-none text-white">{formatQty(totals.incoming_qty || 0)}</p></div><ArrowDownLeft size={15} className="text-[#bff8f5]" /></div>
+          </div>
+          <div className="rounded-[20px] border border-red-200/24 bg-[#E21C2A]/16 p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+            <div className="flex items-start justify-between gap-2"><div><p className="text-[8px] uppercase tracking-[0.1em] text-white/42">Kiment</p><p className="mt-1.5 text-[18px] leading-none text-white">{formatQty(totals.outgoing_qty || 0)}</p></div><ArrowUpRight size={15} className="text-red-100" /></div>
+          </div>
+          <div className="rounded-[20px] border border-white/14 bg-[#344154] p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+            <div className="flex items-start justify-between gap-2"><div><p className="text-[8px] uppercase tracking-[0.1em] text-white/42">Nettó</p><p className="mt-1.5 text-[18px] leading-none text-white">{formatQty(totals.net_qty || 0)}</p></div><ArrowRightLeft size={15} className="text-white/58" /></div>
+          </div>
+          <div className="rounded-[20px] border border-[#7bd7d4]/24 bg-[#344154] p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+            <div className="flex items-start justify-between gap-2"><div><p className="text-[8px] uppercase tracking-[0.1em] text-white/42">Elérhető</p><p className="mt-1.5 text-[18px] leading-none text-white">{formatQty(stockTotals.available)}</p></div><Boxes size={15} className="text-[#bff8f5]" /></div>
+            <p className="mt-1.5 truncate text-[8px] text-white/34">{formatQty(stockTotals.qty)} készlet • {formatQty(stockTotals.reserved)} foglalt</p>
+          </div>
+        </section>
+
+        <div className="hidden gap-3 sm:grid-cols-2 lg:grid xl:grid-cols-5">
           <StatCard icon={MapPin} label="Helyszín" value={selectedLocation?.name || "Minden"} hint="A kiválasztott üzlet / raktár" tone="neutral" />
           <StatCard icon={ArrowDownLeft} label="Bejött" value={formatQty(totals.incoming_qty || 0)} hint="A szűrt időszakban" tone="green" />
           <StatCard icon={ArrowUpRight} label="Kiment" value={formatQty(totals.outgoing_qty || 0)} hint="A szűrt időszakban" tone="red" />
@@ -2234,27 +2327,35 @@ export default function AllInStockMoves() {
 
         {activeTab === "moves" ? (
           <div className={panel}>
-            <div className={panelHead}>
+            <div className="border-b border-white/10 bg-[#303b4d] px-3 py-3 lg:hidden">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-white/38">Mozgásnapló</p>
+                  <h2 className="mt-0.5 truncate text-base text-white">{formatQty(moveRows.length)} mozgás</h2>
+                </div>
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]"><Activity size={17} /></span>
+              </div>
+              <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+                <button type="button" onClick={() => exportPdf("in")} disabled={exportingDirection !== null} className="inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/32 bg-[#2a8d8b] px-2 text-[9px] text-white disabled:opacity-45"><FileText size={13} /><span className="truncate">Bejövő PDF</span></button>
+                <button type="button" onClick={() => exportPdf("out")} disabled={exportingDirection !== null} className="inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-white/70 bg-[#E21C2A] px-2 text-[9px] text-white disabled:opacity-45"><Download size={13} /><span className="truncate">Kimenő PDF</span></button>
+                <button type="button" onClick={toggleAllVisibleMoves} disabled={!moveRows.length || bulkDeleting} className={`inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 text-[9px] disabled:opacity-45 ${allVisibleMovesSelected ? "border-[#8ce7e2]/35 bg-[#2a8d8b]/20 text-[#d7fffd]" : "border-white/14 bg-white/[0.05] text-white/68"}`}><CheckCircle2 size={13} /><span className="truncate">{allVisibleMovesSelected ? "Kijelölve" : "Mind"}</span></button>
+              </div>
+              {selectedMoveCount > 0 ? (
+                <button type="button" onClick={() => setBulkDeleteOpen(true)} disabled={bulkDeleting} className="mt-1.5 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-white/75 bg-[#E21C2A] px-3 text-[10px] text-white shadow-[0_8px_18px_rgba(226,28,42,0.22)] disabled:opacity-45"><Trash2 size={13} /> Kijelöltek törlése ({formatQty(selectedMoveCount)})</button>
+              ) : null}
+            </div>
+
+            <div className={`${panelHead} hidden lg:flex`}>
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-white/40">Mozgásnapló</p>
                 <h2 className="mt-1 flex items-center gap-2 text-base font-normal"><Clock3 size={17} /> Dátum, óra, termék és irány</h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => exportPdf("in")} disabled={exportingDirection !== null} className={primaryBtn}>
-                  <FileText size={15} /> {exportingDirection === "in" ? "Készül..." : "Bejövő PDF"}
-                </button>
-                <button type="button" onClick={() => exportPdf("out")} disabled={exportingDirection !== null} className={redBtn}>
-                  <Download size={15} /> {exportingDirection === "out" ? "Készül..." : "Kimenő PDF"}
-                </button>
+                <button type="button" onClick={() => exportPdf("in")} disabled={exportingDirection !== null} className={primaryBtn}><FileText size={15} /> {exportingDirection === "in" ? "Készül..." : "Bejövő PDF"}</button>
+                <button type="button" onClick={() => exportPdf("out")} disabled={exportingDirection !== null} className={redBtn}><Download size={15} /> {exportingDirection === "out" ? "Készül..." : "Kimenő PDF"}</button>
                 <div className="text-sm text-white/62">{formatQty(moveRows.length)} sor megjelenítve</div>
-                <button type="button" onClick={toggleAllVisibleMoves} disabled={!moveRows.length || bulkDeleting} className={btnSoft}>
-                  <CheckCircle2 size={15} /> {allVisibleMovesSelected ? "Kijelölés törlése" : "Összes kijelölése"}
-                </button>
-                {selectedMoveCount > 0 ? (
-                  <button type="button" onClick={() => setBulkDeleteOpen(true)} disabled={bulkDeleting} className={redBtn}>
-                    <Trash2 size={15} /> Kijelöltek törlése ({formatQty(selectedMoveCount)})
-                  </button>
-                ) : null}
+                <button type="button" onClick={toggleAllVisibleMoves} disabled={!moveRows.length || bulkDeleting} className={btnSoft}><CheckCircle2 size={15} /> {allVisibleMovesSelected ? "Kijelölés törlése" : "Összes kijelölése"}</button>
+                {selectedMoveCount > 0 ? <button type="button" onClick={() => setBulkDeleteOpen(true)} disabled={bulkDeleting} className={redBtn}><Trash2 size={15} /> Kijelöltek törlése ({formatQty(selectedMoveCount)})</button> : null}
               </div>
             </div>
 
@@ -2396,106 +2497,104 @@ export default function AllInStockMoves() {
               </table>
             </div>
 
-            <div className="grid gap-3 p-3 lg:hidden">
+            <div className="grid gap-2 p-2.5 lg:hidden">
               {moveRows.map((row) => {
                 const meta = directionMeta(row);
                 const Icon = meta.icon;
                 const delta = Math.abs(n(row.qty_delta));
                 const openOrderInfo = openPurchaseOrdersByVariant[String(row.variant_id || "")] || null;
+                const selected = selectedMoveIds.has(String(row.id));
                 return (
-                  <div key={row.id} className={`rounded-2xl border p-3 ${selectedMoveIds.has(String(row.id)) ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/12" : "border-white/12 bg-white/[0.05]"}`}>
-                    <div className="flex items-start gap-3">
-                      <ProductThumb item={row} />
-                      <div className="min-w-0 flex-1"><ProductText item={row} /></div>
-                      <input
-                        type="checkbox"
-                        checked={selectedMoveIds.has(String(row.id))}
-                        onChange={() => toggleMoveSelection(String(row.id))}
+                  <article key={row.id} className={`rounded-[20px] border p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)] ${selected ? "border-[#8ce7e2]/46 bg-[#2a8d8b]/13" : "border-white/10 bg-[#293548]"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1 text-[9px] text-white/42">
+                        <span className="inline-flex items-center gap-1.5"><Clock3 size={11} className="text-[#8ee6e2]" />{formatDateTime(row.created_at)}</span>
+                        <span className="mx-1.5 text-white/18">•</span>
+                        <span className="truncate">{row.location_name || "-"}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleMoveSelection(String(row.id))}
                         disabled={bulkDeleting}
-                        className="mt-1 h-5 w-5 shrink-0 cursor-pointer accent-[#2a8d8b]"
+                        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition active:scale-[0.96] ${selected ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.045] text-white/42"}`}
                         aria-label={`${displayName(row)} mozgás kijelölése`}
-                      />
+                      >
+                        <CheckCircle2 size={15} />
+                      </button>
                     </div>
-                    <div className="mt-3 grid gap-2 text-xs text-white/68 sm:grid-cols-2">
-                      <div className="rounded-xl bg-[#354153] px-3 py-2"><Clock3 className="mr-1 inline" size={13} /> {formatDateTime(row.created_at)}</div>
-                      <div className="rounded-xl bg-[#354153] px-3 py-2"><MapPin className="mr-1 inline" size={13} /> {row.location_name || "-"}</div>
+
+                    <div className="mt-2.5 flex min-w-0 items-start gap-2.5">
+                      <ProductThumb item={row} compact />
+                      <div className="min-w-0 flex-1"><ProductText item={row} compact /></div>
+                    </div>
+
+                    <div className="mt-2.5 grid grid-cols-3 gap-1.5 text-center">
+                      <div className="rounded-xl border border-white/8 bg-black/10 px-1.5 py-2">
+                        <span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Előtte</span>
+                        <span className="mt-1 block text-[13px] text-white">{formatQty(row.qty_before ?? 0)}</span>
+                      </div>
                       {row.direction === "out" || n(row.qty_delta) < 0 ? (
                         openOrderInfo ? (
                           <OpenPurchaseOrderBadge
                             info={openOrderInfo}
                             onClick={() => void openReorder(row)}
                             title="Már rendelés alatt"
-                            className="rounded-xl border border-orange-200/70 bg-[#ff6a00] px-3 py-2 text-center font-semibold text-white shadow-[0_8px_18px_rgba(255,106,0,.22)] transition hover:bg-[#ff7a1a]"
+                            className="flex min-h-[52px] w-full flex-col items-center justify-center rounded-xl border border-orange-200/70 bg-[#ff6a00] px-1.5 py-1.5 text-[9px] text-white shadow-[0_8px_18px_rgba(255,106,0,.20)]"
                           >
-                            <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
+                            <span className="inline-flex items-center gap-1"><Icon size={11} /> {meta.label}</span>
+                            <span className="mt-0.5 text-[13px]">{meta.sign}{formatQty(delta)}</span>
                           </OpenPurchaseOrderBadge>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => void openReorder(row)}
-                            className={`rounded-xl border px-3 py-2 text-center font-semibold transition hover:brightness-110 ${meta.cls}`}
-                          >
-                            <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
+                          <button type="button" onClick={() => void openReorder(row)} className={`flex min-h-[52px] flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-[9px] ${meta.cls}`}>
+                            <span className="inline-flex items-center gap-1"><Icon size={11} /> {meta.label}</span>
+                            <span className="mt-0.5 text-[13px]">{meta.sign}{formatQty(delta)}</span>
                           </button>
                         )
                       ) : (
-                        <div className={`rounded-xl border px-3 py-2 text-center font-semibold ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
+                        <div className={`flex min-h-[52px] flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-[9px] ${meta.cls}`}>
+                          <span className="inline-flex items-center gap-1"><Icon size={11} /> {meta.label}</span>
+                          <span className="mt-0.5 text-[13px]">{meta.sign}{formatQty(delta)}</span>
+                        </div>
                       )}
-                      <div className="rounded-xl bg-[#354153] px-3 py-2">{formatQty(row.qty_before ?? 0)} → {formatQty(row.qty_after ?? 0)}</div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
-                      <span className="flex flex-wrap items-center gap-1.5">
-                        Forrás: {sourceLabel(row)}
-                        {movementReasonText(row) ? <span className="text-white/45">• {movementReasonText(row)}</span> : null}
-                        {movementDocumentNumber(row) ? (
-                          <button
-                            type="button"
-                            onClick={() => openMovementDocument(row)}
-                            className="rounded-full border border-[#7bd7d4]/32 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]"
-                          >
-                            {movementDocumentNumber(row)}
-                          </button>
-                        ) : null}
-                      </span>
-                      <div className="grid w-full grid-cols-2 gap-2 sm:w-[224px]">
-                        <button
-                          type="button"
-                          onClick={() => openVariantHistory(row)}
-                          className={`${primaryBtn} w-full`}
-                          title="Termék History"
-                          aria-label="Termék History"
-                        >
-                          <Clock3 size={15} className="shrink-0" /> Történet
-                        </button>
-                        {movementDocumentNumber(row) ? (
-                          <button
-                            type="button"
-                            onClick={() => openMovementDocument(row)}
-                            className={`${btnSoft} w-full`}
-                          >
-                            <FileText size={15} className="shrink-0" /> Bizonylat
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setDeleteCandidate(row)}
-                            disabled={deletingId === row.id}
-                            className={`${tinyDangerBtn} w-full`}
-                          >
-                            <Trash2 size={15} className="shrink-0" /> Törlés
-                          </button>
-                        )}
+                      <div className="rounded-xl border border-white/8 bg-black/10 px-1.5 py-2">
+                        <span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Utána</span>
+                        <span className="mt-1 block text-[13px] text-white">{formatQty(row.qty_after ?? 0)}</span>
                       </div>
                     </div>
-                  </div>
+
+                    <div className="mt-2.5 rounded-xl border border-white/8 bg-black/10 px-2.5 py-2 text-[9px] leading-relaxed text-white/48">
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <span className="min-w-0 flex-1">{sourceLabel(row)}{movementReasonText(row) ? ` • ${movementReasonText(row)}` : ""}</span>
+                        {movementDocumentNumber(row) ? (
+                          <button type="button" onClick={() => openMovementDocument(row)} className="shrink-0 rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/14 px-2 py-0.5 text-[8px] text-[#d7fffd]">{movementDocumentNumber(row)}</button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      <button type="button" onClick={() => openVariantHistory(row)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white active:scale-[0.98]"><Clock3 size={13} /> Történet</button>
+                      {movementDocumentNumber(row) ? (
+                        <button type="button" onClick={() => openMovementDocument(row)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-2 text-[10px] text-white/74 active:scale-[0.98]"><FileText size={13} /> Bizonylat</button>
+                      ) : (
+                        <button type="button" onClick={() => setDeleteCandidate(row)} disabled={deletingId === row.id} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-2 text-[10px] text-white shadow-[0_8px_18px_rgba(226,28,42,0.22)] active:scale-[0.98] disabled:opacity-45"><Trash2 size={13} /> Törlés</button>
+                      )}
+                    </div>
+                  </article>
                 );
               })}
-              {!moveRows.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/55">Nincs mozgás ebben az időszakban.</div>}
+              {!moveRows.length ? <div className="rounded-[20px] border border-dashed border-white/12 bg-[#293548] px-4 py-10 text-center text-[11px] text-white/46">Nincs mozgás ebben az időszakban.</div> : null}
             </div>
           </div>
         ) : (
           <div className={panel}>
-            <div className={panelHead}>
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303b4d] px-3 py-3 lg:hidden">
+              <div className="min-w-0">
+                <p className="text-[8px] uppercase tracking-[0.14em] text-white/38">Jelenlegi készlet</p>
+                <h2 className="mt-0.5 truncate text-base text-white">{formatQty(stockRows.length)} terméksor</h2>
+              </div>
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]"><PackageSearch size={17} /></span>
+            </div>
+            <div className={`${panelHead} hidden lg:flex`}>
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-white/40">Jelenlegi készlet</p>
                 <h2 className="mt-1 flex items-center gap-2 text-base font-normal"><PackageSearch size={17} /> Termékek a kiválasztott helyszínen</h2>
@@ -2554,41 +2653,138 @@ export default function AllInStockMoves() {
               </table>
             </div>
 
-            <div className="grid gap-3 p-3 lg:hidden">
+            <div className="grid gap-2 p-2.5 lg:hidden">
               {stockRows.map((row) => (
-                <div key={`${row.location_id || row.location_code}-${row.variant_id}`} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                  <div className="flex gap-3">
-                    <ProductThumb item={row} />
-                    <div className="min-w-0 flex-1"><ProductText item={row} /></div>
+                <article key={`${row.location_id || row.location_code}-${row.variant_id}`} className="rounded-[20px] border border-white/10 bg-[#293548] p-3 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <ProductThumb item={row} compact />
+                    <div className="min-w-0 flex-1"><ProductText item={row} compact /></div>
+                    <div className="shrink-0 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-1.5 text-right">
+                      <span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Elérhető</span>
+                      <span className="mt-0.5 block text-[16px] leading-none text-white">{formatQty(row.available_qty)}</span>
+                    </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                    <div className="rounded-xl bg-[#354153] px-2 py-2"><span className="block text-white/48">Készlet</span><span className="mt-1 block text-base text-white">{formatQty(row.qty)}</span></div>
-                    <div className="rounded-xl bg-[#354153] px-2 py-2"><span className="block text-white/48">Foglalt</span><span className="mt-1 block text-base text-white">{formatQty(row.reserved_qty)}</span></div>
-                    <div className="rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/16 px-2 py-2"><span className="block text-white/60">Elérhető</span><span className="mt-1 block text-base text-white">{formatQty(row.available_qty)}</span></div>
+                  <div className="mt-2.5 grid grid-cols-3 gap-1.5 text-center">
+                    <div className="rounded-xl border border-white/8 bg-black/10 px-1.5 py-2"><span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Készlet</span><span className="mt-1 block text-[13px] text-white">{formatQty(row.qty)}</span></div>
+                    <div className="rounded-xl border border-white/8 bg-black/10 px-1.5 py-2"><span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Foglalt</span><span className="mt-1 block text-[13px] text-white">{formatQty(row.reserved_qty)}</span></div>
+                    <div className="rounded-xl border border-white/8 bg-black/10 px-1.5 py-2"><span className="block text-[7px] uppercase tracking-[0.08em] text-white/34">Méret</span><span className="mt-1 block truncate text-[13px] text-white">{row.size || "-"}</span></div>
                   </div>
-                  <div className="mt-3 border-t border-white/10 pt-3">
-                    <button
-                      type="button"
-                      onClick={() => openVariantHistory(row)}
-                      className={primaryBtn}
-                      title="Termék History"
-                      aria-label="Termék History"
-                    >
-                      <Clock3 size={15} className="shrink-0" /> Történet
-                    </button>
+                  <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/8 pt-2">
+                    <span className="min-w-0 flex-1 truncate text-[9px] text-white/36">{row.location_name || "-"} • {formatDateTime(row.updated_at)}</span>
+                    <button type="button" onClick={() => openVariantHistory(row)} className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-3 text-[10px] text-white active:scale-[0.98]"><Clock3 size={13} /> Történet</button>
                   </div>
-                </div>
+                </article>
               ))}
-              {!stockRows.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/55">Nincs készlet a szűrés alapján.</div>}
+              {!stockRows.length ? <div className="rounded-[20px] border border-dashed border-white/12 bg-[#293548] px-4 py-10 text-center text-[11px] text-white/46">Nincs készlet a szűrés alapján.</div> : null}
             </div>
           </div>
         )}
 
-        <div className="rounded-2xl border border-[#2a8d8b]/25 bg-[#174c55]/60 px-4 py-3 text-sm text-cyan-50/90">
+        <div className="hidden rounded-2xl border border-[#2a8d8b]/25 bg-[#174c55]/60 px-4 py-3 text-sm text-cyan-50/90 lg:block">
           <Filter className="mr-2 inline" size={15} />
           A PDF export az aktuális dátum-, helyszín- és keresési szűrést használja, külön bejövőre és kimenőre.
         </div>
       </div>
+
+      {mobileFiltersOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setMobileFiltersOpen(false); }}
+        >
+          <section className="flex max-h-[86dvh] w-[calc(100%-24px)] max-w-[356px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><SlidersHorizontal size={16} /></span>
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</p>
+                  <h2 className="mt-0.5 truncate text-[16px] text-white">Mit nézzünk?</h2>
+                </div>
+              </div>
+              <button type="button" onClick={() => setMobileFiltersOpen(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white active:scale-[0.97]" aria-label="Bezárás"><X size={17} /></button>
+            </header>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Helyszín
+                <CompactSelect
+                  value={locationId}
+                  onChange={setLocationId}
+                  placeholder="Minden helyszín"
+                  menuMinWidth={210}
+                  options={[{ value: "", label: "Minden helyszín" }, ...locations.map((loc) => ({ value: loc.id || loc.code, label: loc.name }))]}
+                />
+              </label>
+
+              <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Termék / vonalkód
+                <div className="relative">
+                  <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/34" />
+                  <input value={search} onChange={(event) => setSearch(event.target.value)} className={`${input} w-full pl-9 pr-9`} placeholder="Termék, márka, vonalkód..." />
+                  {search ? <button type="button" onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/44 active:bg-white/10"><X size={13} /></button> : null}
+                </div>
+              </label>
+
+              <div className="rounded-2xl border border-white/9 bg-[#293548] p-2">
+                <p className="mb-2 text-[8px] uppercase tracking-[0.11em] text-white/38">Gyors dátum</p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {presetOptions.map((item) => (
+                    <button key={item.key} type="button" onClick={() => handlePreset(item.key)} className={`h-8 rounded-lg border px-1.5 text-[9px] transition ${preset === item.key ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.035] text-white/54"}`}>{item.label}</button>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                  <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Ettől
+                    <HungarianDatePicker value={from} ariaLabel="Kezdő dátum" onChange={(value) => { setPreset("custom"); setFrom(value); if (to && to < value) setTo(value); }} />
+                  </label>
+                  <label className="grid min-w-0 gap-1 text-[7px] uppercase tracking-[0.08em] text-white/38">Eddig
+                    <HungarianDatePicker value={to} ariaLabel="Záró dátum" onChange={(value) => { setPreset("custom"); setTo(value); if (from && from > value) setFrom(value); }} />
+                  </label>
+                </div>
+                <p className="mt-2 truncate text-[8px] text-white/34">{rangeLabel}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Irány
+                  <CompactSelect
+                    value={direction}
+                    onChange={(next) => setDirection(next as DirectionFilter)}
+                    menuMinWidth={170}
+                    options={[
+                      { value: "all", label: "Minden mozgás" },
+                      { value: "in", label: "Csak bejött" },
+                      { value: "out", label: "Csak kiment" },
+                      { value: "adjust", label: "Korrekció" },
+                    ]}
+                  />
+                </label>
+                <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Művelet
+                  <CompactSelect
+                    value={documentType}
+                    onChange={(next) => setDocumentType(next as StockDocumentTypeFilter)}
+                    menuMinWidth={190}
+                    options={[
+                      { value: "all", label: "Minden típus" },
+                      { value: "internal_transfer", label: "Belső átadás" },
+                      { value: "supplier_return", label: "Beszállítói retur" },
+                      { value: "damaged_writeoff", label: "Sérült / kivezetés" },
+                      { value: "stock_correction", label: "Készletkorrekció" },
+                    ]}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <footer className="grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548] p-2.5">
+              <button
+                type="button"
+                onClick={() => { setLocationId(""); setSearch(""); setDirection("all"); setDocumentType("all"); handlePreset("today"); }}
+                className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[10px] text-white active:scale-[0.98]"
+              >
+                Alaphelyzet
+              </button>
+              <button type="button" onClick={() => { setMobileFiltersOpen(false); void refresh(); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[11px] text-white active:scale-[0.98]"><CheckCircle2 size={14} /> Alkalmazás</button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       {historyTarget && (
         <ProductHistoryOverlay
