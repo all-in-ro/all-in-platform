@@ -1417,7 +1417,7 @@ export default function AllInAdminMagazinDashboardMobile({
               <button
                 type="button"
                 onClick={() => setShiftRepairOpen(true)}
-                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#ff5a63] bg-[#E21C2A] px-3 text-xs text-white shadow-[0_8px_18px_rgba(226,28,42,0.30)] transition hover:bg-[#C91522] active:scale-[0.98]"
+                className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/70 bg-[#E21C2A] px-3 text-xs text-white shadow-[0_8px_18px_rgba(226,28,42,0.30)] transition hover:bg-[#C91522] active:scale-[0.98]"
               >
                 <Wrench size={15} /> Műszak javítás
               </button>
@@ -1597,7 +1597,7 @@ export default function AllInAdminMagazinDashboardMobile({
                       <button
                         type="button"
                         onClick={() => setDeleteTarget({ sale })}
-                        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/38 bg-rose-600 px-3 text-[11px] text-white active:scale-[0.98]"
+                        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/70 bg-[#E21C2A] px-3 text-[11px] text-white transition hover:bg-[#C91522] active:scale-[0.98]"
                       >
                         <Trash2 size={13} /> Törlés
                       </button>
@@ -1914,7 +1914,7 @@ export default function AllInAdminMagazinDashboardMobile({
                 type="button"
                 disabled={deleteSaving}
                 onClick={() => void deleteSaleLine("permanent")}
-                className="flex w-full items-start gap-3 rounded-2xl border border-rose-300/48 bg-rose-600 p-4 text-left text-white active:scale-[0.99] disabled:opacity-50"
+                className="flex w-full items-start gap-3 rounded-2xl border border-white/70 bg-[#E21C2A] p-4 text-left text-white transition hover:bg-[#C91522] active:scale-[0.99] disabled:opacity-50"
               >
                 <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/24 bg-black/10">
                   {deleteSaving ? <Loader2 size={19} className="animate-spin" /> : <Trash2 size={19} />}
