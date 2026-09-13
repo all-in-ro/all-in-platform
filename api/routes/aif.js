@@ -1958,6 +1958,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       men: "men", man: "men", male: "men", masculin: "men", barbati: "men", barbat: "men", bărbat: "men", ferfi: "men", ffi: "men", herren: "men", homme: "men", uomo: "men",
       women: "women", woman: "women", female: "women", feminin: "women", femei: "women", femeie: "women", dama: "women", damă: "women", dame: "women", noi: "women", no: "women", ladies: "women", lady: "women", damen: "women", femme: "women",
       kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", youth: "kids", child: "kids", children: "kids", copii_tineri: "kids",
+      fiu: "kids", lany: "kids", baiat: "kids", fata: "kids", boy: "kids", girl: "kids", juniori: "kids",
       unisex: "unisex", universal: "unisex", mixt: "unisex", mixed: "unisex"
     };
     return map[code] || (['men', 'women', 'kids', 'unisex'].includes(code) ? code : 'unisex');
@@ -7964,6 +7965,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         updated_at timestamptz NOT NULL DEFAULT now(),
         committed_at timestamptz NULL
       )`);
+      await client.query(`ALTER TABLE IF EXISTS aif_legacy_migrations ADD COLUMN IF NOT EXISTS import_mode text NOT NULL DEFAULT 'migration'`);
       await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_legacy_migrations_payload_location_uq
         ON aif_legacy_migrations (payload_hash, target_location_id)
         WHERE status <> 'cancelled'`);
@@ -8046,6 +8048,54 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return Number.isFinite(n) ? n : fallback;
   }
 
+  function legacyImportMode(value, sourceFileName = '') {
+    const explicit = normCode(value);
+    if (['correction', 'korrekcio', 'stock_correction', 'metadata_correction'].includes(explicit)) return 'correction';
+    const fileKey = normCode(sourceFileName);
+    return /(korrekcio|correction|metadata_fix|keszlet_javitas)/.test(fileKey) ? 'correction' : 'migration';
+  }
+
+  const LEGACY_SUPPLIER_NAME_ALIASES = new Map([
+    ['ua', 'Under Armour'],
+    ['under_armour', 'Under Armour'],
+    ['skechers', 'Skechers'],
+    ['mayo_chix', 'Mayo Chix'],
+    ['mayochix', 'Mayo Chix'],
+    ['4f', '4F'],
+    ['fundango', 'Fundango'],
+    ['adidas', 'Adidas'],
+    ['nike', 'Nike'],
+    ['ruci', 'Ruci'],
+  ]);
+
+  function isLegacyOwnCompanySupplierToken(value) {
+    const key = normCode(value);
+    if (!key) return true;
+    return key === 'initializare' || key === 'initialization' || key === 'allinfashion' ||
+      key.includes('titan_euro_com') || key.includes('titan_eurocom') ||
+      key === 'kezdi' || key === 'raktar' || key === 'magazin';
+  }
+
+  function normalizeLegacySupplierCandidate(value) {
+    const raw = text(value);
+    if (!raw || isLegacyOwnCompanySupplierToken(raw)) return null;
+    const key = normCode(raw);
+    return LEGACY_SUPPLIER_NAME_ALIASES.get(key) || raw;
+  }
+
+  function resolveLegacySupplierName(historicValue, rawValue, brandName) {
+    const historic = normalizeLegacySupplierCandidate(historicValue);
+    if (historic) return historic;
+    const pieces = text(rawValue).split(/[|;,]+/).map((part) => text(part)).filter(Boolean);
+    for (const piece of pieces) {
+      const candidate = normalizeLegacySupplierCandidate(piece);
+      if (candidate) return candidate;
+    }
+    // A ForIT régi állományában a forgalmazó sokszor a márka nevével azonosan volt vezetve.
+    // Ha a forrás csak saját üzlet/raktár mozgást tartalmaz, a márkanév a legjobb megőrizhető forrás.
+    return normalizeLegacySupplierCandidate(brandName);
+  }
+
   function legacyPreparedRow(input, index) {
     const sourceRow = legacyValue(input, 'SOURCE_ROW') || String(index + 1);
     const issues = legacyValue(input, 'ISSUES');
@@ -8070,12 +8120,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const sellPriceRaw = legacyValue(input, 'PRET_VANZARE_RON');
     const buyPrice = buyPriceRaw ? legacyNumber(buyPriceRaw, null) : null;
     const sellPrice = sellPriceRaw ? legacyNumber(sellPriceRaw, null) : null;
-    const brandName = emptyToNull(legacyValue(input, 'BRAND'));
-    const colorCode = emptyToNull(legacyValue(input, 'NR_CULOARE'));
-    const colorName = emptyToNull(legacyValue(input, 'CULOARE'));
-    const subcategoryName = emptyToNull(legacyValue(input, 'RODESCR'));
-    const gender = emptyToNull(legacyValue(input, 'GEN') || legacyValue(input, 'GEN_ORIGINAL'));
-    const legacySupplier = emptyToNull(legacyValue(input, 'FURNIZOR_ISTORIC') || legacyValue(input, 'FURNIZOR_RAW'));
+    const brandName = emptyToNull(legacyValue(input, 'BRAND') || legacyValue(input, 'MARCA') || legacyValue(input, 'MÁRKA'));
+    const colorCode = emptyToNull(legacyValue(input, 'NR_CULOARE') || legacyValue(input, 'COLOR_CODE') || legacyValue(input, 'COD_CULOARE'));
+    const colorName = emptyToNull(legacyValue(input, 'CULOARE') || legacyValue(input, 'COLOR') || legacyValue(input, 'SZIN'));
+    const subcategoryName = emptyToNull(
+      legacyValue(input, 'RODESCR') || legacyValue(input, 'RODESCR_ORIGINAL') || legacyValue(input, 'SUBCATEGORIE') || legacyValue(input, 'ALKATEGORIA')
+    );
+    const gender = emptyToNull(legacyValue(input, 'GEN') || legacyValue(input, 'GEN_ORIGINAL') || legacyValue(input, 'GENDER'));
+    const legacySupplierHistoric = emptyToNull(legacyValue(input, 'FURNIZOR_ISTORIC'));
+    const legacySupplierRaw = emptyToNull(legacyValue(input, 'FURNIZOR_RAW'));
+    const legacySupplier = emptyToNull(resolveLegacySupplierName(legacySupplierHistoric, legacySupplierRaw, brandName));
     const tvaStatus = emptyToNull(legacyValue(input, 'TVA_ACHIZITIE_STATUS'));
     const tvaRateText = legacyValue(input, 'TVA_ACHIZITIE_RATE');
     const tvaRate = tvaRateText ? legacyNumber(tvaRateText, null) : null;
@@ -8085,6 +8139,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (issues) warnings.push(issues);
     if (!barcode) warnings.push('Nincs használható vonalkód.');
     if (!brandName) warnings.push('A márka nem volt biztosan azonosítható.');
+    if (!legacySupplier) warnings.push('A forgalmazó nem volt biztosan azonosítható.');
+    if (!subcategoryName) warnings.push('Az alkategória / RODESCR hiányzik.');
+    if (!colorCode && !colorName) warnings.push('A szín és színkód hiányzik.');
+    if (!gender) warnings.push('A nem nincs megadva.');
     if (!rawSize) warnings.push(`Méret nem volt azonosítható; ideiglenes méret: ${size}.`);
     if (rawQty < 0) warnings.push(`Régi negatív készlet (${rawQty}) → nyitókészlet 0.`);
 
@@ -8112,6 +8170,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       rawQty,
       targetQty,
       legacySupplier,
+      legacySupplierHistoric,
+      legacySupplierRaw,
       tvaStatus,
       tvaRate,
       activeFlag: (legacyValue(input, 'ACTIVE') || '').toUpperCase() === 'YES',
@@ -8469,6 +8529,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       normalizedNegativeRows: 0,
       missingBarcodeRows: 0,
       missingBrandRows: 0,
+      missingSupplierRows: 0,
+      missingSubcategoryRows: 0,
+      missingColorRows: 0,
+      missingGenderRows: 0,
       missingSizeRows: 0,
       totalQty: 0,
       purchaseValueRon: 0,
@@ -8493,15 +8557,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (row.previewAction === 'conflict') summary.conflictRows++;
         const issueText = text(row.issues || row.message || row.preview_message || '').toUpperCase();
         const missingBrand = !text(row.brandName ?? row.brand_name) || issueText.includes('UNKNOWN_BRAND');
+        const missingSupplier = !text(row.legacySupplier ?? row.legacy_supplier);
+        const missingSubcategory = !text(row.subcategoryName ?? row.subcategory_name) || issueText.includes('MISSING_CATEGORY');
+        const missingColor = !text(row.colorCode ?? row.color_code ?? row.colorName ?? row.color_name);
+        const missingGender = !text(row.gender) || issueText.includes('MISSING_GENDER');
         const missingSize = String(row.size || '').startsWith('N/A-') || issueText.includes('SIZE_NOT_PARSED') || issueText.includes('MISSING_SIZE');
-        const meaningfulReview = missingBrand || missingSize || Number(row.rawQty ?? row.raw_qty ?? 0) < 0 ||
-          ['MISSING_CATEGORY','MISSING_GENDER','MISSING_BARCODE','MISSING_PRODUCT_CODE','NEGATIVE_STOCK'].some((code) => issueText.includes(code));
+        const meaningfulReview = missingBrand || missingSupplier || missingSubcategory || missingColor || missingGender || missingSize || Number(row.rawQty ?? row.raw_qty ?? 0) < 0 ||
+          ['MISSING_BARCODE','MISSING_PRODUCT_CODE','NEGATIVE_STOCK'].some((code) => issueText.includes(code));
         if (meaningfulReview) summary.reviewRows++;
         if (Number(row.targetStockQty ?? row.target_qty ?? 0) > 0) summary.positiveStockRows++;
         else summary.zeroStockRows++;
         if (Number(row.rawQty ?? row.raw_qty ?? 0) < 0) summary.normalizedNegativeRows++;
         if (!text(row.barcode ?? row.legacy_barcode)) summary.missingBarcodeRows++;
         if (!text(row.brandName ?? row.brand_name)) summary.missingBrandRows++;
+        if (!text(row.legacySupplier ?? row.legacy_supplier)) summary.missingSupplierRows++;
+        if (!text(row.subcategoryName ?? row.subcategory_name)) summary.missingSubcategoryRows++;
+        if (!text(row.colorCode ?? row.color_code ?? row.colorName ?? row.color_name)) summary.missingColorRows++;
+        if (!text(row.gender)) summary.missingGenderRows++;
         if (String(row.size || '').startsWith('N/A-')) summary.missingSizeRows++;
         const qty = Number(row.targetStockQty ?? row.target_qty ?? 0);
         summary.totalQty += qty;
@@ -8544,9 +8616,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       productCode: row.legacy_product_code || null,
       originalProductCode: row.legacy_original_code || null,
       barcode: row.legacy_barcode || null,
+      snCod: row.payload?.snCod || row.payload?.sn_cod || null,
       colorCode: row.color_code || null,
       colorName: row.color_name || null,
       size: row.size || null,
+      subcategoryName: row.subcategory_name || null,
+      gender: row.gender || null,
+      legacySupplier: row.legacy_supplier || null,
       message: row.preview_message || null,
       processError: row.process_error || null,
       variantId: row.variant_id ? String(row.variant_id) : null,
@@ -8567,6 +8643,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locationName: row.location_name || null,
       sourceFileName: row.source_file_name || null,
       payloadHash: row.payload_hash || null,
+      importMode: row.import_mode || 'migration',
       status: row.status || 'prepared',
       rowCount: Number(row.row_count || 0),
       processedRows: Number(row.processed_rows || 0),
@@ -8621,7 +8698,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             originalTitle: row.originalTitle, originalProductCode: row.originalProductCode, productCode: row.productCode,
             modelCode: row.modelCode, snCod: row.snCod, rawSize: row.rawSize, brandName: row.brandName,
             colorCode: row.colorCode, colorName: row.colorName, size: row.size, subcategoryName: row.subcategoryName,
-            gender: row.gender, legacySupplier: row.legacySupplier, tvaStatus: row.tvaStatus, tvaRate: row.tvaRate,
+            gender: row.gender, legacySupplier: row.legacySupplier, legacySupplierHistoric: row.legacySupplierHistoric,
+            legacySupplierRaw: row.legacySupplierRaw, tvaStatus: row.tvaStatus, tvaRate: row.tvaRate,
             rawQty: row.rawQty, targetQty: row.targetQty, activeFlag: row.activeFlag, raw: row.raw,
           })
         ];
@@ -8645,10 +8723,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await findByIdOrCode(client, 'aif_locations', body.targetLocationId || body.target_location_id || body.location);
       if (!location || location.is_active === false) return res.status(400).json({ error: 'Érvényes célhely kiválasztása kötelező.' });
 
+      const importMode = legacyImportMode(body.importMode || body.import_mode, body.sourceFileName || body.source_file_name);
       const preparedBase = rowsInput.map(legacyPreparedRow);
       const inferredLegacy = inferLegacyBrandsAndSizes(preparedBase);
       const prepared = inferredLegacy.rows;
-      const hashPayload = prepared.map((row) => ({
+      const hashPayload = prepared.map((row) => importMode === 'correction' ? ({
+        sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
+        modelCode: row.modelCode, snCod: row.snCod, title: row.title, brandName: row.brandName,
+        colorCode: row.colorCode, colorName: row.colorName, size: row.size, subcategoryName: row.subcategoryName,
+        gender: row.gender, legacySupplier: row.legacySupplier,
+        buyPrice: row.buyPrice, sellPrice: row.sellPrice, rawQty: row.rawQty, targetQty: row.targetQty, importMode,
+      }) : ({
+        // Kompatibilitás a már előkészített teljes ForIT migrációkkal: a régi hash-formátum marad.
         sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
         modelCode: row.modelCode, title: row.title, brandName: row.brandName, colorCode: row.colorCode, size: row.size,
         buyPrice: row.buyPrice, sellPrice: row.sellPrice, rawQty: row.rawQty, targetQty: row.targetQty,
@@ -8681,6 +8767,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         targetStockQty: row.targetQty,
         barcode: row.barcode,
         brandName: row.brandName,
+        legacySupplier: row.legacySupplier,
+        subcategoryName: row.subcategoryName,
+        colorCode: row.colorCode,
+        colorName: row.colorName,
+        gender: row.gender,
         size: row.size,
         buyPrice: row.buyPrice,
         sellPrice: row.sellPrice,
@@ -8693,9 +8784,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query('BEGIN');
       const migrationResult = await client.query(
         `INSERT INTO aif_legacy_migrations (
-           source_system, source_date, target_location_id, source_file_name, payload_hash, status,
+           source_system, source_date, target_location_id, source_file_name, payload_hash, import_mode, status,
            row_count, processed_rows, total_qty, note, created_by, stats
-         ) VALUES ($1,$2,$3,$4,$5,'prepared',$6,0,$7,$8,$9,$10::jsonb)
+         ) VALUES ($1,$2,$3,$4,$5,$6,'prepared',$7,0,$8,$9,$10,$11::jsonb)
          RETURNING id`,
         [
           text(body.sourceSystem || body.source_system || 'ForIT') || 'ForIT',
@@ -8703,6 +8794,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           location.id,
           emptyToNull(body.sourceFileName || body.source_file_name),
           payloadHash,
+          importMode,
           previewRows.length,
           summary.totalQty,
           emptyToNull(body.note),
@@ -8722,8 +8814,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         try {
           const location = await findByIdOrCode(client, 'aif_locations', body.targetLocationId || body.target_location_id || body.location);
           if (location) {
-            const prepared = rowsInput.map(legacyPreparedRow);
-            const payloadHash = createHash('sha256').update(JSON.stringify(prepared.map((row) => ({ sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, targetQty: row.targetQty })))).digest('hex');
+            const importMode = legacyImportMode(body.importMode || body.import_mode, body.sourceFileName || body.source_file_name);
+            const prepared = inferLegacyBrandsAndSizes(rowsInput.map(legacyPreparedRow)).rows;
+            const payloadHash = createHash('sha256').update(JSON.stringify(prepared.map((row) => importMode === 'correction' ? ({
+              sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
+              modelCode: row.modelCode, snCod: row.snCod, title: row.title, brandName: row.brandName,
+              colorCode: row.colorCode, colorName: row.colorName, size: row.size, subcategoryName: row.subcategoryName,
+              gender: row.gender, legacySupplier: row.legacySupplier,
+              buyPrice: row.buyPrice, sellPrice: row.sellPrice, rawQty: row.rawQty, targetQty: row.targetQty, importMode,
+            }) : ({
+              sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
+              modelCode: row.modelCode, title: row.title, brandName: row.brandName, colorCode: row.colorCode, size: row.size,
+              buyPrice: row.buyPrice, sellPrice: row.sellPrice, rawQty: row.rawQty, targetQty: row.targetQty,
+            })))).digest('hex');
             const existing = await client.query(`SELECT id FROM aif_legacy_migrations WHERE payload_hash=$1 AND target_location_id=$2 ORDER BY created_at DESC LIMIT 1`, [payloadHash, location.id]);
             if (existing.rowCount) {
               const detail = await readLegacyMigrationDetail(client, existing.rows[0].id);
@@ -9344,6 +9447,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       legacyOriginalProductCode: row.legacy_original_code || null,
       legacyProductCode: row.legacy_product_code || null,
       legacyHistoricSupplier: row.legacy_supplier || null,
+      legacySupplierHistoric: payload.legacySupplierHistoric || null,
+      legacySupplierRaw: payload.legacySupplierRaw || null,
       legacyPurchaseTvaStatus: row.tva_status || null,
       legacyPurchaseTvaRate: row.tva_rate === null || row.tva_rate === undefined ? null : Number(row.tva_rate),
       legacyRawQty: Number(row.raw_qty || 0),
@@ -9414,7 +9519,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
   async function buildLegacyFastContext(client, migrationRows) {
-    const [brandsResult, categoriesResult, colorTypesResult, brandColorsResult, sizeTypesResult, brandSizesResult] = await Promise.all([
+    const [brandsResult, categoriesResult, colorTypesResult, brandColorsResult, sizeTypesResult, brandSizesResult, suppliersResult] = await Promise.all([
       client.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY is_active DESC, name ASC`),
       client.query(`SELECT id, code, parent_id, name_ro, name_hu, aliases, is_active FROM aif_categories ORDER BY is_active DESC, parent_id NULLS FIRST, sort_order ASC`),
       client.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, is_active FROM aif_color_types ORDER BY is_active DESC, sort_order ASC`),
@@ -9427,6 +9532,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     FROM aif_brand_size_codes bsc
                     JOIN aif_size_types st ON st.id=bsc.size_type_id
                     WHERE bsc.is_active=true AND st.is_active=true`),
+      client.query(`SELECT id, code, name, is_active FROM aif_suppliers ORDER BY is_active DESC, name ASC`),
     ]);
 
     const brandByKey = new Map();
@@ -9486,6 +9592,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const brandSizeByKey = new Map();
     for (const item of brandSizesResult.rows) brandSizeByKey.set(`${item.brand_id}:${normCode(item.size_code)}`, item);
 
+    const supplierByKey = new Map();
+    const registerSupplier = (supplier) => {
+      for (const value of [supplier.id, supplier.code, supplier.name]) {
+        const key = normCode(value);
+        if (key && !supplierByKey.has(key)) supplierByKey.set(key, supplier);
+      }
+    };
+    suppliersResult.rows.forEach(registerSupplier);
+    const wantedSuppliers = Array.from(new Set(migrationRows.map((row) => text(row.legacy_supplier)).filter(Boolean)));
+    for (const supplierName of wantedSuppliers) {
+      const key = normCode(supplierName);
+      if (!key || supplierByKey.has(key) || isLegacyOwnCompanySupplierToken(supplierName)) continue;
+      const inserted = await client.query(
+        `INSERT INTO aif_suppliers (code, name, is_active, notes)
+         VALUES ($1,$2,true,'ForIT legacy forgalmazó')
+         ON CONFLICT (code) DO UPDATE SET is_active=true, updated_at=now()
+         RETURNING id, code, name, is_active`,
+        [key, supplierName]
+      );
+      registerSupplier(inserted.rows[0]);
+    }
+
     const existingVariantIds = Array.from(new Set(migrationRows.map((row) => row.variant_id ? String(row.variant_id) : '').filter(Boolean)));
     const existingVariantById = new Map();
     if (existingVariantIds.length) {
@@ -9505,6 +9633,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       brandColorByKey,
       sizeByKey,
       brandSizeByKey,
+      supplierByKey,
       existingVariantById,
       modelByCode: new Map(),
       modelTouched: new Set(),
@@ -9518,11 +9647,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawColorCode = emptyToNull(row.color_code);
     const rawColorName = emptyToNull(row.color_name);
     const brandColor = brand && rawColorCode ? context.brandColorByKey.get(`${brand.id}:${normCode(rawColorCode)}`) : null;
-    const genericColor = !brandColor && rawColorName ? context.colorByKey.get(normCode(rawColorName)) : null;
+    const genericColor = !brandColor ? context.colorByKey.get(normCode(rawColorName || rawColorCode || '')) : null;
     const rawSize = text(row.size) || `N/A-${row.source_row || row.row_no}`;
     const brandSize = brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
     const genericSize = !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
     const category = context.categoryByKey.get(normCode(row.subcategory_name || '')) || null;
+    const supplier = context.supplierByKey.get(normCode(row.legacy_supplier || '')) || null;
     const subcategoryId = category?.parent_id ? category.id : null;
     const categoryId = category?.parent_id ? category.parent_id : category?.id || null;
     const legacyAttributes = {
@@ -9536,6 +9666,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       legacyOriginalProductCode: row.legacy_original_code || null,
       legacyProductCode: row.legacy_product_code || null,
       legacyHistoricSupplier: row.legacy_supplier || null,
+      legacySupplierHistoric: payload.legacySupplierHistoric || null,
+      legacySupplierRaw: payload.legacySupplierRaw || null,
       legacyPurchaseTvaStatus: row.tva_status || null,
       legacyPurchaseTvaRate: row.tva_rate === null || row.tva_rate === undefined ? null : Number(row.tva_rate),
       legacyRawQty: Number(row.raw_qty || 0),
@@ -9544,6 +9676,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
     return {
       brand,
+      supplier,
+      legacySupplierName: emptyToNull(row.legacy_supplier),
       categoryId,
       subcategoryId,
       modelCodeRaw: text(row.model_code || row.legacy_product_code || row.source_row),
@@ -9563,7 +9697,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function ensureLegacyModelFast(client, normalized, context) {
+  async function ensureLegacyModelFast(client, normalized, context, correctionMode = false) {
     const brandKey = normalized.brand?.code || (normalized.brand ? normCode(normalized.brand.name) : 'aif');
     const modelCode = `${brandKey || 'aif'}:${normCode(normalized.modelCodeRaw || normalized.titleRo)}`;
     if (context.modelByCode.has(modelCode)) return context.modelByCode.get(modelCode);
@@ -9577,17 +9711,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!context.modelTouched.has(String(model.id))) {
         await client.query(
           `UPDATE aif_product_models
-           SET brand_id=COALESCE(brand_id,$2),
-               category_id=COALESCE(category_id,$3),
-               subcategory_id=COALESCE(subcategory_id,$4),
-               title_ro=CASE WHEN NULLIF(btrim(COALESCE(title_ro,'')),'') IS NULL THEN $5 ELSE title_ro END,
-               gender=CASE WHEN NULLIF(btrim(COALESCE(gender,'')),'') IS NULL THEN $6 ELSE gender END,
-               product_type=COALESCE(NULLIF(product_type,''),$7),
-               shopify_title=COALESCE(NULLIF(shopify_title,''),$5),
+           SET brand_id=CASE WHEN $8::boolean AND $2::uuid IS NOT NULL THEN $2::uuid ELSE COALESCE(brand_id,$2::uuid) END,
+               category_id=CASE WHEN $8::boolean AND $3::uuid IS NOT NULL THEN $3::uuid ELSE COALESCE(category_id,$3::uuid) END,
+               subcategory_id=CASE WHEN $8::boolean AND $4::uuid IS NOT NULL THEN $4::uuid ELSE COALESCE(subcategory_id,$4::uuid) END,
+               title_ro=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($5,'')),'') IS NOT NULL THEN $5 WHEN NULLIF(btrim(COALESCE(title_ro,'')),'') IS NULL THEN $5 ELSE title_ro END,
+               gender=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($6,'')),'') IS NOT NULL THEN $6 WHEN NULLIF(btrim(COALESCE(gender,'')),'') IS NULL THEN $6 ELSE gender END,
+               product_type=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($7,'')),'') IS NOT NULL THEN $7 ELSE COALESCE(NULLIF(product_type,''),$7) END,
+               shopify_title=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($5,'')),'') IS NOT NULL THEN $5 ELSE COALESCE(NULLIF(shopify_title,''),$5) END,
                status=CASE WHEN status='archived' THEN 'active' ELSE status END,
                updated_at=now()
            WHERE id::text=$1`,
-          [model.id, normalized.brand?.id || null, normalized.categoryId, normalized.subcategoryId, normalized.titleRo, normalized.gender, normalized.productType]
+          [model.id, normalized.brand?.id || null, normalized.categoryId, normalized.subcategoryId, normalized.titleRo, normalized.gender, normalized.productType, Boolean(correctionMode)]
         );
         context.modelTouched.add(String(model.id));
       }
@@ -9671,9 +9805,49 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     throw Object.assign(new Error('A legacy variáns egyedi kulccsal ütközött, és nem volt biztonságosan feloldható.'), { code: 'legacy_unique_conflict' });
   }
 
+  async function ensureLegacyCorrectionBarcodeAvailable(client, variantId, barcode) {
+    const code = emptyToNull(barcode);
+    if (!code) return true;
+    const owner = await client.query(
+      `SELECT id::text AS id, barcode, internal_sku
+       FROM aif_product_variants
+       WHERE lower(btrim(COALESCE(barcode,'')))=lower(btrim($1))
+         AND id::text<>$2
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [code, String(variantId)]
+    );
+    if (!owner.rowCount) return true;
+    const error = new Error(`A ${code} vonalkód már egy másik AllIn variánshoz tartozik (${owner.rows[0].internal_sku || owner.rows[0].id}).`);
+    error.code = 'legacy_correction_barcode_conflict';
+    error.statusCode = 409;
+    throw error;
+  }
+
+  async function upsertLegacySupplierLink(client, variantId, row, normalized) {
+    const supplier = normalized?.supplier;
+    if (!supplier?.id) return false;
+    await upsertSupplierCode(client, {
+      variantId,
+      supplierId: supplier.id,
+      normalized: {
+        supplierProductCode: emptyToNull(row.legacy_product_code || normalized.internalSku),
+        supplierVariantCode: null,
+        supplierColorCode: emptyToNull(row.color_code || normalized.colorCode),
+        supplierSize: emptyToNull(row.size || normalized.size),
+        colorName: emptyToNull(normalized.colorName),
+        barcode: emptyToNull(row.legacy_barcode || normalized.barcode),
+        legacySourceSystem: 'ForIT',
+        legacySupplierName: row.legacy_supplier || supplier.name || null,
+      },
+    });
+    return true;
+  }
+
   async function processLegacyProductFast(client, migration, row, context) {
     if (row.preview_action === 'conflict') throw Object.assign(new Error(row.preview_message || 'Ütköző migrációs sor.'), { code: 'legacy_preview_conflict' });
     const normalized = legacyFastNormalized(row, migration, context);
+    const correctionMode = legacyImportMode(migration.import_mode, migration.source_file_name) === 'correction';
     let existing = row.variant_id ? context.existingVariantById.get(String(row.variant_id)) : null;
     let variantId;
     let modelId;
@@ -9681,34 +9855,55 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     if (existing) {
       if (normalized.barcode && existing.barcode && text(normalized.barcode).toLowerCase() !== text(existing.barcode).toLowerCase()) {
-        throw Object.assign(new Error(`A meglévő variáns barcode-ja (${existing.barcode}) nem egyezik a ForIT barcode-dal (${normalized.barcode}).`), { code: 'legacy_barcode_mismatch' });
+        if (!correctionMode) {
+          throw Object.assign(new Error(`A meglévő variáns barcode-ja (${existing.barcode}) nem egyezik a ForIT barcode-dal (${normalized.barcode}).`), { code: 'legacy_barcode_mismatch' });
+        }
+        await ensureLegacyCorrectionBarcodeAvailable(client, existing.id, normalized.barcode);
       }
       variantId = existing.id;
       modelId = existing.model_id;
+      const realSize = text(row.payload?.rawSize || row.size || '').startsWith('N/A-') ? null : normalized.size;
       await client.query(
         `UPDATE aif_product_variants v
-         SET barcode=CASE WHEN NULLIF(btrim(COALESCE(v.barcode,'')),'') IS NULL THEN $2 ELSE v.barcode END,
+         SET barcode=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($2,'')),'') IS NOT NULL THEN $2 WHEN NULLIF(btrim(COALESCE(v.barcode,'')),'') IS NULL THEN $2 ELSE v.barcode END,
              internal_sku=CASE
                WHEN NULLIF(btrim(COALESCE(v.internal_sku,'')),'') IS NULL
                 AND NULLIF(btrim(COALESCE($3,'')),'') IS NOT NULL
                 AND NOT EXISTS (SELECT 1 FROM aif_product_variants other WHERE other.id<>v.id AND lower(btrim(COALESCE(other.internal_sku,'')))=lower(btrim($3)))
                THEN $3 ELSE v.internal_sku END,
-             sn_cod=COALESCE(NULLIF(sn_cod,''),$4),
-             color_code=COALESCE(NULLIF(color_code,''),$5),
-             color_name=COALESCE(NULLIF(color_name,''),$6),
-             color_hex=COALESCE(NULLIF(color_hex,''),$7),
-             size=COALESCE(NULLIF(size,''),$8),
-             buy_price=COALESCE(buy_price,$9),
-             sell_price=COALESCE(sell_price,$10),
+             sn_cod=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($4,'')),'') IS NOT NULL THEN $4 ELSE COALESCE(NULLIF(sn_cod,''),$4) END,
+             color_code=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($5,'')),'') IS NOT NULL THEN $5 ELSE COALESCE(NULLIF(color_code,''),$5) END,
+             color_name=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($6,'')),'') IS NOT NULL THEN $6 ELSE COALESCE(NULLIF(color_name,''),$6) END,
+             color_hex=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($7,'')),'') IS NOT NULL THEN $7 ELSE COALESCE(NULLIF(color_hex,''),$7) END,
+             size=CASE WHEN $13::boolean AND NULLIF(btrim(COALESCE($8,'')),'') IS NOT NULL THEN $8 ELSE COALESCE(NULLIF(size,''),$8) END,
+             buy_price=CASE WHEN $13::boolean AND $9::numeric IS NOT NULL THEN $9::numeric ELSE COALESCE(buy_price,$9::numeric) END,
+             sell_price=CASE WHEN $13::boolean AND $10::numeric IS NOT NULL THEN $10::numeric ELSE COALESCE(sell_price,$10::numeric) END,
              attributes=COALESCE(attributes,'{}'::jsonb) || $11::jsonb,
              status=CASE WHEN $12::int > 0 THEN 'active' WHEN status='archived' THEN 'inactive' ELSE status END,
              updated_at=now()
          WHERE v.id::text=$1`,
-        [variantId, normalized.barcode, normalized.internalSku, normalized.snCod, normalized.colorCode, normalized.colorName, normalized.colorHex, normalized.size, normalized.buyPrice, normalized.sellPrice, JSON.stringify(normalized.attributes || {}), Number(row.target_qty || 0)]
+        [variantId, normalized.barcode, normalized.internalSku, normalized.snCod, normalized.colorCode, normalized.colorName, normalized.colorHex, realSize, normalized.buyPrice, normalized.sellPrice, JSON.stringify(normalized.attributes || {}), Number(row.target_qty || 0), Boolean(correctionMode)]
       );
-      if (modelId) context.reactivatedModelIds.add(String(modelId));
+      if (modelId) {
+        await client.query(
+          `UPDATE aif_product_models
+           SET brand_id=CASE WHEN $8::boolean AND $2::uuid IS NOT NULL THEN $2::uuid ELSE COALESCE(brand_id,$2::uuid) END,
+               category_id=CASE WHEN $8::boolean AND $3::uuid IS NOT NULL THEN $3::uuid ELSE COALESCE(category_id,$3::uuid) END,
+               subcategory_id=CASE WHEN $8::boolean AND $4::uuid IS NOT NULL THEN $4::uuid ELSE COALESCE(subcategory_id,$4::uuid) END,
+               title_ro=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($5,'')),'') IS NOT NULL THEN $5 WHEN NULLIF(btrim(COALESCE(title_ro,'')),'') IS NULL THEN $5 ELSE title_ro END,
+               gender=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($6,'')),'') IS NOT NULL THEN $6 WHEN NULLIF(btrim(COALESCE(gender,'')),'') IS NULL THEN $6 ELSE gender END,
+               product_type=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($7,'')),'') IS NOT NULL THEN $7 ELSE COALESCE(NULLIF(product_type,''),$7) END,
+               shopify_title=CASE WHEN $8::boolean AND NULLIF(btrim(COALESCE($5,'')),'') IS NOT NULL THEN $5 ELSE COALESCE(NULLIF(shopify_title,''),$5) END,
+               status=CASE WHEN status='archived' THEN 'active' ELSE status END,
+               updated_at=now()
+           WHERE id::text=$1`,
+          [modelId, normalized.brand?.id || null, normalized.categoryId, normalized.subcategoryId, normalized.titleRo, normalized.gender, normalized.productType, Boolean(correctionMode)]
+        );
+        context.reactivatedModelIds.add(String(modelId));
+      }
+      await upsertLegacySupplierLink(client, variantId, row, normalized);
     } else {
-      let model = await ensureLegacyModelFast(client, normalized, context);
+      let model = await ensureLegacyModelFast(client, normalized, context, correctionMode);
       modelId = model.id;
       let variant;
       try {
@@ -9727,13 +9922,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             conflictResolutionAtCommit: 'separate_legacy_model_fallback',
           },
         };
-        model = await ensureLegacyModelFast(client, fallbackNormalized, context);
+        model = await ensureLegacyModelFast(client, fallbackNormalized, context, correctionMode);
         modelId = model.id;
         variant = await insertLegacyVariantFast(client, modelId, fallbackNormalized, row);
       }
       variantId = variant.id;
       created = Boolean(variant.created);
       if (!created) context.existingVariantById.set(String(variantId), variant);
+      await upsertLegacySupplierLink(client, variantId, row, normalized);
     }
 
     return { row, variantId: String(variantId), modelId: modelId ? String(modelId) : null, created };
