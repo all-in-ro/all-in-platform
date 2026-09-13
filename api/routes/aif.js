@@ -8056,6 +8056,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   const LEGACY_SUPPLIER_NAME_ALIASES = new Map([
     ['ua', 'Under Armour'],
+    ['ua_ua', 'Under Armour'],
+    ['underarmour', 'Under Armour'],
+    ['ua_under_armour', 'Under Armour'],
     ['under_armour', 'Under Armour'],
     ['skechers', 'Skechers'],
     ['mayo_chix', 'Mayo Chix'],
@@ -8079,6 +8082,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const raw = text(value);
     if (!raw || isLegacyOwnCompanySupplierToken(raw)) return null;
     const key = normCode(raw);
+    if (/^ua(?:_ua)+$/.test(key)) return 'Under Armour';
     return LEGACY_SUPPLIER_NAME_ALIASES.get(key) || raw;
   }
 
@@ -8240,39 +8244,67 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     map.set(safeKey, counter);
   }
 
+  const LEGACY_STANDARD_SIZE_TOKENS = new Map([
+    ['XXS', 'XXS'], ['XS', 'XS'], ['S', 'S'], ['M', 'M'], ['L', 'L'], ['XL', 'XL'],
+    ['XXL', 'XXL'], ['XXXL', 'XXXL'], ['2XL', '2XL'], ['3XL', '3XL'], ['4XL', '4XL'], ['5XL', '5XL'], ['6XL', '6XL'],
+    ['XS/S', 'XS/S'], ['S/M', 'S/M'], ['M/L', 'M/L'], ['L/XL', 'L/XL'], ['XL/XXL', 'XL/XXL'],
+    ['XXL/XXXL', 'XXL/XXXL'], ['XXL/3XL', 'XXL/3XL'], ['2XL/3XL', '2XL/3XL'], ['3XL/4XL', '3XL/4XL'],
+    ['NS', 'OSFM'], ['OS', 'OSFM'], ['OSF', 'OSFM'], ['OSFM', 'OSFM'], ['OSFA', 'OSFA'], ['OSFY', 'OSFY'],
+    ['UNI', 'UNI'], ['UNIVERSAL', 'UNI'], ['ONESIZE', 'ONE SIZE'], ['ONE SIZE', 'ONE SIZE'],
+  ]);
+
+  function legacySizeTokenFromText(value) {
+    const raw = text(value).toUpperCase();
+    if (!raw) return null;
+
+    const exactKey = raw.replace(/\s+/g, ' ').trim();
+    if (LEGACY_STANDARD_SIZE_TOKENS.has(exactKey)) return LEGACY_STANDARD_SIZE_TOKENS.get(exactKey);
+
+    // ForIT-nál a cikkszám sokszor MODEL-SZÍN-MÉRET-SZEZON alakú, pl.
+    // 1365973-001-XL-1124 vagy 1386634-432-OSFM-1124.
+    // Nem csak az utolsó tokent nézzük, hanem hátulról az első valódi méretkódot.
+    const tokens = raw
+      .replace(/[()\[\]]/g, '-')
+      .split(/[-_\s]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (let index = tokens.length - 1; index >= 0; index -= 1) {
+      const token = tokens[index];
+      if (LEGACY_STANDARD_SIZE_TOKENS.has(token)) return LEGACY_STANDARD_SIZE_TOKENS.get(token);
+    }
+
+    // A perjeles méretet (S/M, L/XL stb.) külön is megfogjuk, mert a tokenizálásnál
+    // a '/' szándékosan megmarad.
+    const comboMatch = raw.match(/(?:^|[-_\s])(XS\/S|S\/M|M\/L|L\/XL|XL\/XXL|XXL\/XXXL|XXL\/3XL|2XL\/3XL|3XL\/4XL)(?=$|[-_\s])/i);
+    if (comboMatch) return comboMatch[1].toUpperCase();
+    return null;
+  }
+
   function legacySizeFromKnownSuffix(row) {
     if (row?.rawSize) return null;
-    const oneSizeMap = new Map([
-      ['NS', 'OSFM'],
-      ['OS', 'OSFM'],
-      ['UNI', 'UNI'],
-      ['UNIVERSAL', 'UNI'],
-      ['ONESIZE', 'ONE SIZE'],
-      ['ONE SIZE', 'ONE SIZE'],
-      ['OSFM', 'OSFM'],
-      ['OSFA', 'OSFA'],
-      ['OSFY', 'OSFY'],
-    ]);
+
     const colorToken = text(row?.colorCode).toUpperCase();
-    if (oneSizeMap.has(colorToken)) {
-      return { size: oneSizeMap.get(colorToken), clearColorCode: true, evidence: `ForIT kódsuffix: ${colorToken}` };
+    const colorSize = LEGACY_STANDARD_SIZE_TOKENS.get(colorToken);
+    if (colorSize && ['OSFM', 'OSFA', 'OSFY', 'UNI', 'ONE SIZE'].includes(colorSize)) {
+      return { size: colorSize, clearColorCode: true, evidence: `ForIT színkódmezőben talált méret: ${colorToken}` };
     }
 
-    const code = text(row?.originalProductCode || row?.productCode).toUpperCase();
-    const last = code.split('-').filter(Boolean).pop() || '';
-    if (oneSizeMap.has(last)) {
-      return { size: oneSizeMap.get(last), clearColorCode: false, evidence: `ForIT termékkód vége: ${last}` };
-    }
-
-    const title = text(row?.originalTitle || row?.title).toUpperCase();
-    const titleLast = title.split(/\s+/).filter(Boolean).pop() || '';
-    if (oneSizeMap.has(titleLast)) {
-      return { size: oneSizeMap.get(titleLast), clearColorCode: colorToken === titleLast, evidence: `ForIT név vége: ${titleLast}` };
-    }
-
-    const apparelMatch = code.match(/-(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|XS\/S|S\/M|M\/L|L\/XL|XL\/XXL)(?:-(?:REG|R))?$/i);
-    if (apparelMatch) {
-      return { size: apparelMatch[1].toUpperCase(), clearColorCode: false, evidence: `ForIT termékkódból: ${apparelMatch[1].toUpperCase()}` };
+    const sources = [
+      ['termékkód', row?.originalProductCode],
+      ['termékkód', row?.productCode],
+      ['terméknév', row?.originalTitle],
+      ['terméknév', row?.title],
+    ];
+    for (const [sourceLabel, value] of sources) {
+      const inferred = legacySizeTokenFromText(value);
+      if (inferred) {
+        return {
+          size: inferred,
+          clearColorCode: Boolean(colorToken && LEGACY_STANDARD_SIZE_TOKENS.get(colorToken) === inferred && ['OSFM', 'OSFA', 'OSFY', 'UNI', 'ONE SIZE'].includes(inferred)),
+          evidence: `ForIT ${sourceLabel}: ${inferred}`,
+        };
+      }
     }
     return null;
   }
@@ -8344,6 +8376,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
+      // A régi ForIT-ban az UA-UA / UA jelölés az Under Armour forgalmazót jelenti.
+      // A márka-inferencia után újrafuttatjuk a forgalmazó-felismerést, így a régi,
+      // üres vagy UA-UA értékű sorok sem maradnak "Forgalmazó" hibán.
+      const beforeSupplier = row.legacySupplier;
+      const resolvedSupplier = resolveLegacySupplierName(row.legacySupplierHistoric || beforeSupplier, row.legacySupplierRaw, row.brandName);
+      if (resolvedSupplier) {
+        row.legacySupplier = resolvedSupplier;
+        row.warnings = (row.warnings || []).filter((message) => !/forgalmazó nem volt biztosan azonosítható/i.test(String(message)));
+        if (row.issues) {
+          row.issues = row.issues
+            .split(';')
+            .map((part) => part.trim())
+            .filter((part) => part && !['MISSING_SUPPLIER', 'UNKNOWN_SUPPLIER', 'MISSING_FURNIZOR', 'UNKNOWN_FURNIZOR'].includes(part.toUpperCase()))
+            .join('; ') || null;
+        }
+        if (beforeSupplier && normCode(beforeSupplier) !== normCode(resolvedSupplier)) {
+          row.warnings.push(`Forgalmazó automatikusan javítva: ${beforeSupplier} → ${resolvedSupplier}.`);
+        }
+      }
+
       const inferredSize = legacySizeFromKnownSuffix(row);
       if (inferredSize) {
         row.size = inferredSize.size;
@@ -8352,7 +8404,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         row.warnings = (row.warnings || []).filter((message) => !/Méret nem volt azonosítható/i.test(String(message)));
         row.warnings.push(`Méret automatikusan felismerve: ${inferredSize.size} (${inferredSize.evidence}).`);
         if (row.issues) {
-          row.issues = row.issues.split(';').map((part) => part.trim()).filter((part) => part && part !== 'SIZE_NOT_PARSED').join('; ') || null;
+          row.issues = row.issues
+            .split(';')
+            .map((part) => part.trim())
+            .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
+            .join('; ') || null;
         }
         inferredSizes++;
       }
@@ -8596,11 +8652,44 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function legacyCompactDbRow(row = {}) {
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const brandName = row.brand_name || payload.brandName || null;
+    const supplierName = normalizeLegacySupplierCandidate(
+      row.legacy_supplier || payload.legacySupplier || payload.legacySupplierHistoric
+    ) || resolveLegacySupplierName(
+      payload.legacySupplierHistoric,
+      payload.legacySupplierRaw,
+      brandName
+    );
+
+    let displaySize = row.size || payload.size || null;
+    let displayIssues = row.issues || null;
+    if (!displaySize || String(displaySize).startsWith('N/A-')) {
+      const inferredSize = legacySizeFromKnownSuffix({
+        rawSize: payload.rawSize || null,
+        colorCode: row.color_code || payload.colorCode || null,
+        originalProductCode: row.legacy_original_code || payload.originalProductCode || null,
+        productCode: row.legacy_product_code || payload.productCode || null,
+        originalTitle: row.original_title || payload.originalTitle || null,
+        title: row.title || null,
+      });
+      if (inferredSize?.size) {
+        displaySize = inferredSize.size;
+        if (displayIssues) {
+          displayIssues = displayIssues
+            .split(';')
+            .map((part) => part.trim())
+            .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
+            .join('; ') || null;
+        }
+      }
+    }
+
     return {
       rowNo: Number(row.row_no || 0),
       sourceRow: row.source_row || null,
       sourceStatus: row.source_status || null,
-      issues: row.issues || null,
+      issues: displayIssues,
       previewAction: row.preview_action || 'new',
       processStatus: row.process_status || 'pending',
       warningCount: Number(row.warning_count || 0),
@@ -8610,18 +8699,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       existingReservedQty: row.existing_reserved_qty === null || row.existing_reserved_qty === undefined ? null : Number(row.existing_reserved_qty),
       title: row.title || null,
       originalTitle: row.original_title || null,
-      brandName: row.brand_name || null,
+      brandName,
       modelCode: row.model_code || null,
       productCode: row.legacy_product_code || null,
       originalProductCode: row.legacy_original_code || null,
       barcode: row.legacy_barcode || null,
-      snCod: row.payload?.snCod || row.payload?.sn_cod || null,
+      snCod: payload.snCod || payload.sn_cod || null,
       colorCode: row.color_code || null,
       colorName: row.color_name || null,
-      size: row.size || null,
+      size: displaySize,
       subcategoryName: row.subcategory_name || null,
       gender: row.gender || null,
-      legacySupplier: row.legacy_supplier || null,
+      legacySupplier: supplierName || null,
       message: row.preview_message || null,
       processError: row.process_error || null,
       variantId: row.variant_id ? String(row.variant_id) : null,
@@ -9445,7 +9534,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       legacyOriginalTitle: row.original_title || null,
       legacyOriginalProductCode: row.legacy_original_code || null,
       legacyProductCode: row.legacy_product_code || null,
-      legacyHistoricSupplier: row.legacy_supplier || null,
+      legacyHistoricSupplier: normalizedSupplierName || row.legacy_supplier || null,
       legacySupplierHistoric: payload.legacySupplierHistoric || null,
       legacySupplierRaw: payload.legacySupplierRaw || null,
       legacyPurchaseTvaStatus: row.tva_status || null,
@@ -9599,7 +9688,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
     };
     suppliersResult.rows.forEach(registerSupplier);
-    const wantedSuppliers = Array.from(new Set(migrationRows.map((row) => text(row.legacy_supplier)).filter(Boolean)));
+    const wantedSuppliers = Array.from(new Set(
+      migrationRows
+        .map((row) => normalizeLegacySupplierCandidate(row.legacy_supplier) || null)
+        .filter(Boolean)
+    ));
     for (const supplierName of wantedSuppliers) {
       const key = normCode(supplierName);
       if (!key || supplierByKey.has(key) || isLegacyOwnCompanySupplierToken(supplierName)) continue;
@@ -9651,7 +9744,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const brandSize = brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
     const genericSize = !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
     const category = context.categoryByKey.get(normCode(row.subcategory_name || '')) || null;
-    const supplier = context.supplierByKey.get(normCode(row.legacy_supplier || '')) || null;
+    const normalizedSupplierName = normalizeLegacySupplierCandidate(row.legacy_supplier) || resolveLegacySupplierName(
+      payload.legacySupplierHistoric,
+      payload.legacySupplierRaw,
+      row.brand_name
+    );
+    const supplier = context.supplierByKey.get(normCode(normalizedSupplierName || '')) || null;
     const subcategoryId = category?.parent_id ? category.id : null;
     const categoryId = category?.parent_id ? category.parent_id : category?.id || null;
     const legacyAttributes = {
@@ -9676,7 +9774,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return {
       brand,
       supplier,
-      legacySupplierName: emptyToNull(row.legacy_supplier),
+      legacySupplierName: emptyToNull(normalizedSupplierName || row.legacy_supplier),
       categoryId,
       subcategoryId,
       modelCodeRaw: text(row.model_code || row.legacy_product_code || row.source_row),
