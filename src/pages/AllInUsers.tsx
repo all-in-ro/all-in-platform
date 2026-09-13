@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import {
   Barcode,
@@ -177,6 +178,163 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+
+type AllInSelectOption = { value: string; label: string };
+
+function AllInSelect({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  placeholder = "Válassz",
+}: {
+  value: string;
+  options: AllInSelectOption[];
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({});
+  const selected = options.find((option) => String(option.value) === String(value)) || null;
+  const searchable = options.length > 9;
+  const needle = query.trim().toLowerCase();
+  const visible = needle ? options.filter((option) => option.label.toLowerCase().includes(needle)) : options;
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    const node = triggerRef.current;
+    if (!node || typeof window === "undefined") return;
+    const rect = node.getBoundingClientRect();
+    const edge = 10;
+    const width = Math.min(Math.max(rect.width, 190), Math.max(190, window.innerWidth - edge * 2));
+    const left = Math.min(Math.max(edge, rect.left), Math.max(edge, window.innerWidth - width - edge));
+    const wanted = Math.min(310, 18 + (searchable ? 46 : 0) + Math.max(1, options.length) * 36);
+    const below = Math.max(0, window.innerHeight - rect.bottom - edge);
+    const above = Math.max(0, rect.top - edge);
+    const up = below < Math.min(170, wanted) && above > below;
+    setStyle({
+      position: "fixed",
+      left,
+      width,
+      top: up ? Math.max(edge, rect.top - 6) : Math.min(window.innerHeight - edge, rect.bottom + 6),
+      maxHeight: Math.max(110, Math.min(wanted, up ? above - 6 : below - 6)),
+      transform: up ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [options.length, searchable]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [close, open, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => {
+          if (open) close();
+          else {
+            setQuery("");
+            updatePosition();
+            setOpen(true);
+          }
+        }}
+        className="flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-white/16 bg-[#293649] px-3 text-left text-[12px] font-normal text-white outline-none transition hover:bg-[#344154] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/15"
+      >
+        <span className={`min-w-0 flex-1 truncate ${selected ? "text-white" : "text-white/42"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/52 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/30 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,.72)]"
+          style={style}
+        >
+          {searchable ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-1.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-8 w-full rounded-xl border border-white/14 bg-[#202b3b] pl-8 pr-8 text-[11px] text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/55"
+                  placeholder="Keresés..."
+                />
+                {query ? <button type="button" onClick={() => setQuery("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-white/46"><X className="h-3 w-3" /></button> : null}
+              </div>
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            <div className="grid gap-1">
+              {visible.map((option) => {
+                const active = String(option.value) === String(value);
+                return (
+                  <button
+                    key={option.value || "__empty"}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => {
+                      onChange(option.value);
+                      close();
+                    }}
+                    className={`flex min-h-8 w-full items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${active ? "border-[#7bd7d4]/48 bg-[#2a8d8b] text-white" : "border-transparent bg-[#354153] text-white/80 hover:bg-[#415064]"}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {active ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#d7fffd]" /> : null}
+                  </button>
+                );
+              })}
+              {!visible.length ? <div className="px-3 py-5 text-center text-[11px] text-white/42">Nincs találat.</div> : null}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 export default function AllInUsers({ api, actor }: { api?: string; actor?: string }) {
   const apiBase = useMemo(() => {
     const fromProp = typeof api === "string" && api.trim() ? api.trim() : "";
@@ -215,10 +373,6 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [listErr, setListErr] = useState("");
   const [status, setStatus] = useState<"active" | "inactive" | "all">("active");
 
-  const [openShop, setOpenShop] = useState(false);
-  const [openStatus, setOpenStatus] = useState(false);
-  const shopRef = useRef<HTMLDivElement | null>(null);
-  const statusRef = useRef<HTMLDivElement | null>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("");
@@ -238,33 +392,9 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
   const shopName = (id: string) => shops.find((shop) => shop.id === id)?.name || id;
   const shopLabel = shopName(shopId);
-  const statusLabel = status === "active" ? "Aktív" : status === "inactive" ? "Inaktív" : "Összes";
 
   const activeCount = useMemo(() => items.filter((item) => !item.revokedAt).length, [items]);
   const inactiveCount = useMemo(() => items.filter((item) => Boolean(item.revokedAt)).length, [items]);
-
-  useEffect(() => {
-    const onMouseDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (openShop && shopRef.current && !shopRef.current.contains(target)) setOpenShop(false);
-      if (openStatus && statusRef.current && !statusRef.current.contains(target)) setOpenStatus(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setOpenShop(false);
-      setOpenStatus(false);
-      setConfirmOpen(false);
-      setPlaceOpen(false);
-      setCardItem(null);
-    };
-    window.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [openShop, openStatus]);
 
   useEffect(() => {
     if (!pageNotice) return;
@@ -282,7 +412,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       setShops(list);
       if (list.length && !list.some((shop) => shop.id === shopId)) setShopId(list[0].id);
     } catch (error: any) {
-      setShopsErr(String(error?.message || error || "A helységek nem tölthetők be."));
+      setShopsErr(String(error?.message || error || "A helyszínek nem tölthetők be."));
     }
   };
 
@@ -319,7 +449,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     setErr("");
     setOutText("");
     if (!shopId) {
-      setErr("Válassz helységet a kód generálásához.");
+      setErr("Válassz helyszínt a kód generálásához.");
       return;
     }
 
@@ -459,10 +589,10 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
         });
         const body = await response.json().catch(() => null);
         if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
-        setPageNotice("A helység törölve.");
+        setPageNotice("A helyszín törölve.");
         await fetchShops();
       } catch (error: any) {
-        setPlaceErr(String(error?.message || error || "A helység törlése nem sikerült."));
+        setPlaceErr(String(error?.message || error || "A helyszín törlése nem sikerült."));
       } finally {
         setPlaceBusy(false);
       }
@@ -482,7 +612,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     const normalizedId = (placeId.trim() || slugifyId(normalizedName)).trim();
 
     if (!normalizedName) {
-      setPlaceErr("Adj meg egy helységnevet.");
+      setPlaceErr("Adj meg egy helyszínnevet.");
       return;
     }
     if (!normalizedId) {
@@ -502,11 +632,11 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
 
       setPlaceOpen(false);
-      setPageNotice("Az új helység létrehozva.");
+      setPageNotice("Az új helyszín létrehozva.");
       await fetchShops();
       setShopId(normalizedId);
     } catch (error: any) {
-      setPlaceErr(String(error?.message || error || "A helység létrehozása nem sikerült."));
+      setPlaceErr(String(error?.message || error || "A helyszín létrehozása nem sikerült."));
     } finally {
       setPlaceBusy(false);
     }
@@ -671,83 +801,67 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   };
 
   return (
-    <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white sm:px-4 sm:py-5">
-      <div className="mx-auto max-w-[1500px] space-y-4">
-        <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex min-w-[250px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] px-3 pb-8 pt-0 text-white font-normal sm:px-4 sm:py-5">
+      <div className="mx-auto w-full min-w-0 max-w-[1500px] space-y-3 sm:space-y-4">
+        <header className="sticky top-0 z-40 -mx-3 border-b border-white/12 bg-[#2d394b]/96 px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:top-2 sm:mx-0 sm:rounded-2xl sm:border sm:border-white/20 sm:px-4 sm:py-3">
+          <div className="sm:hidden">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
                 <UsersRound className="h-5 w-5" />
               </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/58">AllInFashion • hozzáférések</div>
+                <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Felhasználók</h1>
+                <div className="mt-0.5 truncate text-[10px] text-white/44">{shopLabel || "Helyszín"} • {activeCount} aktív</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button type="button" onClick={openPlaceModal} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,.22)] active:scale-[0.97]" aria-label="Helyszínek"><MapPin className="h-4 w-4" /></button>
+                <button type="button" disabled={listBusy} onClick={() => { void fetchShops(); void fetchList(); }} className={iconBtn} aria-label="Frissítés"><RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} /></button>
+                <button type="button" onClick={() => (window.location.hash = "#allin")} className={iconBtn} aria-label="Kezdőlap"><Home className="h-4 w-4" /></button>
+              </div>
+            </div>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-3 sm:flex">
+            <div className="flex min-w-[250px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]"><UsersRound className="h-5 w-5" /></span>
               <div>
                 <div className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</div>
                 <h1 className="mt-0.5 text-xl leading-tight">Felhasználók</h1>
-                <div className="mt-0.5 text-[11px] text-white/48">Belépési kódok, hozzáférések és helységek kezelése</div>
+                <div className="mt-0.5 text-[11px] text-white/48">Belépési kódok és hozzáférések kezelése</div>
               </div>
             </div>
-
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-              <Button className={btnSoft} type="button" onClick={openPlaceModal}>
-                <MapPin className="h-4 w-4" />
-                <span className="hidden sm:inline">Helységek kezelése</span>
-                <span className="sm:hidden">Helységek</span>
-              </Button>
-              <Button
-                className={btnSoft}
-                type="button"
-                disabled={listBusy}
-                onClick={() => {
-                  void fetchShops();
-                  void fetchList();
-                }}
-              >
-                <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
-                <span className="hidden sm:inline">Frissítés</span>
-              </Button>
-              <Button className={btn} type="button" onClick={() => (window.location.hash = "#allin")}>
-                <Home className="h-4 w-4" />
-                <span className="hidden sm:inline">Kezdőlap</span>
-              </Button>
+              <Button className={btnSoft} type="button" onClick={openPlaceModal}><MapPin className="h-4 w-4" /> Helyszínek</Button>
+              <Button className={btnSoft} type="button" disabled={listBusy} onClick={() => { void fetchShops(); void fetchList(); }}><RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} /> Frissítés</Button>
+              <Button className={btn} type="button" onClick={() => (window.location.hash = "#allin")}><Home className="h-4 w-4" /> Kezdőlap</Button>
             </div>
           </div>
         </header>
 
         {pageNotice ? (
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/72 px-4 py-3 text-sm text-[#e5fffd]">
-            <span>
-              <CheckCircle2 className="mr-2 inline h-4 w-4" />
-              {pageNotice}
-            </span>
-            <button type="button" className="text-white/55 hover:text-white" onClick={() => setPageNotice("")}>
-              <X className="h-4 w-4" />
-            </button>
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/72 px-3 py-2.5 text-[12px] text-[#e5fffd] sm:px-4 sm:py-3 sm:text-sm">
+            <span className="min-w-0"><CheckCircle2 className="mr-2 inline h-4 w-4" />{pageNotice}</span>
+            <button type="button" className="shrink-0 text-white/55 hover:text-white" onClick={() => setPageNotice("")}><X className="h-4 w-4" /></button>
           </div>
         ) : null}
 
-        <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/13 p-3">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.11em] text-[#d7fffd]/62">
-              <Store className="h-4 w-4" /> Kiválasztott helység
-            </div>
-            <div className="mt-2 truncate text-lg text-white">{shopLabel || "-"}</div>
+        <section className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+          <div className="min-w-0 rounded-[20px] border border-[#7bd7d4]/24 bg-[#2a8d8b]/13 p-3">
+            <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.1em] text-[#d7fffd]/58 sm:text-[10px]"><Store className="h-3.5 w-3.5" /> Helyszín</div>
+            <div className="mt-1.5 truncate text-[16px] text-white sm:text-lg">{shopLabel || "-"}</div>
           </div>
-          <div className="rounded-2xl border border-emerald-200/20 bg-emerald-500/9 p-3">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.11em] text-emerald-100/62">
-              <ShieldCheck className="h-4 w-4" /> Aktív a listában
-            </div>
-            <div className="mt-2 text-lg text-white">{activeCount}</div>
+          <div className="rounded-[20px] border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 p-3">
+            <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.1em] text-[#d7fffd]/58 sm:text-[10px]"><ShieldCheck className="h-3.5 w-3.5" /> Aktív</div>
+            <div className="mt-1.5 text-[20px] leading-none text-white">{activeCount}</div>
           </div>
-          <div className="rounded-2xl border border-amber-200/20 bg-amber-500/9 p-3">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.11em] text-amber-100/62">
-              <Power className="h-4 w-4" /> Inaktív a listában
-            </div>
-            <div className="mt-2 text-lg text-white">{inactiveCount}</div>
+          <div className="rounded-[20px] border border-amber-200/18 bg-amber-500/8 p-3">
+            <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.1em] text-amber-50/58 sm:text-[10px]"><Power className="h-3.5 w-3.5" /> Inaktív</div>
+            <div className="mt-1.5 text-[20px] leading-none text-white">{inactiveCount}</div>
           </div>
-          <div className="rounded-2xl border border-white/12 bg-white/[0.055] p-3">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.11em] text-white/44">
-              <UsersRound className="h-4 w-4" /> Belépve
-            </div>
-            <div className="mt-2 truncate text-lg text-white">{actor || "ADMIN"}</div>
+          <div className="min-w-0 rounded-[20px] border border-white/12 bg-[#344154] p-3">
+            <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.1em] text-white/42 sm:text-[10px]"><UsersRound className="h-3.5 w-3.5" /> Belépve</div>
+            <div className="mt-1.5 truncate text-[16px] text-white sm:text-lg">{actor || "ADMIN"}</div>
           </div>
         </section>
 
@@ -770,99 +884,44 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             </span>
           </div>
 
-          <div className="space-y-4 p-4">
-            <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.9fr)_minmax(180px,0.65fr)_minmax(240px,1fr)_auto] lg:items-end">
-              <div ref={shopRef} className="relative grid gap-1.5">
-                <div className={label}>Helység</div>
-                <button
-                  type="button"
-                  className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-left text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-                  onClick={() => {
-                    setOpenShop((current) => !current);
-                    setOpenStatus(false);
-                  }}
-                  aria-haspopup="listbox"
-                  aria-expanded={openShop}
-                >
-                  <span className="truncate">{shopLabel}</span>
-                  <ChevronDown className={`h-4 w-4 shrink-0 text-white/55 transition ${openShop ? "rotate-180" : ""}`} />
-                </button>
-                {openShop ? (
-                  <div className="absolute left-0 top-full z-[220] mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                    {shops.map((shop) => (
-                      <button
-                        key={shop.id}
-                        type="button"
-                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${shopId === shop.id ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                        onClick={() => {
-                          setShopId(shop.id);
-                          setOpenShop(false);
-                        }}
-                      >
-                        {shop.name}
-                      </button>
-                    ))}
-                    {!shops.length ? <div className="px-4 py-3 text-sm text-white/48">Nincs helység.</div> : null}
-                  </div>
-                ) : null}
-              </div>
+          <div className="space-y-3 p-3 sm:p-4">
+            <div className="grid min-w-0 grid-cols-2 gap-2.5 lg:grid-cols-[minmax(220px,0.9fr)_minmax(180px,0.65fr)_minmax(240px,1fr)_auto] lg:items-end">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Helyszín
+                <AllInSelect
+                  value={shopId}
+                  options={shops.map((shop) => ({ value: shop.id, label: shop.name }))}
+                  onChange={setShopId}
+                  ariaLabel="Helyszín"
+                  placeholder="Válassz helyszínt"
+                />
+              </label>
 
-              <div ref={statusRef} className="relative grid gap-1.5">
-                <div className={label}>Lista állapota</div>
-                <button
-                  type="button"
-                  className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-left text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-                  onClick={() => {
-                    setOpenStatus((current) => !current);
-                    setOpenShop(false);
-                  }}
-                  aria-haspopup="listbox"
-                  aria-expanded={openStatus}
-                >
-                  <span>{statusLabel}</span>
-                  <ChevronDown className={`h-4 w-4 text-white/55 transition ${openStatus ? "rotate-180" : ""}`} />
-                </button>
-                {openStatus ? (
-                  <div className="absolute left-0 top-full z-[220] mt-2 w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
-                    {([
-                      ["active", "Aktív"],
-                      ["inactive", "Inaktív"],
-                      ["all", "Összes"],
-                    ] as const).map(([value, text]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${status === value ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                        onClick={() => {
-                          setStatus(value);
-                          setOpenStatus(false);
-                        }}
-                      >
-                        {text}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Lista
+                <AllInSelect
+                  value={status}
+                  options={[
+                    { value: "active", label: "Aktív" },
+                    { value: "inactive", label: "Inaktív" },
+                    { value: "all", label: "Összes" },
+                  ]}
+                  onChange={(value) => setStatus(value as "active" | "inactive" | "all")}
+                  ariaLabel="Lista állapota"
+                />
+              </label>
 
-              <div className="grid gap-1.5">
-                <div className={label}>Dolgozó neve</div>
+              <label className="col-span-2 grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 lg:col-span-1">Dolgozó neve
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   className={input}
                   placeholder="Pl. Kovács Anna"
                 />
-              </div>
+              </label>
 
-              <Button type="button" className={`${btnPrimary} w-full lg:w-auto`} disabled={busy || !shopId} onClick={createCode}>
+              <Button type="button" className={`${btnPrimary} col-span-2 w-full lg:col-span-1 lg:w-auto`} disabled={busy || !shopId} onClick={createCode}>
                 {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                 {busy ? "Generálás…" : "Kód generálása"}
               </Button>
-            </div>
-
-            <div className="rounded-xl border border-[#7bd7d4]/20 bg-[#174c55]/42 px-3 py-2 text-xs leading-5 text-[#e5fffd]/76">
-              A kód a kiválasztott helységhez tartozik. Az inaktivált kód nem használható belépésre, de később újra aktiválható.
             </div>
 
             {err ? (
@@ -943,10 +1002,10 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           {item.code ? <CopyButton value={item.code} copyKey={item.id} compact /> : null}
                         </div>
 
-                        <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
+                        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,.72fr)_38px] gap-2">
                           <button
                             type="button"
-                            className={`inline-flex h-9 items-center justify-center gap-2 rounded-xl border px-3 text-xs transition disabled:opacity-45 ${inactive ? "border-[#7bd7d4]/35 bg-[#2a8d8b] text-white hover:bg-[#319c99]" : "border-white/16 bg-[#354153] text-white hover:bg-[#3e4d63]"}`}
+                            className={`inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 text-[10px] transition disabled:opacity-45 ${inactive ? "border-[#7bd7d4]/35 bg-[#2a8d8b] text-white hover:bg-[#319c99]" : "border-white/16 bg-[#354153] text-white hover:bg-[#3e4d63]"}`}
                             disabled={rowBusyId === item.id}
                             onClick={() => openConfirmToggle(item.id, inactive)}
                           >
@@ -955,7 +1014,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           </button>
                           <button
                             type="button"
-                            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:opacity-45"
+                            className="inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2 text-[10px] text-white transition hover:bg-[#319c99] disabled:opacity-45"
                             disabled={!item.code || rowBusyId === item.id}
                             onClick={() => setCardItem(item)}
                             title="PVC belépőkártya"
@@ -965,7 +1024,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           </button>
                           <button
                             type="button"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-600 text-white transition hover:bg-rose-500 disabled:opacity-45"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522] disabled:opacity-45"
                             disabled={rowBusyId === item.id}
                             onClick={() => openConfirmDelete(item.id)}
                             title="Végleges törlés"
@@ -982,7 +1041,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="hidden overflow-hidden rounded-2xl border border-white/12 md:block">
                   <div className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_330px] items-center bg-[#303a4c] px-3 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/48">
                     <div>Felhasználó</div>
-                    <div>Helység</div>
+                    <div>Helyszín</div>
                     <div>Belépési kód</div>
                     <div>Létrehozva</div>
                     <div className="text-right">Művelet</div>
@@ -1035,7 +1094,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           </button>
                           <button
                             type="button"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-600 text-white transition hover:bg-rose-500 disabled:opacity-45"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522] disabled:opacity-45"
                             disabled={rowBusyId === item.id}
                             onClick={() => openConfirmDelete(item.id)}
                             title="Végleges törlés"
@@ -1061,7 +1120,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             if (event.currentTarget === event.target) setCardItem(null);
           }}
         >
-          <section className="w-full max-w-[720px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#4b5362] text-white shadow-[0_34px_110px_rgba(0,0,0,0.55)]">
+          <section className="w-full max-w-[370px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303c4f] text-white shadow-[0_34px_110px_rgba(0,0,0,0.55)] sm:max-w-[720px]">
             <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
@@ -1077,22 +1136,22 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               </button>
             </header>
 
-            <div className="grid place-items-center p-5 sm:p-7">
-              <div className="relative aspect-[85.6/54] w-full max-w-[560px] overflow-hidden rounded-[22px] border-2 border-[#2a8d8b] bg-gradient-to-br from-[#f7fbfb] to-white p-6 text-[#182233] shadow-[0_24px_60px_rgba(15,23,42,0.3)]">
+            <div className="grid place-items-center p-3 sm:p-7">
+              <div className="relative aspect-[85.6/54] w-full max-w-[560px] overflow-hidden rounded-[20px] border-2 border-[#2a8d8b] bg-gradient-to-br from-[#f7fbfb] to-white p-3.5 text-[#182233] shadow-[0_24px_60px_rgba(15,23,42,0.3)] sm:rounded-[22px] sm:p-6">
                 <span className="absolute inset-y-0 left-0 w-3 bg-[#2a8d8b]" />
                 <div className="flex items-start justify-between gap-3">
-                  <div className="text-2xl font-normal tracking-[0.14em]">ALL IN</div>
-                  <span className="rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/8 px-3 py-1 text-[10px] tracking-[0.12em] text-[#206f6d]">
+                  <div className="text-[16px] font-normal tracking-[0.12em] sm:text-2xl sm:tracking-[0.14em]">ALL IN</div>
+                  <span className="rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/8 px-2 py-1 text-[7px] tracking-[0.09em] text-[#206f6d] sm:px-3 sm:text-[10px] sm:tracking-[0.12em]">
                     BELÉPŐKÁRTYA
                   </span>
                 </div>
-                <div className="mt-4 truncate text-xl font-normal">{cardItem.name || "Név nélküli felhasználó"}</div>
-                <div className="mt-1 text-sm text-slate-500">{shopName(cardItem.shopId)}</div>
+                <div className="mt-2.5 truncate text-[14px] font-normal sm:mt-4 sm:text-xl">{cardItem.name || "Név nélküli felhasználó"}</div>
+                <div className="mt-0.5 truncate text-[10px] text-slate-500 sm:mt-1 sm:text-sm">{shopName(cardItem.shopId)}</div>
                 <div
-                  className="mx-auto mt-4 h-[80px] w-[88%] overflow-hidden bg-white [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
+                  className="mx-auto mt-2.5 h-[52px] w-[88%] overflow-hidden bg-white sm:mt-4 sm:h-[80px] [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
                   dangerouslySetInnerHTML={{ __html: code128Svg(accessCardPayload(cardItem), 64) }}
                 />
-                <div className="mt-2 text-center font-mono text-sm tracking-[0.16em] text-slate-700">
+                <div className="mt-1 text-center font-mono text-[9px] tracking-[0.1em] text-slate-700 sm:mt-2 sm:text-sm sm:tracking-[0.16em]">
                   {cardItem.code}
                 </div>
               </div>
@@ -1126,7 +1185,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             if (event.currentTarget === event.target && !rowBusyId) setConfirmOpen(false);
           }}
         >
-          <div className="w-full max-w-md overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
+          <div className="w-full max-w-[340px] overflow-hidden rounded-[24px] border border-white/18 bg-[#303c4f] shadow-2xl sm:max-w-md">
             <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#303a4c] px-4 py-3.5">
               <div>
                 <div className="text-[10px] uppercase tracking-[0.16em] text-white/42">Megerősítés</div>
@@ -1145,7 +1204,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 type="button"
                 className={
                   confirmAction?.kind === "delete" || confirmAction?.kind === "delete-shop"
-                    ? "inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 text-xs text-white transition hover:bg-rose-500"
+                    ? "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/75 bg-[#E21C2A] px-4 text-xs text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522]"
                     : btnPrimary
                 }
                 onClick={() => void runConfirm()}
@@ -1169,7 +1228,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             if (event.currentTarget === event.target && !placeBusy) setPlaceOpen(false);
           }}
         >
-          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
+          <div className="max-h-[88dvh] w-full max-w-[370px] overflow-y-auto rounded-[24px] border border-white/18 bg-[#303c4f] shadow-2xl sm:max-h-[92vh] sm:max-w-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#236d6b] via-[#2a8d8b] to-[#426775] px-4 py-3.5">
               <div className="flex items-start gap-3">
                 <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/[0.14] text-white">
@@ -1177,8 +1236,8 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </span>
                 <div>
                   <div className="text-[10px] uppercase tracking-[0.18em] text-white/65">Admin settings</div>
-                  <div className="mt-0.5 text-xl text-white">Helységek kezelése</div>
-                  <div className="mt-1 text-xs text-white/62">Új helység létrehozása vagy meglévő helység törlése.</div>
+                  <div className="mt-0.5 text-xl text-white">Helyszínek kezelése</div>
+                  
                 </div>
               </div>
               <button type="button" className={iconBtn} disabled={placeBusy} onClick={() => setPlaceOpen(false)} aria-label="Bezárás">
@@ -1189,7 +1248,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             <div className="space-y-4 p-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
-                  <div className={label}>Helység neve</div>
+                  <div className={label}>Helyszín neve</div>
                   <input
                     className={input}
                     value={placeName}
@@ -1221,7 +1280,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
               <div className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04]">
                 <div className="flex items-center justify-between border-b border-white/10 bg-[#303a4c] px-3 py-2.5">
-                  <div className="text-sm text-white">Meglévő helységek</div>
+                  <div className="text-sm text-white">Meglévő helyszínek</div>
                   <span className="rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/52">{shops.length}</span>
                 </div>
                 <div className="max-h-64 overflow-y-auto p-2">
@@ -1233,21 +1292,21 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                       </div>
                       <button
                         type="button"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-600 text-white transition hover:bg-rose-500"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522]"
                         onClick={() => {
-                          setConfirmTitle("Helység végleges törlése");
-                          setConfirmMsg(`Biztosan véglegesen törlöd ezt a helységet: ${shop.name}?`);
+                          setConfirmTitle("Helyszín végleges törlése");
+                          setConfirmMsg(`Biztosan véglegesen törlöd ezt a helyszínt: ${shop.name}?`);
                           setConfirmAction({ kind: "delete-shop", id: shop.id });
                           setConfirmOpen(true);
                         }}
-                        title="Helység törlése"
-                        aria-label="Helység törlése"
+                        title="Helyszín törlése"
+                        aria-label="Helyszín törlése"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   ))}
-                  {!shops.length ? <div className="px-3 py-6 text-center text-sm text-white/48">Nincs létrehozott helység.</div> : null}
+                  {!shops.length ? <div className="px-3 py-6 text-center text-sm text-white/48">Nincs létrehozott helyszín.</div> : null}
                 </div>
               </div>
             </div>
@@ -1258,7 +1317,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               </button>
               <button type="button" className={btnPrimary} disabled={placeBusy} onClick={() => void createPlace()}>
                 {placeBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                {placeBusy ? "Mentés…" : "Helység létrehozása"}
+                {placeBusy ? "Mentés…" : "Helyszín létrehozása"}
               </button>
             </div>
           </div>
