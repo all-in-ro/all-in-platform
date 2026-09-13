@@ -915,6 +915,10 @@ export type AifLegacyImportSummary = {
   normalizedNegativeRows: number;
   missingBarcodeRows: number;
   missingBrandRows: number;
+  missingSupplierRows?: number;
+  missingSubcategoryRows?: number;
+  missingColorRows?: number;
+  missingGenderRows?: number;
   missingSizeRows: number;
   totalQty: number;
   purchaseValueRon: number;
@@ -947,9 +951,13 @@ export type AifLegacyImportCompactRow = {
   productCode?: string | null;
   originalProductCode?: string | null;
   barcode?: string | null;
+  snCod?: string | null;
   colorCode?: string | null;
   colorName?: string | null;
   size?: string | null;
+  subcategoryName?: string | null;
+  gender?: string | null;
+  legacySupplier?: string | null;
   message?: string | null;
   processError?: string | null;
   variantId?: string | null;
@@ -964,6 +972,7 @@ export type AifLegacyImportItem = {
   locationName?: string | null;
   sourceFileName?: string | null;
   payloadHash?: string | null;
+  importMode?: "migration" | "correction" | string;
   status: "prepared" | "committing" | "committed" | "failed" | "cancelled" | string;
   rowCount: number;
   processedRows: number;
@@ -990,6 +999,7 @@ export function apiAifStartLegacyImport(input: {
   targetLocationId: string;
   note?: string | null;
   forceNew?: boolean;
+  importMode?: "migration" | "correction";
   rows: Array<Record<string, unknown>>;
 }) {
   return fetchAifJSON<AifLegacyImportDetailResponse>("/legacy-imports/start", {
@@ -1007,6 +1017,7 @@ export function apiAifListLegacyImports(limit = 20) {
       sourceSystem: string;
       sourceDate?: string | null;
       sourceFileName?: string | null;
+      importMode?: "migration" | "correction" | string;
       targetLocationId: string;
       locationCode?: string | null;
       locationName?: string | null;
