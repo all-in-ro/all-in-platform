@@ -5906,27 +5906,63 @@ function AllInIncomingReception(_props: Props) {
             }
           />
           {receptionListOpen && (
-            <div className="mt-3 grid gap-2">
-              {receptions.map((r) => (
-                <div key={r.id} className={`rounded-xl border px-3 py-2 ${String(r.id) === String(selectedReceptionId) ? "border-emerald-200/35 bg-emerald-400/12" : "border-white/12 bg-[#354153]"}`}>
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
-                      <p className="mt-1 text-xs text-white/62">{r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}</p>
+            <div className="mt-3 overflow-hidden rounded-[18px] border border-white/12 bg-[#2d394b]/70 shadow-[0_12px_28px_rgba(15,23,42,0.12)]">
+              <div className="hidden lg:grid lg:grid-cols-[minmax(280px,1.7fr)_100px_150px_145px_186px] lg:items-center lg:gap-3 border-b border-white/10 bg-[#293648] px-3 py-2 text-[9px] uppercase tracking-[0.09em] text-white/44">
+                <span>Receptió / beszállító</span>
+                <span className="text-center">Terméksor</span>
+                <span className="text-right">Érték</span>
+                <span className="text-center">Állapot</span>
+                <span className="text-right">Műveletek</span>
+              </div>
+
+              <div className="divide-y divide-white/8">
+                {receptions.map((r) => {
+                  const isCommitted = String(r.status || "").toLowerCase() === "committed";
+                  return (
+                    <div
+                      key={r.id}
+                      className={`grid grid-cols-3 gap-2 px-3 py-2.5 transition-colors hover:bg-white/[0.035] lg:grid-cols-[minmax(280px,1.7fr)_100px_150px_145px_186px] lg:items-center lg:gap-3 ${String(r.id) === String(selectedReceptionId) ? "bg-[#208d8b]/10" : "bg-[#354153]/72"}`}
+                    >
+                      <div className="col-span-3 min-w-0 lg:col-span-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${isCommitted ? "bg-emerald-300" : "bg-[#7bd7d4]"}`} />
+                          <p className="min-w-0 truncate text-[13px] text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
+                        </div>
+                        <p className="mt-1 truncate pl-4 text-[11px] text-white/56">
+                          {r.supplier_name || "-"} <span className="text-white/24">•</span> {r.location_name || "-"} <span className="text-white/24">•</span> {r.currency_code || "-"}
+                        </p>
+                      </div>
+
+                      <div className="min-w-0 rounded-lg border border-white/8 bg-[#2e3a4c]/72 px-2 py-1.5 text-center lg:border-0 lg:bg-transparent lg:px-0 lg:py-0">
+                        <p className="text-[8px] uppercase tracking-[0.07em] text-white/38 lg:hidden">Terméksor</p>
+                        <p className="mt-0.5 tabular-nums text-[12px] text-white lg:mt-0">{r.line_count || 0}</p>
+                      </div>
+
+                      <div className="min-w-0 rounded-lg border border-white/8 bg-[#2e3a4c]/72 px-2 py-1.5 text-right lg:border-0 lg:bg-transparent lg:px-0 lg:py-0">
+                        <p className="text-[8px] uppercase tracking-[0.07em] text-white/38 lg:hidden">Érték</p>
+                        <p className="mt-0.5 truncate tabular-nums text-[12px] text-white lg:mt-0">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p>
+                      </div>
+
+                      <div className="min-w-0 rounded-lg border border-white/8 bg-[#2e3a4c]/72 px-2 py-1.5 text-center lg:border-0 lg:bg-transparent lg:px-0 lg:py-0">
+                        <p className="text-[8px] uppercase tracking-[0.07em] text-white/38 lg:hidden">Állapot</p>
+                        <span className={`mt-0.5 inline-flex h-7 max-w-full items-center justify-center truncate rounded-lg border px-2.5 text-[10px] lg:mt-0 ${isCommitted ? "border-emerald-200/24 bg-emerald-400/10 text-emerald-50" : "border-[#7bd7d4]/22 bg-[#208d8b]/10 text-[#d8fffd]"}`}>
+                          {receptionStatusLabel(r.status)}
+                        </span>
+                      </div>
+
+                      <div className="col-span-3 grid grid-cols-2 gap-2 lg:col-span-1 lg:flex lg:justify-end">
+                        <button className={`${tinyBtn} w-full lg:w-[88px]`} onClick={() => loadReceptionIntoWorkspace(r.id)} disabled={busy} type="button">
+                          <Edit3 size={13} /> Betöltés
+                        </button>
+                        <button className={`${tinyBtn} w-full lg:w-[90px]`} onClick={() => (window.location.hash = "#allinreceptions")} type="button">
+                          <FileText size={13} /> Részletek
+                        </button>
+                      </div>
                     </div>
-                    <div className="grid gap-2 text-xs md:grid-cols-3 md:min-w-[360px]">
-                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Terméksor</span><p className="text-white">{r.line_count || 0}</p></div>
-                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Érték</span><p className="text-white">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p></div>
-                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Állapot</span><p className="text-white">{receptionStatusLabel(r.status)}</p></div>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <button className={tinyBtn} onClick={() => loadReceptionIntoWorkspace(r.id)} disabled={busy} type="button"><Edit3 size={13} /> Betöltés</button>
-                      <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button"><Download size={13} /> Részletek</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió.</p>}
+                  );
+                })}
+                {!receptions.length && <p className="px-3 py-8 text-center text-sm text-white/55">Még nincs receptió.</p>}
+              </div>
             </div>
           )}
         </section>
