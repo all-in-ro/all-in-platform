@@ -47,7 +47,7 @@ const page = "min-h-screen overflow-x-hidden bg-gradient-to-b from-[#5a6575] via
 const shell = "mx-auto w-full min-w-0 max-w-[760px] space-y-3 px-3";
 const panel = "overflow-hidden rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,.16)]";
 const input = "h-10 w-full min-w-0 rounded-xl border border-white/16 bg-[#293649] px-3 text-[12px] text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15";
-const label = "grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46";
+const label = "grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-[#dbe7f3]";
 const iconBtn = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white transition active:scale-[0.97] disabled:opacity-45";
 const iconBtnActive = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,.22)] transition active:scale-[0.97]";
 const softBtn = "inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-3 text-[11px] text-white transition active:scale-[0.98] disabled:opacity-45";
@@ -68,6 +68,13 @@ function formatDate(value?: string | null) {
   const date = new Date(`${key}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return key;
   return new Intl.DateTimeFormat("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "UTC" }).format(date);
+}
+
+function formatDateCompact(value?: string | null) {
+  const key = justDate(value);
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return key || "-";
+  const [year, month, day] = key.split("-");
+  return `${year}.${month}.${day}`;
 }
 
 function money(value?: number | null, currency = "RON") {
@@ -226,7 +233,7 @@ function AllInDatePicker({ value, onChange, ariaLabel }: { value: string; onChan
 
   return (
     <>
-      <button type="button" aria-label={ariaLabel} onClick={() => setOpen(true)} className="flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-white/16 bg-[#293649] px-3 text-left text-[12px] text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/15"><span className="flex min-w-0 flex-1 items-center gap-2"><CalendarDays className="h-3.5 w-3.5 shrink-0 text-[#8ee6e2]" /><span className="truncate">{formatDate(value)}</span></span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-white/50" /></button>
+      <button type="button" aria-label={ariaLabel} onClick={() => setOpen(true)} className="flex h-10 w-full min-w-0 items-center justify-between gap-1.5 overflow-hidden rounded-xl border border-white/16 bg-[#293649] px-2.5 text-left text-[11px] text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/15"><span className="flex min-w-0 flex-1 items-center gap-1.5 text-white"><CalendarDays className="h-3.5 w-3.5 shrink-0 text-[#8ee6e2]" /><span className="min-w-0 truncate text-white">{formatDateCompact(value)}</span></span><ChevronDown className="h-3 w-3 shrink-0 text-white/60" /></button>
       {open && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[2147483300] grid place-items-center bg-slate-950/72 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setOpen(false); }}>
           <div className="w-full max-w-[310px] overflow-hidden rounded-[24px] border border-[#8ce7e2]/42 bg-[#202c3d] p-3 text-white shadow-[0_32px_90px_rgba(2,6,23,.78)]" onMouseDown={(event) => event.stopPropagation()}>
@@ -369,12 +376,12 @@ export default function AllInCarExpensesMobile() {
 
       {filtersOpen && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/72 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setFiltersOpen(false); }}>
-          <section className="flex max-h-[84dvh] w-full max-w-[350px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] shadow-[0_32px_100px_rgba(0,0,0,.58)]">
-            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-3.5 py-3"><div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><SlidersHorizontal className="h-4 w-4" /></span><div><div className="text-[8px] uppercase tracking-[0.14em] text-white/42">Részletes szűrés</div><h2 className="mt-0.5 text-[16px]">Autó kiadások</h2></div></div><button type="button" onClick={() => setFiltersOpen(false)} className={iconBtn}><X className="h-4 w-4" /></button></header>
+          <section className="flex max-h-[84dvh] w-[calc(100vw-28px)] max-w-[344px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,.58)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-3.5 py-3"><div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><SlidersHorizontal className="h-4 w-4" /></span><div><div className="text-[8px] uppercase tracking-[0.14em] text-[#dbe7f3]/70">Részletes szűrés</div><h2 className="mt-0.5 text-[16px] text-white">Autó kiadások</h2></div></div><button type="button" onClick={() => setFiltersOpen(false)} className={iconBtn}><X className="h-4 w-4" /></button></header>
             <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
               <label className={label}>Autó<AllInSelect value={String(carId)} onChange={(value) => setCarId(value ? Number(value) : "")} ariaLabel="Autó" options={[{ value: "", label: "Minden autó" }, ...cars.map((car) => ({ value: String(car.id), label: `${car.plate || "-"} • ${car.make_model || "-"}` }))]} /></label>
               <label className={label}>Kategória<AllInSelect value={category} onChange={setCategory} ariaLabel="Kategória" options={[{ value: "", label: "Minden kategória" }, ...CATEGORIES.map((name) => ({ value: name, label: name }))]} /></label>
-              <div className="grid grid-cols-2 gap-2"><label className={label}>Dátumtól<AllInDatePicker value={dateFrom} onChange={setDateFrom} ariaLabel="Kezdő dátum" /></label><label className={label}>Dátumig<AllInDatePicker value={dateTo} onChange={setDateTo} ariaLabel="Záró dátum" /></label></div>
+              <div className="grid min-w-0 grid-cols-2 gap-2"><label className={`${label} min-w-0`}>Dátumtól<AllInDatePicker value={dateFrom} onChange={setDateFrom} ariaLabel="Kezdő dátum" /></label><label className={`${label} min-w-0`}>Dátumig<AllInDatePicker value={dateTo} onChange={setDateTo} ariaLabel="Záró dátum" /></label></div>
             </div>
             <footer className="grid grid-cols-[.9fr_1.3fr] gap-2 border-t border-white/10 bg-[#293548] p-3"><button type="button" className={softBtn} onClick={() => { setCarId(""); setCategory(""); setQ(""); setDateFrom(`${today.slice(0, 7)}-01`); setDateTo(today); }}>Alaphelyzet</button><button type="button" className={primaryBtn} onClick={() => { void reload(); setFiltersOpen(false); }}><Search className="h-3.5 w-3.5" /> Alkalmazás</button></footer>
           </section>
@@ -384,12 +391,12 @@ export default function AllInCarExpensesMobile() {
 
       {formOpen && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[920] grid place-items-center bg-slate-950/76 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) setFormOpen(false); }}>
-          <section className="flex max-h-[90dvh] w-full max-w-[370px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] shadow-[0_32px_100px_rgba(0,0,0,.62)]">
-            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3"><div className="flex min-w-0 items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><Wrench className="h-4 w-4" /></span><div className="min-w-0"><div className="text-[8px] uppercase tracking-[0.14em] text-white/42">{item.id ? "Kiadás szerkesztése" : "Új kiadás"}</div><h2 className="mt-0.5 truncate text-[16px]">{item.id ? "Tétel módosítása" : "Új autókiadás"}</h2></div></div><button type="button" disabled={saving} onClick={() => setFormOpen(false)} className={iconBtn}><X className="h-4 w-4" /></button></header>
+          <section className="flex max-h-[90dvh] w-[calc(100vw-24px)] max-w-[360px] flex-col overflow-hidden rounded-[26px] border border-white/18 bg-[#303c4f] text-white shadow-[0_32px_100px_rgba(0,0,0,.62)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303c4f] px-3.5 py-3"><div className="flex min-w-0 items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><Wrench className="h-4 w-4" /></span><div className="min-w-0"><div className="text-[8px] uppercase tracking-[0.14em] text-[#dbe7f3]/70">{item.id ? "Kiadás szerkesztése" : "Új kiadás"}</div><h2 className="mt-0.5 truncate text-[16px] text-white">{item.id ? "Tétel módosítása" : "Új autókiadás"}</h2></div></div><button type="button" disabled={saving} onClick={() => setFormOpen(false)} className={iconBtn}><X className="h-4 w-4" /></button></header>
             <form onSubmit={submit} className="min-h-0 flex-1 overflow-y-auto p-3">
               <div className="grid gap-2.5">
                 <label className={label}>Autó<AllInSelect value={String(item.car_id ?? "")} onChange={(value) => setItem((current) => ({ ...current, car_id: value ? Number(value) : null }))} ariaLabel="Autó" placeholder="Válassz autót" options={[{ value: "", label: "Válassz autót" }, ...cars.map((car) => ({ value: String(car.id), label: `${car.plate || "-"} • ${car.make_model || "-"}` }))]} /></label>
-                <div className="grid grid-cols-2 gap-2"><label className={label}>Dátum<AllInDatePicker value={item.date} onChange={(value) => setItem((current) => ({ ...current, date: value }))} ariaLabel="Kiadás dátuma" /></label><label className={label}>km óra<input className={input} type="number" value={item.odometer_km ?? ""} onChange={(event) => setItem((current) => ({ ...current, odometer_km: event.target.value ? Number(event.target.value) : null }))} placeholder="156000" /></label></div>
+                <div className="grid min-w-0 grid-cols-2 gap-2"><label className={`${label} min-w-0`}>Dátum<AllInDatePicker value={item.date} onChange={(value) => setItem((current) => ({ ...current, date: value }))} ariaLabel="Kiadás dátuma" /></label><label className={`${label} min-w-0`}>km óra<input className={input} type="number" value={item.odometer_km ?? ""} onChange={(event) => setItem((current) => ({ ...current, odometer_km: event.target.value ? Number(event.target.value) : null }))} placeholder="156000" /></label></div>
                 <label className={label}>Kategória<AllInSelect value={item.category || ""} onChange={(value) => setItem((current) => ({ ...current, category: value }))} ariaLabel="Kategória" options={[{ value: "", label: "Nincs megadva" }, ...CATEGORIES.map((name) => ({ value: name, label: name }))]} /></label>
                 <label className={label}>Leírás<input className={input} value={item.description || ""} onChange={(event) => setItem((current) => ({ ...current, description: event.target.value }))} placeholder="Munkalap, tételes leírás..." /></label>
                 <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-2"><label className={label}>Összeg<input className={input} type="number" step="0.01" value={item.cost ?? ""} onChange={(event) => setItem((current) => ({ ...current, cost: event.target.value ? Number(event.target.value) : null }))} placeholder="0.00" /></label><label className={label}>Pénznem<input className={input} value={item.currency || "RON"} onChange={(event) => setItem((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} /></label></div>
