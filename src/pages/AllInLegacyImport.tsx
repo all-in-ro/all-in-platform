@@ -314,6 +314,15 @@ function sourceNeedsReview(row: AifLegacyImportCompactRow) {
 
 type LegacyIssueBadge = { key: string; label: string; tone: "warning" | "danger" };
 
+function legacySizeIsClearlyResolved(value: unknown) {
+  const raw = String(value || "").trim().toUpperCase().replace(/\s+/g, " " );
+  if (!raw || raw.startsWith("N/A-") || raw === "N/A" || raw === "-") return false;
+  if (/^(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|OS|OSF|OSFM|OSFA|OSFY|UNI|UNIVERSAL|ONE SIZE)$/.test(raw)) return true;
+  if (/^(XS\/S|S\/M|M\/L|L\/XL|XL\/XXL|XXL\/XXXL|XXL\/3XL|2XL\/3XL|3XL\/4XL)$/.test(raw)) return true;
+  if (/^\d{1,3}(?:[.,]5)?$/.test(raw)) return true;
+  return false;
+}
+
 function legacyIssueBadges(row: AifLegacyImportCompactRow): LegacyIssueBadge[] {
   if (row.processStatus === "skipped") return [];
   const raw = `${row.issues || ""} ${row.message || ""} ${row.processError || ""}`.toUpperCase();
@@ -327,7 +336,8 @@ function legacyIssueBadges(row: AifLegacyImportCompactRow): LegacyIssueBadge[] {
   if (!String(row.subcategoryName || "").trim() || raw.includes("MISSING_CATEGORY")) add("category", "Alkategória");
   if (!String(row.gender || "").trim() || raw.includes("MISSING_GENDER")) add("gender", "Nem");
   if (!String(row.colorCode || row.colorName || "").trim()) add("color", "Szín");
-  if (!String(row.size || "").trim() || String(row.size || "").startsWith("N/A-") || raw.includes("SIZE_NOT_PARSED") || raw.includes("MISSING_SIZE")) add("size", "Méret");
+  const sizeResolved = legacySizeIsClearlyResolved(row.size);
+  if (!sizeResolved && (!String(row.size || "").trim() || String(row.size || "").startsWith("N/A-") || raw.includes("SIZE_NOT_PARSED") || raw.includes("MISSING_SIZE"))) add("size", "Méret");
   if (!String(row.barcode || "").trim() || raw.includes("MISSING_BARCODE")) add("barcode", "Vonalkód");
   if (!String(row.productCode || "").trim() || raw.includes("MISSING_PRODUCT_CODE")) add("code", "Termékkód");
   if (row.rawQty < 0 || raw.includes("NEGATIVE_STOCK")) add("negative_stock", `${row.rawQty} db → 0`);
