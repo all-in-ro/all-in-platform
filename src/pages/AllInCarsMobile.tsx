@@ -237,8 +237,17 @@ function AllInSelect({ value, options, onChange, ariaLabel }: { value: string; o
 
 function CarImage({ car }: { car: Car }) {
   return (
-    <div className="grid h-[76px] w-[92px] shrink-0 place-items-center overflow-hidden rounded-2xl border border-white/14 bg-white shadow-sm">
-      {car.photo_url ? <img src={car.photo_url} alt="" className="h-full w-full object-contain p-1" loading="lazy" /> : <ImageIcon className="h-6 w-6 text-slate-400" />}
+    <div className="grid h-[84px] w-[84px] shrink-0 place-items-center overflow-hidden rounded-[20px] border border-white/18 bg-white p-2.5 shadow-sm">
+      {car.photo_url ? (
+        <img
+          src={car.photo_url}
+          alt=""
+          className="max-h-full max-w-full object-contain"
+          loading="lazy"
+        />
+      ) : (
+        <ImageIcon className="h-6 w-6 text-slate-400" />
+      )}
     </div>
   );
 }
@@ -257,7 +266,7 @@ function CarCard({ car, compact = false }: { car: any; compact?: boolean }) {
   return (
     <article className={`overflow-hidden rounded-[22px] border bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,.16)] ${warning ? "border-red-300/30" : "border-white/13"}`}>
       <div className="p-3">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
           <CarImage car={car} />
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
