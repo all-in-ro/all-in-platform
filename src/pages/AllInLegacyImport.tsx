@@ -220,6 +220,37 @@ function integer(value: unknown) {
   return Number.isFinite(n) ? Math.round(n).toLocaleString("ro-RO") : "0";
 }
 
+function legacyImportModeFromFileName(fileName: string) {
+  const key = String(fileName || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_");
+  return /(korrekcio|correction|metadata_fix|keszlet_javitas)/.test(key) ? "correction" as const : "migration" as const;
+}
+
+function legacyCsvValue(row: CsvRow, ...keys: string[]) {
+  for (const key of keys) {
+    const direct = String(row?.[key] || "").trim();
+    if (direct) return direct;
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const found = Object.entries(row || {}).find(([candidate]) => candidate.toLowerCase().replace(/[^a-z0-9]+/g, "") === normalizedKey);
+    if (found && String(found[1] || "").trim()) return String(found[1]).trim();
+  }
+  return "";
+}
+
+function legacySupplierPreview(row: CsvRow) {
+  const historic = legacyCsvValue(row, "FURNIZOR_ISTORIC");
+  if (historic) return historic;
+  const raw = legacyCsvValue(row, "FURNIZOR_RAW");
+  const external = raw.split(/[|;,]+/).map((part) => part.trim()).find((part) => {
+    const key = part.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return part && !key.includes("titan euro-com") && !key.includes("titan eurocom") && key !== "initializare";
+  });
+  return external || legacyCsvValue(row, "BRAND");
+}
+
 function parseSemicolonCsv(source: string): CsvRow[] {
   const text = String(source || "").replace(/^\uFEFF/, "");
   const matrix: string[][] = [];
@@ -301,9 +332,11 @@ function legacyIssueBadges(row: AifLegacyImportCompactRow): LegacyIssueBadge[] {
   };
 
   if (!String(row.brandName || "").trim() || raw.includes("UNKNOWN_BRAND")) add("brand", "Márka");
+  if (!String(row.legacySupplier || "").trim()) add("supplier", "Forgalmazó");
+  if (!String(row.subcategoryName || "").trim() || raw.includes("MISSING_CATEGORY")) add("category", "Alkategória");
+  if (!String(row.gender || "").trim() || raw.includes("MISSING_GENDER")) add("gender", "Nem");
+  if (!String(row.colorCode || row.colorName || "").trim()) add("color", "Szín");
   if (!String(row.size || "").trim() || String(row.size || "").startsWith("N/A-") || raw.includes("SIZE_NOT_PARSED") || raw.includes("MISSING_SIZE")) add("size", "Méret");
-  if (raw.includes("MISSING_CATEGORY")) add("category", "Kategória");
-  if (raw.includes("MISSING_GENDER")) add("gender", "Nem");
   if (!String(row.barcode || "").trim() || raw.includes("MISSING_BARCODE")) add("barcode", "Vonalkód");
   if (!String(row.productCode || "").trim() || raw.includes("MISSING_PRODUCT_CODE")) add("code", "Termékkód");
   if (row.rawQty < 0 || raw.includes("NEGATIVE_STOCK")) add("negative_stock", `${row.rawQty} db → 0`);
@@ -333,6 +366,7 @@ type LegacyHistoryItem = {
   id: string;
   status: string;
   sourceFileName?: string | null;
+  importMode?: string | null;
   sourceDate?: string | null;
   locationName?: string | null;
   rowCount: number;
@@ -440,19 +474,29 @@ export default function AllInLegacyImport() {
     let zero = 0;
     let negative = 0;
     let totalQty = 0;
-    let missingBarcode = 0;
-    let missingBrand = 0;
+    let barcode = 0;
+    let brand = 0;
+    let supplier = 0;
+    let subcategory = 0;
+    let color = 0;
+    let gender = 0;
     for (const row of csvRows) {
-      const qty = Number(String(row.QTY || "0").replace(",", ".")) || 0;
+      const qty = Number(String(legacyCsvValue(row, "QTY") || "0").replace(",", ".")) || 0;
       if (qty > 0) positive += 1;
       else if (qty < 0) negative += 1;
       else zero += 1;
       totalQty += Math.max(0, Math.trunc(qty));
-      if (!String(row.BARCODE || "").trim()) missingBarcode += 1;
-      if (!String(row.BRAND || "").trim()) missingBrand += 1;
+      if (legacyCsvValue(row, "BARCODE")) barcode += 1;
+      if (legacyCsvValue(row, "BRAND")) brand += 1;
+      if (legacySupplierPreview(row)) supplier += 1;
+      if (legacyCsvValue(row, "RODESCR", "RODESCR_ORIGINAL", "SUBCATEGORIE")) subcategory += 1;
+      if (legacyCsvValue(row, "NR_CULOARE", "CULOARE")) color += 1;
+      if (legacyCsvValue(row, "GEN", "GEN_ORIGINAL")) gender += 1;
     }
-    return { positive, zero, negative, totalQty, missingBarcode, missingBrand };
+    return { positive, zero, negative, totalQty, barcode, brand, supplier, subcategory, color, gender };
   }, [csvRows]);
+
+  const currentImportMode = legacyImportModeFromFileName(fileName);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLocaleLowerCase("hu-HU");
@@ -465,7 +509,8 @@ export default function AllInLegacyImport() {
       if (statusFilter === "done" && row.processStatus !== "done") return false;
       if (statusFilter === "error" && row.processStatus !== "error") return false;
       if (!q) return true;
-      return [row.title, row.barcode, row.productCode, row.originalProductCode, row.brandName, row.modelCode, row.colorCode, row.size, row.message]
+      return [row.title, row.barcode, row.productCode, row.originalProductCode, row.brandName, row.modelCode, row.snCod,
+        row.colorCode, row.colorName, row.size, row.subcategoryName, row.gender, row.legacySupplier, row.message]
         .some((value) => String(value || "").toLocaleLowerCase("hu-HU").includes(q));
     });
   }, [migrationRows, search, statusFilter]);
@@ -513,13 +558,18 @@ export default function AllInLegacyImport() {
         sourceDate: csvRows[0]?.SOURCE_DATE || "2026-08-19",
         sourceFileName: fileName || "AllIn_ForIT_LEGACY_IMPORT_FULL_20260819.csv",
         targetLocationId: locationId,
-        note: "Régi rendszer nyitókészlet és teljes terméktörzs migráció",
+        importMode: currentImportMode,
+        note: currentImportMode === "correction"
+          ? "ForIT készlet- és metaadat korrekció: meglévő termékek vonalkód, márka, forgalmazó, szín, alkategória, nem, méret és ár adatainak javítása"
+          : "Régi rendszer nyitókészlet és teljes terméktörzs migráció",
         rows: csvRows,
       });
       setMigration(response);
       setMessage(response.duplicate
         ? "Ez a fájl ehhez az üzlethez már elő lett készítve. A meglévő migrációt töltöttem vissza, nem készítettem másolatot."
-        : "Ellenőrzés kész. Még semmilyen termék vagy készlet nem változott.");
+        : currentImportMode === "correction"
+          ? "Korrekciós ellenőrzés kész. A meglévő termékek metaadatai csak a véglegesítéskor frissülnek, a készlet pedig a CSV QTY értékére áll."
+          : "Ellenőrzés kész. Még semmilyen termék vagy készlet nem változott.");
       try { window.sessionStorage.setItem(LEGACY_ACTIVE_MIGRATION_KEY, response.item.id); } catch {}
       await loadHistory();
     } catch (e: any) {
@@ -673,7 +723,10 @@ export default function AllInLegacyImport() {
               <h2 className="mt-1 text-lg text-white">Melyik készletet hozzuk át?</h2>
               <p className="mt-1 text-sm text-white/58">Válaszd ki, melyik AllIn helyhez tartozik a forráskészlet.</p>
             </div>
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-200/25 bg-amber-300/8 px-3 py-1 text-[11px] text-amber-50"><ShieldCheck size={13} /> Az ellenőrzés nem módosít készletet</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {fileName ? <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] ${currentImportMode === "correction" ? "border-[#8ce7e2]/38 bg-[#2a8d8b]/18 text-[#d9fffd]" : "border-white/14 bg-white/[0.05] text-white/62"}`}>{currentImportMode === "correction" ? "KORREKCIÓS CSV" : "TELJES MIGRÁCIÓ"}</span> : null}
+              <span className="inline-flex items-center gap-2 rounded-full border border-amber-200/25 bg-amber-300/8 px-3 py-1 text-[11px] text-amber-50"><ShieldCheck size={13} /> Az ellenőrzés nem módosít készletet</span>
+            </div>
           </div>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
@@ -706,14 +759,19 @@ export default function AllInLegacyImport() {
           </div>
 
           {csvRows.length ? (
-            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">CSV sor</p><p className="mt-1 text-base">{csvRows.length.toLocaleString("ro-RO")}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Pozitív készlet</p><p className="mt-1 text-base">{localStats.positive.toLocaleString("ro-RO")}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">0 készlet</p><p className="mt-1 text-base">{localStats.zero.toLocaleString("ro-RO")}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Régi negatív</p><p className="mt-1 text-base text-amber-100">{localStats.negative.toLocaleString("ro-RO")}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Nyitókészlet</p><p className="mt-1 text-base">{integer(localStats.totalQty)} db</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Barcode nélkül</p><p className="mt-1 text-base">{localStats.missingBarcode.toLocaleString("ro-RO")}</p></div>
-            </div>
+            <>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">CSV sor</p><p className="mt-1 text-base">{csvRows.length.toLocaleString("ro-RO")}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Vonalkód</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.barcode} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Márka</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.brand} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Forgalmazó</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.supplier} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Alkategória</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.subcategory} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Szín / színkód</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.color} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Nem</p><p className="mt-1 text-base text-[#bff8f5]">{localStats.gender} / {csvRows.length}</p></div>
+                <div className={statCard}><p className="text-[9px] uppercase text-white/46">Nyitókészlet</p><p className="mt-1 text-base">{integer(localStats.totalQty)} db</p></div>
+              </div>
+              {currentImportMode === "correction" ? <div className="mt-3 rounded-xl border border-[#8ce7e2]/28 bg-[#2a8d8b]/12 px-3 py-2 text-sm text-[#e7fffd]">Korrekciós mód: a CSV-ben megadott értékek a meglévő AllIn terméknél is javíthatják a vonalkódot, márkát, forgalmazót, színt, alkategóriát, nemet, méretet és árakat. Másik termékhez tartozó vonalkódot a szerver blokkol.</div> : null}
+            </>
           ) : null}
         </section>
 
@@ -765,6 +823,15 @@ export default function AllInLegacyImport() {
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Márka nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBrandRows)} sor</p></div>
             </div>
 
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Vonalkód felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - summary.missingBarcodeRows)} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Márka felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - summary.missingBrandRows)} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Forgalmazó felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - (summary.missingSupplierRows || 0))} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Alkategória felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - (summary.missingSubcategoryRows || 0))} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Szín felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - (summary.missingColorRows || 0))} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Nem felismerve</p><p className="mt-1 text-sm text-[#bff8f5]">{integer((summary.importRows ?? summary.rowCount) - (summary.missingGenderRows || 0))} / {integer(summary.importRows ?? summary.rowCount)}</p></div>
+            </div>
+
             {!summary.canCommit && summary.conflictRows > 0 ? (
               <div className="mt-4 rounded-2xl border border-red-200/28 bg-red-500/10 p-3 text-sm text-red-50">
                 <strong>{summary.conflictRows} ütköző sor.</strong> Rendezheted automatikusan, vagy a nem kívánt sort a listában kihagyhatod az importból.
@@ -772,7 +839,7 @@ export default function AllInLegacyImport() {
             ) : null}
 
             <div className="mt-4 rounded-2xl border border-amber-200/28 bg-amber-300/8 p-3 text-sm leading-6 text-amber-50">
-              <strong>Készletlogika:</strong> a kiválasztott célhely készlete <strong>pontosan</strong> a CSV `QTY` értékére áll, nem hozzáadással. A negatív készletű {summary.normalizedNegativeRows} sor nyitókészlete 0 lesz; az eredeti érték az auditban megmarad.
+              <strong>Készletlogika:</strong> a kiválasztott célhely készlete <strong>pontosan</strong> a CSV `QTY` értékére áll, nem hozzáadással. A negatív készletű {summary.normalizedNegativeRows} sor nyitókészlete 0 lesz; az eredeti érték az auditban megmarad.{migration?.item?.importMode === "correction" ? " A korrekciós import a CSV-ben megadott metaadatokat a már létező termékeken is javítja." : ""}
             </div>
           </section>
         ) : null}
@@ -811,7 +878,7 @@ export default function AllInLegacyImport() {
             <div className="mt-3 overflow-x-auto rounded-2xl border border-white/12">
               <table className="w-full min-w-[1180px] text-xs">
                 <thead className="bg-[#273447] text-[9px] uppercase tracking-[0.08em] text-white/50">
-                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Kód</th><th className="px-3 py-2 text-left">Barcode</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">Forrás db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Hiányzik / gond</th><th className="px-3 py-2 text-center">Import</th></tr>
+                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Forgalmazó</th><th className="px-3 py-2 text-left">Alkategória</th><th className="px-3 py-2 text-left">Nem</th><th className="px-3 py-2 text-left">Kód / S/N</th><th className="px-3 py-2 text-left">Vonalkód</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">Forrás db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Hiányzik / gond</th><th className="px-3 py-2 text-center">Import</th></tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((row) => {
@@ -824,9 +891,12 @@ export default function AllInLegacyImport() {
                         <td className="px-3 py-2.5"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] ${actionClass(row)}`}>{actionLabel(row)}</span></td>
                         <td className={`px-3 py-2.5 ${skipped ? "text-white/48 line-through" : "text-white"}`}>{row.title || "-"}</td>
                         <td className="px-3 py-2.5 text-white/72">{row.brandName || "-"}</td>
-                        <td className="px-3 py-2.5 font-mono text-white/76">{row.productCode || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{row.legacySupplier || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{row.subcategoryName || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{row.gender || "-"}</td>
+                        <td className="px-3 py-2.5 font-mono text-white/76"><span>{row.productCode || "-"}</span>{row.snCod ? <span className="mt-1 block text-[10px] text-white/42">S/N {row.snCod}</span> : null}</td>
                         <td className="px-3 py-2.5 font-mono text-white/76">{row.barcode || "-"}</td>
-                        <td className="px-3 py-2.5 text-white/72">{[row.colorCode || row.colorName, row.size].filter(Boolean).join(" • ") || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{[row.colorName || row.colorCode, row.colorCode && row.colorName ? row.colorCode : null, row.size].filter(Boolean).join(" • ") || "-"}</td>
                         <td className={`px-3 py-2.5 text-right ${row.rawQty < 0 ? "text-amber-100" : "text-white"}`}>{row.rawQty}</td>
                         <td className="px-3 py-2.5 text-right text-white/80">{row.existingStockQty ?? 0} → {row.targetStockQty}</td>
                         <td className="max-w-[300px] px-3 py-2.5" title={fullHint !== "-" ? fullHint : undefined}>
@@ -859,7 +929,7 @@ export default function AllInLegacyImport() {
                       </tr>
                     );
                   })}
-                  {!visibleRows.length ? <tr><td colSpan={11} className="px-4 py-10 text-center text-white/42">Nincs ilyen sor.</td></tr> : null}
+                  {!visibleRows.length ? <tr><td colSpan={14} className="px-4 py-10 text-center text-white/42">Nincs ilyen sor.</td></tr> : null}
                 </tbody>
               </table>
             </div>
@@ -921,7 +991,7 @@ export default function AllInLegacyImport() {
                   <div key={item.id} className="flex w-full flex-col gap-2 rounded-2xl border border-white/12 bg-[#354153] p-3 transition hover:border-[#7bd7d4]/28 sm:flex-row sm:items-center sm:justify-between">
                     <button className="min-w-0 flex-1 text-left" type="button" onClick={() => void loadMigration(item.id)}>
                       <p className="truncate text-sm text-white">{item.sourceFileName || "Régi rendszer import"}</p>
-                      <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.72)" }}>{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor</p>
+                      <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.72)" }}>{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor{item.importMode === "correction" ? " • KORREKCIÓ" : ""}</p>
                     </button>
                     <div className="flex shrink-0 items-center justify-end gap-2">
                       <button className="min-w-[150px] text-right" type="button" onClick={() => void loadMigration(item.id)}>
