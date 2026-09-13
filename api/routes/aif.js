@@ -8048,11 +8048,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return Number.isFinite(n) ? n : fallback;
   }
 
-  function legacyImportMode(value, sourceFileName = '') {
+  function legacyImportMode(value) {
     const explicit = normCode(value);
     if (['correction', 'korrekcio', 'stock_correction', 'metadata_correction'].includes(explicit)) return 'correction';
-    const fileKey = normCode(sourceFileName);
-    return /(korrekcio|correction|metadata_fix|keszlet_javitas)/.test(fileKey) ? 'correction' : 'migration';
+    return 'migration';
   }
 
   const LEGACY_SUPPLIER_NAME_ALIASES = new Map([
