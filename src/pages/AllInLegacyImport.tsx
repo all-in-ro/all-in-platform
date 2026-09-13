@@ -766,16 +766,19 @@ export default function AllInLegacyImport() {
 
             <div className="min-w-0">
               <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">CSV fájl</p>
-              <button className={`${neutralBtn} h-11 w-full justify-start`} onClick={() => fileInputRef.current?.click()} disabled={busy || committing} type="button">
+              <button
+                className={`${neutralBtn} h-11 w-full justify-start`}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy || committing}
+                type="button"
+                title={fileName && csvRows.length
+                  ? `Kiválasztva: ${fileName} • ${csvRows.length.toLocaleString("ro-RO")} sor. Kattints másik CSV kiválasztásához.`
+                  : "Mindig a gépedről most kiválasztott fájl kerül ellenőrzésre."}
+              >
                 <FileSpreadsheet size={16} />
                 <span className="min-w-0 flex-1 text-left">{fileName ? "Másik CSV kiválasztása" : "CSV fájl kiválasztása"}</span>
               </button>
               <input ref={fileInputRef} className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file).catch((e) => setError(e?.message || "A CSV nem olvasható.")); event.currentTarget.value = ""; }} />
-              {fileName && csvRows.length ? (
-                <p className="mt-1 truncate text-[10px] text-[#cffffd]/72" title={fileName}>Kiválasztva: {fileName} • {csvRows.length.toLocaleString("ro-RO")} sor</p>
-              ) : (
-                <p className="mt-1 text-[10px] text-white/38">Mindig a gépedről most kiválasztott fájl kerül ellenőrzésre.</p>
-              )}
             </div>
 
             <button className={`${primaryBtn} h-11`} onClick={startPreview} disabled={busy || committing || !locationId || !csvRows.length} type="button">
