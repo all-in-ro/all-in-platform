@@ -220,15 +220,6 @@ function integer(value: unknown) {
   return Number.isFinite(n) ? Math.round(n).toLocaleString("ro-RO") : "0";
 }
 
-function legacyImportModeFromFileName(fileName: string) {
-  const key = String(fileName || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_");
-  return /(korrekcio|correction|metadata_fix|keszlet_javitas)/.test(key) ? "correction" as const : "migration" as const;
-}
-
 function legacyCsvValue(row: CsvRow, ...keys: string[]) {
   for (const key of keys) {
     const direct = String(row?.[key] || "").trim();
@@ -389,6 +380,7 @@ export default function AllInLegacyImport() {
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [locationId, setLocationId] = useState("");
   const [fileName, setFileName] = useState("");
+  const [importMode, setImportMode] = useState<"migration" | "correction">("migration");
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
   const [migration, setMigration] = useState<AifLegacyImportDetailResponse | null>(null);
   const [history, setHistory] = useState<LegacyHistoryItem[]>([]);
@@ -427,6 +419,8 @@ export default function AllInLegacyImport() {
       if (migration?.item?.id === item.id) {
         setMigration(null);
         setConfirmExactStock(false);
+        setFileName("");
+        setCsvRows([]);
         try { window.sessionStorage.removeItem(LEGACY_ACTIVE_MIGRATION_KEY); } catch {}
       }
       setDeleteCandidate(null);
@@ -443,7 +437,11 @@ export default function AllInLegacyImport() {
     const response = await apiAifGetLegacyImport(id);
     setMigration(response);
     setLocationId(String(response.item?.targetLocationId || ""));
-    setFileName(response.item?.sourceFileName || "");
+    setImportMode(response.item?.importMode === "correction" ? "correction" : "migration");
+    // A naplóból megnyitott import NEM egy helyileg kiválasztott fájl.
+    // Ne mutassuk úgy, mintha a böngészőben az a CSV lenne kiválasztva.
+    setFileName("");
+    setCsvRows([]);
     setConfirmExactStock(false);
     try { window.sessionStorage.setItem(LEGACY_ACTIVE_MIGRATION_KEY, id); } catch {}
     return response;
@@ -496,7 +494,7 @@ export default function AllInLegacyImport() {
     return { positive, zero, negative, totalQty, barcode, brand, supplier, subcategory, color, gender };
   }, [csvRows]);
 
-  const currentImportMode = legacyImportModeFromFileName(fileName);
+  const currentImportMode = importMode;
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLocaleLowerCase("hu-HU");
@@ -537,7 +535,7 @@ export default function AllInLegacyImport() {
     }
     setFileName(file.name);
     setCsvRows(parsed);
-    setMessage(`${parsed.length.toLocaleString("ro-RO")} sor beolvasva. Ez még csak helyi előnézet, az adatbázis nem változott.`);
+    setMessage(`${file.name} • ${parsed.length.toLocaleString("ro-RO")} sor beolvasva. Ez a most kiválasztott helyi fájl; az adatbázis még nem változott.`);
   }
 
   async function startPreview() {
@@ -546,7 +544,7 @@ export default function AllInLegacyImport() {
       return;
     }
     if (!csvRows.length) {
-      setError("Előbb töltsd be a teljes migrációs CSV-t.");
+      setError("Előbb válaszd ki a CSV fájlt, amelyiket most importálni akarod.");
       return;
     }
     setBusy(true);
@@ -556,7 +554,7 @@ export default function AllInLegacyImport() {
       const response = await apiAifStartLegacyImport({
         sourceSystem: "ForIT",
         sourceDate: csvRows[0]?.SOURCE_DATE || "2026-08-19",
-        sourceFileName: fileName || "AllIn_ForIT_LEGACY_IMPORT_FULL_20260819.csv",
+        sourceFileName: fileName || "AllIn_import.csv",
         targetLocationId: locationId,
         importMode: currentImportMode,
         note: currentImportMode === "correction"
@@ -724,12 +722,11 @@ export default function AllInLegacyImport() {
               <p className="mt-1 text-sm text-white/58">Válaszd ki, melyik AllIn helyhez tartozik a forráskészlet.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {fileName ? <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] ${currentImportMode === "correction" ? "border-[#8ce7e2]/38 bg-[#2a8d8b]/18 text-[#d9fffd]" : "border-white/14 bg-white/[0.05] text-white/62"}`}>{currentImportMode === "correction" ? "KORREKCIÓS CSV" : "TELJES MIGRÁCIÓ"}</span> : null}
               <span className="inline-flex items-center gap-2 rounded-full border border-amber-200/25 bg-amber-300/8 px-3 py-1 text-[11px] text-amber-50"><ShieldCheck size={13} /> Az ellenőrzés nem módosít készletet</span>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_1.45fr_auto] lg:items-end">
             <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
               Cél üzlet / hely
               <LegacySmartSelect
@@ -744,14 +741,43 @@ export default function AllInLegacyImport() {
                 ]}
               />
             </label>
-            <div>
-              <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">Előkészített migrációs CSV</p>
+
+            <div className="min-w-0">
+              <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">Import mód</p>
+              <div className="grid h-11 grid-cols-2 gap-1 rounded-[13px] border border-white/18 bg-[#293548] p-1">
+                <button
+                  type="button"
+                  disabled={busy || committing}
+                  onClick={() => setImportMode("migration")}
+                  className={`rounded-[9px] px-2 text-[11px] transition ${importMode === "migration" ? "border border-[#8ce7e2]/45 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.22)]" : "border border-transparent text-white/62 hover:bg-white/[0.06] hover:text-white"}`}
+                >
+                  Teljes migráció
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || committing}
+                  onClick={() => setImportMode("correction")}
+                  className={`rounded-[9px] px-2 text-[11px] transition ${importMode === "correction" ? "border border-[#8ce7e2]/45 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.22)]" : "border border-transparent text-white/62 hover:bg-white/[0.06] hover:text-white"}`}
+                >
+                  Korrekció
+                </button>
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">CSV fájl</p>
               <button className={`${neutralBtn} h-11 w-full justify-start`} onClick={() => fileInputRef.current?.click()} disabled={busy || committing} type="button">
                 <FileSpreadsheet size={16} />
-                <span className="min-w-0 flex-1 truncate text-left">{fileName || "Migrációs CSV kiválasztása"}</span>
+                <span className="min-w-0 flex-1 text-left">{fileName ? "Másik CSV kiválasztása" : "CSV fájl kiválasztása"}</span>
               </button>
               <input ref={fileInputRef} className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file).catch((e) => setError(e?.message || "A CSV nem olvasható.")); event.currentTarget.value = ""; }} />
+              {fileName && csvRows.length ? (
+                <p className="mt-1 truncate text-[10px] text-[#cffffd]/72" title={fileName}>Kiválasztva: {fileName} • {csvRows.length.toLocaleString("ro-RO")} sor</p>
+              ) : (
+                <p className="mt-1 text-[10px] text-white/38">Mindig a gépedről most kiválasztott fájl kerül ellenőrzésre.</p>
+              )}
             </div>
+
             <button className={`${primaryBtn} h-11`} onClick={startPreview} disabled={busy || committing || !locationId || !csvRows.length} type="button">
               {busy ? <RefreshCw size={15} className="animate-spin" /> : <UploadCloud size={15} />}
               {busy ? "Ellenőrzés..." : "Szerveres ellenőrzés"}
