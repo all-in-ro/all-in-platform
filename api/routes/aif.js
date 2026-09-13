@@ -8260,6 +8260,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const exactKey = raw.replace(/\s+/g, ' ').trim();
     if (LEGACY_STANDARD_SIZE_TOKENS.has(exactKey)) return LEGACY_STANDARD_SIZE_TOKENS.get(exactKey);
 
+    // Többszavas méret a terméknév közepén, pl. "...-ONE SIZE-1124".
+    // A sima tokenizálás ezt ONE + SIZE darabokra bontaná, ezért előbb külön felismerjük.
+    const oneSizeMatch = raw.match(/(?:^|[-_\s])(ONE[\s_-]+SIZE)(?=$|[-_\s])/i);
+    if (oneSizeMatch) return 'ONE SIZE';
+
     // ForIT-nál a cikkszám sokszor MODEL-SZÍN-MÉRET-SZEZON alakú, pl.
     // 1365973-001-XL-1124 vagy 1386634-432-OSFM-1124.
     // Nem csak az utolsó tokent nézzük, hanem hátulról az első valódi méretkódot.
@@ -8282,7 +8287,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function legacySizeFromKnownSuffix(row) {
-    if (row?.rawSize) return null;
+    const currentRawSize = text(row?.rawSize);
+    // Az előkészítő CSV-kben a hiányzó méret néha már N/A-1234 formában szerepel.
+    // Ez nem valódi méret, ezért ilyenkor továbbra is próbálunk a termékkódból / névből felismerni.
+    if (currentRawSize && !/^N\/?A(?:-|$)/i.test(currentRawSize) && currentRawSize !== '-') return null;
 
     const colorToken = text(row?.colorCode).toUpperCase();
     const colorSize = LEGACY_STANDARD_SIZE_TOKENS.get(colorToken);
@@ -8307,6 +8315,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
     }
     return null;
+  }
+
+  function legacyResolvedStoredSize(row = {}, payload = {}) {
+    const storedSize = text(row?.size || payload?.size);
+    const direct = legacySizeTokenFromText(storedSize);
+    if (direct) return direct;
+    const inferred = legacySizeFromKnownSuffix({
+      rawSize: storedSize || payload?.rawSize || null,
+      colorCode: row?.color_code || row?.colorCode || payload?.colorCode || null,
+      originalProductCode: row?.legacy_original_code || row?.originalProductCode || payload?.originalProductCode || null,
+      productCode: row?.legacy_product_code || row?.productCode || payload?.productCode || null,
+      originalTitle: row?.original_title || row?.originalTitle || payload?.originalTitle || null,
+      title: row?.title || payload?.title || null,
+    });
+    return inferred?.size || storedSize || `N/A-${row?.source_row || row?.row_no || row?.sourceRow || row?.rowNo || ''}`;
   }
 
   function inferLegacyBrandsAndSizes(preparedRows = []) {
@@ -8396,13 +8419,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      const inferredSize = legacySizeFromKnownSuffix(row);
+      // Ha a CSV már eleve tiszta méretet tartalmaz (S, M, XL, OSFM...), azt tekintjük igaznak,
+      // és a régi előkészítőben bennmaradt SIZE_NOT_PARSED / MISSING_SIZE jelzést eldobjuk.
+      const directSize = legacySizeTokenFromText(row.rawSize || row.size);
+      const inferredSize = directSize
+        ? { size: directSize, clearColorCode: false, evidence: 'ForIT méretmező' }
+        : legacySizeFromKnownSuffix(row);
       if (inferredSize) {
+        const beforeSize = text(row.size);
         row.size = inferredSize.size;
         row.rawSize = inferredSize.size;
         if (inferredSize.clearColorCode) row.colorCode = null;
-        row.warnings = (row.warnings || []).filter((message) => !/Méret nem volt azonosítható/i.test(String(message)));
-        row.warnings.push(`Méret automatikusan felismerve: ${inferredSize.size} (${inferredSize.evidence}).`);
+
+        row.warnings = (row.warnings || [])
+          .map((message) => String(message || '')
+            .split(';')
+            .map((part) => part.trim())
+            .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
+            .join('; '))
+          .filter((message) => message && !/Méret nem volt azonosítható/i.test(message));
+
+        if (!directSize || normCode(beforeSize) !== normCode(inferredSize.size)) {
+          row.warnings.push(`Méret automatikusan felismerve: ${inferredSize.size} (${inferredSize.evidence}).`);
+          inferredSizes++;
+        }
         if (row.issues) {
           row.issues = row.issues
             .split(';')
@@ -8410,7 +8450,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
             .join('; ') || null;
         }
-        inferredSizes++;
       }
     }
 
@@ -8664,6 +8703,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     let displaySize = row.size || payload.size || null;
     let displayIssues = row.issues || null;
+    let displayMessage = row.preview_message || null;
     if (!displaySize || String(displaySize).startsWith('N/A-')) {
       const inferredSize = legacySizeFromKnownSuffix({
         rawSize: payload.rawSize || null,
@@ -8673,15 +8713,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         originalTitle: row.original_title || payload.originalTitle || null,
         title: row.title || null,
       });
-      if (inferredSize?.size) {
-        displaySize = inferredSize.size;
-        if (displayIssues) {
-          displayIssues = displayIssues
-            .split(';')
-            .map((part) => part.trim())
-            .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
-            .join('; ') || null;
-        }
+      if (inferredSize?.size) displaySize = inferredSize.size;
+    }
+
+    // Ha a megjelenített méret már egyértelműen felismerhető, a régi/stale mérethibát
+    // sem az issues, sem a preview_message nem viheti tovább a felületre.
+    const resolvedDisplaySize = legacySizeTokenFromText(displaySize);
+    if (resolvedDisplaySize) {
+      displaySize = resolvedDisplaySize;
+      if (displayIssues) {
+        displayIssues = displayIssues
+          .split(';')
+          .map((part) => part.trim())
+          .filter((part) => part && !['SIZE_NOT_PARSED', 'MISSING_SIZE'].includes(part.toUpperCase()))
+          .join('; ') || null;
+      }
+      if (displayMessage) {
+        displayMessage = String(displayMessage)
+          .split('•')
+          .map((part) => part.trim())
+          .filter((part) => part && !/SIZE_NOT_PARSED|MISSING_SIZE|Méret nem volt azonosítható/i.test(part))
+          .join(' • ') || null;
       }
     }
 
@@ -8711,7 +8763,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       subcategoryName: row.subcategory_name || null,
       gender: row.gender || null,
       legacySupplier: supplierName || null,
-      message: row.preview_message || null,
+      message: displayMessage,
       processError: row.process_error || null,
       variantId: row.variant_id ? String(row.variant_id) : null,
       buyPrice: row.buy_price === null || row.buy_price === undefined ? null : Number(row.buy_price),
@@ -9557,8 +9609,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       colorCode: emptyToNull(row.color_code),
       supplierColorCode: emptyToNull(row.color_code),
       colorName: emptyToNull(row.color_name),
-      size: text(row.size) || `N/A-${row.source_row || row.row_no}`,
-      supplierSize: text(row.size) || `N/A-${row.source_row || row.row_no}`,
+      size: legacyResolvedStoredSize(row, payload),
+      supplierSize: legacyResolvedStoredSize(row, payload),
       barcode: emptyToNull(row.legacy_barcode),
       snCod: emptyToNull(payload.snCod || row.model_code),
       sn_cod: emptyToNull(payload.snCod || row.model_code),
@@ -9740,7 +9792,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawColorName = emptyToNull(row.color_name);
     const brandColor = brand && rawColorCode ? context.brandColorByKey.get(`${brand.id}:${normCode(rawColorCode)}`) : null;
     const genericColor = !brandColor ? context.colorByKey.get(normCode(rawColorName || rawColorCode || '')) : null;
-    const rawSize = text(row.size) || `N/A-${row.source_row || row.row_no}`;
+    const rawSize = legacyResolvedStoredSize(row, payload);
     const brandSize = brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
     const genericSize = !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
     const category = context.categoryByKey.get(normCode(row.subcategory_name || '')) || null;
