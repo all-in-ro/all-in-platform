@@ -1327,52 +1327,71 @@ function isBrandDefinition(definition) {
 
 async function applicableProductMetafieldDefinitions(categoryId) {
   const category = text(categoryId);
+  const rows = [];
+  const seenIds = new Set();
+  const seenCursors = new Set();
+  let after = null;
 
-  // Critical: never merge in the unfiltered full PRODUCT definition list here.
-  // That list also contains category-constrained metafields that do NOT apply to
-  // this product. Sending one of those causes Shopify's:
-  // "Owner subtype does not match the metafield definition's constraints."
-  if (category) {
-    const query = `query AifApplicableProductMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier!) {
-      definitions: metafieldDefinitions(
-        ownerType: PRODUCT,
-        first: 250,
-        constraintSubtype: $constraint
-      ) {
-        nodes {
-          id
-          name
-          namespace
-          key
-          type { name }
-          validations { name value }
+  const query = category
+    ? `query AifApplicableProductMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier!, $after: String) {
+        definitions: metafieldDefinitions(
+          ownerType: PRODUCT,
+          first: 250,
+          after: $after,
+          constraintSubtype: $constraint
+        ) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            name
+            namespace
+            key
+            type { name }
+            validations { name value }
+          }
         }
-      }
-    }`;
-    const response = await shopifyGraphql(query, {
-      constraint: { key: "category", value: category },
-    });
-    return response.data?.definitions?.nodes || [];
+      }`
+    : `query AifUnconstrainedProductMetafieldDefinitions($after: String) {
+        definitions: metafieldDefinitions(
+          ownerType: PRODUCT,
+          first: 250,
+          after: $after,
+          constraintStatus: UNCONSTRAINED_ONLY
+        ) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            name
+            namespace
+            key
+            type { name }
+            validations { name value }
+          }
+        }
+      }`;
+
+  for (let page = 0; page < 30; page += 1) {
+    const variables = category
+      ? { constraint: { key: "category", value: category }, after }
+      : { after };
+    const response = await shopifyGraphql(query, variables);
+    const connection = response.data?.definitions;
+
+    for (const row of connection?.nodes || []) {
+      const id = text(row?.id) || `${text(row?.namespace)}.${text(row?.key)}`;
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      rows.push(row);
+    }
+
+    if (!connection?.pageInfo?.hasNextPage) break;
+    const next = text(connection?.pageInfo?.endCursor);
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    after = next;
   }
 
-  const query = `query AifUnconstrainedProductMetafieldDefinitions {
-    definitions: metafieldDefinitions(
-      ownerType: PRODUCT,
-      first: 250,
-      constraintStatus: UNCONSTRAINED_ONLY
-    ) {
-      nodes {
-        id
-        name
-        namespace
-        key
-        type { name }
-        validations { name value }
-      }
-    }
-  }`;
-  const response = await shopifyGraphql(query);
-  return response.data?.definitions?.nodes || [];
+  return rows;
 }
 
 
@@ -1453,20 +1472,32 @@ async function exactProductMetafieldDefinition(definition, cache) {
 }
 
 function metafieldDefinitionScore(definition, aliases, preferredNamespaces = []) {
-  const name = normalizeKey(definition?.name);
+  const name = normalizeKey(definition?.name).replace(/[_-]+/g, " ");
   const key = normalizeKey(definition?.key).replace(/[_-]+/g, " ");
   const namespace = normalizeKey(definition?.namespace);
-  const normalizedAliases = (aliases || []).map((value) => normalizeKey(value).replace(/[_-]+/g, " ")).filter(Boolean);
+  const normalizedAliases = (aliases || [])
+    .map((value) => normalizeKey(value).replace(/[_-]+/g, " "))
+    .filter(Boolean);
   const preferred = new Set((preferredNamespaces || []).map(normalizeKey).filter(Boolean));
-  let score = 0;
+
+  let semanticScore = 0;
   for (const alias of normalizedAliases) {
-    if (name === alias) score = Math.max(score, 100);
-    if (key === alias) score = Math.max(score, 95);
-    if (name && (name.includes(alias) || alias.includes(name))) score = Math.max(score, 55);
-    if (key && (key.includes(alias) || alias.includes(key))) score = Math.max(score, 50);
+    if (name === alias) semanticScore = Math.max(semanticScore, 200);
+    if (key === alias) semanticScore = Math.max(semanticScore, 190);
+
+    // Partial matching is only useful for meaningful multi-character names.
+    // It must not turn "Public" into Brand or "Color" into Size just because
+    // both happen to live in a preferred namespace.
+    if (alias.length >= 4 && name.length >= 4 && (name.includes(alias) || alias.includes(name))) {
+      semanticScore = Math.max(semanticScore, 110);
+    }
+    if (alias.length >= 4 && key.length >= 4 && (key.includes(alias) || alias.includes(key))) {
+      semanticScore = Math.max(semanticScore, 100);
+    }
   }
-  if (preferred.has(namespace)) score += 20;
-  return score;
+
+  if (semanticScore <= 0) return 0;
+  return semanticScore + (preferred.has(namespace) ? 20 : 0);
 }
 
 function findProductMetafieldDefinition(definitions, aliases, preferredNamespaces = []) {
@@ -1527,19 +1558,37 @@ function isTaxonomyReferenceType(typeName) {
   return ["product_taxonomy_value_reference", "list.product_taxonomy_value_reference"].includes(text(typeName));
 }
 
-function taxonomyAttributeMatchScore(attribute, definition, aliases = []) {
+function taxonomyAttributeMatchScore(attribute, definition, aliases = [], preferredAttributeHandles = []) {
   const attributeName = normalizeKey(attribute?.name).replace(/[^a-z0-9]+/g, " ").trim();
   if (!attributeName) return 0;
+
+  const preferred = unique(preferredAttributeHandles)
+    .map((value) => normalizeKey(value).replace(/[_-]+/g, " ").replace(/[^a-z0-9]+/g, " ").trim())
+    .filter(Boolean);
+
+  // The metaobject field validation is authoritative. Example:
+  // shopify--fabric -> product_taxonomy_attribute_handle = "fabric".
+  for (const handle of preferred) {
+    if (attributeName === handle) return 1000;
+  }
+
   const candidates = unique([
     definition?.name,
     definition?.key,
     ...aliases,
     ...validationValues(definition, ["product_taxonomy_attribute_handle"]),
-  ]).map((value) => normalizeKey(value).replace(/[^a-z0-9]+/g, " ").trim()).filter(Boolean);
+  ]).map((value) => normalizeKey(value).replace(/[_-]+/g, " ").replace(/[^a-z0-9]+/g, " ").trim()).filter(Boolean);
+
   let score = 0;
   for (const candidate of candidates) {
-    if (attributeName === candidate) score = Math.max(score, 130);
-    else if (attributeName.includes(candidate) || candidate.includes(attributeName)) score = Math.max(score, 80);
+    if (attributeName === candidate) score = Math.max(score, 200);
+    else if (
+      candidate.length >= 4 &&
+      attributeName.length >= 4 &&
+      (attributeName.includes(candidate) || candidate.includes(attributeName))
+    ) {
+      score = Math.max(score, 90);
+    }
   }
   return score;
 }
@@ -1637,6 +1686,7 @@ async function resolveTaxonomyValuesForCandidates({
   categoryId,
   candidates,
   aliases,
+  preferredAttributeHandles = [],
   taxonomyCategoryAttributesCache,
   taxonomyAttributeValuesCache,
 }) {
@@ -1646,7 +1696,10 @@ async function resolveTaxonomyValuesForCandidates({
 
   const attributes = await loadTaxonomyCategoryAttributes(categoryId, taxonomyCategoryAttributesCache);
   const attribute = attributes
-    .map((row) => ({ row, score: taxonomyAttributeMatchScore(row, definition, aliases) }))
+    .map((row) => ({
+      row,
+      score: taxonomyAttributeMatchScore(row, definition, aliases, preferredAttributeHandles),
+    }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)[0]?.row || null;
 
@@ -2241,33 +2294,39 @@ async function ensureTaxonomyBackedMetaobjects({
   taxonomyCategoryAttributesCache,
   taxonomyAttributeValuesCache,
 }) {
-  const taxonomy = await resolveTaxonomyValuesForCandidates({
-    definition,
-    categoryId,
-    candidates,
-    aliases,
-    taxonomyCategoryAttributesCache,
-    taxonomyAttributeValuesCache,
-  });
-  if (!taxonomy.selected?.length) return {
-    ids: [],
-    reason: taxonomy.reason,
-    taxonomyAttribute: taxonomy.taxonomyAttribute || null,
-    availableAttributes: taxonomy.availableAttributes,
-    availableEntries: taxonomy.availableEntries,
-  };
-
-  let entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
   const taxonomyField = taxonomyFieldForMetaobjectDefinition(metaDefinition, definition);
   if (!taxonomyField) {
     return {
       ids: [],
       reason: "metaobject_taxonomy_field_missing",
-      taxonomyAttribute: taxonomy.taxonomyAttribute || null,
       metaobjectType,
     };
   }
 
+  const preferredAttributeHandles = validationValues(taxonomyField, [
+    "product_taxonomy_attribute_handle",
+  ]);
+
+  const taxonomy = await resolveTaxonomyValuesForCandidates({
+    definition,
+    categoryId,
+    candidates,
+    aliases,
+    preferredAttributeHandles,
+    taxonomyCategoryAttributesCache,
+    taxonomyAttributeValuesCache,
+  });
+
+  if (!taxonomy.selected?.length) return {
+    ids: [],
+    reason: taxonomy.reason,
+    taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+    preferredAttributeHandles,
+    availableAttributes: taxonomy.availableAttributes,
+    availableEntries: taxonomy.availableEntries,
+  };
+
+  let entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
   const displayField = textFieldForMetaobjectDefinition(metaDefinition);
   const ids = [];
   const created = [];
@@ -2290,15 +2349,18 @@ async function ensureTaxonomyBackedMetaobjects({
         handle,
         fields,
       });
+
       if (!upserted.metaobject?.id) {
         return {
           ids,
           reason: upserted.reason || "metaobject_upsert_failed",
           metaobjectType,
           taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+          preferredAttributeHandles,
           errors: upserted.errors || null,
         };
       }
+
       existing = upserted.metaobject;
       created.push(existing);
       entries = [...entries, existing];
@@ -2313,6 +2375,7 @@ async function ensureTaxonomyBackedMetaobjects({
     ids,
     reason: ids.length ? null : "metaobject_entry_missing",
     metaobjectType,
+    preferredAttributeHandles,
     taxonomyAttribute: taxonomy.taxonomyAttribute || null,
     taxonomyValues: taxonomy.selected.map((entry) => ({ id: text(entry.id), name: text(entry.name) })),
     createdMetaobjects: created.map((entry) => ({
@@ -2486,6 +2549,7 @@ async function metafieldValueForDefinition({
       metaobjectType,
       taxonomyAttribute: ensured?.taxonomyAttribute || null,
       taxonomyValues: ensured?.taxonomyValues || null,
+      preferredAttributeHandles: ensured?.preferredAttributeHandles || null,
       availableAttributes: ensured?.availableAttributes,
       availableEntries: ensured?.availableEntries,
       errors: ensured?.errors || null,
@@ -2496,6 +2560,7 @@ async function metafieldValueForDefinition({
     value: typeName === "list.metaobject_reference" ? JSON.stringify(ids) : ids[0],
     reason: null,
     metaobjectType,
+    preferredAttributeHandles: ensured?.preferredAttributeHandles || null,
     taxonomyAttribute: ensured?.taxonomyAttribute || null,
     taxonomyValues: ensured?.taxonomyValues || null,
     createdMetaobjects: ensured?.createdMetaobjects || null,
@@ -2772,6 +2837,7 @@ async function setShopifyProductMetadata({
         metaobjectType: resolved.metaobjectType || null,
         taxonomyAttribute: resolved.taxonomyAttribute || null,
         taxonomyValues: resolved.taxonomyValues || null,
+        preferredAttributeHandles: resolved.preferredAttributeHandles || undefined,
         availableAttributes: resolved.availableAttributes || undefined,
         availableEntries: resolved.availableEntries || undefined,
         errors: resolved.errors || undefined,
@@ -3155,6 +3221,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           reason: skipped.reason,
           definition: skipped.definition || null,
           metaobjectType: skipped.metaobjectType || null,
+          preferredAttributeHandles: skipped.preferredAttributeHandles || null,
           availableAttributes: skipped.availableAttributes || null,
           availableEntries: skipped.availableEntries || null,
           errors: skipped.errors || null,
