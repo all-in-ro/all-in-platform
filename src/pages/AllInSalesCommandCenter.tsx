@@ -77,6 +77,7 @@ type FiltersState = {
   brand: string;
   category: string;
   subcategory: string;
+  gender: string;
   size: string;
   color: string;
   payment: string;
@@ -121,6 +122,7 @@ const dimensionLabels: Record<AifSalesCommandDimensionKey, string> = {
   color: "Színek",
   store: "Üzletek",
   payment: "Fizetési módok",
+  gender: "Nem",
 };
 
 const chartMetricConfig: Record<
@@ -2050,6 +2052,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     brand: "",
     category: "",
     subcategory: "",
+    gender: "",
     size: "",
     color: "",
     payment: "",
@@ -2143,13 +2146,14 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   }
 
   function clearDrillFilters() {
-    applyPatch({ employee: "", brand: "", category: "", subcategory: "", size: "", color: "", payment: "", product: "", snCod: "", location: "all", search: "", source: "all" });
+    applyPatch({ employee: "", brand: "", category: "", subcategory: "", gender: "", size: "", color: "", payment: "", product: "", snCod: "", location: "all", search: "", source: "all" });
   }
 
   function drillDimension(active: AifSalesCommandDimensionKey, item: AifSalesCommandDimensionItem) {
     if (active === "brand") applyPatch({ brand: item.rawName || item.name });
     else if (active === "category") applyPatch({ category: item.rawName || item.name });
     else if (active === "subcategory") applyPatch({ subcategory: item.rawName || item.name });
+    else if (active === "gender") applyPatch({ gender: item.rawName || item.name });
     else if (active === "size") applyPatch({ size: item.rawName || item.name });
     else if (active === "color") applyPatch({ color: item.rawName || item.name });
     else if (active === "payment") applyPatch({ payment: item.rawName || item.key });
@@ -2164,6 +2168,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (applied.brand) values.push({ key: "brand", label: applied.brand });
     if (applied.category) values.push({ key: "category", label: applied.category });
     if (applied.subcategory) values.push({ key: "subcategory", label: applied.subcategory });
+    if (applied.gender) values.push({ key: "gender", label: `Nem: ${applied.gender}` });
     if (applied.size) values.push({ key: "size", label: `Méret: ${applied.size}` });
     if (applied.color) values.push({ key: "color", label: applied.color });
     if (applied.payment) values.push({ key: "payment", label: paymentLabel(applied.payment) });
@@ -2199,6 +2204,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const brandOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))], [data?.filterOptions.brands]);
   const categoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden főkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.categories]);
   const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories]);
+  const genderOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden nem" }, ...(data?.filterOptions.genders || []).map((value) => ({ value, label: value }))], [data?.filterOptions.genders]);
   const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...(data?.filterOptions.sizes || []).map((value) => ({ value, label: value }))], [data?.filterOptions.sizes]);
   const colorOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden szín" }, ...(data?.filterOptions.colors || []).map((value) => ({ value, label: value }))], [data?.filterOptions.colors]);
   const paymentOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden fizetési mód" }, ...Array.from(new Map((data?.dimensions.payment || []).map((item) => [item.rawName || item.key, { value: item.rawName || item.key, label: paymentLabel(item.rawName || item.key || item.name) }])).values())], [data?.dimensions.payment]);
@@ -2207,6 +2213,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (dimension === "brand") return draft.brand;
     if (dimension === "category") return draft.category;
     if (dimension === "subcategory") return draft.subcategory;
+    if (dimension === "gender") return draft.gender;
     if (dimension === "product") return draft.product;
     if (dimension === "size") return draft.size;
     if (dimension === "color") return draft.color;
@@ -2219,6 +2226,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (dimension === "brand") applyPatch({ brand: "" });
     else if (dimension === "category") applyPatch({ category: "" });
     else if (dimension === "subcategory") applyPatch({ subcategory: "" });
+    else if (dimension === "gender") applyPatch({ gender: "" });
     else if (dimension === "product") applyPatch({ product: "" });
     else if (dimension === "size") applyPatch({ size: "" });
     else if (dimension === "color") applyPatch({ color: "" });
@@ -2318,6 +2326,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
                 <FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel>
                 <FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Nem"><SelectControl value={draft.gender} onChange={(value) => setDraft({ ...draft, gender: value })} options={genderOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel>
@@ -2353,7 +2362,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           <EmployeeRanking rows={data?.employees || []} metric={chartMetric} selected={applied.employee} onSelect={(employee) => applyPatch({ employee })} comparisonAvailable={comparisonAvailable} />
         </section>
 
-        <DimensionPanel dimensions={data?.dimensions || ({ brand: [], category: [], subcategory: [], product: [], size: [], color: [], store: [], payment: [] } as AifSalesCommandOverviewResponse["dimensions"])} activeDimension={dimension} onDimensionChange={setDimension} metric={chartMetric} onDrill={drillDimension} comparisonAvailable={comparisonAvailable} selectedValue={selectedDimensionValue} onClearSelected={clearActiveDimensionFilter} />
+        <DimensionPanel dimensions={data?.dimensions || ({ brand: [], category: [], subcategory: [], product: [], size: [], color: [], store: [], payment: [], gender: [] } as AifSalesCommandOverviewResponse["dimensions"])} activeDimension={dimension} onDimensionChange={setDimension} metric={chartMetric} onDrill={drillDimension} comparisonAvailable={comparisonAvailable} selectedValue={selectedDimensionValue} onClearSelected={clearActiveDimensionFilter} />
 
         <section className="space-y-2">
           <div className="flex flex-wrap items-center justify-end gap-1.5">
