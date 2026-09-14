@@ -172,6 +172,30 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     return bucket;
   }
 
+  function genderLabel(value) {
+    const key = normCode(value);
+    if (["men", "male", "masculin", "barbati", "barbat", "ferfi"].includes(key)) return "Férfi";
+    if (["women", "woman", "female", "feminin", "femei", "femeie", "noi", "no"].includes(key)) return "Női";
+    if (["kisfiu", "boy", "boys", "baiat", "baieti", "fiu", "fiuk"].includes(key)) return "Fiú";
+    if (["kislany", "girl", "girls", "fata", "fete", "lany", "lanyok"].includes(key)) return "Lány";
+    if (["kids", "kid", "children", "child", "copii", "copil", "gyerek", "junior", "youth"].includes(key)) return "Gyerek";
+    if (["unisex", "gender_neutral", "genderneutral"].includes(key)) return "Unisex";
+    return text(value) || "Nincs adat";
+  }
+
+  function genderSql(expression) {
+    return `CASE
+      WHEN ${expression} IS NULL OR btrim((${expression})::text)='' THEN 'Nincs adat'
+      WHEN lower(btrim((${expression})::text)) IN ('men','male','masculin','barbati','barbat','férfi','ferfi') THEN 'Férfi'
+      WHEN lower(btrim((${expression})::text)) IN ('women','woman','female','feminin','femei','femeie','női','noi','no') THEN 'Női'
+      WHEN lower(btrim((${expression})::text)) IN ('kisfiu','boy','boys','baiat','baieti','fiu','fiuk') THEN 'Fiú'
+      WHEN lower(btrim((${expression})::text)) IN ('kislany','girl','girls','fata','fete','lany','lanyok') THEN 'Lány'
+      WHEN lower(btrim((${expression})::text)) IN ('kids','kid','children','child','copii','copil','gyerek','junior','youth') THEN 'Gyerek'
+      WHEN lower(btrim((${expression})::text)) IN ('unisex','gender neutral','gender-neutral','gender_neutral','genderneutral') THEN 'Unisex'
+      ELSE btrim((${expression})::text)
+    END`;
+  }
+
   async function ensureHistorySchema() {
     if (!historySchemaPromise) {
       historySchemaPromise = (async () => {
@@ -550,6 +574,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(sl.brand_name,''),NULLIF(b.name,'')) AS brand_name,
         COALESCE(NULLIF(sl.category_name,''),NULLIF(cat.name_hu,''),NULLIF(cat.name_ro,'')) AS category_name,
         COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
+        ${genderSql("COALESCE(NULLIF(sl.raw->>'gender',''),NULLIF(m.gender,''))")} AS gender_name,
         COALESCE(NULLIF(sl.product_title,''),NULLIF(m.title_ro,''),NULLIF(sl.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(sl.image_url,''),NULLIF(v.image_url,''),NULLIF(sl.raw->>'imageUrl',''),NULLIF(sl.raw->>'image_url','')) AS image_url,
@@ -603,6 +628,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(el.brand_name,''),NULLIF(b.name,'')) AS brand_name,
         COALESCE(NULLIF(cat.name_hu,''),NULLIF(cat.name_ro,'')) AS category_name,
         COALESCE(NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
+        ${genderSql("NULLIF(m.gender,'')")} AS gender_name,
         COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),NULLIF(el.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(el.image_url,''),NULLIF(v.image_url,'')) AS image_url,
@@ -651,6 +677,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(src.brand_name,''),NULLIF(b.name,'')) AS brand_name,
         COALESCE(NULLIF(src.category_name,''),NULLIF(cat.name_hu,''),NULLIF(cat.name_ro,'')) AS category_name,
         COALESCE(NULLIF(src.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
+        ${genderSql("COALESCE(NULLIF(src.raw->>'gender',''),NULLIF(m.gender,''))")} AS gender_name,
         COALESCE(NULLIF(src.product_title,''),NULLIF(m.title_ro,''),NULLIF(src.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(src.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(src.image_url,''),NULLIF(v.image_url,''),NULLIF(src.raw->>'imageUrl',''),NULLIF(src.raw->>'image_url','')) AS image_url,
@@ -702,6 +729,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         h.brand_name,
         h.category_name,
         h.subcategory_name,
+        'Nincs adat'::text AS gender_name,
         COALESCE(NULLIF(h.product_title,''),NULLIF(h.product_code,'')) AS product_title,
         h.product_code,
         NULL::text AS image_url,
@@ -758,6 +786,10 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     if (text(filters.subcategory)) {
       const p = push(text(filters.subcategory));
       where.push(`lower(COALESCE(f.subcategory_name,''))=lower(${p})`);
+    }
+    if (text(filters.gender)) {
+      const p = push(text(filters.gender));
+      where.push(`lower(COALESCE(f.gender_name,''))=lower(${p})`);
     }
     if (text(filters.size)) {
       const p = push(text(filters.size));
@@ -1023,7 +1055,8 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
           ('size'::text, NULLIF(f.size,''), NULLIF(f.size,''), NULL::text),
           ('color'::text, NULLIF(f.color_name,''), NULLIF(f.color_name,''), NULL::text),
           ('store'::text, COALESCE(NULLIF(f.location_code,''),NULLIF(f.location_name,'')), COALESCE(NULLIF(f.location_name,''),NULLIF(f.location_code,'')), NULLIF(f.location_code,'')),
-          ('payment'::text, NULLIF(f.payment_method,''), NULLIF(f.payment_method,''), NULL::text)
+          ('payment'::text, NULLIF(f.payment_method,''), NULLIF(f.payment_method,''), NULL::text),
+          ('gender'::text, COALESCE(NULLIF(f.gender_name,''),'Nincs adat'), COALESCE(NULLIF(f.gender_name,''),'Nincs adat'), NULL::text)
         ) d(dimension,dimension_key,dimension_name,meta)
         WHERE d.dimension_key IS NOT NULL
       ) expanded
@@ -1181,7 +1214,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
   async function filterOptions() {
     const now = Date.now();
     if (filterOptionsCache && filterOptionsCache.expiresAt > now) return filterOptionsCache.value;
-    const [locationsResult, yearsResult, employeesResult, shopEmployeesResult, brandsResult, categoriesResult, subcategoriesResult, sizesResult, colorsResult] = await Promise.all([
+    const [locationsResult, yearsResult, employeesResult, shopEmployeesResult, brandsResult, categoriesResult, subcategoriesResult, sizesResult, colorsResult, gendersResult] = await Promise.all([
       pool.query(`SELECT id::text AS id, code, name
         FROM aif_locations
         WHERE COALESCE(is_active,true)=true
@@ -1229,6 +1262,11 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         UNION SELECT NULLIF(color_name,'') AS value FROM aif_shop_exchange_lines
         UNION SELECT NULLIF(color_name,'') AS value FROM aif_sales_history_rows
       ) x WHERE value IS NOT NULL ORDER BY value ASC LIMIT 500`),
+      pool.query(`SELECT DISTINCT NULLIF(gender,'') AS value
+        FROM aif_product_models
+        WHERE NULLIF(gender,'') IS NOT NULL
+        ORDER BY value ASC
+        LIMIT 100`),
     ]);
     const value = {
       locations: locationsResult.rows.map((row) => ({ id: row.id, code: row.code, name: row.name })),
@@ -1243,6 +1281,8 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       subcategories: subcategoriesResult.rows.map((row) => row.value),
       sizes: sizesResult.rows.map((row) => row.value),
       colors: colorsResult.rows.map((row) => row.value),
+      genders: Array.from(new Set(gendersResult.rows.map((row) => genderLabel(row.value)).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b, "hu")),
     };
     filterOptionsCache = { expiresAt: now + 60_000, value };
     return value;
@@ -1270,6 +1310,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         brand: text(req.query.brand),
         category: text(req.query.category),
         subcategory: text(req.query.subcategory),
+        gender: text(req.query.gender),
         size: text(req.query.size),
         color: text(req.query.color),
         payment: text(req.query.payment || req.query.paymentMethod || req.query.payment_method),
@@ -1282,7 +1323,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       let bucket = cleanBucket(req.query.bucket, days);
       const requestedBucket = normCode(req.query.bucket || "auto") || "auto";
       const hasDimensionDrill = Boolean(
-        filters.brand || filters.category || filters.subcategory || filters.size ||
+        filters.brand || filters.category || filters.subcategory || filters.gender || filters.size ||
         filters.color || filters.payment || filters.product || filters.snCod || filters.search
       );
       if (requestedBucket === "auto" && filters.source !== "live" && !hasDimensionDrill) {
@@ -1377,7 +1418,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         .map((row, index) => ({ actor: row.name, rank: index + 1, current: row.current, comparison: row.comparison, deltaPercent: row.deltaPercent }));
       const dimensionRows = mergeNamedRows(currentDimensionsResult.rows, comparisonDimensionsResult.rows, "dimension");
       const dimensions = {};
-      for (const key of ["brand", "category", "subcategory", "product", "size", "color", "store", "payment"]) {
+      for (const key of ["brand", "category", "subcategory", "product", "size", "color", "store", "payment", "gender"]) {
         dimensions[key] = dimensionRows
           .filter((row) => row.dimension === key)
           .map((row, index) => ({
