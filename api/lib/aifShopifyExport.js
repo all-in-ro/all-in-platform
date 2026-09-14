@@ -196,12 +196,104 @@ function shopifyAgeGroup(value) {
     : "adult";
 }
 
+function audienceSignalText(row) {
+  if (!row || typeof row !== "object") return normalizeKey(row);
+  return normalizeKey([
+    row?.gender,
+    row?.shopify_title,
+    row?.title_ro,
+    row?.title_hu,
+    row?.title,
+    row?.category_name_ro,
+    row?.category_name_hu,
+    row?.category_code,
+    row?.subcategory_name_ro,
+    row?.subcategory_name_hu,
+    row?.subcategory_code,
+    row?.product_type,
+  ].filter(Boolean).join(" "))
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasAudienceToken(haystack, tokens) {
+  const padded = ` ${text(haystack)} `;
+  return (tokens || []).some((token) => padded.includes(` ${normalizeKey(token)} `));
+}
+
+function shopifyAudienceProfile(value) {
+  if (!value || typeof value !== "object") {
+    const ageGroup = shopifyAgeGroup(value);
+    const gender = shopifyGender(value);
+    return {
+      ageGroup,
+      gender,
+      audience: ageGroup === "kids"
+        ? "Copii"
+        : gender === "female"
+          ? "Femei"
+          : gender === "male"
+            ? "Bărbați"
+            : "Unisex",
+    };
+  }
+
+  const haystack = audienceSignalText(value);
+  const rawGender = text(value?.gender);
+  const rawGenderNormalized = shopifyGender(rawGender);
+
+  const childSignal = shopifyAgeGroup(rawGender) === "kids" || hasAudienceToken(haystack, [
+    "copii", "copil", "copila", "copilasi", "junior", "kids", "kid", "children", "child",
+    "boys", "boy", "girls", "girl", "baieti", "baiat", "fete", "fata",
+    "gyerek", "gyermek", "fiuk", "fiu", "lanyok", "lany", "youth",
+  ]);
+
+  const femaleSignal = hasAudienceToken(haystack, [
+    "women", "woman", "female", "femei", "femeie", "feminin", "dama", "doamne",
+    "lady", "ladies", "noi", "no", "girls", "girl", "fete", "fata", "lany", "lanyok",
+  ]);
+
+  const maleSignal = hasAudienceToken(haystack, [
+    "men", "man", "male", "barbati", "barbat", "masculin", "ferfi", "ferfiak",
+    "boys", "boy", "baieti", "baiat", "fiuk", "fiu",
+  ]);
+
+  let gender = rawGenderNormalized;
+  if (femaleSignal && !maleSignal) gender = "female";
+  else if (maleSignal && !femaleSignal) gender = "male";
+  else if (femaleSignal && maleSignal && rawGenderNormalized === "unisex") gender = "unisex";
+
+  const ageGroup = childSignal ? "kids" : "adult";
+  const audience = ageGroup === "kids"
+    ? "Copii"
+    : gender === "female"
+      ? "Femei"
+      : gender === "male"
+        ? "Bărbați"
+        : "Unisex";
+
+  return { ageGroup, gender, audience };
+}
+
+function shopifyGenderForRow(row) {
+  return shopifyAudienceProfile(row).gender;
+}
+
+function shopifyAgeGroupForRow(row) {
+  return shopifyAudienceProfile(row).ageGroup;
+}
+
 function shopifyAudience(value) {
-  if (shopifyAgeGroup(value) === "kids") return "Copii";
-  const gender = shopifyGender(value);
-  if (gender === "female") return "Femei";
-  if (gender === "male") return "Bărbați";
-  return "Unisex";
+  return shopifyAudienceProfile(value).audience;
+}
+
+function audienceTechnicalTag(value) {
+  const audience = shopifyAudience(value);
+  if (audience === "Bărbați") return "audience-barbati";
+  if (audience === "Femei") return "audience-femei";
+  if (audience === "Copii") return "audience-copii";
+  return "audience-unisex";
 }
 
 function shopifyStyle(row) {
@@ -326,22 +418,35 @@ function descriptionHtml(row) {
 }
 
 function buildTags(row) {
+  const profile = shopifyAudienceProfile(row);
+  const reservedAudienceTags = new Set([
+    "barbati", "barbat", "men", "male", "masculin",
+    "femei", "femeie", "women", "female", "feminin", "dama",
+    "copii", "copil", "kids", "kid", "children", "child", "junior",
+    "boys", "boy", "baieti", "baiat", "girls", "girl", "fete", "fata",
+    "unisex",
+  ]);
+
   const normalizedTags = [
     "allinfashion",
     row.brand_name,
     row.category_name_ro,
     row.subcategory_name_ro,
     row.product_type,
-    row.gender,
     row.season,
-    row.color_name,
-  ].map(tagValue).filter(Boolean);
+    resolvedRowColorName(row),
+  ]
+    .map(tagValue)
+    .filter((value) => value && !reservedAudienceTags.has(normalizeKey(value)));
 
-  // A Shopifyban a technikai gender címke mellett az emberi, román címke is kell.
-  // Így a women/female adatból automatikusan Femei lesz, és az automata kollekciók
-  // nem kénytelenek angol-magyar-román találós kérdést játszani.
+  // Az audience címkék kizárólag a normalizált besorolásból jönnek.
+  // Így egy "Fete", "Băieți", "Copii" vagy "Dama" termék nem tud a
+  // Bărbați kollekcióba beesni csak azért, mert a nyers gender mező hibás volt.
   return unique([
-    shopifyAudience(row.gender),
+    profile.audience,
+    audienceTechnicalTag(row),
+    `age-${profile.ageGroup}`,
+    `gender-${profile.gender}`,
     shopifyStyle(row),
     ...normalizedTags,
   ]).join(", ");
@@ -920,8 +1025,8 @@ function productRowsForItems(items, productStatus) {
         "Google Shopping / Google product category": first
           ? googleProductCategoryForShopifyCategory(category)
           : "",
-        "Google Shopping / Gender": first ? shopifyGender(item.gender) : "",
-        "Google Shopping / Age group": first ? shopifyAgeGroup(item.gender) : "",
+        "Google Shopping / Gender": first ? shopifyGenderForRow(item) : "",
+        "Google Shopping / Age group": first ? shopifyAgeGroupForRow(item) : "",
         "Google Shopping / Manufacturer part number (MPN)": productCode(item),
         "Google Shopping / Ad group name": "",
         "Google Shopping / Ads labels": "",
@@ -1097,7 +1202,8 @@ export async function createAifShopifyProductExport(client, options = {}) {
             brand: item.brand_name,
             brandCode: item.brand_code,
             gender: item.gender,
-            audience: shopifyAudience(item.gender),
+            audience: shopifyAudience(item),
+            audienceProfile: shopifyAudienceProfile(item),
             style: shopifyStyle(item),
             categoryNameRo: item.category_name_ro,
             categoryNameHu: item.category_name_hu,
@@ -3684,12 +3790,46 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         ]),
         sizes: unique([text(item.snapshot?.size), text(item.live_size)]),
         materials: unique([text(item.snapshot?.material), text(item.live_material)]),
-        genders: unique([text(item.snapshot?.gender), text(item.live_gender)]),
-        ageGroups: unique([
-          text(item.snapshot?.gender) ? shopifyAgeGroup(item.snapshot?.gender) : "",
-          text(item.live_gender) ? shopifyAgeGroup(item.live_gender) : "",
+        genders: unique([
+          shopifyGenderForRow({
+            gender: text(item.snapshot?.gender || item.live_gender),
+            shopify_title: text(item.snapshot?.title),
+            title_ro: text(item.snapshot?.title),
+            category_name_ro: text(item.snapshot?.categoryNameRo || item.live_category_name_ro),
+            category_name_hu: text(item.snapshot?.categoryNameHu),
+            category_code: text(item.snapshot?.categoryCode),
+            subcategory_name_ro: text(item.snapshot?.subcategoryNameRo || item.live_subcategory_name_ro),
+            subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
+            subcategory_code: text(item.snapshot?.subcategoryCode),
+            product_type: text(item.snapshot?.productType || item.live_product_type),
+          }),
         ]),
-        audience: text(item.snapshot?.audience) || (text(item.snapshot?.gender || item.live_gender) ? shopifyAudience(item.snapshot?.gender || item.live_gender) : ""),
+        ageGroups: unique([
+          shopifyAgeGroupForRow({
+            gender: text(item.snapshot?.gender || item.live_gender),
+            shopify_title: text(item.snapshot?.title),
+            title_ro: text(item.snapshot?.title),
+            category_name_ro: text(item.snapshot?.categoryNameRo || item.live_category_name_ro),
+            category_name_hu: text(item.snapshot?.categoryNameHu),
+            category_code: text(item.snapshot?.categoryCode),
+            subcategory_name_ro: text(item.snapshot?.subcategoryNameRo || item.live_subcategory_name_ro),
+            subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
+            subcategory_code: text(item.snapshot?.subcategoryCode),
+            product_type: text(item.snapshot?.productType || item.live_product_type),
+          }),
+        ]),
+        audience: shopifyAudience({
+          gender: text(item.snapshot?.gender || item.live_gender),
+          shopify_title: text(item.snapshot?.title),
+          title_ro: text(item.snapshot?.title),
+          category_name_ro: text(item.snapshot?.categoryNameRo || item.live_category_name_ro),
+          category_name_hu: text(item.snapshot?.categoryNameHu),
+          category_code: text(item.snapshot?.categoryCode),
+          subcategory_name_ro: text(item.snapshot?.subcategoryNameRo || item.live_subcategory_name_ro),
+          subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
+          subcategory_code: text(item.snapshot?.subcategoryCode),
+          product_type: text(item.snapshot?.productType || item.live_product_type),
+        }),
         style: text(item.snapshot?.style) || shopifyStyle({
           brand_name: item.live_brand_name,
           category_name_ro: item.live_category_name_ro,
