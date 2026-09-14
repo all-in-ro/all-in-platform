@@ -81,6 +81,17 @@ type CreateResult = {
   stockMode?: string;
 };
 
+type MetadataWarning = {
+  scope?: string;
+  productId?: string;
+  category?: string | null;
+  reason?: string;
+  candidates?: string[] | null;
+  definition?: { name?: string; namespace?: string; key?: string; type?: string } | null;
+  metaobjectType?: string | null;
+  error?: string | null;
+};
+
 type ExportHistoryItem = {
   id: string;
   status: "prepared" | "downloaded" | "partially_mapped" | "mapped" | "error" | string;
@@ -169,6 +180,7 @@ export default function ShopifyProductExportModal({
   const [error, setError] = useState("");
   const [created, setCreated] = useState<CreateResult | null>(null);
   const [reconcileMessage, setReconcileMessage] = useState("");
+  const [metadataWarnings, setMetadataWarnings] = useState<MetadataWarning[]>([]);
   const [exports, setExports] = useState<ExportHistoryItem[]>([]);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [reconcilingExportId, setReconcilingExportId] = useState("");
@@ -200,6 +212,7 @@ export default function ShopifyProductExportModal({
     setPreviewBusy(true);
     setError("");
     setReconcileMessage("");
+    setMetadataWarnings([]);
     try {
       const result = await requestJSON<Preview>("/api/aif/shopify/product-exports/preview", {
         method: "POST",
@@ -218,6 +231,7 @@ export default function ShopifyProductExportModal({
     if (!open) return;
     setCreated(null);
     setReconcileMessage("");
+    setMetadataWarnings([]);
     void loadHistory();
     const timer = window.setTimeout(() => void loadPreview(), 80);
     return () => window.clearTimeout(timer);
@@ -269,6 +283,7 @@ export default function ShopifyProductExportModal({
     setReconcilingExportId(exportId);
     setError("");
     setReconcileMessage("");
+    setMetadataWarnings([]);
     try {
       const result = await requestJSON<{
         mapped: number;
@@ -278,6 +293,16 @@ export default function ShopifyProductExportModal({
         publishedProducts?: number;
         brandUpdatedProducts?: number;
         brandSkippedProducts?: number;
+        colorUpdatedProducts?: number;
+        colorSkippedProducts?: number;
+        sizeUpdatedProducts?: number;
+        sizeSkippedProducts?: number;
+        fabricUpdatedProducts?: number;
+        fabricSkippedProducts?: number;
+        targetGenderUpdatedProducts?: number;
+        targetGenderSkippedProducts?: number;
+        ageGroupUpdatedProducts?: number;
+        ageGroupSkippedProducts?: number;
         audienceUpdatedProducts?: number;
         audienceSkippedProducts?: number;
         styleUpdatedProducts?: number;
@@ -285,24 +310,30 @@ export default function ShopifyProductExportModal({
         metadataUpdatedProducts?: number;
         errorItems?: Array<{ sku?: string; error?: string }>;
         productErrors?: Array<{ scope?: string; error?: string }>;
+        productWarnings?: MetadataWarning[];
       }>(
         `/api/aif/shopify/product-exports/${encodeURIComponent(exportId)}/reconcile`,
         { method: "POST", body: JSON.stringify({ enqueueStock: true }) }
       );
       const productSummary = [
         result.activatedProducts ? `${result.activatedProducts} termék aktiválva` : "",
-        result.publishedProducts ? `${result.publishedProducts} termék közzétéve az Online áruházban` : "",
-        result.brandUpdatedProducts ? `${result.brandUpdatedProducts} Brand kitöltve` : "",
-        result.audienceUpdatedProducts ? `${result.audienceUpdatedProducts} Public kitöltve` : "",
-        result.styleUpdatedProducts ? `${result.styleUpdatedProducts} Stil kitöltve` : "",
-        result.brandSkippedProducts ? `${result.brandSkippedProducts} Brand kihagyva` : "",
-        result.audienceSkippedProducts ? `${result.audienceSkippedProducts} Public kihagyva` : "",
-        result.styleSkippedProducts ? `${result.styleSkippedProducts} Stil kihagyva` : "",
+        result.publishedProducts ? `${result.publishedProducts} termék közzétéve` : "",
+        result.brandUpdatedProducts ? `${result.brandUpdatedProducts} Brand` : "",
+        result.colorUpdatedProducts ? `${result.colorUpdatedProducts} Szín` : "",
+        result.sizeUpdatedProducts ? `${result.sizeUpdatedProducts} Méret` : "",
+        result.fabricUpdatedProducts ? `${result.fabricUpdatedProducts} Szövet` : "",
+        result.targetGenderUpdatedProducts ? `${result.targetGenderUpdatedProducts} Célzott nem` : "",
+        result.ageGroupUpdatedProducts ? `${result.ageGroupUpdatedProducts} Korosztály` : "",
+        result.audienceUpdatedProducts ? `${result.audienceUpdatedProducts} Public` : "",
+        result.styleUpdatedProducts ? `${result.styleUpdatedProducts} Stil` : "",
       ].filter(Boolean).join(" • ");
+      const warnings = Array.isArray(result.productWarnings) ? result.productWarnings : [];
+      setMetadataWarnings(warnings);
+      const skippedCount = warnings.length;
       setReconcileMessage(
         result.errors
-          ? `Párosítva: ${result.mapped}. Javítandó: ${result.errors}.${productSummary ? ` ${productSummary}.` : ""}`
-          : `Párosítás kész: ${result.mapped} variáns. ${productSummary || "A termékek aktiválása és az Online áruház közzététele elkészült."} A Miercurea Ciuc induló készlet szinkronja sorba állt.`
+          ? `Párosítva: ${result.mapped}. Javítandó: ${result.errors}.${productSummary ? ` Metaadat: ${productSummary}.` : ""}${skippedCount ? ` ${skippedCount} metaadat nem volt automatikusan párosítható.` : ""}`
+          : `Párosítás kész: ${result.mapped} variáns.${productSummary ? ` Metaadat kitöltve: ${productSummary}.` : ""}${skippedCount ? ` ${skippedCount} metaadat nem volt automatikusan párosítható.` : ""} A Miercurea Ciuc induló készlet szinkronja sorba állt.`
       );
       await loadHistory();
       await onChanged?.();
@@ -382,7 +413,7 @@ export default function ShopifyProductExportModal({
             <p>{groupingMode === "model_colors"
               ? "Egy AllIn modellből egy Shopify-termék készül. A Culoare az első, a Mărime a második variánsopció, ezért a ciklam / roz / turcoaz ugyanazon terméken belül választható."
               : "A beszállítói termékkódok külön Shopify-termékek maradnak. Ezt csak akkor használd, amikor a színkódos cikkszám valóban külön terméket jelent."}</p>
-            <p className="mt-1.5 text-[#bff3ef]">A CSV a román közönségcímkét is hozzáadja, például women → Femei. Import után a Párosítás automatikusan kitölti a Shopify Brand, Public és Stil mezőket, amikor ezek definíciói elérhetők.</p>
+            <p className="mt-1.5 text-[#bff3ef]">Import után a Párosítás a Shopify kategória-metaadatokat is kitölti az AllInből: Brand, Szín, Méret, Szövet, Korosztály és Célzott nem. A Public és Stil mezők is frissülnek, ha a definícióik elérhetők.</p>
           </div>
 
           <div className="mt-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
@@ -397,6 +428,22 @@ export default function ShopifyProductExportModal({
           {reconcileMessage ? (
             <div className="mt-3 flex items-start gap-2 rounded-2xl border border-[#77d8d4]/30 bg-[#203f49] px-3 py-3 text-sm text-[#d7fffd]">
               <CheckCircle2 className="mt-0.5 shrink-0" size={17} /> {reconcileMessage}
+            </div>
+          ) : null}
+
+          {metadataWarnings.length ? (
+            <div className="mt-3 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-3 text-xs text-amber-50">
+              <div className="flex items-center gap-2 text-sm"><AlertTriangle size={16} /> Nem párosított Shopify metaadatok</div>
+              <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+                {metadataWarnings.slice(0, 10).map((warning, index) => (
+                  <div key={`${warning.productId || "product"}-${warning.scope || "meta"}-${index}`} className="rounded-xl border border-amber-200/15 bg-black/10 px-2.5 py-2">
+                    <span className="text-amber-100">{warning.scope || "metaadat"}</span>
+                    <span className="text-white/55"> • {warning.reason || "nem párosítható"}</span>
+                    {warning.candidates?.length ? <span className="mt-0.5 block truncate text-[10px] text-white/45" title={warning.candidates.join(" / ")}>{warning.candidates.join(" / ")}</span> : null}
+                  </div>
+                ))}
+              </div>
+              {metadataWarnings.length > 10 ? <p className="mt-2 text-[10px] text-white/45">+ {metadataWarnings.length - 10} további jelzés</p> : null}
             </div>
           ) : null}
 
@@ -482,7 +529,7 @@ export default function ShopifyProductExportModal({
             ) : exports.length ? (
               <div className="max-h-64 divide-y divide-white/[0.07] overflow-y-auto">
                 {exports.map((row) => {
-                  const pending = !["mapped"].includes(String(row.status || "").toLowerCase());
+                  const mapped = String(row.status || "").toLowerCase() === "mapped";
                   return (
                     <div key={row.id} className="grid gap-2 px-3 py-2.5 lg:grid-cols-[1fr,160px,150px,auto] lg:items-center">
                       <div className="min-w-0">
@@ -498,12 +545,10 @@ export default function ShopifyProductExportModal({
                         <a className={softButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`} download>
                           <Download size={14} /> CSV
                         </a>
-                        {pending ? (
-                          <button type="button" className={primaryButton} onClick={() => void reconcile(row.id)} disabled={reconcileBusy}>
-                            <UploadCloud size={14} className={reconcilingExportId === row.id ? "animate-pulse" : ""} />
-                            {reconcilingExportId === row.id ? "Ellenőrzés..." : "Párosítás"}
-                          </button>
-                        ) : null}
+                        <button type="button" className={primaryButton} onClick={() => void reconcile(row.id)} disabled={reconcileBusy}>
+                          <UploadCloud size={14} className={reconcilingExportId === row.id ? "animate-pulse" : ""} />
+                          {reconcilingExportId === row.id ? "Ellenőrzés..." : mapped ? "Metaadatok frissítése" : "Párosítás"}
+                        </button>
                       </div>
                     </div>
                   );
