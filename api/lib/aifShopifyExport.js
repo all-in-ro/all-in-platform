@@ -230,10 +230,7 @@ function shopifyStyle(row) {
 }
 
 function productCategory(row) {
-  const haystack = normalizeKey([
-    row.shopify_title,
-    row.title_ro,
-    row.title,
+  const structuredHaystack = normalizeKey([
     row.category_name_ro,
     row.category_name_hu,
     row.category_code,
@@ -241,6 +238,26 @@ function productCategory(row) {
     row.subcategory_name_hu,
     row.subcategory_code,
     row.product_type,
+  ].filter(Boolean).join(" "));
+
+  // Explicit catalog classification wins over incidental title words.
+  // This prevents, for example, a Dress containing "tricou" in its title
+  // from being silently reclassified as a T-Shirt.
+  if (/dress|ruha|rochie/.test(structuredHaystack)) {
+    return "Apparel & Accessories > Clothing > Dresses";
+  }
+  if (/sock|zokni|soset|șoset/.test(structuredHaystack)) {
+    return "Apparel & Accessories > Clothing > Socks";
+  }
+  if (/boxer|boxeri|boxer brief|boxer-brief|alsonadrag|alsónadrág|chiloti|chiloți/.test(structuredHaystack)) {
+    return "Apparel & Accessories > Clothing > Men's Undergarments > Men's Underwear > Boxer Briefs";
+  }
+
+  const haystack = normalizeKey([
+    row.shopify_title,
+    row.title_ro,
+    row.title,
+    structuredHaystack,
   ].filter(Boolean).join(" "));
 
   if (/shoe|shoes|cip[oő]|pantof|incalt|incălț|sneaker|sportcip/.test(haystack)) {
@@ -2837,6 +2854,34 @@ async function taxonomyCategoryByPath(path, cache) {
   return suffix;
 }
 
+
+function shouldRepairExistingShopifyCategory(task) {
+  const currentId = text(task?.categoryId);
+  const currentName = text(task?.categoryName);
+  const desired = text(task?.desiredCategoryPath);
+
+  if (!desired) return false;
+
+  // Empty category: safe to set.
+  if (!currentId && !currentName) return true;
+
+  // Archived Shopify taxonomy IDs must be migrated.
+  if (/\/archived-/i.test(currentId)) return true;
+
+  // Very broad Clothing Accessories is safe to refine only when the product is
+  // unmistakably underwear/boxer from our own catalog data.
+  if (
+    normalizedCategoryPath(currentName) === normalizedCategoryPath("Apparel & Accessories > Clothing Accessories") &&
+    /boxer briefs$/i.test(desired)
+  ) {
+    return true;
+  }
+
+  // Never auto-reclassify an already valid, specific category such as Dresses,
+  // T-Shirts, Jackets, etc. Metadata sync should not become a taxonomy bulldozer.
+  return false;
+}
+
 async function updateShopifyProductCategory(productId, categoryId) {
   const product = text(productId);
   const category = text(categoryId);
@@ -2853,7 +2898,7 @@ async function updateShopifyProductCategory(productId, categoryId) {
           isArchived
         }
       }
-      userErrors { field message code }
+      userErrors { field message }
     }
   }`;
 
@@ -3413,14 +3458,15 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       // category metafields. This is required for archived taxonomy IDs such as
       // the old Socks category and for products that were exported into a broad
       // parent category even though the model/title clearly identifies a leaf.
-      if (task.desiredCategoryPath) {
+      if (task.desiredCategoryPath && shouldRepairExistingShopifyCategory(task)) {
         try {
+          const oldCategoryId = text(task.categoryId);
           const desiredCategory = await taxonomyCategoryByPath(
             task.desiredCategoryPath,
             taxonomyCategorySearchCache,
           );
 
-          if (desiredCategory?.id && text(desiredCategory.id) !== text(task.categoryId)) {
+          if (desiredCategory?.id && text(desiredCategory.id) !== oldCategoryId) {
             const updatedCategory = await updateShopifyProductCategory(
               task.productId,
               desiredCategory.id,
@@ -3430,8 +3476,9 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
             categoryUpdatedProducts += 1;
 
             // A category changed, so applicable metafield definitions must be
-            // resolved fresh for the new category.
-            metadataDefinitionCache.delete(task.categoryId);
+            // resolved fresh for both the old and the new category keys.
+            if (oldCategoryId) metadataDefinitionCache.delete(oldCategoryId);
+            if (task.categoryId) metadataDefinitionCache.delete(task.categoryId);
           } else if (!desiredCategory?.id) {
             categorySkippedProducts += 1;
             productWarnings.push({
