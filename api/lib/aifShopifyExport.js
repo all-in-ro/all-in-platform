@@ -200,10 +200,19 @@ function audienceSignalText(row) {
   if (!row || typeof row !== "object") return normalizeKey(row);
   return normalizeKey([
     row?.gender,
+    row?.brand_name,
+    row?.brand,
+    row?.brand_code,
     row?.shopify_title,
     row?.title_ro,
     row?.title_hu,
     row?.title,
+    row?.model_code,
+    row?.productCode,
+    row?.product_code,
+    row?.supplier_product_code,
+    row?.supplier_variant_code,
+    row?.internal_sku,
     row?.category_name_ro,
     row?.category_name_hu,
     row?.category_code,
@@ -215,6 +224,58 @@ function audienceSignalText(row) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function brandSpecificAudienceProfile(row) {
+  if (!row || typeof row !== "object") return { ageGroup: "", gender: "" };
+
+  const brand = normalizeKey(row?.brand_name || row?.brand || row?.brand_code);
+  const sources = [
+    row?.shopify_title,
+    row?.title_ro,
+    row?.title_hu,
+    row?.title,
+    row?.model_code,
+    row?.productCode,
+    row?.product_code,
+    row?.supplier_product_code,
+    row?.supplier_variant_code,
+    row?.internal_sku,
+  ].map((value) => normalizeKey(value)).filter(Boolean);
+  const codeText = sources.join(" ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const padded = ` ${codeText} `;
+
+  // Under Armour naming is highly regular in the legacy catalog:
+  // UA M = men, UA W = women, UA B = boys, UA G = girls, UA Y = youth.
+  // These short prefixes are much stronger than an empty / wrong legacy gender field.
+  if (brand.includes("under armour") || padded.includes(" ua ")) {
+    if (/\bua\s+b\b/.test(codeText)) return { ageGroup: "kids", gender: "male" };
+    if (/\bua\s+g\b/.test(codeText)) return { ageGroup: "kids", gender: "female" };
+    if (/\bua\s+y\b/.test(codeText)) return { ageGroup: "kids", gender: "unisex" };
+    if (/\bua\s+w\b/.test(codeText)) return { ageGroup: "adult", gender: "female" };
+    if (/\bua\s+m\b/.test(codeText)) return { ageGroup: "adult", gender: "male" };
+  }
+
+  // 4F legacy model names use an M/F/U/J token directly before the model number.
+  // Examples in the live catalog: M520, F515, U083. J is treated as junior.
+  // Only apply this rule to 4F so a random letter+number in another brand cannot
+  // silently change the audience.
+  if (brand === "4f" || brand.startsWith("4f ")) {
+    for (const source of sources) {
+      const match = source.match(/(?:^|[^a-z0-9])([mfuj])\s*0*\d{2,4}(?:[^a-z0-9]|$)/i);
+      if (!match) continue;
+      const token = normalizeKey(match[1]);
+      if (token === "f") return { ageGroup: "adult", gender: "female" };
+      if (token === "m") return { ageGroup: "adult", gender: "male" };
+      if (token === "u") return { ageGroup: "adult", gender: "unisex" };
+      if (token === "j") return { ageGroup: "kids", gender: "unisex" };
+    }
+  }
+
+  return { ageGroup: "", gender: "" };
 }
 
 function hasAudienceToken(haystack, tokens) {
@@ -242,8 +303,9 @@ function shopifyAudienceProfile(value) {
   const haystack = audienceSignalText(value);
   const rawGender = text(value?.gender);
   const rawGenderNormalized = shopifyGender(rawGender);
+  const brandProfile = brandSpecificAudienceProfile(value);
 
-  const childSignal = shopifyAgeGroup(rawGender) === "kids" || hasAudienceToken(haystack, [
+  const explicitChildSignal = hasAudienceToken(haystack, [
     "copii", "copil", "copila", "copilasi", "junior", "kids", "kid", "children", "child",
     "boys", "boy", "girls", "girl", "baieti", "baiat", "fete", "fata",
     "gyerek", "gyermek", "fiuk", "fiu", "lanyok", "lany", "youth",
@@ -259,12 +321,17 @@ function shopifyAudienceProfile(value) {
     "boys", "boy", "baieti", "baiat", "fiuk", "fiu",
   ]);
 
+  // Human-readable title/category wording wins. If the legacy title is neutral,
+  // brand-specific model conventions are the next strongest signal; raw gender is last.
   let gender = rawGenderNormalized;
   if (femaleSignal && !maleSignal) gender = "female";
   else if (maleSignal && !femaleSignal) gender = "male";
+  else if (brandProfile.gender) gender = brandProfile.gender;
   else if (femaleSignal && maleSignal && rawGenderNormalized === "unisex") gender = "unisex";
 
-  const ageGroup = childSignal ? "kids" : "adult";
+  const ageGroup = explicitChildSignal || shopifyAgeGroup(rawGender) === "kids" || brandProfile.ageGroup === "kids"
+    ? "kids"
+    : "adult";
   const audience = ageGroup === "kids"
     ? "Copii"
     : gender === "female"
@@ -3667,7 +3734,11 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
        v.color_code AS live_color_code,
        sc.supplier_color_name AS live_supplier_color_name,
        sc.supplier_color_code AS live_supplier_color_code,
+       sc.supplier_product_code AS live_supplier_product_code,
+       sc.supplier_variant_code AS live_supplier_variant_code,
        v.size AS live_size,
+       v.internal_sku AS live_internal_sku,
+       m.model_code AS live_model_code,
        m.gender AS live_gender,
        m.material AS live_material,
        m.product_type AS live_product_type,
@@ -3680,7 +3751,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
      LEFT JOIN aif_categories c ON c.id=m.category_id
      LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
      LEFT JOIN LATERAL (
-       SELECT supplier_color_code, supplier_color_name
+       SELECT supplier_color_code, supplier_color_name, supplier_product_code, supplier_variant_code
        FROM aif_variant_supplier_codes sc
        WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
        ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
@@ -3802,6 +3873,13 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
             subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
             subcategory_code: text(item.snapshot?.subcategoryCode),
             product_type: text(item.snapshot?.productType || item.live_product_type),
+            brand_name: text(item.snapshot?.brand || item.live_brand_name),
+            brand_code: text(item.snapshot?.brandCode || item.live_brand_code),
+            model_code: text(item.live_model_code),
+            productCode: text(item.snapshot?.productCode),
+            supplier_product_code: text(item.live_supplier_product_code),
+            supplier_variant_code: text(item.live_supplier_variant_code),
+            internal_sku: text(item.live_internal_sku),
           }),
         ]),
         ageGroups: unique([
@@ -3816,6 +3894,13 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
             subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
             subcategory_code: text(item.snapshot?.subcategoryCode),
             product_type: text(item.snapshot?.productType || item.live_product_type),
+            brand_name: text(item.snapshot?.brand || item.live_brand_name),
+            brand_code: text(item.snapshot?.brandCode || item.live_brand_code),
+            model_code: text(item.live_model_code),
+            productCode: text(item.snapshot?.productCode),
+            supplier_product_code: text(item.live_supplier_product_code),
+            supplier_variant_code: text(item.live_supplier_variant_code),
+            internal_sku: text(item.live_internal_sku),
           }),
         ]),
         audience: shopifyAudience({
@@ -3829,6 +3914,13 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
           subcategory_code: text(item.snapshot?.subcategoryCode),
           product_type: text(item.snapshot?.productType || item.live_product_type),
+          brand_name: text(item.snapshot?.brand || item.live_brand_name),
+          brand_code: text(item.snapshot?.brandCode || item.live_brand_code),
+          model_code: text(item.live_model_code),
+          productCode: text(item.snapshot?.productCode),
+          supplier_product_code: text(item.live_supplier_product_code),
+          supplier_variant_code: text(item.live_supplier_variant_code),
+          internal_sku: text(item.live_internal_sku),
         }),
         style: text(item.snapshot?.style) || shopifyStyle({
           brand_name: item.live_brand_name,
