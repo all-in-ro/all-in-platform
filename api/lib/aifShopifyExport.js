@@ -1351,6 +1351,60 @@ async function applicableProductMetafieldDefinitions(categoryId) {
   });
 }
 
+
+async function exactProductMetafieldDefinition(definition, cache) {
+  const namespace = text(definition?.namespace);
+  const key = text(definition?.key);
+  if (!namespace || !key) return definition || null;
+
+  const cacheKey = `${namespace}.${key}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
+  const query = `query AifExactProductMetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
+    metafieldDefinition(identifier: $identifier) {
+      id
+      name
+      namespace
+      key
+      type { name }
+      validations { name value }
+      standardTemplate {
+        id
+        name
+        namespace
+        key
+        type { name }
+        validations { name value }
+      }
+    }
+  }`;
+
+  try {
+    const response = await shopifyGraphql(query, {
+      identifier: {
+        ownerType: "PRODUCT",
+        namespace,
+        key,
+      },
+    });
+    const exact = response.data?.metafieldDefinition || null;
+    const hydrated = exact
+      ? {
+          ...definition,
+          ...exact,
+          type: exact.type || definition?.type || null,
+          validations: Array.isArray(exact.validations) ? exact.validations : (definition?.validations || []),
+        }
+      : definition || null;
+    cache?.set(cacheKey, hydrated);
+    return hydrated;
+  } catch {
+    // A listából kapott definíció még mindig jobb, mint a semmi.
+    cache?.set(cacheKey, definition || null);
+    return definition || null;
+  }
+}
+
 function metafieldDefinitionScore(definition, aliases, preferredNamespaces = []) {
   const name = normalizeKey(definition?.name);
   const key = normalizeKey(definition?.key).replace(/[_-]+/g, " ");
@@ -1841,33 +1895,9 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
   const cached = definitionTypeCache?.get(cacheKey);
   if (cached && typeof cached === "object") return cached;
 
-  const directTypes = validationValues(definition, [
-    "metaobject_definition_type",
-    "metaobject_definition_types",
-  ]);
-  const inferredType = directTypes[0] || inferredMetaobjectTypeForMetafield(definition);
-
-  // This is the important path for Shopify category metafields.
-  // Standard metaobject definitions aren't reliably discoverable in a generic
-  // metaobjectDefinitions list, but Shopify exposes an exact by-type query.
-  if (inferredType) {
-    try {
-      let resolved = await metaobjectDefinitionByType(inferredType);
-      if (!resolved && inferredType.startsWith("shopify--")) {
-        resolved = await enableStandardMetaobjectDefinition(inferredType);
-      }
-      resolved = hydratedMetaobjectDefinition(resolved);
-      if (resolved?.type) {
-        definitionTypeCache?.set(cacheKey, resolved);
-        return resolved;
-      }
-    } catch (error) {
-      // Keep the error details by rethrowing. Silently replacing this with an
-      // empty fake definition is exactly what hid the real problem before.
-      throw error;
-    }
-  }
-
+  // Shopify GraphQLnál a metaobject_reference és list.metaobject_reference
+  // hivatalos célmeghatározása a metafield definition validationje.
+  // Ez az elsődleges igazság, nem a namespace/key-ből kitalált type.
   const definitionIds = validationValues(definition, [
     "metaobject_definition_id",
     "metaobject_definition_ids",
@@ -1875,24 +1905,12 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
   const definitionId = definitionIds[0] || "";
 
   if (definitionId) {
-    const query = `query AifMetaobjectDefinitionType($id: ID!) {
+    const query = `query AifTargetMetaobjectDefinition($id: ID!) {
       metaobjectDefinition(id: $id) {
         id
         name
         type
         displayNameKey
-        standardTemplate {
-          name
-          type
-          displayNameKey
-          fieldDefinitions {
-            key
-            name
-            required
-            type { name }
-            validations { name value }
-          }
-        }
         fieldDefinitions {
           key
           name
@@ -1910,7 +1928,23 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
     }
   }
 
-  // Last fallback for genuinely custom definitions.
+  // Egyes definíciók type validationt adhatnak ID helyett.
+  const directTypes = validationValues(definition, [
+    "metaobject_definition_type",
+    "metaobject_definition_types",
+  ]);
+  for (const directType of directTypes) {
+    if (!directType) continue;
+    const resolved = hydratedMetaobjectDefinition(await metaobjectDefinitionByType(directType));
+    if (resolved?.type) {
+      definitionTypeCache?.set(cacheKey, resolved);
+      return resolved;
+    }
+  }
+
+  // Csak valódi custom fallback. A korábbi shopify--size / shopify--fabric
+  // találgatás Record not found hibát okozott, ezért itt már NEM próbálunk
+  // standard definíciót vakon engedélyezni.
   let definitions = [];
   try {
     definitions = await loadMetaobjectDefinitions(metaobjectDefinitionsCache);
@@ -1920,7 +1954,7 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
 
   const found = hydratedMetaobjectDefinition(
     definitions
-      .map((row) => ({ row, score: metaobjectDefinitionMatchScore(row, definition, inferredType) }))
+      .map((row) => ({ row, score: metaobjectDefinitionMatchScore(row, definition, "") }))
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score)[0]?.row || null
   );
@@ -2306,11 +2340,14 @@ async function metafieldValueForDefinition({
     definitionTypeCache,
     metaobjectDefinitionsCache,
   );
-  const metaobjectType = text(metaDefinition?.type || metaDefinition?.standardTemplate?.type)
-    || await metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache);
+  const metaobjectType = text(metaDefinition?.type);
 
   if (!metaobjectType) {
-    return { value: null, reason: "metaobject_definition_missing" };
+    return {
+      value: null,
+      reason: "metaobject_definition_missing",
+      metafieldValidations: definition?.validations || [],
+    };
   }
 
   let ensured;
@@ -2501,6 +2538,7 @@ async function setShopifyProductMetadata({
   audience,
   style,
   definitionCache,
+  exactMetafieldDefinitionCache,
   metaobjectDefinitionTypeCache,
   metaobjectDefinitionsCache,
   metaobjectEntriesCache,
@@ -2521,7 +2559,7 @@ async function setShopifyProductMetadata({
     {
       field: "brand",
       aliases: ["Brand", "Brand name", "Marcă", "Marca", "Márka"],
-      preferredNamespaces: ["shopify"],
+      preferredNamespaces: ["custom", "shopify"],
       candidates: unique([text(brand)]),
     },
     {
@@ -2578,11 +2616,13 @@ async function setShopifyProductMetadata({
       skippedFields.push({ field: field.field, reason: "missing_value" });
       continue;
     }
-    const definition = findProductMetafieldDefinition(definitions, field.aliases, field.preferredNamespaces);
-    if (!definition) {
+    const listedDefinition = findProductMetafieldDefinition(definitions, field.aliases, field.preferredNamespaces);
+    if (!listedDefinition) {
       skippedFields.push({ field: field.field, reason: "definition_missing" });
       continue;
     }
+
+    const definition = await exactProductMetafieldDefinition(listedDefinition, exactMetafieldDefinitionCache);
 
     let resolved;
     try {
@@ -2629,6 +2669,7 @@ async function setShopifyProductMetadata({
         availableAttributes: resolved.availableAttributes || undefined,
         availableEntries: resolved.availableEntries || undefined,
         errors: resolved.errors || undefined,
+        metafieldValidations: resolved.metafieldValidations || undefined,
         candidates: cleanCandidates,
       });
       continue;
@@ -2900,6 +2941,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const productErrors = [];
   const productWarnings = [];
   const metadataDefinitionCache = new Map();
+  const exactMetafieldDefinitionCache = new Map();
   const metaobjectDefinitionTypeCache = new Map();
   const metaobjectDefinitionsCache = new Map();
   const metaobjectEntriesCache = new Map();
@@ -2938,6 +2980,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         gender: (task.genders || [])[0] || "",
         ageGroup: (task.ageGroups || [])[0] || "",
         definitionCache: metadataDefinitionCache,
+        exactMetafieldDefinitionCache,
         metaobjectDefinitionTypeCache,
         metaobjectDefinitionsCache,
         metaobjectEntriesCache,
