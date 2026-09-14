@@ -4206,7 +4206,8 @@ export type AifSalesCommandDimensionKey =
   | "size"
   | "color"
   | "store"
-  | "payment";
+  | "payment"
+  | "gender";
 
 export type AifSalesCommandDimensionItem = {
   key: string;
@@ -4251,6 +4252,7 @@ export type AifSalesCommandDetailItem = {
   brandName?: string | null;
   categoryName?: string | null;
   subcategoryName?: string | null;
+  genderName?: string | null;
   productTitle?: string | null;
   productCode?: string | null;
   colorName?: string | null;
@@ -4291,6 +4293,7 @@ export type AifSalesCommandOverviewResponse = {
     brand?: string | null;
     category?: string | null;
     subcategory?: string | null;
+    gender?: string | null;
     size?: string | null;
     color?: string | null;
     payment?: string | null;
@@ -4343,6 +4346,7 @@ export type AifSalesCommandOverviewResponse = {
     subcategories: string[];
     sizes: string[];
     colors: string[];
+    genders: string[];
   };
 };
 
@@ -4409,6 +4413,7 @@ export function apiAifSalesCommandCenterOverview(options?: {
   brand?: string;
   category?: string;
   subcategory?: string;
+  gender?: string;
   size?: string;
   color?: string;
   payment?: string;
@@ -4428,6 +4433,7 @@ export function apiAifSalesCommandCenterOverview(options?: {
   if (options?.brand?.trim()) q.set("brand", options.brand.trim());
   if (options?.category?.trim()) q.set("category", options.category.trim());
   if (options?.subcategory?.trim()) q.set("subcategory", options.subcategory.trim());
+  if (options?.gender?.trim()) q.set("gender", options.gender.trim());
   if (options?.size?.trim()) q.set("size", options.size.trim());
   if (options?.color?.trim()) q.set("color", options.color.trim());
   if (options?.payment?.trim()) q.set("payment", options.payment.trim());
