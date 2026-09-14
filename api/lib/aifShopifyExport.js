@@ -259,19 +259,38 @@ function brandSpecificAudienceProfile(row) {
     if (/\bua\s+m\b/.test(codeText)) return { ageGroup: "adult", gender: "male" };
   }
 
-  // 4F legacy model names use an M/F/U/J token directly before the model number.
-  // Examples in the live catalog: M520, F515, U083. J is treated as junior.
-  // Only apply this rule to 4F so a random letter+number in another brand cannot
-  // silently change the audience.
+  // 4F product codes need two layers of interpretation.
+  // 4FJ... is the junior line, while M/F/U in the model suffix indicates
+  // boy / girl / unisex inside that junior line. This junior marker MUST win
+  // before the generic adult M/F/U rule, otherwise codes such as
+  // 4FJ...M520 are incorrectly classified as adult men.
   if (brand === "4f" || brand.startsWith("4f ")) {
+    const junior4f = sources.some((source) => /(?:^|[^a-z0-9])4fj/i.test(source) || /^4fj/i.test(source));
+
+    let modelToken = "";
     for (const source of sources) {
-      const match = source.match(/(?:^|[^a-z0-9])([mfuj])\s*0*\d{2,4}(?:[^a-z0-9]|$)/i);
+      const match = source.match(/(?:^|[^a-z0-9])([mfu])\s*0*\d{2,4}(?:[^a-z0-9]|$)/i);
       if (!match) continue;
-      const token = normalizeKey(match[1]);
-      if (token === "f") return { ageGroup: "adult", gender: "female" };
-      if (token === "m") return { ageGroup: "adult", gender: "male" };
-      if (token === "u") return { ageGroup: "adult", gender: "unisex" };
-      if (token === "j") return { ageGroup: "kids", gender: "unisex" };
+      modelToken = normalizeKey(match[1]);
+      break;
+    }
+
+    if (junior4f) {
+      if (modelToken === "f") return { ageGroup: "kids", gender: "female" };
+      if (modelToken === "m") return { ageGroup: "kids", gender: "male" };
+      return { ageGroup: "kids", gender: "unisex" };
+    }
+
+    // Adult 4F legacy model names use M/F/U directly before the model number.
+    // Only apply this rule to 4F so a random letter+number in another brand cannot
+    // silently change the audience.
+    if (modelToken === "f") return { ageGroup: "adult", gender: "female" };
+    if (modelToken === "m") return { ageGroup: "adult", gender: "male" };
+    if (modelToken === "u") return { ageGroup: "adult", gender: "unisex" };
+
+    for (const source of sources) {
+      const juniorToken = source.match(/(?:^|[^a-z0-9])j\s*0*\d{2,4}(?:[^a-z0-9]|$)/i);
+      if (juniorToken) return { ageGroup: "kids", gender: "unisex" };
     }
   }
 
