@@ -9779,7 +9779,23 @@ export default function AllInWarehouse() {
     });
   }, [incomingFocus?.batchId, incomingFocusVariantIdsKey]);
 
-  const selectionSourceItems = useMemo(() => mergeInventoryItems(items, persistedSelectedItems), [items, persistedSelectedItems]);
+  // A kijelölt munkalista NEM használhatja a mergeInventoryItems 600 soros
+  // megjelenítési limitjét. A raktárban több ezer variáns lehet, és egy korai
+  // termék kijelölésekor emiatt a checkbox kipipálódott, miközben a
+  // „Kijelöltek megnyitása” gomb 0 kijelöltet látott.
+  const selectionSourceItems = useMemo(() => {
+    const map = new Map<string, InventoryItem>();
+    for (const item of inventoryDisplayItems) {
+      const id = selectedVariantIdFromItem(item);
+      if (id) map.set(id, { ...item, variant_id: id });
+    }
+    for (const item of persistedSelectedItems) {
+      const id = selectedVariantIdFromItem(item);
+      if (!id) continue;
+      map.set(id, { ...(map.get(id) || {}), ...item, variant_id: id } as InventoryItem);
+    }
+    return Array.from(map.values());
+  }, [inventoryDisplayItems, persistedSelectedItems]);
 
   const selectedItems = useMemo(() => {
     const selected = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
@@ -9798,7 +9814,12 @@ export default function AllInWarehouse() {
     });
   }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocusVariantIdsKey, incomingSelectedVariants]);
 
-  const selectedCount = selectedItems.length;
+  // A gombok engedélyezése közvetlenül a kijelölési állapotból történik,
+  // ezért már a kattintás pillanatában aktívak, nem egy külön lista-feloldástól függenek.
+  const selectedCount = useMemo(
+    () => Object.keys(selectedVariants).filter((id) => selectedVariants[id]).length,
+    [selectedVariants],
+  );
   const incomingSelectedCount = incomingSelectedItems.length;
   const activeListSelectedCount = incomingFocus?.batchId ? incomingSelectedCount : selectedCount;
   const selectedUnassignedItems = useMemo(
@@ -10848,8 +10869,11 @@ export default function AllInWarehouse() {
       const saved = await request();
       // Gyors egymás utáni kattintásoknál egy régebbi válasz nem írhatja felül
       // az újabbat. A legutolsó művelet után külön GET hozza a végleges közös állapotot.
-      if (mutationSequence === selectedMutationSequenceRef.current) {
-        applyPersistedSelectedWorklist(saved.items || []);
+      if (mutationSequence === selectedMutationSequenceRef.current && Array.isArray(saved.items)) {
+        // Csak akkor írjuk felül az optimista kijelölést, ha a backend ténylegesen
+        // visszaküldte a teljes munkalistát. Egy csak count/added jellegű válasz
+        // többé nem nullázza le a frissen kipipált terméket.
+        applyPersistedSelectedWorklist(saved.items);
       }
       return saved;
     } catch (error) {
