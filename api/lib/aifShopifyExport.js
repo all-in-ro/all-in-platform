@@ -1507,8 +1507,27 @@ async function loadTaxonomyAttributeValues(attributeId, cache) {
 }
 
 function taxonomyValueMatchScore(value, candidateKeys) {
-  const key = metaobjectMatchKey(value?.name);
-  return key && candidateKeys.has(key) ? 120 : 0;
+  const raw = text(value?.name);
+  const key = metaobjectMatchKey(raw);
+  if (!key) return 0;
+  if (candidateKeys.has(key)) return 300;
+
+  // Shopify size taxonomy values are often human labels such as
+  // "Medium (M)" / "Extra large (XL)". The AllIn side correctly stores M / XL,
+  // so the code in parentheses must count as an exact taxonomy match.
+  const parenthetical = Array.from(raw.matchAll(/\(([^)]+)\)/g))
+    .flatMap((match) => String(match[1] || "").split(/[\/,;|]+/))
+    .map(metaobjectMatchKey)
+    .filter(Boolean);
+  if (parenthetical.some((part) => candidateKeys.has(part))) return 280;
+
+  // A few Shopify labels contain the short value as a standalone word.
+  // Keep this conservative so numeric sizes don't accidentally hit each other.
+  for (const candidate of candidateKeys) {
+    if (!candidate || candidate.length < 2) continue;
+    if (candidate.length >= 4 && (key.startsWith(candidate) || key.endsWith(candidate))) return 120;
+  }
+  return 0;
 }
 
 
@@ -1550,6 +1569,24 @@ async function resolveTaxonomyValuesForCandidates({
   }
 
   if (!selected.length) {
+    // Shopify apparel taxonomy does not contain every supplier sizing system
+    // (for example height sizes such as 152). The exact variant option remains
+    // "152"; the category metafield can honestly use Shopify's "Other" value
+    // instead of staying blank.
+    const definitionKey = normalizeKey(definition?.key).replace(/[^a-z0-9]+/g, "");
+    if (definitionKey === "size") {
+      const other = entries.find((entry) => metaobjectMatchKey(entry?.name) === "other");
+      if (other?.id) {
+        selected.push(other);
+        return {
+          selected,
+          reason: null,
+          fallback: "other",
+          taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
+        };
+      }
+    }
+
     return {
       selected: [],
       reason: "taxonomy_value_missing",
@@ -1708,6 +1745,97 @@ function metaobjectDefinitionMatchScore(row, definition, inferredType = "") {
   return score;
 }
 
+async function metaobjectDefinitionByType(type) {
+  const cleanType = text(type);
+  if (!cleanType) return null;
+  const query = `query AifMetaobjectDefinitionByType($type: String!) {
+    metaobjectDefinitionByType(type: $type) {
+      id
+      name
+      type
+      displayNameKey
+      standardTemplate {
+        name
+        type
+        displayNameKey
+        fieldDefinitions {
+          key
+          name
+          required
+          type { name }
+          validations { name value }
+        }
+      }
+      fieldDefinitions {
+        key
+        name
+        required
+        type { name }
+        validations { name value }
+      }
+    }
+  }`;
+  const response = await shopifyGraphql(query, { type: cleanType });
+  return response.data?.metaobjectDefinitionByType || null;
+}
+
+async function enableStandardMetaobjectDefinition(type) {
+  const cleanType = text(type);
+  if (!cleanType || !cleanType.startsWith("shopify--")) return null;
+  const mutation = `mutation AifEnableStandardMetaobjectDefinition($type: String!) {
+    standardMetaobjectDefinitionEnable(type: $type) {
+      metaobjectDefinition {
+        id
+        name
+        type
+        displayNameKey
+        standardTemplate {
+          name
+          type
+          displayNameKey
+          fieldDefinitions {
+            key
+            name
+            required
+            type { name }
+            validations { name value }
+          }
+        }
+        fieldDefinitions {
+          key
+          name
+          required
+          type { name }
+          validations { name value }
+        }
+      }
+      userErrors { field message code }
+    }
+  }`;
+  const response = await shopifyGraphql(mutation, { type: cleanType });
+  const payload = response.data?.standardMetaobjectDefinitionEnable;
+  if (payload?.userErrors?.length) {
+    throw Object.assign(
+      new Error(payload.userErrors.map((row) => row.message).join(" | ")),
+      { code: "shopify_standard_metaobject_enable_failed", payload, type: cleanType }
+    );
+  }
+  return payload?.metaobjectDefinition || null;
+}
+
+function hydratedMetaobjectDefinition(definition) {
+  if (!definition) return null;
+  const liveFields = Array.isArray(definition.fieldDefinitions) ? definition.fieldDefinitions : [];
+  const templateFields = Array.isArray(definition.standardTemplate?.fieldDefinitions)
+    ? definition.standardTemplate.fieldDefinitions
+    : [];
+  return {
+    ...definition,
+    displayNameKey: text(definition.displayNameKey || definition.standardTemplate?.displayNameKey) || null,
+    fieldDefinitions: liveFields.length ? liveFields : templateFields,
+  };
+}
+
 async function metaobjectDefinitionForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache) {
   const cacheKey = `${text(definition?.namespace)}.${text(definition?.key)}`;
   const cached = definitionTypeCache?.get(cacheKey);
@@ -1719,6 +1847,27 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
   ]);
   const inferredType = directTypes[0] || inferredMetaobjectTypeForMetafield(definition);
 
+  // This is the important path for Shopify category metafields.
+  // Standard metaobject definitions aren't reliably discoverable in a generic
+  // metaobjectDefinitions list, but Shopify exposes an exact by-type query.
+  if (inferredType) {
+    try {
+      let resolved = await metaobjectDefinitionByType(inferredType);
+      if (!resolved && inferredType.startsWith("shopify--")) {
+        resolved = await enableStandardMetaobjectDefinition(inferredType);
+      }
+      resolved = hydratedMetaobjectDefinition(resolved);
+      if (resolved?.type) {
+        definitionTypeCache?.set(cacheKey, resolved);
+        return resolved;
+      }
+    } catch (error) {
+      // Keep the error details by rethrowing. Silently replacing this with an
+      // empty fake definition is exactly what hid the real problem before.
+      throw error;
+    }
+  }
+
   const definitionIds = validationValues(definition, [
     "metaobject_definition_id",
     "metaobject_definition_ids",
@@ -1726,37 +1875,42 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
   const definitionId = definitionIds[0] || "";
 
   if (definitionId) {
-    try {
-      const query = `query AifMetaobjectDefinitionType($id: ID!) {
-        metaobjectDefinition(id: $id) {
-          id
+    const query = `query AifMetaobjectDefinitionType($id: ID!) {
+      metaobjectDefinition(id: $id) {
+        id
+        name
+        type
+        displayNameKey
+        standardTemplate {
           name
           type
           displayNameKey
-          standardTemplate { name type }
           fieldDefinitions {
             key
             name
             required
             type { name }
+            validations { name value }
           }
         }
-      }`;
-      const response = await shopifyGraphql(query, { id: definitionId });
-      const resolved = response.data?.metaobjectDefinition || null;
-      if (resolved?.type) {
-        definitionTypeCache?.set(cacheKey, resolved);
-        return resolved;
+        fieldDefinitions {
+          key
+          name
+          required
+          type { name }
+          validations { name value }
+        }
       }
-    } catch {
-      // A standard Shopify mezőknél a validation sokszor nem ad használható
-      // definition ID-t. Ilyenkor az alábbi type / standardTemplate fallback jön.
+    }`;
+    const response = await shopifyGraphql(query, { id: definitionId });
+    const resolved = hydratedMetaobjectDefinition(response.data?.metaobjectDefinition || null);
+    if (resolved?.type) {
+      definitionTypeCache?.set(cacheKey, resolved);
+      return resolved;
     }
   }
 
-  // Shopify standard category metafieldeknél a cél metaobject type stabilan
-  // a namespace+key mintát követi (pl. shopify.color-pattern -> shopify--color-pattern).
-  // Ezt akkor is vissza tudjuk adni, ha a definition API nem közli külön.
+  // Last fallback for genuinely custom definitions.
   let definitions = [];
   try {
     definitions = await loadMetaobjectDefinitions(metaobjectDefinitionsCache);
@@ -1764,24 +1918,15 @@ async function metaobjectDefinitionForMetafield(definition, definitionTypeCache,
     definitions = [];
   }
 
-  const found = definitions
-    .map((row) => ({ row, score: metaobjectDefinitionMatchScore(row, definition, inferredType) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.row || null;
+  const found = hydratedMetaobjectDefinition(
+    definitions
+      .map((row) => ({ row, score: metaobjectDefinitionMatchScore(row, definition, inferredType) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.row || null
+  );
 
-  const fallback = found || (inferredType ? {
-    id: null,
-    name: text(definition?.name),
-    type: inferredType,
-    displayNameKey: null,
-    standardTemplate: normalizeKey(definition?.namespace) === "shopify"
-      ? { name: text(definition?.name), type: inferredType }
-      : null,
-    fieldDefinitions: [],
-  } : null);
-
-  if (fallback) definitionTypeCache?.set(cacheKey, fallback);
-  return fallback;
+  if (found) definitionTypeCache?.set(cacheKey, found);
+  return found;
 }
 
 async function metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache) {
@@ -2268,13 +2413,36 @@ const SHOPIFY_COLOR_CANDIDATES = {
 function colorCandidates(values) {
   const source = Array.isArray(values) ? values : [values];
   const out = [];
+  const phraseRules = [
+    [/off[\s_-]*white|ivory|cream|crem/, ["White"]],
+    [/black|negru|fekete/, ["Black"]],
+    [/navy|bleumarin|sotetkek|sötétkék/, ["Navy"]],
+    [/denim|cobalt|royal[\s_-]*blue|albastru|blue|kek|kék/, ["Blue"]],
+    [/petrol|olive|khaki|kaki|verde|green|zold|zöld/, ["Green"]],
+    [/anthracite|antracit|grey|gray|gri|szurke|szürke|melange/, ["Gray"]],
+    [/multicolou?r|multi[\s_-]*colour|multi[\s_-]*color/, ["Multicolor"]],
+    [/red|rosu|roșu|piros/, ["Red"]],
+    [/pink|roz|rozsaszin|rózsaszín/, ["Pink"]],
+    [/purple|violet|mov|lila/, ["Purple"]],
+    [/orange|portocaliu|narancs/, ["Orange"]],
+    [/yellow|galben|sarga|sárga/, ["Yellow"]],
+    [/brown|maro|barna/, ["Brown"]],
+    [/beige|bej|bezs|bézs/, ["Beige"]],
+    [/gold|auriu|arany/, ["Gold"]],
+    [/silver|argintiu|ezust|ezüst/, ["Silver"]],
+  ];
+
   for (const value of source) {
     const raw = text(value);
     if (!raw) continue;
     out.push(raw);
-    const parts = normalizeKey(raw).split(/[\/,+&]+/).map((part) => part.trim()).filter(Boolean);
-    for (const part of parts.length ? parts : [normalizeKey(raw)]) {
+    const normalizedRaw = normalizeKey(raw);
+    const parts = normalizedRaw.split(/[\/,+&]+/).map((part) => part.trim()).filter(Boolean);
+    for (const part of parts.length ? parts : [normalizedRaw]) {
       out.push(...(SHOPIFY_COLOR_CANDIDATES[part] || []));
+    }
+    for (const [pattern, candidates] of phraseRules) {
+      if (pattern.test(normalizedRaw)) out.push(...candidates);
     }
   }
   return unique(out);
@@ -2543,6 +2711,7 @@ async function enqueueInitialMiercureaProductExportStock(client, variantId, quan
 
 export async function reconcileAifShopifyProductExport(client, exportId, options = {}) {
   await ensureAifShopifyExportSchema(client);
+  const metadataOnly = bool(options.metadataOnly, false);
   const exportResult = await client.query(`SELECT * FROM aif_shopify_product_exports WHERE id::text=$1 LIMIT 1`, [text(exportId)]);
   if (!exportResult.rowCount) return null;
   const exportRow = exportResult.rows[0];
@@ -2655,7 +2824,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
          WHERE export_id=$1 AND variant_id=$2`,
         [exportRow.id, item.variant_id]
       );
-      if (options.enqueueStock !== false) {
+      if (!metadataOnly && options.enqueueStock !== false) {
         await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }
       const taskData = {
@@ -2738,7 +2907,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const taxonomyAttributeValuesCache = new Map();
   let onlinePublicationId = "";
 
-  if (exportRow.product_status === "active" && productTasks.size) {
+  if (!metadataOnly && exportRow.product_status === "active" && productTasks.size) {
     try {
       onlinePublicationId = await onlineStorePublicationId();
     } catch (error) {
@@ -2752,7 +2921,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
 
   for (const task of productTasks.values()) {
     try {
-      if (exportRow.product_status === "active") {
+      if (!metadataOnly && exportRow.product_status === "active") {
         await activateShopifyProduct(task.productId, task.brand);
         activatedProducts += 1;
         if (onlinePublicationId) {
@@ -2857,6 +3026,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    metadataOnly,
     productErrors,
     productWarnings,
     onlinePublicationId: onlinePublicationId || null,
@@ -2902,6 +3072,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    metadataOnly,
     totals,
   };
 }
