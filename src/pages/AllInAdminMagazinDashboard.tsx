@@ -1100,7 +1100,7 @@ function RankingBars({
 }
 
 function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments"] }) {
-  const colors = ["#2dd4bf", "#60a5fa", "#f59e0b", "#f43f5e", "#a78bfa", "#94a3b8"];
+  const colors = ["#36d8ca", "#67aaf9", "#f4b24c", "#f06478", "#aa8df3", "#9ca9b9"];
   const total = items.reduce((sum, item) => sum + numberValue(item.amount), 0);
   const totalMagnitude = items.reduce((sum, item) => sum + Math.abs(numberValue(item.amount)), 0);
   let cursor = 0;
@@ -1111,7 +1111,10 @@ function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments
     cursor = end;
     return `${colors[index % colors.length]} ${start}% ${end}%`;
   });
-  const background = parts.length ? `conic-gradient(${parts.join(", ")})` : "conic-gradient(#526071 0 100%)";
+  const background = parts.length
+    ? `conic-gradient(from -90deg, ${parts.join(", ")})`
+    : "conic-gradient(from -90deg, #526071 0 100%)";
+  const totalText = money(total);
 
   return (
     <section className={`${card} p-4`}>
@@ -1119,23 +1122,36 @@ function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments
         <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Pénzmozgás</p>
         <h3 className="mt-1 text-base text-white">Fizetési megoszlás</h3>
       </div>
-      <div className="mt-4 grid gap-4 sm:grid-cols-[150px_1fr] sm:items-center">
-        <div className="relative mx-auto h-36 w-36 rounded-full" style={{ background }}>
-          <div className="absolute inset-[22px] grid place-items-center rounded-full border border-white/12 bg-[#344154] text-center">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Fizetve</p>
-              <p className="mt-1 text-sm text-white">{money(total)}</p>
-            </div>
+      <div className="mt-4 grid gap-5 sm:grid-cols-[176px_1fr] sm:items-center">
+        <div className="relative mx-auto grid h-40 w-40 place-items-center">
+          <div
+            className="absolute inset-0 rounded-full shadow-[0_16px_34px_rgba(7,14,26,0.24),inset_0_0_0_1px_rgba(255,255,255,0.05)]"
+            style={{ background }}
+          />
+          <div className="absolute inset-[13px] rounded-full border border-white/10 bg-[#344154] shadow-[inset_0_10px_24px_rgba(9,18,30,0.16)]" />
+          <div className="absolute inset-[18px] rounded-full border border-white/[0.045]" />
+          <div className="relative z-10 flex max-w-[124px] flex-col items-center justify-center text-center">
+            <p className="text-[9px] uppercase tracking-[0.16em] text-white/44">Fizetve</p>
+            <p
+              className="mt-1.5 max-w-full whitespace-nowrap text-[clamp(0.72rem,1.05vw,0.92rem)] font-medium leading-none tracking-[-0.025em] text-white"
+              title={totalText}
+            >
+              {totalText}
+            </p>
+            <span className="mt-2 h-px w-8 bg-gradient-to-r from-transparent via-[#8ce7e2]/50 to-transparent" />
           </div>
         </div>
         <div className="space-y-2">
           {items.slice(0, 6).map((item, index) => (
             <div key={item.method} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2">
               <span className="flex min-w-0 items-center gap-2 text-xs text-white/70">
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_10px_rgba(255,255,255,0.05)]"
+                  style={{ backgroundColor: colors[index % colors.length] }}
+                />
                 <span className="truncate">{item.label}</span>
               </span>
-              <span className="text-xs text-white">{money(item.amount)}</span>
+              <span className="whitespace-nowrap text-xs text-white">{money(item.amount)}</span>
             </div>
           ))}
           {!items.length ? <p className="py-4 text-center text-xs text-white/42">Nincs rögzített fizetés.</p> : null}
@@ -1359,14 +1375,15 @@ export default function AllInAdminMagazinDashboard({
           <button
             type="button"
             onClick={() => setShiftRepairOpen(true)}
-            className="group flex min-h-[74px] items-center gap-3 rounded-[20px] border border-amber-200/20 bg-gradient-to-br from-[#4a4650] to-[#343d4d] px-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:border-amber-200/36 hover:from-[#514b55] hover:to-[#3b4657] active:translate-y-0 active:scale-[0.99]"
+            className="group relative flex min-h-[74px] items-center gap-3 overflow-hidden rounded-[20px] border border-[#ff8792]/70 bg-[#d91f32] px-4 text-left shadow-[0_14px_34px_rgba(217,31,50,0.34),0_0_24px_rgba(217,31,50,0.12)] transition hover:-translate-y-0.5 hover:border-[#ffb0b8]/85 hover:bg-[#ef2940] hover:shadow-[0_16px_38px_rgba(239,41,64,0.42),0_0_30px_rgba(239,41,64,0.18)] active:translate-y-0 active:scale-[0.99]"
           >
-            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/26 bg-amber-400/10 text-amber-50">
+            <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-white/60 to-transparent" />
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/34 bg-black/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]">
               <Wrench size={19} />
             </span>
-            <span className="min-w-0">
+            <span className="relative min-w-0">
               <span className="block text-sm text-white">Műszak javítás</span>
-              <span className="mt-1 block truncate text-[10px] text-white/43">Hibás napzárás feloldása</span>
+              <span className="mt-1 block truncate text-[10px] text-white/76">Hibás napzárás feloldása</span>
             </span>
           </button>
         </section>
