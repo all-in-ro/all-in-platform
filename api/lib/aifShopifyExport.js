@@ -231,6 +231,9 @@ function shopifyStyle(row) {
 
 function productCategory(row) {
   const haystack = normalizeKey([
+    row.shopify_title,
+    row.title_ro,
+    row.title,
     row.category_name_ro,
     row.category_name_hu,
     row.category_code,
@@ -265,7 +268,11 @@ function productCategory(row) {
     return "Apparel & Accessories > Clothing > Skirts";
   }
   if (/sock|zokni|soset|șoset/.test(haystack)) {
-    return "Apparel & Accessories > Clothing > Underwear & Socks > Socks";
+    // Shopify 2026 taxonomy: the old "Underwear & Socks > Socks" path is archived.
+    return "Apparel & Accessories > Clothing > Socks";
+  }
+  if (/boxer|boxeri|boxer brief|boxer-brief|alsonadrag|alsónadrág|chiloti|chiloți/.test(haystack)) {
+    return "Apparel & Accessories > Clothing > Men's Undergarments > Men's Underwear > Boxer Briefs";
   }
   if (/baseball[ _-]?cap|sapca|șapcă|sepci|blitzing/.test(haystack)) {
     return "Apparel & Accessories > Clothing Accessories > Hats > Baseball Caps";
@@ -2773,6 +2780,107 @@ function materialCandidates(values) {
   return unique(out);
 }
 
+
+function normalizedCategoryPath(value) {
+  return normalizeKey(value)
+    .replace(/\s*>\s*/g, " > ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function taxonomyCategoryByPath(path, cache) {
+  const wanted = text(path);
+  if (!wanted) return null;
+  const cacheKey = normalizedCategoryPath(wanted);
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
+  const leaf = wanted.split(">").map((part) => part.trim()).filter(Boolean).pop() || wanted;
+  const query = `query AifTaxonomyCategorySearch($search: String!) {
+    taxonomy {
+      categories(first: 100, search: $search) {
+        nodes {
+          id
+          name
+          fullName
+          isArchived
+          isLeaf
+        }
+      }
+    }
+  }`;
+
+  const searches = unique([wanted, leaf]);
+  let candidates = [];
+  for (const search of searches) {
+    const response = await shopifyGraphql(query, { search });
+    candidates.push(...(response.data?.taxonomy?.categories?.nodes || []));
+  }
+
+  const deduped = Array.from(
+    new Map(candidates.map((row) => [text(row?.id), row])).values()
+  ).filter((row) => text(row?.id) && !row?.isArchived);
+
+  const wantedKey = normalizedCategoryPath(wanted);
+  const exact = deduped.find((row) => normalizedCategoryPath(row?.fullName) === wantedKey);
+
+  const suffix = exact || deduped
+    .filter((row) => normalizeKey(row?.name) === normalizeKey(leaf))
+    .sort((a, b) => {
+      const aPath = normalizedCategoryPath(a?.fullName);
+      const bPath = normalizedCategoryPath(b?.fullName);
+      const aScore = aPath.endsWith(`> ${normalizeKey(leaf)}`) ? 1 : 0;
+      const bScore = bPath.endsWith(`> ${normalizeKey(leaf)}`) ? 1 : 0;
+      return bScore - aScore;
+    })[0] || null;
+
+  cache?.set(cacheKey, suffix);
+  return suffix;
+}
+
+async function updateShopifyProductCategory(productId, categoryId) {
+  const product = text(productId);
+  const category = text(categoryId);
+  if (!product || !category) return null;
+
+  const mutation = `mutation AifRepairProductCategory($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
+      product {
+        id
+        category {
+          id
+          name
+          fullName
+          isArchived
+        }
+      }
+      userErrors { field message code }
+    }
+  }`;
+
+  const response = await shopifyGraphql(mutation, {
+    product: {
+      id: product,
+      category,
+      deleteConflictingConstrainedMetafields: true,
+    },
+  });
+
+  const payload = response.data?.productUpdate;
+  if (payload?.userErrors?.length) {
+    throw Object.assign(
+      new Error(payload.userErrors.map((row) => row.message).join(" | ")),
+      {
+        code: "shopify_product_category_update_failed",
+        payload,
+        productId: product,
+        categoryId: category,
+      }
+    );
+  }
+
+  return payload?.product?.category || null;
+}
+
 async function setShopifyProductMetadata({
   productId,
   categoryId,
@@ -3201,6 +3309,17 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           subcategory_name_ro: item.live_subcategory_name_ro,
           product_type: item.live_product_type,
         }),
+        desiredCategoryPath: productCategory({
+          shopify_title: text(item.snapshot?.title),
+          title_ro: text(item.snapshot?.title),
+          category_name_ro: text(item.snapshot?.categoryNameRo || item.live_category_name_ro),
+          category_name_hu: text(item.snapshot?.categoryNameHu),
+          category_code: text(item.snapshot?.categoryCode),
+          subcategory_name_ro: text(item.snapshot?.subcategoryNameRo || item.live_subcategory_name_ro),
+          subcategory_name_hu: text(item.snapshot?.subcategoryNameHu),
+          subcategory_code: text(item.snapshot?.subcategoryCode),
+          product_type: text(item.snapshot?.productType || item.live_product_type),
+        }) || text(item.snapshot?.productCategory),
         categoryId: text(variant.product?.category?.id),
         categoryName: text(variant.product?.category?.fullName || variant.product?.category?.name),
         currentStatus: text(variant.product?.status),
@@ -3216,6 +3335,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         ageGroups: unique([...(existingTask.ageGroups || []), ...taskData.ageGroups]),
         audience: existingTask.audience || taskData.audience,
         style: existingTask.style || taskData.style,
+        desiredCategoryPath: existingTask.desiredCategoryPath || taskData.desiredCategoryPath,
         categoryId: existingTask.categoryId || taskData.categoryId,
         categoryName: existingTask.categoryName || taskData.categoryName,
       } : taskData);
@@ -3252,6 +3372,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   let styleUpdatedProducts = 0;
   let styleSkippedProducts = 0;
   let metadataUpdatedProducts = 0;
+  let categoryUpdatedProducts = 0;
+  let categorySkippedProducts = 0;
   const productErrors = [];
   const productWarnings = [];
   const metadataDefinitionCache = new Map();
@@ -3261,6 +3383,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const metaobjectEntriesCache = new Map();
   const taxonomyCategoryAttributesCache = new Map();
   const taxonomyAttributeValuesCache = new Map();
+  const taxonomyCategorySearchCache = new Map();
   let onlinePublicationId = "";
 
   if (!metadataOnly && exportRow.product_status === "active" && productTasks.size) {
@@ -3283,6 +3406,53 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         if (onlinePublicationId) {
           const published = await publishShopifyProductToOnlineStore(task.productId, onlinePublicationId);
           if (published) publishedProducts += 1;
+        }
+      }
+
+      // Repair obsolete / overly broad Shopify categories before resolving
+      // category metafields. This is required for archived taxonomy IDs such as
+      // the old Socks category and for products that were exported into a broad
+      // parent category even though the model/title clearly identifies a leaf.
+      if (task.desiredCategoryPath) {
+        try {
+          const desiredCategory = await taxonomyCategoryByPath(
+            task.desiredCategoryPath,
+            taxonomyCategorySearchCache,
+          );
+
+          if (desiredCategory?.id && text(desiredCategory.id) !== text(task.categoryId)) {
+            const updatedCategory = await updateShopifyProductCategory(
+              task.productId,
+              desiredCategory.id,
+            );
+            task.categoryId = text(updatedCategory?.id || desiredCategory.id);
+            task.categoryName = text(updatedCategory?.fullName || desiredCategory.fullName);
+            categoryUpdatedProducts += 1;
+
+            // A category changed, so applicable metafield definitions must be
+            // resolved fresh for the new category.
+            metadataDefinitionCache.delete(task.categoryId);
+          } else if (!desiredCategory?.id) {
+            categorySkippedProducts += 1;
+            productWarnings.push({
+              scope: "category",
+              productId: task.productId,
+              category: task.categoryName || task.categoryId || null,
+              reason: "taxonomy_category_not_found",
+              desiredCategoryPath: task.desiredCategoryPath,
+            });
+          }
+        } catch (error) {
+          categorySkippedProducts += 1;
+          productWarnings.push({
+            scope: "category",
+            productId: task.productId,
+            category: task.categoryName || task.categoryId || null,
+            reason: "category_update_failed",
+            desiredCategoryPath: task.desiredCategoryPath,
+            error: error?.message || String(error),
+            code: error?.code || null,
+          });
         }
       }
 
@@ -3386,6 +3556,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    categoryUpdatedProducts,
+    categorySkippedProducts,
     metadataOnly,
     productErrors,
     productWarnings,
@@ -3432,6 +3604,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    categoryUpdatedProducts,
+    categorySkippedProducts,
     metadataOnly,
     totals,
   };
