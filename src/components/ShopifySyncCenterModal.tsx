@@ -50,6 +50,22 @@ type MappingRow = {
   reexport_ready?: boolean | null;
 };
 
+type ExportReportRow = {
+  "Állapot"?: string | null;
+  "Modell"?: string | null;
+  "Márka"?: string | null;
+  "Termékkód"?: string | null;
+  "Szín"?: string | null;
+  "Méret"?: string | null;
+  "Shopify SKU"?: string | null;
+  "AllIn belső SKU"?: string | null;
+  "Elérhető készlet"?: number | string | null;
+  "Már Shopifyhoz kapcsolva"?: string | null;
+  "Hibák"?: string | null;
+  "Figyelmeztetések"?: string | null;
+  [key: string]: unknown;
+};
+
 type ExportHistoryRow = {
   id: string;
   status?: string | null;
@@ -63,6 +79,11 @@ type ExportHistoryRow = {
   created_at?: string | null;
   downloaded_at?: string | null;
   reconciled_at?: string | null;
+  summary?: {
+    reportRows?: ExportReportRow[] | null;
+    reconciliation?: Record<string, any> | null;
+    [key: string]: unknown;
+  } | null;
 };
 
 type RefreshResult = {
@@ -128,6 +149,59 @@ function exportStatusLabel(value?: string | null) {
   return status || "Ismeretlen";
 }
 
+
+function exportReportRows(row?: ExportHistoryRow | null) {
+  return Array.isArray(row?.summary?.reportRows) ? row!.summary!.reportRows! : [];
+}
+
+type ExportProductGroup = {
+  key: string;
+  title: string;
+  brand: string;
+  productCode: string;
+  variants: ExportReportRow[];
+  totalQty: number;
+  errors: number;
+  warnings: number;
+};
+
+function exportProductGroups(row?: ExportHistoryRow | null, searchValue = "") {
+  const q = normalized(searchValue);
+  const groups = new Map<string, ExportProductGroup>();
+
+  for (const report of exportReportRows(row)) {
+    const title = clean(report["Modell"]) || "Névtelen termék";
+    const brand = clean(report["Márka"]) || "-";
+    const productCode = clean(report["Termékkód"]) || "-";
+    const sku = clean(report["Shopify SKU"]);
+    const color = clean(report["Szín"]);
+    const size = clean(report["Méret"]);
+    const haystack = normalized([title, brand, productCode, sku, color, size].join(" "));
+    if (q && !haystack.includes(q)) continue;
+
+    const key = `${normalized(title)}::${normalized(brand)}::${normalized(productCode)}`;
+    const current = groups.get(key) || {
+      key,
+      title,
+      brand,
+      productCode,
+      variants: [],
+      totalQty: 0,
+      errors: 0,
+      warnings: 0,
+    };
+    current.variants.push(report);
+    current.totalQty += numberValue(report["Elérhető készlet"]);
+    if (clean(report["Hibák"])) current.errors += 1;
+    if (clean(report["Figyelmeztetések"])) current.warnings += 1;
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.values()).sort((a, b) =>
+    a.title.localeCompare(b.title, "hu", { numeric: true, sensitivity: "base" })
+  );
+}
+
 function mappingState(row: MappingRow) {
   const sync = normalized(row.sync_status);
   const outbox = normalized(row.outbox_status);
@@ -183,6 +257,9 @@ export default function ShopifySyncCenterModal({
   const [selectedMappingIds, setSelectedMappingIds] = useState<Record<string, boolean>>({});
   const [maintenanceConfirm, setMaintenanceConfirm] = useState<MaintenanceConfirm | null>(null);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [exportDetailTarget, setExportDetailTarget] = useState<ExportHistoryRow | null>(null);
+  const [exportDetailSearch, setExportDetailSearch] = useState("");
+  const [metadataRefreshExportId, setMetadataRefreshExportId] = useState("");
   const pageSize = 50;
 
   async function loadMappings() {
@@ -239,6 +316,59 @@ export default function ShopifySyncCenterModal({
     } finally {
       setAuditBusy(false);
       setSyncingVariantId("");
+    }
+  }
+
+  async function refreshExportMetadata(row: ExportHistoryRow) {
+    const exportId = clean(row.id);
+    if (!exportId) return;
+    setMetadataRefreshExportId(exportId);
+    setError("");
+    setMessage("");
+    try {
+      const result = await requestJSON<{
+        mapped: number;
+        errors: number;
+        status: string;
+        metadataUpdatedProducts?: number;
+        brandUpdatedProducts?: number;
+        audienceUpdatedProducts?: number;
+        styleUpdatedProducts?: number;
+        colorUpdatedProducts?: number;
+        sizeUpdatedProducts?: number;
+        fabricUpdatedProducts?: number;
+        ageGroupUpdatedProducts?: number;
+        targetGenderUpdatedProducts?: number;
+        productWarnings?: Array<Record<string, unknown>>;
+        productErrors?: Array<Record<string, unknown>>;
+      }>(`/api/aif/shopify/product-exports/${encodeURIComponent(exportId)}/reconcile`, {
+        method: "POST",
+        body: JSON.stringify({ enqueueStock: false }),
+      });
+
+      const parts = [
+        `${numberValue(result.mapped)} variáns ellenőrizve`,
+        result.metadataUpdatedProducts ? `${numberValue(result.metadataUpdatedProducts)} termék metaadata frissítve` : "",
+        result.brandUpdatedProducts ? `${numberValue(result.brandUpdatedProducts)} Brand` : "",
+        result.colorUpdatedProducts ? `${numberValue(result.colorUpdatedProducts)} Szín` : "",
+        result.sizeUpdatedProducts ? `${numberValue(result.sizeUpdatedProducts)} Méret` : "",
+        result.fabricUpdatedProducts ? `${numberValue(result.fabricUpdatedProducts)} Szövet` : "",
+        result.ageGroupUpdatedProducts ? `${numberValue(result.ageGroupUpdatedProducts)} Korosztály` : "",
+        result.targetGenderUpdatedProducts ? `${numberValue(result.targetGenderUpdatedProducts)} Célzott nem` : "",
+      ].filter(Boolean);
+
+      const warningCount = Array.isArray(result.productWarnings) ? result.productWarnings.length : 0;
+      const errorCount = Array.isArray(result.productErrors) ? result.productErrors.length : 0;
+      if (warningCount) parts.push(`${warningCount} metaadat nem volt automatikusan párosítható`);
+      if (errorCount || result.errors) parts.push(`${Math.max(errorCount, numberValue(result.errors))} hiba`);
+
+      setMessage(`Metaadat-frissítés kész • ${parts.join(" • ")}.`);
+      await Promise.all([loadExports(), loadMappings()]);
+      await onChanged?.();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A Shopify metaadatok frissítése nem sikerült.");
+    } finally {
+      setMetadataRefreshExportId("");
     }
   }
 
@@ -344,6 +474,9 @@ export default function ShopifySyncCenterModal({
     setSelectedMappingIds({});
     setSelectedExportIds({});
     setMaintenanceConfirm(null);
+    setExportDetailTarget(null);
+    setExportDetailSearch("");
+    setMetadataRefreshExportId("");
     void loadAll().then(() => refreshMappings({ automatic: true }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -352,6 +485,11 @@ export default function ShopifySyncCenterModal({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (exportDetailTarget) {
+        setExportDetailTarget(null);
+        setExportDetailSearch("");
+        return;
+      }
       if (maintenanceConfirm) {
         setMaintenanceConfirm(null);
         return;
@@ -364,7 +502,7 @@ export default function ShopifySyncCenterModal({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, deleteConfirmIds.length, maintenanceConfirm]);
+  }, [open, onClose, deleteConfirmIds.length, maintenanceConfirm, exportDetailTarget]);
 
   const mappingSummary = useMemo(() => {
     const errorProducts = new Set<string>();
@@ -434,6 +572,15 @@ export default function ShopifySyncCenterModal({
       .filter((row) => normalized(row.status) === "mapped" && new Date(String(row.created_at || 0)).getTime() < cutoff)
       .map((row) => row.id);
   }, [exports]);
+
+  const exportDetailGroups = useMemo(
+    () => exportProductGroups(exportDetailTarget, exportDetailSearch),
+    [exportDetailTarget, exportDetailSearch],
+  );
+  const exportDetailVariantCount = useMemo(
+    () => exportDetailGroups.reduce((sum, group) => sum + group.variants.length, 0),
+    [exportDetailGroups],
+  );
 
   if (!open) return null;
 
@@ -644,8 +791,38 @@ export default function ShopifySyncCenterModal({
                       <span className={`inline-flex w-fit rounded-full border px-2 py-1 text-[11px] ${normalized(row.status) === "mapped" ? "border-[#BCD98B] bg-[#F3F8E9] text-[#365A25]" : normalized(row.status) === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{exportStatusLabel(row.status)}</span>
                       <span className="text-xs text-slate-500">{row.shopify_location_name || "Miercurea Ciuc"}</span>
                       <div className="flex flex-wrap justify-end gap-1.5">
+                        <button
+                          type="button"
+                          className={smallButton}
+                          onClick={() => {
+                            setExportDetailTarget(row);
+                            setExportDetailSearch("");
+                          }}
+                          title="Az exportban szereplő termékek és variánsok"
+                        >
+                          <Search size={13} /> Termékek
+                        </button>
                         <a className={smallButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`} download><Download size={13} /> CSV</a>
-                        {normalized(row.status) !== "mapped" ? <button type="button" className={smallButton} onClick={() => void requestJSON(`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/reconcile`, { method: "POST", body: JSON.stringify({ enqueueStock: true }) }).then(async () => { setMessage("Export újrapárosítva, a készletszinkron sorba állt."); await loadAll(); await onChanged?.(); }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : "A párosítás nem sikerült."))}><UploadCloud size={13} /> Párosítás</button> : null}
+                        {normalized(row.status) === "mapped" ? (
+                          <button
+                            type="button"
+                            className={primaryButton}
+                            onClick={() => void refreshExportMetadata(row)}
+                            disabled={Boolean(metadataRefreshExportId)}
+                            title="Brand, szín, méret és további Shopify kategória-metaadatok újraellenőrzése"
+                          >
+                            <RefreshCw size={13} className={metadataRefreshExportId === row.id ? "animate-spin" : ""} />
+                            {metadataRefreshExportId === row.id ? "Frissítés..." : "Metaadatok"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={smallButton}
+                            onClick={() => void requestJSON(`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/reconcile`, { method: "POST", body: JSON.stringify({ enqueueStock: true }) }).then(async () => { setMessage("Export újrapárosítva, a készletszinkron sorba állt."); await loadAll(); await onChanged?.(); }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : "A párosítás nem sikerült."))}
+                          >
+                            <UploadCloud size={13} /> Párosítás
+                          </button>
+                        )}
                         <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100" onClick={() => setDeleteConfirmIds([row.id])} title="Előzmény törlése"><Trash2 size={14} /></button>
                       </div>
                     </div>
@@ -667,6 +844,120 @@ export default function ShopifySyncCenterModal({
           <button type="button" className={softButton} onClick={onClose}><X size={14} /> Bezárás</button>
         </footer>
       </div>
+
+      {exportDetailTarget ? (
+        <div className="fixed inset-0 z-[118] flex items-center justify-center bg-slate-950/65 px-3 py-4 backdrop-blur-sm" onMouseDown={(event) => {
+          if (event.currentTarget !== event.target) return;
+          setExportDetailTarget(null);
+          setExportDetailSearch("");
+        }}>
+          <div className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[24px] border border-[#C8D6C2] bg-[#F5F7F2] text-slate-900 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-[#2F6E3F] bg-gradient-to-r from-[#003D32] via-[#004C3F] to-[#2F6E3F] px-4 py-3 text-white">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-white/70">Shopify export tartalma</p>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                  <h3 className="font-mono text-lg">{exportDetailTarget.id.slice(0, 8)}</h3>
+                  <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px]">{exportStatusLabel(exportDetailTarget.status)}</span>
+                </div>
+                <p className="mt-1 text-xs text-white/72">{dateTime(exportDetailTarget.created_at)} • {numberValue(exportDetailTarget.model_count)} termék • {numberValue(exportDetailTarget.valid_variant_count)} exportált variáns</p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/35 bg-white/10 transition hover:bg-white/20"
+                onClick={() => {
+                  setExportDetailTarget(null);
+                  setExportDetailSearch("");
+                }}
+                aria-label="Bezárás"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="border-b border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="relative min-w-[240px] flex-1">
+                  <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    className="h-9 w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 text-sm outline-none transition focus:border-[#5E8E3E] focus:ring-2 focus:ring-[#95BF47]/20"
+                    value={exportDetailSearch}
+                    onChange={(event) => setExportDetailSearch(event.target.value)}
+                    placeholder="Termék, márka, termékkód, SKU, szín, méret..."
+                    autoFocus
+                  />
+                </label>
+                <span className="rounded-full border border-[#CFE3A6] bg-[#F5FAEC] px-3 py-2 text-[11px] text-[#365A25]">{exportDetailGroups.length} termék</span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">{exportDetailVariantCount} variáns</span>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {!exportReportRows(exportDetailTarget).length ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-800">
+                  Ehhez a régebbi exporthoz nincs elmentett részletes terméklista. A CSV továbbra is letölthető, de a rendszer akkor még nem mentette a reportRows tartalmát.
+                </div>
+              ) : exportDetailGroups.length ? (
+                <div className="space-y-2.5">
+                  {exportDetailGroups.map((group) => (
+                    <section key={group.key} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="text-sm text-slate-900">{group.title}</h4>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">{group.brand}</span>
+                          </div>
+                          <p className="mt-0.5 font-mono text-[11px] text-slate-500">{group.productCode}</p>
+                        </div>
+                        <div className="flex shrink-0 gap-1.5 text-[10px]">
+                          <span className="rounded-full border border-[#CFE3A6] bg-[#F5FAEC] px-2 py-1 text-[#365A25]">{group.variants.length} variáns</span>
+                          <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">{group.totalQty} db</span>
+                          {group.errors ? <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">{group.errors} hibás</span> : null}
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {group.variants.map((variant, index) => (
+                          <div key={`${clean(variant["Shopify SKU"])}-${index}`} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[1fr,120px,80px,90px] sm:items-center">
+                            <div className="min-w-0">
+                              <p className="truncate font-mono text-[11px] text-slate-700">SKU: {clean(variant["Shopify SKU"]) || "-"}</p>
+                              <p className="mt-0.5 truncate text-[10px] text-slate-400">AllIn: {clean(variant["AllIn belső SKU"]) || "-"}</p>
+                            </div>
+                            <div className="truncate text-slate-600">{clean(variant["Szín"]) || "-"}</div>
+                            <div className="text-slate-700">{clean(variant["Méret"]) || "-"}</div>
+                            <div className="text-right tabular-nums text-slate-700">{numberValue(variant["Elérhető készlet"])} db</div>
+                            {clean(variant["Hibák"]) ? <div className="sm:col-span-4 rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] text-rose-700">{clean(variant["Hibák"])}</div> : null}
+                            {clean(variant["Figyelmeztetések"]) ? <div className="sm:col-span-4 rounded-lg bg-amber-50 px-2 py-1.5 text-[10px] text-amber-700">{clean(variant["Figyelmeztetések"])}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">Nincs találat ebben az exportban.</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3">
+              <p className="text-[11px] text-slate-500">Itt pontosan azt látod, mi tartozott ehhez az exporthoz. Nem kell többé számlák és SKU-k között régészkedni.</p>
+              <div className="flex gap-2">
+                <a className={softButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(exportDetailTarget.id)}/download`} download><Download size={13} /> CSV</a>
+                {normalized(exportDetailTarget.status) === "mapped" ? (
+                  <button
+                    type="button"
+                    className={primaryButton}
+                    onClick={() => void refreshExportMetadata(exportDetailTarget)}
+                    disabled={Boolean(metadataRefreshExportId)}
+                  >
+                    <RefreshCw size={13} className={metadataRefreshExportId === exportDetailTarget.id ? "animate-spin" : ""} />
+                    {metadataRefreshExportId === exportDetailTarget.id ? "Frissítés..." : "Metaadatok frissítése"}
+                  </button>
+                ) : null}
+                <button type="button" className={softButton} onClick={() => { setExportDetailTarget(null); setExportDetailSearch(""); }}><X size={13} /> Bezárás</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {maintenanceConfirm ? (
         <div className="fixed inset-0 z-[112] flex items-center justify-center bg-slate-950/60 px-4">
