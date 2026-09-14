@@ -1511,7 +1511,8 @@ function taxonomyValueMatchScore(value, candidateKeys) {
   return key && candidateKeys.has(key) ? 120 : 0;
 }
 
-async function taxonomyMetafieldValueForDefinition({
+
+async function resolveTaxonomyValuesForCandidates({
   definition,
   categoryId,
   candidates,
@@ -1519,19 +1520,19 @@ async function taxonomyMetafieldValueForDefinition({
   taxonomyCategoryAttributesCache,
   taxonomyAttributeValuesCache,
 }) {
-  const typeName = text(definition?.type?.name);
   const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
-  if (!cleanCandidates.length) return { value: null, reason: "missing_value" };
-  if (!text(categoryId)) return { value: null, reason: "missing_category" };
+  if (!cleanCandidates.length) return { selected: [], reason: "missing_value" };
+  if (!text(categoryId)) return { selected: [], reason: "missing_category" };
 
   const attributes = await loadTaxonomyCategoryAttributes(categoryId, taxonomyCategoryAttributesCache);
   const attribute = attributes
     .map((row) => ({ row, score: taxonomyAttributeMatchScore(row, definition, aliases) }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)[0]?.row || null;
+
   if (!attribute?.id) {
     return {
-      value: null,
+      selected: [],
       reason: "taxonomy_attribute_missing",
       availableAttributes: attributes.slice(0, 60).map((row) => ({ id: text(row.id), name: text(row.name) })),
     };
@@ -1550,19 +1551,45 @@ async function taxonomyMetafieldValueForDefinition({
 
   if (!selected.length) {
     return {
-      value: null,
+      selected: [],
       reason: "taxonomy_value_missing",
       taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
-      availableEntries: entries.slice(0, 80).map((entry) => ({ id: text(entry.id), displayName: text(entry.name) })),
+      availableEntries: entries.slice(0, 120).map((entry) => ({ id: text(entry.id), displayName: text(entry.name) })),
     };
   }
 
-  const ids = selected.map((entry) => text(entry.id)).filter(Boolean);
+  return {
+    selected,
+    reason: null,
+    taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
+  };
+}
+
+async function taxonomyMetafieldValueForDefinition({
+  definition,
+  categoryId,
+  candidates,
+  aliases,
+  taxonomyCategoryAttributesCache,
+  taxonomyAttributeValuesCache,
+}) {
+  const typeName = text(definition?.type?.name);
+  const resolved = await resolveTaxonomyValuesForCandidates({
+    definition,
+    categoryId,
+    candidates,
+    aliases,
+    taxonomyCategoryAttributesCache,
+    taxonomyAttributeValuesCache,
+  });
+  if (!resolved.selected?.length) return resolved;
+
+  const ids = resolved.selected.map((entry) => text(entry.id)).filter(Boolean);
   return {
     value: typeName === "list.product_taxonomy_value_reference" ? JSON.stringify(ids) : ids[0],
     reason: null,
-    taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
-    taxonomyValues: selected.map((entry) => ({ id: text(entry.id), name: text(entry.name) })),
+    taxonomyAttribute: resolved.taxonomyAttribute || null,
+    taxonomyValues: resolved.selected.map((entry) => ({ id: text(entry.id), name: text(entry.name) })),
   };
 }
 
@@ -1589,6 +1616,7 @@ function validationValues(definition, names = []) {
   return unique(values);
 }
 
+
 function isMetaobjectReferenceType(typeName) {
   return ["metaobject_reference", "list.metaobject_reference"].includes(text(typeName));
 }
@@ -1597,33 +1625,270 @@ function metaobjectMatchKey(value) {
   return normalizeKey(value).replace(/[^a-z0-9]+/g, "");
 }
 
-async function metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache) {
+function inferredMetaobjectTypeForMetafield(definition) {
+  const namespace = normalizeKey(definition?.namespace);
+  const key = text(definition?.key)
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!key) return "";
+  if (namespace === "shopify") return `shopify--${key}`;
+  if (namespace === "custom") return `custom--${key}`;
+  return "";
+}
+
+async function loadMetaobjectDefinitions(cache) {
+  const cacheKey = "__all__";
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
+  const query = `query AifMetaobjectDefinitions($first: Int!, $after: String) {
+    metaobjectDefinitions(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        type
+        displayNameKey
+        standardTemplate { name type }
+        fieldDefinitions {
+          key
+          name
+          required
+          type { name }
+        }
+      }
+    }
+  }`;
+
+  const rows = [];
+  const seenCursors = new Set();
+  let after = null;
+  for (let page = 0; page < 20; page += 1) {
+    const response = await shopifyGraphql(query, { first: 250, after });
+    const connection = response.data?.metaobjectDefinitions;
+    rows.push(...(connection?.nodes || []));
+    if (!connection?.pageInfo?.hasNextPage) break;
+    const next = text(connection?.pageInfo?.endCursor);
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    after = next;
+  }
+
+  cache?.set(cacheKey, rows);
+  return rows;
+}
+
+function metaobjectDefinitionMatchScore(row, definition, inferredType = "") {
+  const rowType = text(row?.type);
+  const templateType = text(row?.standardTemplate?.type);
+  if (inferredType && (rowType === inferredType || templateType === inferredType)) return 1000;
+
+  const candidates = unique([
+    definition?.name,
+    definition?.key,
+    inferredType,
+    inferredType.replace(/^shopify--|^custom--/, ""),
+  ]).map(metaobjectMatchKey).filter(Boolean);
+
+  let score = 0;
+  const rowValues = [
+    row?.name,
+    row?.type,
+    row?.standardTemplate?.name,
+    row?.standardTemplate?.type,
+  ].map(metaobjectMatchKey).filter(Boolean);
+
+  for (const candidate of candidates) {
+    for (const value of rowValues) {
+      if (candidate === value) score = Math.max(score, 220);
+      else if (candidate && value && (candidate.includes(value) || value.includes(candidate))) score = Math.max(score, 120);
+    }
+  }
+  return score;
+}
+
+async function metaobjectDefinitionForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache) {
+  const cacheKey = `${text(definition?.namespace)}.${text(definition?.key)}`;
+  const cached = definitionTypeCache?.get(cacheKey);
+  if (cached && typeof cached === "object") return cached;
+
   const directTypes = validationValues(definition, [
     "metaobject_definition_type",
     "metaobject_definition_types",
   ]);
-  if (directTypes.length) return directTypes[0];
+  const inferredType = directTypes[0] || inferredMetaobjectTypeForMetafield(definition);
 
   const definitionIds = validationValues(definition, [
     "metaobject_definition_id",
     "metaobject_definition_ids",
   ]);
   const definitionId = definitionIds[0] || "";
-  if (!definitionId) return "";
-  if (definitionTypeCache?.has(definitionId)) return definitionTypeCache.get(definitionId);
 
-  const query = `query AifMetaobjectDefinitionType($id: ID!) {
-    metaobjectDefinition(id: $id) {
-      id
-      name
-      type
-      displayNameKey
+  if (definitionId) {
+    try {
+      const query = `query AifMetaobjectDefinitionType($id: ID!) {
+        metaobjectDefinition(id: $id) {
+          id
+          name
+          type
+          displayNameKey
+          standardTemplate { name type }
+          fieldDefinitions {
+            key
+            name
+            required
+            type { name }
+          }
+        }
+      }`;
+      const response = await shopifyGraphql(query, { id: definitionId });
+      const resolved = response.data?.metaobjectDefinition || null;
+      if (resolved?.type) {
+        definitionTypeCache?.set(cacheKey, resolved);
+        return resolved;
+      }
+    } catch {
+      // A standard Shopify mezőknél a validation sokszor nem ad használható
+      // definition ID-t. Ilyenkor az alábbi type / standardTemplate fallback jön.
+    }
+  }
+
+  // Shopify standard category metafieldeknél a cél metaobject type stabilan
+  // a namespace+key mintát követi (pl. shopify.color-pattern -> shopify--color-pattern).
+  // Ezt akkor is vissza tudjuk adni, ha a definition API nem közli külön.
+  let definitions = [];
+  try {
+    definitions = await loadMetaobjectDefinitions(metaobjectDefinitionsCache);
+  } catch {
+    definitions = [];
+  }
+
+  const found = definitions
+    .map((row) => ({ row, score: metaobjectDefinitionMatchScore(row, definition, inferredType) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.row || null;
+
+  const fallback = found || (inferredType ? {
+    id: null,
+    name: text(definition?.name),
+    type: inferredType,
+    displayNameKey: null,
+    standardTemplate: normalizeKey(definition?.namespace) === "shopify"
+      ? { name: text(definition?.name), type: inferredType }
+      : null,
+    fieldDefinitions: [],
+  } : null);
+
+  if (fallback) definitionTypeCache?.set(cacheKey, fallback);
+  return fallback;
+}
+
+async function metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache) {
+  const resolved = await metaobjectDefinitionForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache);
+  return text(resolved?.type || resolved?.standardTemplate?.type);
+}
+
+function parseReferenceIds(value) {
+  const raw = text(value);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(text).filter(Boolean);
+    if (parsed !== null && parsed !== undefined) return [text(parsed)].filter(Boolean);
+  } catch {}
+  return [raw];
+}
+
+function entryReferencesTaxonomyValue(entry, taxonomyValueId) {
+  const wanted = text(taxonomyValueId);
+  if (!wanted) return false;
+  return (entry?.fields || []).some((field) => parseReferenceIds(field?.value).includes(wanted));
+}
+
+function metaobjectHandlePart(value) {
+  const raw = normalizeKey(value)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return raw || "value";
+}
+
+async function upsertMetaobjectEntry({ type, handle, fields }) {
+  const cleanType = text(type);
+  const cleanHandle = text(handle);
+  if (!cleanType || !cleanHandle || !fields?.length) {
+    return { metaobject: null, reason: "metaobject_upsert_input_missing" };
+  }
+
+  const mutation = `mutation AifMetaobjectUpsert($handle: MetaobjectHandleInput!, $metaobject: MetaobjectUpsertInput!) {
+    metaobjectUpsert(handle: $handle, metaobject: $metaobject) {
+      metaobject {
+        id
+        type
+        handle
+        displayName
+        fields { key value }
+      }
+      userErrors { field message code }
     }
   }`;
-  const response = await shopifyGraphql(query, { id: definitionId });
-  const definitionType = text(response.data?.metaobjectDefinition?.type);
-  definitionTypeCache?.set(definitionId, definitionType);
-  return definitionType;
+
+  const response = await shopifyGraphql(mutation, {
+    handle: { type: cleanType, handle: cleanHandle },
+    metaobject: { fields },
+  });
+  const payload = response.data?.metaobjectUpsert;
+  if (payload?.userErrors?.length) {
+    return {
+      metaobject: null,
+      reason: "metaobject_upsert_failed",
+      errors: payload.userErrors,
+    };
+  }
+  return { metaobject: payload?.metaobject || null, reason: null };
+}
+
+function taxonomyFieldForMetaobjectDefinition(metaDefinition, metafieldDefinition) {
+  const fields = Array.isArray(metaDefinition?.fieldDefinitions) ? metaDefinition.fieldDefinitions : [];
+  const taxonomyFields = fields.filter((field) =>
+    ["product_taxonomy_value_reference", "list.product_taxonomy_value_reference"].includes(text(field?.type?.name))
+  );
+  if (!taxonomyFields.length) return null;
+
+  const hint = normalizeKey(metafieldDefinition?.key).replace(/[^a-z0-9]+/g, "");
+  const nameHint = normalizeKey(metafieldDefinition?.name).replace(/[^a-z0-9]+/g, "");
+  return taxonomyFields
+    .map((field) => {
+      const key = normalizeKey(field?.key).replace(/[^a-z0-9]+/g, "");
+      const name = normalizeKey(field?.name).replace(/[^a-z0-9]+/g, "");
+      let score = 0;
+      if (hint && (key.includes(hint) || hint.includes(key))) score += 100;
+      if (nameHint && (name.includes(nameHint) || nameHint.includes(name))) score += 80;
+      if (key.includes("color") && hint.includes("color")) score += 120;
+      if (key === "taxonomyreference" || key.endsWith("taxonomyreference")) score += 40;
+      return { field, score };
+    })
+    .sort((a, b) => b.score - a.score)[0]?.field || taxonomyFields[0];
+}
+
+function textFieldForMetaobjectDefinition(metaDefinition) {
+  const fields = Array.isArray(metaDefinition?.fieldDefinitions) ? metaDefinition.fieldDefinitions : [];
+  const displayKey = text(metaDefinition?.displayNameKey);
+  if (displayKey) {
+    const display = fields.find((field) => text(field?.key) === displayKey);
+    if (display && ["single_line_text_field", "multi_line_text_field"].includes(text(display?.type?.name))) return display;
+  }
+  return fields.find((field) => {
+    const key = normalizeKey(field?.key);
+    const typeName = text(field?.type?.name);
+    return ["label", "name", "title", "value"].some((token) => key.includes(token))
+      && ["single_line_text_field", "multi_line_text_field"].includes(typeName);
+  }) || fields.find((field) =>
+    field?.required && ["single_line_text_field", "multi_line_text_field"].includes(text(field?.type?.name))
+  ) || fields.find((field) =>
+    ["single_line_text_field", "multi_line_text_field"].includes(text(field?.type?.name))
+  ) || null;
 }
 
 async function loadMetaobjectsByType(type, metaobjectEntriesCache) {
@@ -1674,12 +1939,193 @@ function metaobjectMatchScore(entry, candidateKeys) {
   return score;
 }
 
+
+async function ensureTaxonomyBackedMetaobjects({
+  definition,
+  metaDefinition,
+  metaobjectType,
+  categoryId,
+  candidates,
+  aliases,
+  metaobjectEntriesCache,
+  taxonomyCategoryAttributesCache,
+  taxonomyAttributeValuesCache,
+}) {
+  const taxonomy = await resolveTaxonomyValuesForCandidates({
+    definition,
+    categoryId,
+    candidates,
+    aliases,
+    taxonomyCategoryAttributesCache,
+    taxonomyAttributeValuesCache,
+  });
+  if (!taxonomy.selected?.length) return {
+    ids: [],
+    reason: taxonomy.reason,
+    taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+    availableAttributes: taxonomy.availableAttributes,
+    availableEntries: taxonomy.availableEntries,
+  };
+
+  let entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
+  const taxonomyField = taxonomyFieldForMetaobjectDefinition(metaDefinition, definition);
+  if (!taxonomyField) {
+    return {
+      ids: [],
+      reason: "metaobject_taxonomy_field_missing",
+      taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+      metaobjectType,
+    };
+  }
+
+  const displayField = textFieldForMetaobjectDefinition(metaDefinition);
+  const ids = [];
+  const created = [];
+
+  for (const taxonomyValue of taxonomy.selected) {
+    let existing = entries.find((entry) => entryReferencesTaxonomyValue(entry, taxonomyValue.id)) || null;
+
+    if (!existing) {
+      const taxonomyFieldType = text(taxonomyField?.type?.name);
+      const fields = [{
+        key: text(taxonomyField.key),
+        value: taxonomyFieldType === "list.product_taxonomy_value_reference"
+          ? JSON.stringify([text(taxonomyValue.id)])
+          : text(taxonomyValue.id),
+      }];
+
+      if (displayField && text(displayField.key) !== text(taxonomyField.key)) {
+        fields.push({ key: text(displayField.key), value: text(taxonomyValue.name) });
+      }
+
+      // Ha további kötelező egyszerű szövegmező van, kapja ugyanazt a
+      // felhasználóbarát nevet. Kötelező, ismeretlen referencia mezőt nem találgatunk.
+      for (const field of metaDefinition?.fieldDefinitions || []) {
+        const fieldKey = text(field?.key);
+        if (!field?.required || !fieldKey || fields.some((row) => row.key === fieldKey)) continue;
+        const typeName = text(field?.type?.name);
+        if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) {
+          fields.push({ key: fieldKey, value: text(taxonomyValue.name) });
+        }
+      }
+
+      const handle = `aif-${metaobjectHandlePart(text(taxonomyValue.name))}-${text(taxonomyValue.id).split("/").pop() || "taxonomy"}`.slice(0, 190);
+      const upserted = await upsertMetaobjectEntry({
+        type: metaobjectType,
+        handle,
+        fields,
+      });
+      if (!upserted.metaobject?.id) {
+        return {
+          ids,
+          reason: upserted.reason || "metaobject_upsert_failed",
+          metaobjectType,
+          taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+          errors: upserted.errors || null,
+        };
+      }
+      existing = upserted.metaobject;
+      created.push(existing);
+      entries = [...entries, existing];
+      metaobjectEntriesCache?.set(metaobjectType, entries);
+    }
+
+    const id = text(existing?.id);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+
+  return {
+    ids,
+    reason: ids.length ? null : "metaobject_entry_missing",
+    metaobjectType,
+    taxonomyAttribute: taxonomy.taxonomyAttribute || null,
+    taxonomyValues: taxonomy.selected.map((entry) => ({ id: text(entry.id), name: text(entry.name) })),
+    createdMetaobjects: created.map((entry) => ({
+      id: text(entry.id),
+      handle: text(entry.handle),
+      displayName: text(entry.displayName),
+    })),
+  };
+}
+
+async function ensureSimpleMetaobject({
+  definition,
+  metaDefinition,
+  metaobjectType,
+  candidates,
+  metaobjectEntriesCache,
+}) {
+  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
+  if (!cleanCandidates.length) return { ids: [], reason: "missing_value" };
+
+  let entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
+  const matches = [];
+
+  for (const candidate of cleanCandidates) {
+    const candidateKeys = new Set([metaobjectMatchKey(candidate)].filter(Boolean));
+    const match = entries
+      .map((entry) => ({ entry, score: metaobjectMatchScore(entry, candidateKeys) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.entry || null;
+    if (match?.id && !matches.some((row) => text(row.id) === text(match.id))) matches.push(match);
+  }
+
+  if (matches.length) {
+    return { ids: matches.map((entry) => text(entry.id)).filter(Boolean), reason: null, metaobjectType };
+  }
+
+  const displayField = textFieldForMetaobjectDefinition(metaDefinition);
+  if (!displayField) {
+    return { ids: [], reason: "metaobject_display_field_missing", metaobjectType };
+  }
+
+  const value = cleanCandidates[0];
+  const fields = [{ key: text(displayField.key), value }];
+
+  for (const field of metaDefinition?.fieldDefinitions || []) {
+    const fieldKey = text(field?.key);
+    if (!field?.required || !fieldKey || fields.some((row) => row.key === fieldKey)) continue;
+    const typeName = text(field?.type?.name);
+    if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) {
+      fields.push({ key: fieldKey, value });
+    }
+  }
+
+  const upserted = await upsertMetaobjectEntry({
+    type: metaobjectType,
+    handle: `aif-${metaobjectHandlePart(value)}`.slice(0, 190),
+    fields,
+  });
+  if (!upserted.metaobject?.id) {
+    return {
+      ids: [],
+      reason: upserted.reason || "metaobject_upsert_failed",
+      metaobjectType,
+      errors: upserted.errors || null,
+    };
+  }
+
+  entries = [...entries, upserted.metaobject];
+  metaobjectEntriesCache?.set(metaobjectType, entries);
+  return {
+    ids: [text(upserted.metaobject.id)],
+    reason: null,
+    metaobjectType,
+    createdMetaobjects: [{
+      id: text(upserted.metaobject.id),
+      handle: text(upserted.metaobject.handle),
+      displayName: text(upserted.metaobject.displayName),
+    }],
+  };
+}
+
 async function metafieldValueForDefinition({
   definition,
   categoryId,
   candidates,
   aliases,
   definitionTypeCache,
+  metaobjectDefinitionsCache,
   metaobjectEntriesCache,
   taxonomyCategoryAttributesCache,
   taxonomyAttributeValuesCache,
@@ -1687,6 +2133,13 @@ async function metafieldValueForDefinition({
   const typeName = text(definition?.type?.name);
   const textValue = metafieldTextValue(definition, candidates);
   if (textValue !== null) return { value: textValue, reason: null };
+
+  if (["single_line_text_field", "multi_line_text_field", "list.single_line_text_field"].includes(typeName)) {
+    return {
+      value: null,
+      reason: definitionChoiceValues(definition).length ? "choice_not_allowed" : "text_value_not_resolved",
+    };
+  }
 
   if (isTaxonomyReferenceType(typeName)) {
     return taxonomyMetafieldValueForDefinition({
@@ -1703,54 +2156,62 @@ async function metafieldValueForDefinition({
     return { value: null, reason: "definition_type_unsupported" };
   }
 
-  const metaobjectType = await metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache);
+  const metaDefinition = await metaobjectDefinitionForMetafield(
+    definition,
+    definitionTypeCache,
+    metaobjectDefinitionsCache,
+  );
+  const metaobjectType = text(metaDefinition?.type || metaDefinition?.standardTemplate?.type)
+    || await metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache);
+
   if (!metaobjectType) {
     return { value: null, reason: "metaobject_definition_missing" };
   }
 
-  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
-  if (!cleanCandidates.length) return { value: null, reason: "missing_value", metaobjectType };
-
-  const entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
-  const matches = [];
-  for (const candidate of cleanCandidates) {
-    const candidateKeys = new Set([metaobjectMatchKey(candidate)].filter(Boolean));
-    const match = entries
-      .map((entry) => ({ entry, score: metaobjectMatchScore(entry, candidateKeys) }))
-      .filter((row) => row.score > 0)
-      .sort((a, b) => b.score - a.score)[0]?.entry || null;
-    if (match?.id && !matches.some((row) => text(row.id) === text(match.id))) matches.push(match);
+  let ensured;
+  if (metaobjectType.startsWith("shopify--") && text(categoryId)) {
+    ensured = await ensureTaxonomyBackedMetaobjects({
+      definition,
+      metaDefinition,
+      metaobjectType,
+      categoryId,
+      candidates,
+      aliases,
+      metaobjectEntriesCache,
+      taxonomyCategoryAttributesCache,
+      taxonomyAttributeValuesCache,
+    });
+  } else {
+    ensured = await ensureSimpleMetaobject({
+      definition,
+      metaDefinition,
+      metaobjectType,
+      candidates,
+      metaobjectEntriesCache,
+    });
   }
 
-  if (!matches.length) {
+  const ids = unique((ensured?.ids || []).map(text).filter(Boolean));
+  if (!ids.length) {
     return {
       value: null,
-      reason: "metaobject_entry_missing",
+      reason: ensured?.reason || "metaobject_entry_missing",
       metaobjectType,
-      availableEntries: entries.slice(0, 80).map((entry) => ({
-        id: text(entry?.id),
-        handle: text(entry?.handle),
-        displayName: text(entry?.displayName),
-      })),
+      taxonomyAttribute: ensured?.taxonomyAttribute || null,
+      taxonomyValues: ensured?.taxonomyValues || null,
+      availableAttributes: ensured?.availableAttributes,
+      availableEntries: ensured?.availableEntries,
+      errors: ensured?.errors || null,
     };
   }
 
   return {
-    value: typeName === "list.metaobject_reference"
-      ? JSON.stringify(matches.map((match) => text(match.id)))
-      : text(matches[0].id),
+    value: typeName === "list.metaobject_reference" ? JSON.stringify(ids) : ids[0],
     reason: null,
     metaobjectType,
-    metaobject: {
-      id: text(matches[0].id),
-      handle: text(matches[0].handle),
-      displayName: text(matches[0].displayName),
-    },
-    metaobjects: matches.map((match) => ({
-      id: text(match.id),
-      handle: text(match.handle),
-      displayName: text(match.displayName),
-    })),
+    taxonomyAttribute: ensured?.taxonomyAttribute || null,
+    taxonomyValues: ensured?.taxonomyValues || null,
+    createdMetaobjects: ensured?.createdMetaobjects || null,
   };
 }
 
@@ -1873,6 +2334,7 @@ async function setShopifyProductMetadata({
   style,
   definitionCache,
   metaobjectDefinitionTypeCache,
+  metaobjectDefinitionsCache,
   metaobjectEntriesCache,
   taxonomyCategoryAttributesCache,
   taxonomyAttributeValuesCache,
@@ -1962,6 +2424,7 @@ async function setShopifyProductMetadata({
         candidates: cleanCandidates,
         aliases: field.aliases,
         definitionTypeCache: metaobjectDefinitionTypeCache,
+        metaobjectDefinitionsCache,
         metaobjectEntriesCache,
         taxonomyCategoryAttributesCache,
         taxonomyAttributeValuesCache,
@@ -1994,8 +2457,10 @@ async function setShopifyProductMetadata({
         },
         metaobjectType: resolved.metaobjectType || null,
         taxonomyAttribute: resolved.taxonomyAttribute || null,
+        taxonomyValues: resolved.taxonomyValues || null,
         availableAttributes: resolved.availableAttributes || undefined,
         availableEntries: resolved.availableEntries || undefined,
+        errors: resolved.errors || undefined,
         candidates: cleanCandidates,
       });
       continue;
@@ -2019,6 +2484,7 @@ async function setShopifyProductMetadata({
       metaobjectType: resolved.metaobjectType || null,
       metaobject: resolved.metaobject || null,
       metaobjects: resolved.metaobjects || null,
+      createdMetaobjects: resolved.createdMetaobjects || null,
       taxonomyAttribute: resolved.taxonomyAttribute || null,
       taxonomyValues: resolved.taxonomyValues || null,
     });
@@ -2266,6 +2732,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const productWarnings = [];
   const metadataDefinitionCache = new Map();
   const metaobjectDefinitionTypeCache = new Map();
+  const metaobjectDefinitionsCache = new Map();
   const metaobjectEntriesCache = new Map();
   const taxonomyCategoryAttributesCache = new Map();
   const taxonomyAttributeValuesCache = new Map();
@@ -2303,6 +2770,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         ageGroup: (task.ageGroups || [])[0] || "",
         definitionCache: metadataDefinitionCache,
         metaobjectDefinitionTypeCache,
+        metaobjectDefinitionsCache,
         metaobjectEntriesCache,
         taxonomyCategoryAttributesCache,
         taxonomyAttributeValuesCache,
