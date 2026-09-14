@@ -1338,7 +1338,8 @@ async function applicableProductMetafieldDefinitions(categoryId) {
           ownerType: PRODUCT,
           first: 250,
           after: $after,
-          constraintSubtype: $constraint
+          constraintSubtype: $constraint,
+          constraintStatus: CONSTRAINED_AND_UNCONSTRAINED
         ) {
           pageInfo { hasNextPage endCursor }
           nodes {
@@ -1394,6 +1395,81 @@ async function applicableProductMetafieldDefinitions(categoryId) {
   return rows;
 }
 
+
+
+async function applicableDefinitionByIdentifier({ namespace, key, categoryId, cache }) {
+  const ns = text(namespace);
+  const defKey = text(key);
+  const category = text(categoryId);
+  if (!ns || !defKey) return null;
+
+  const cacheKey = `applicable::${category || "__all__"}::${ns}.${defKey}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
+  try {
+    if (category) {
+      const query = `query AifApplicableDefinitionByIdentifier(
+        $namespace: String!,
+        $key: String!,
+        $constraint: MetafieldDefinitionConstraintSubtypeIdentifier!
+      ) {
+        definitions: metafieldDefinitions(
+          ownerType: PRODUCT,
+          first: 10,
+          namespace: $namespace,
+          key: $key,
+          constraintSubtype: $constraint,
+          constraintStatus: CONSTRAINED_AND_UNCONSTRAINED
+        ) {
+          nodes {
+            id
+            name
+            namespace
+            key
+            type { name }
+            validations { name value }
+          }
+        }
+      }`;
+
+      const response = await shopifyGraphql(query, {
+        namespace: ns,
+        key: defKey,
+        constraint: { key: "category", value: category },
+      });
+
+      const row = response.data?.definitions?.nodes?.[0] || null;
+      cache?.set(cacheKey, row);
+      return row;
+    }
+
+    const query = `query AifDefinitionByIdentifier($identifier: MetafieldDefinitionIdentifierInput!) {
+      metafieldDefinition(identifier: $identifier) {
+        id
+        name
+        namespace
+        key
+        type { name }
+        validations { name value }
+      }
+    }`;
+
+    const response = await shopifyGraphql(query, {
+      identifier: {
+        ownerType: "PRODUCT",
+        namespace: ns,
+        key: defKey,
+      },
+    });
+
+    const row = response.data?.metafieldDefinition || null;
+    cache?.set(cacheKey, row);
+    return row;
+  } catch {
+    cache?.set(cacheKey, null);
+    return null;
+  }
+}
 
 async function exactProductMetafieldDefinition(definition, cache) {
   const namespace = text(definition?.namespace);
@@ -2729,42 +2805,56 @@ async function setShopifyProductMetadata({
   const fields = [
     {
       field: "brand",
+      exactNamespace: "custom",
+      exactKey: "brand",
       aliases: ["Brand", "Brand name", "Marcă", "Marca", "Márka"],
       preferredNamespaces: ["custom", "shopify"],
       candidates: unique([text(brand)]),
     },
     {
       field: "color",
+      exactNamespace: "shopify",
+      exactKey: "color-pattern",
       aliases: ["Color", "Colour", "Color pattern", "color-pattern", "Culoare", "Szín"],
       preferredNamespaces: ["shopify"],
       candidates: colorCandidates(colors),
     },
     {
       field: "size",
+      exactNamespace: "shopify",
+      exactKey: "size",
       aliases: ["Size", "Clothing size", "Accessory size", "Sock size", "Hat size", "Mărime", "Marime", "Méret"],
       preferredNamespaces: ["shopify"],
       candidates: sizeCandidates(sizes),
     },
     {
       field: "fabric",
+      exactNamespace: "shopify",
+      exactKey: "fabric",
       aliases: ["Fabric", "Material", "Composition", "Compoziție", "Compozitie", "Țesătură", "Tesatura", "Szövet", "Anyag"],
       preferredNamespaces: ["shopify"],
       candidates: materialCandidates(materials),
     },
     {
       field: "targetGender",
+      exactNamespace: "shopify",
+      exactKey: "target-gender",
       aliases: ["Target gender", "Gender", "Célzott nem", "Nem", "Gen", "Sex"],
       preferredNamespaces: ["shopify"],
       candidates: targetGenderCandidates(gender || audience),
     },
     {
       field: "ageGroup",
+      exactNamespace: "shopify",
+      exactKey: "age-group",
       aliases: ["Age group", "Korosztály", "Grupă de vârstă", "Grupa de varsta"],
       preferredNamespaces: ["shopify"],
       candidates: ageGroupCandidates(ageGroup || gender || audience),
     },
     {
       field: "audience",
+      exactNamespace: "custom",
+      exactKey: "public",
       aliases: ["Public", "Audience", "Public țintă", "Target audience"],
       preferredNamespaces: ["custom"],
       candidates: audienceCandidates(audience),
@@ -2787,9 +2877,25 @@ async function setShopifyProductMetadata({
       skippedFields.push({ field: field.field, reason: "missing_value" });
       continue;
     }
-    const listedDefinition = findProductMetafieldDefinition(definitions, field.aliases, field.preferredNamespaces);
+    let listedDefinition = findProductMetafieldDefinition(definitions, field.aliases, field.preferredNamespaces);
+
+    if (!listedDefinition && field.exactNamespace && field.exactKey) {
+      listedDefinition = await applicableDefinitionByIdentifier({
+        namespace: field.exactNamespace,
+        key: field.exactKey,
+        categoryId,
+        cache: exactMetafieldDefinitionCache,
+      });
+    }
+
     if (!listedDefinition) {
-      skippedFields.push({ field: field.field, reason: "definition_missing" });
+      skippedFields.push({
+        field: field.field,
+        reason: "definition_missing",
+        expectedDefinition: field.exactNamespace && field.exactKey
+          ? `${field.exactNamespace}.${field.exactKey}`
+          : null,
+      });
       continue;
     }
 
@@ -3220,6 +3326,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           category: task.categoryName || task.categoryId || null,
           reason: skipped.reason,
           definition: skipped.definition || null,
+          expectedDefinition: skipped.expectedDefinition || null,
           metaobjectType: skipped.metaobjectType || null,
           preferredAttributeHandles: skipped.preferredAttributeHandles || null,
           availableAttributes: skipped.availableAttributes || null,
