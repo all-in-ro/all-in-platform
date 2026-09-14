@@ -1828,7 +1828,11 @@ async function resolveTaxonomyValuesForCandidates({
     // "152"; the category metafield can honestly use Shopify's "Other" value
     // instead of staying blank.
     const definitionKey = normalizeKey(definition?.key).replace(/[^a-z0-9]+/g, "");
-    if (definitionKey === "size") {
+    // Shopify uses several standard size metafields depending on category
+    // (size, accessory-size, etc.). Supplier range sizes such as 39-42 or
+    // 35-38 often have no exact taxonomy value. Preserve the exact variant
+    // option, and use Shopify's honest "Other" bucket for the category metafield.
+    if (definitionKey === "size" || definitionKey.endsWith("size")) {
       const other = entries.find((entry) => metaobjectMatchKey(entry?.name) === "other");
       if (other?.id) {
         selected.push(other);
