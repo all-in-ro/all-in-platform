@@ -1388,12 +1388,35 @@ async function exactProductMetafieldDefinition(definition, cache) {
       },
     });
     const exact = response.data?.metafieldDefinition || null;
+    const mergeValidations = (...groups) => {
+      const seen = new Set();
+      const rows = [];
+      for (const group of groups) {
+        for (const validation of Array.isArray(group) ? group : []) {
+          const name = text(validation?.name);
+          const value = text(validation?.value);
+          const key = `${name}::${value}`;
+          if (!name || seen.has(key)) continue;
+          seen.add(key);
+          rows.push(validation);
+        }
+      }
+      return rows;
+    };
     const hydrated = exact
       ? {
           ...definition,
           ...exact,
-          type: exact.type || definition?.type || null,
-          validations: Array.isArray(exact.validations) ? exact.validations : (definition?.validations || []),
+          type: exact.type || exact.standardTemplate?.type || definition?.type || null,
+          // Shopify category metafieldeknél a metaobject cél-definition sokszor
+          // a standard template validációjában van, miközben az aktivált
+          // definíció saját validations tömbje üres. Mindkettőt meg kell tartani.
+          validations: mergeValidations(
+            exact.validations,
+            exact.standardTemplate?.validations,
+            definition?.validations,
+            definition?.standardTemplate?.validations,
+          ),
         }
       : definition || null;
     cache?.set(cacheKey, hydrated);
@@ -2347,6 +2370,15 @@ async function metafieldValueForDefinition({
       value: null,
       reason: "metaobject_definition_missing",
       metafieldValidations: definition?.validations || [],
+      standardTemplate: definition?.standardTemplate
+        ? {
+            id: text(definition.standardTemplate.id),
+            namespace: text(definition.standardTemplate.namespace),
+            key: text(definition.standardTemplate.key),
+            type: text(definition.standardTemplate.type?.name),
+            validations: definition.standardTemplate.validations || [],
+          }
+        : null,
     };
   }
 
@@ -2670,6 +2702,7 @@ async function setShopifyProductMetadata({
         availableEntries: resolved.availableEntries || undefined,
         errors: resolved.errors || undefined,
         metafieldValidations: resolved.metafieldValidations || undefined,
+        standardTemplate: resolved.standardTemplate || undefined,
         candidates: cleanCandidates,
       });
       continue;
