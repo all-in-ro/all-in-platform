@@ -1030,6 +1030,9 @@ export async function createAifShopifyProductExport(client, options = {}) {
             subcategoryNameHu: item.subcategory_name_hu,
             subcategoryCode: item.subcategory_code,
             productType: item.product_type,
+            material: item.material,
+            season: item.season,
+            productCategory: productCategory(item),
             tags: buildTags(item),
             productCode: item.product_group_code || productGroupCode(item, prepared.groupingMode),
             productGroupKey: item.product_group_key || productGroupKey(item, prepared.groupingMode),
@@ -1403,11 +1406,164 @@ function resolvedMetafieldChoice(definition, candidates) {
 
 function metafieldTextValue(definition, candidates) {
   const typeName = text(definition?.type?.name);
-  const value = resolvedMetafieldChoice(definition, candidates);
-  if (!value) return null;
-  if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) return value;
-  if (typeName === "list.single_line_text_field") return JSON.stringify([value]);
+  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
+  if (!cleanCandidates.length) return null;
+  if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) {
+    const value = resolvedMetafieldChoice(definition, cleanCandidates);
+    return value || null;
+  }
+  if (typeName === "list.single_line_text_field") {
+    const allowed = definitionChoiceValues(definition);
+    const values = allowed.length
+      ? cleanCandidates.map((candidate) => allowed.find((value) => normalizeKey(value) === normalizeKey(candidate))).filter(Boolean)
+      : cleanCandidates;
+    return values.length ? JSON.stringify(unique(values)) : null;
+  }
   return null;
+}
+
+function isTaxonomyReferenceType(typeName) {
+  return ["product_taxonomy_value_reference", "list.product_taxonomy_value_reference"].includes(text(typeName));
+}
+
+function taxonomyAttributeMatchScore(attribute, definition, aliases = []) {
+  const attributeName = normalizeKey(attribute?.name).replace(/[^a-z0-9]+/g, " ").trim();
+  if (!attributeName) return 0;
+  const candidates = unique([
+    definition?.name,
+    definition?.key,
+    ...aliases,
+    ...validationValues(definition, ["product_taxonomy_attribute_handle"]),
+  ]).map((value) => normalizeKey(value).replace(/[^a-z0-9]+/g, " ").trim()).filter(Boolean);
+  let score = 0;
+  for (const candidate of candidates) {
+    if (attributeName === candidate) score = Math.max(score, 130);
+    else if (attributeName.includes(candidate) || candidate.includes(attributeName)) score = Math.max(score, 80);
+  }
+  return score;
+}
+
+async function loadTaxonomyCategoryAttributes(categoryId, cache) {
+  const id = text(categoryId);
+  if (!id) return [];
+  if (cache?.has(id)) return cache.get(id);
+  const query = `query AifTaxonomyCategoryAttributes($id: ID!) {
+    node(id: $id) {
+      ... on TaxonomyCategory {
+        id
+        name
+        fullName
+        attributes(first: 100) {
+          nodes {
+            __typename
+            ... on TaxonomyChoiceListAttribute { id name }
+          }
+        }
+      }
+    }
+  }`;
+  const response = await shopifyGraphql(query, { id });
+  const attributes = (response.data?.node?.attributes?.nodes || [])
+    .filter((row) => row?.__typename === "TaxonomyChoiceListAttribute" && text(row?.id));
+  cache?.set(id, attributes);
+  return attributes;
+}
+
+async function loadTaxonomyAttributeValues(attributeId, cache) {
+  const id = text(attributeId);
+  if (!id) return [];
+  if (cache?.has(id)) return cache.get(id);
+  const query = `query AifTaxonomyAttributeValues($id: ID!, $after: String) {
+    node(id: $id) {
+      ... on TaxonomyChoiceListAttribute {
+        id
+        name
+        values(first: 250, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id name }
+        }
+      }
+    }
+  }`;
+  const values = [];
+  const seen = new Set();
+  let after = null;
+  for (let page = 0; page < 60; page += 1) {
+    const response = await shopifyGraphql(query, { id, after });
+    const connection = response.data?.node?.values;
+    for (const row of connection?.nodes || []) {
+      const valueId = text(row?.id);
+      if (!valueId || seen.has(valueId)) continue;
+      seen.add(valueId);
+      values.push({ id: valueId, name: text(row?.name) });
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    const next = text(connection?.pageInfo?.endCursor);
+    if (!next || next === after) break;
+    after = next;
+  }
+  cache?.set(id, values);
+  return values;
+}
+
+function taxonomyValueMatchScore(value, candidateKeys) {
+  const key = metaobjectMatchKey(value?.name);
+  return key && candidateKeys.has(key) ? 120 : 0;
+}
+
+async function taxonomyMetafieldValueForDefinition({
+  definition,
+  categoryId,
+  candidates,
+  aliases,
+  taxonomyCategoryAttributesCache,
+  taxonomyAttributeValuesCache,
+}) {
+  const typeName = text(definition?.type?.name);
+  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
+  if (!cleanCandidates.length) return { value: null, reason: "missing_value" };
+  if (!text(categoryId)) return { value: null, reason: "missing_category" };
+
+  const attributes = await loadTaxonomyCategoryAttributes(categoryId, taxonomyCategoryAttributesCache);
+  const attribute = attributes
+    .map((row) => ({ row, score: taxonomyAttributeMatchScore(row, definition, aliases) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.row || null;
+  if (!attribute?.id) {
+    return {
+      value: null,
+      reason: "taxonomy_attribute_missing",
+      availableAttributes: attributes.slice(0, 60).map((row) => ({ id: text(row.id), name: text(row.name) })),
+    };
+  }
+
+  const entries = await loadTaxonomyAttributeValues(attribute.id, taxonomyAttributeValuesCache);
+  const selected = [];
+  for (const candidate of cleanCandidates) {
+    const candidateKeys = new Set([metaobjectMatchKey(candidate)].filter(Boolean));
+    const match = entries
+      .map((entry) => ({ entry, score: taxonomyValueMatchScore(entry, candidateKeys) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.entry || null;
+    if (match?.id && !selected.some((row) => row.id === match.id)) selected.push(match);
+  }
+
+  if (!selected.length) {
+    return {
+      value: null,
+      reason: "taxonomy_value_missing",
+      taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
+      availableEntries: entries.slice(0, 80).map((entry) => ({ id: text(entry.id), displayName: text(entry.name) })),
+    };
+  }
+
+  const ids = selected.map((entry) => text(entry.id)).filter(Boolean);
+  return {
+    value: typeName === "list.product_taxonomy_value_reference" ? JSON.stringify(ids) : ids[0],
+    reason: null,
+    taxonomyAttribute: { id: text(attribute.id), name: text(attribute.name) },
+    taxonomyValues: selected.map((entry) => ({ id: text(entry.id), name: text(entry.name) })),
+  };
 }
 
 function validationValues(definition, names = []) {
@@ -1520,13 +1676,28 @@ function metaobjectMatchScore(entry, candidateKeys) {
 
 async function metafieldValueForDefinition({
   definition,
+  categoryId,
   candidates,
+  aliases,
   definitionTypeCache,
   metaobjectEntriesCache,
+  taxonomyCategoryAttributesCache,
+  taxonomyAttributeValuesCache,
 }) {
   const typeName = text(definition?.type?.name);
   const textValue = metafieldTextValue(definition, candidates);
   if (textValue !== null) return { value: textValue, reason: null };
+
+  if (isTaxonomyReferenceType(typeName)) {
+    return taxonomyMetafieldValueForDefinition({
+      definition,
+      categoryId,
+      candidates,
+      aliases,
+      taxonomyCategoryAttributesCache,
+      taxonomyAttributeValuesCache,
+    });
+  }
 
   if (!isMetaobjectReferenceType(typeName)) {
     return { value: null, reason: "definition_type_unsupported" };
@@ -1537,25 +1708,26 @@ async function metafieldValueForDefinition({
     return { value: null, reason: "metaobject_definition_missing" };
   }
 
-  const candidateKeys = new Set(
-    unique((candidates || []).map(text).filter(Boolean))
-      .map(metaobjectMatchKey)
-      .filter(Boolean)
-  );
-  if (!candidateKeys.size) return { value: null, reason: "missing_value", metaobjectType };
+  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
+  if (!cleanCandidates.length) return { value: null, reason: "missing_value", metaobjectType };
 
   const entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
-  const match = entries
-    .map((entry) => ({ entry, score: metaobjectMatchScore(entry, candidateKeys) }))
-    .filter((row) => row.score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.entry || null;
+  const matches = [];
+  for (const candidate of cleanCandidates) {
+    const candidateKeys = new Set([metaobjectMatchKey(candidate)].filter(Boolean));
+    const match = entries
+      .map((entry) => ({ entry, score: metaobjectMatchScore(entry, candidateKeys) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.entry || null;
+    if (match?.id && !matches.some((row) => text(row.id) === text(match.id))) matches.push(match);
+  }
 
-  if (!match?.id) {
+  if (!matches.length) {
     return {
       value: null,
       reason: "metaobject_entry_missing",
       metaobjectType,
-      availableEntries: entries.slice(0, 50).map((entry) => ({
+      availableEntries: entries.slice(0, 80).map((entry) => ({
         id: text(entry?.id),
         handle: text(entry?.handle),
         displayName: text(entry?.displayName),
@@ -1565,15 +1737,20 @@ async function metafieldValueForDefinition({
 
   return {
     value: typeName === "list.metaobject_reference"
-      ? JSON.stringify([text(match.id)])
-      : text(match.id),
+      ? JSON.stringify(matches.map((match) => text(match.id)))
+      : text(matches[0].id),
     reason: null,
     metaobjectType,
     metaobject: {
+      id: text(matches[0].id),
+      handle: text(matches[0].handle),
+      displayName: text(matches[0].displayName),
+    },
+    metaobjects: matches.map((match) => ({
       id: text(match.id),
       handle: text(match.handle),
       displayName: text(match.displayName),
-    },
+    })),
   };
 }
 
@@ -1591,15 +1768,114 @@ function styleCandidates(value) {
     : ["Fashion", "Lifestyle"];
 }
 
+function targetGenderCandidates(value) {
+  const key = shopifyGender(value);
+  if (key === "female") return ["Female", "Women", "Femei", "Feminin", "Női", "Noi"];
+  if (key === "male") return ["Male", "Men", "Bărbați", "Barbati", "Masculin", "Férfi", "Ferfi"];
+  return ["Unisex", "Gender neutral", "Gender-neutral"];
+}
+
+function ageGroupCandidates(value) {
+  return shopifyAgeGroup(value) === "kids"
+    ? ["Kids", "Children", "Copii", "Junior", "Youth", "Gyerek"]
+    : ["Adult", "Adults", "Adulți", "Adulti", "Felnőtt", "Felnott"];
+}
+
+const SHOPIFY_COLOR_CANDIDATES = {
+  negru: ["Black", "Negru", "Fekete"],
+  alb: ["White", "Alb", "Fehér", "Feher"],
+  rosu: ["Red", "Roșu", "Rosu", "Piros"],
+  albastru: ["Blue", "Albastru", "Kék", "Kek"],
+  bleumarin: ["Navy", "Navy blue", "Bleumarin", "Sötétkék", "Sotetkek"],
+  verde: ["Green", "Verde", "Zöld", "Zold"],
+  galben: ["Yellow", "Galben", "Sárga", "Sarga"],
+  gri: ["Gray", "Grey", "Gri", "Szürke", "Szurke"],
+  portocaliu: ["Orange", "Portocaliu", "Narancs"],
+  maro: ["Brown", "Maro", "Barna"],
+  bej: ["Beige", "Bej", "Bézs", "Bezs"],
+  mov: ["Purple", "Violet", "Mov", "Lila"],
+  violet: ["Violet", "Purple", "Mov", "Lila"],
+  roz: ["Pink", "Roz", "Rózsaszín", "Rozsaszin"],
+  auriu: ["Gold", "Auriu", "Arany"],
+  argintiu: ["Silver", "Argintiu", "Ezüst", "Ezust"],
+  crem: ["Cream", "Crem"],
+  turcoaz: ["Turquoise", "Turcoaz"],
+  kaki: ["Khaki", "Kaki"],
+  multicolor: ["Multicolor", "Multi-color", "Multicolour"],
+};
+
+function colorCandidates(values) {
+  const source = Array.isArray(values) ? values : [values];
+  const out = [];
+  for (const value of source) {
+    const raw = text(value);
+    if (!raw) continue;
+    out.push(raw);
+    const parts = normalizeKey(raw).split(/[\/,+&]+/).map((part) => part.trim()).filter(Boolean);
+    for (const part of parts.length ? parts : [normalizeKey(raw)]) {
+      out.push(...(SHOPIFY_COLOR_CANDIDATES[part] || []));
+    }
+  }
+  return unique(out);
+}
+
+function sizeCandidates(values) {
+  const source = Array.isArray(values) ? values : [values];
+  const out = [];
+  for (const value of source) {
+    const raw = text(value);
+    if (!raw) continue;
+    const key = normalizeKey(raw).replace(/\s+/g, "");
+    out.push(raw);
+    if (["osfm", "onesizefitsmost"].includes(key)) out.push("One size fits most", "One size");
+    if (["osfa", "onesizefitsall"].includes(key)) out.push("One size fits all", "One size");
+    if (["onesize", "uni", "universal"].includes(key)) out.push("One size");
+    if (key === "2xl") out.push("XXL");
+    if (key === "3xl") out.push("XXXL");
+  }
+  return unique(out);
+}
+
+function materialCandidates(values) {
+  const source = Array.isArray(values) ? values : [values];
+  const out = [];
+  const rules = [
+    [/bumbac|cotton|pamut/, ["Cotton", "Bumbac", "Pamut"]],
+    [/poliester|polyester|poliészter|polieszter/, ["Polyester", "Poliester"]],
+    [/elastan|elastane|spandex|elasztan/, ["Elastane", "Spandex", "Elastan"]],
+    [/nylon|poliamid|polyamide/, ["Nylon", "Polyamide", "Poliamidă", "Poliamida"]],
+    [/vascoza|viscoza|viscose|rayon/, ["Viscose", "Rayon", "Viscoză", "Viscoza"]],
+    [/lana|wool|gyapju/, ["Wool", "Lână", "Lana", "Gyapjú", "Gyapju"]],
+    [/in|linen|len/, ["Linen", "In"]],
+    [/piele|leather|bor/, ["Leather", "Piele", "Bőr", "Bor"]],
+    [/acril|acrylic|akril/, ["Acrylic", "Acril"]],
+  ];
+  for (const value of source) {
+    const raw = text(value);
+    if (!raw) continue;
+    out.push(raw);
+    const key = normalizeKey(raw);
+    for (const [pattern, candidates] of rules) if (pattern.test(key)) out.push(...candidates);
+  }
+  return unique(out);
+}
+
 async function setShopifyProductMetadata({
   productId,
   categoryId,
   brand,
+  colors = [],
+  sizes = [],
+  materials = [],
+  gender,
+  ageGroup,
   audience,
   style,
   definitionCache,
   metaobjectDefinitionTypeCache,
   metaobjectEntriesCache,
+  taxonomyCategoryAttributesCache,
+  taxonomyAttributeValuesCache,
 }) {
   const product = text(productId);
   if (!product) return { updatedFields: [], skippedFields: [{ field: "all", reason: "missing_product" }] };
@@ -1614,21 +1890,48 @@ async function setShopifyProductMetadata({
   const fields = [
     {
       field: "brand",
-      value: text(brand),
-      aliases: ["Brand", "Marcă", "Marca", "Márka"],
+      aliases: ["Brand", "Brand name", "Marcă", "Marca", "Márka"],
       preferredNamespaces: ["shopify"],
-      candidates: [text(brand)],
+      candidates: unique([text(brand)]),
+    },
+    {
+      field: "color",
+      aliases: ["Color", "Colour", "Color pattern", "color-pattern", "Culoare", "Szín"],
+      preferredNamespaces: ["shopify"],
+      candidates: colorCandidates(colors),
+    },
+    {
+      field: "size",
+      aliases: ["Size", "Clothing size", "Mărime", "Marime", "Méret"],
+      preferredNamespaces: ["shopify"],
+      candidates: sizeCandidates(sizes),
+    },
+    {
+      field: "fabric",
+      aliases: ["Fabric", "Material", "Composition", "Compoziție", "Compozitie", "Țesătură", "Tesatura", "Szövet", "Anyag"],
+      preferredNamespaces: ["shopify"],
+      candidates: materialCandidates(materials),
+    },
+    {
+      field: "targetGender",
+      aliases: ["Target gender", "Gender", "Célzott nem", "Nem", "Gen", "Sex"],
+      preferredNamespaces: ["shopify"],
+      candidates: targetGenderCandidates(gender || audience),
+    },
+    {
+      field: "ageGroup",
+      aliases: ["Age group", "Korosztály", "Grupă de vârstă", "Grupa de varsta"],
+      preferredNamespaces: ["shopify"],
+      candidates: ageGroupCandidates(ageGroup || gender || audience),
     },
     {
       field: "audience",
-      value: text(audience),
       aliases: ["Public", "Audience", "Public țintă", "Target audience"],
       preferredNamespaces: ["custom"],
       candidates: audienceCandidates(audience),
     },
     {
       field: "style",
-      value: text(style),
       aliases: ["Stil", "Style"],
       preferredNamespaces: ["custom"],
       candidates: styleCandidates(style),
@@ -1640,7 +1943,8 @@ async function setShopifyProductMetadata({
   const skippedFields = [];
   const resolvedFields = [];
   for (const field of fields) {
-    if (!field.value) {
+    const cleanCandidates = unique((field.candidates || []).map(text).filter(Boolean));
+    if (!cleanCandidates.length) {
       skippedFields.push({ field: field.field, reason: "missing_value" });
       continue;
     }
@@ -1654,9 +1958,13 @@ async function setShopifyProductMetadata({
     try {
       resolved = await metafieldValueForDefinition({
         definition,
-        candidates: field.candidates,
+        categoryId,
+        candidates: cleanCandidates,
+        aliases: field.aliases,
         definitionTypeCache: metaobjectDefinitionTypeCache,
         metaobjectEntriesCache,
+        taxonomyCategoryAttributesCache,
+        taxonomyAttributeValuesCache,
       });
     } catch (error) {
       skippedFields.push({
@@ -1685,7 +1993,10 @@ async function setShopifyProductMetadata({
           type: text(definition.type?.name),
         },
         metaobjectType: resolved.metaobjectType || null,
+        taxonomyAttribute: resolved.taxonomyAttribute || null,
+        availableAttributes: resolved.availableAttributes || undefined,
         availableEntries: resolved.availableEntries || undefined,
+        candidates: cleanCandidates,
       });
       continue;
     }
@@ -1707,6 +2018,9 @@ async function setShopifyProductMetadata({
       },
       metaobjectType: resolved.metaobjectType || null,
       metaobject: resolved.metaobject || null,
+      metaobjects: resolved.metaobjects || null,
+      taxonomyAttribute: resolved.taxonomyAttribute || null,
+      taxonomyValues: resolved.taxonomyValues || null,
     });
   }
 
@@ -1767,9 +2081,26 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   if (!exportResult.rowCount) return null;
   const exportRow = exportResult.rows[0];
   const itemsResult = await client.query(
-    `SELECT * FROM aif_shopify_product_export_items
-     WHERE export_id=$1 AND item_status IN ('exported_pending','error','mapped')
-     ORDER BY created_at`,
+    `SELECT
+       e.*,
+       b.name AS live_brand_name,
+       b.code AS live_brand_code,
+       v.color_name AS live_color_name,
+       v.color_code AS live_color_code,
+       v.size AS live_size,
+       m.gender AS live_gender,
+       m.material AS live_material,
+       m.product_type AS live_product_type,
+       c.name_ro AS live_category_name_ro,
+       subc.name_ro AS live_subcategory_name_ro
+     FROM aif_shopify_product_export_items e
+     JOIN aif_product_variants v ON v.id=e.variant_id
+     JOIN aif_product_models m ON m.id=v.model_id
+     LEFT JOIN aif_brands b ON b.id=m.brand_id
+     LEFT JOIN aif_categories c ON c.id=m.category_id
+     LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+     WHERE e.export_id=$1 AND e.item_status IN ('exported_pending','error','mapped')
+     ORDER BY e.created_at`,
     [exportRow.id]
   );
   const shopifyVariants = await loadAllShopifyVariants();
@@ -1864,9 +2195,22 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       const taskData = {
         productId,
         modelId: item.model_id,
-        brand: text(item.snapshot?.brand),
-        audience: text(item.snapshot?.audience) || (text(item.snapshot?.gender) ? shopifyAudience(item.snapshot?.gender) : ""),
-        style: text(item.snapshot?.style),
+        brand: text(item.snapshot?.brand || item.live_brand_name || item.live_brand_code),
+        colors: unique([text(item.snapshot?.color), text(item.live_color_name), text(item.live_color_code)]),
+        sizes: unique([text(item.snapshot?.size), text(item.live_size)]),
+        materials: unique([text(item.snapshot?.material), text(item.live_material)]),
+        genders: unique([text(item.snapshot?.gender), text(item.live_gender)]),
+        ageGroups: unique([
+          text(item.snapshot?.gender) ? shopifyAgeGroup(item.snapshot?.gender) : "",
+          text(item.live_gender) ? shopifyAgeGroup(item.live_gender) : "",
+        ]),
+        audience: text(item.snapshot?.audience) || (text(item.snapshot?.gender || item.live_gender) ? shopifyAudience(item.snapshot?.gender || item.live_gender) : ""),
+        style: text(item.snapshot?.style) || shopifyStyle({
+          brand_name: item.live_brand_name,
+          category_name_ro: item.live_category_name_ro,
+          subcategory_name_ro: item.live_subcategory_name_ro,
+          product_type: item.live_product_type,
+        }),
         categoryId: text(variant.product?.category?.id),
         categoryName: text(variant.product?.category?.fullName || variant.product?.category?.name),
         currentStatus: text(variant.product?.status),
@@ -1875,6 +2219,11 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       productTasks.set(productId, existingTask ? {
         ...existingTask,
         brand: existingTask.brand || taskData.brand,
+        colors: unique([...(existingTask.colors || []), ...taskData.colors]),
+        sizes: unique([...(existingTask.sizes || []), ...taskData.sizes]),
+        materials: unique([...(existingTask.materials || []), ...taskData.materials]),
+        genders: unique([...(existingTask.genders || []), ...taskData.genders]),
+        ageGroups: unique([...(existingTask.ageGroups || []), ...taskData.ageGroups]),
         audience: existingTask.audience || taskData.audience,
         style: existingTask.style || taskData.style,
         categoryId: existingTask.categoryId || taskData.categoryId,
@@ -1898,6 +2247,16 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   let publishedProducts = 0;
   let brandUpdatedProducts = 0;
   let brandSkippedProducts = 0;
+  let colorUpdatedProducts = 0;
+  let colorSkippedProducts = 0;
+  let sizeUpdatedProducts = 0;
+  let sizeSkippedProducts = 0;
+  let fabricUpdatedProducts = 0;
+  let fabricSkippedProducts = 0;
+  let targetGenderUpdatedProducts = 0;
+  let targetGenderSkippedProducts = 0;
+  let ageGroupUpdatedProducts = 0;
+  let ageGroupSkippedProducts = 0;
   let audienceUpdatedProducts = 0;
   let audienceSkippedProducts = 0;
   let styleUpdatedProducts = 0;
@@ -1908,6 +2267,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const metadataDefinitionCache = new Map();
   const metaobjectDefinitionTypeCache = new Map();
   const metaobjectEntriesCache = new Map();
+  const taxonomyCategoryAttributesCache = new Map();
+  const taxonomyAttributeValuesCache = new Map();
   let onlinePublicationId = "";
 
   if (exportRow.product_status === "active" && productTasks.size) {
@@ -1935,17 +2296,34 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
 
       const metadataResult = await setShopifyProductMetadata({
         ...task,
+        colors: task.colors || [],
+        sizes: task.sizes || [],
+        materials: task.materials || [],
+        gender: (task.genders || [])[0] || "",
+        ageGroup: (task.ageGroups || [])[0] || "",
         definitionCache: metadataDefinitionCache,
         metaobjectDefinitionTypeCache,
         metaobjectEntriesCache,
+        taxonomyCategoryAttributesCache,
+        taxonomyAttributeValuesCache,
       });
       if (metadataResult.updatedFields.length) metadataUpdatedProducts += 1;
       if (metadataResult.updatedFields.includes("brand")) brandUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("color")) colorUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("size")) sizeUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("fabric")) fabricUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("targetGender")) targetGenderUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("ageGroup")) ageGroupUpdatedProducts += 1;
       if (metadataResult.updatedFields.includes("audience")) audienceUpdatedProducts += 1;
       if (metadataResult.updatedFields.includes("style")) styleUpdatedProducts += 1;
 
       for (const skipped of metadataResult.skippedFields || []) {
         if (skipped.field === "brand") brandSkippedProducts += 1;
+        if (skipped.field === "color") colorSkippedProducts += 1;
+        if (skipped.field === "size") sizeSkippedProducts += 1;
+        if (skipped.field === "fabric") fabricSkippedProducts += 1;
+        if (skipped.field === "targetGender") targetGenderSkippedProducts += 1;
+        if (skipped.field === "ageGroup") ageGroupSkippedProducts += 1;
         if (skipped.field === "audience") audienceSkippedProducts += 1;
         if (skipped.field === "style") styleSkippedProducts += 1;
         productWarnings.push({
@@ -1955,7 +2333,9 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           reason: skipped.reason,
           definition: skipped.definition || null,
           metaobjectType: skipped.metaobjectType || null,
+          availableAttributes: skipped.availableAttributes || null,
           availableEntries: skipped.availableEntries || null,
+          candidates: skipped.candidates || null,
           error: skipped.error || null,
           code: skipped.code || null,
         });
@@ -1994,6 +2374,16 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     publishedProducts,
     brandUpdatedProducts,
     brandSkippedProducts,
+    colorUpdatedProducts,
+    colorSkippedProducts,
+    sizeUpdatedProducts,
+    sizeSkippedProducts,
+    fabricUpdatedProducts,
+    fabricSkippedProducts,
+    targetGenderUpdatedProducts,
+    targetGenderSkippedProducts,
+    ageGroupUpdatedProducts,
+    ageGroupSkippedProducts,
     audienceUpdatedProducts,
     audienceSkippedProducts,
     styleUpdatedProducts,
@@ -2029,6 +2419,16 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     publishedProducts,
     brandUpdatedProducts,
     brandSkippedProducts,
+    colorUpdatedProducts,
+    colorSkippedProducts,
+    sizeUpdatedProducts,
+    sizeSkippedProducts,
+    fabricUpdatedProducts,
+    fabricSkippedProducts,
+    targetGenderUpdatedProducts,
+    targetGenderSkippedProducts,
+    ageGroupUpdatedProducts,
+    ageGroupSkippedProducts,
     audienceUpdatedProducts,
     audienceSkippedProducts,
     styleUpdatedProducts,
