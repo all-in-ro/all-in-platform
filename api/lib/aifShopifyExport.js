@@ -1327,28 +1327,52 @@ function isBrandDefinition(definition) {
 
 async function applicableProductMetafieldDefinitions(categoryId) {
   const category = text(categoryId);
-  const query = `query AifProductMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier) {
-    allDefinitions: metafieldDefinitions(ownerType: PRODUCT, first: 250) {
-      nodes { name namespace key type { name } validations { name value } }
-    }
-    categoryDefinitions: metafieldDefinitions(ownerType: PRODUCT, first: 250, constraintSubtype: $constraint) {
-      nodes { name namespace key type { name } validations { name value } }
+
+  // Critical: never merge in the unfiltered full PRODUCT definition list here.
+  // That list also contains category-constrained metafields that do NOT apply to
+  // this product. Sending one of those causes Shopify's:
+  // "Owner subtype does not match the metafield definition's constraints."
+  if (category) {
+    const query = `query AifApplicableProductMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier!) {
+      definitions: metafieldDefinitions(
+        ownerType: PRODUCT,
+        first: 250,
+        constraintSubtype: $constraint
+      ) {
+        nodes {
+          id
+          name
+          namespace
+          key
+          type { name }
+          validations { name value }
+        }
+      }
+    }`;
+    const response = await shopifyGraphql(query, {
+      constraint: { key: "category", value: category },
+    });
+    return response.data?.definitions?.nodes || [];
+  }
+
+  const query = `query AifUnconstrainedProductMetafieldDefinitions {
+    definitions: metafieldDefinitions(
+      ownerType: PRODUCT,
+      first: 250,
+      constraintStatus: UNCONSTRAINED_ONLY
+    ) {
+      nodes {
+        id
+        name
+        namespace
+        key
+        type { name }
+        validations { name value }
+      }
     }
   }`;
-  const response = await shopifyGraphql(query, {
-    constraint: category ? { key: "category", value: category } : null,
-  });
-  const combined = [
-    ...(response.data?.categoryDefinitions?.nodes || []),
-    ...(response.data?.allDefinitions?.nodes || []),
-  ];
-  const seen = new Set();
-  return combined.filter((row) => {
-    const id = `${text(row?.namespace)}.${text(row?.key)}`;
-    if (!id || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
+  const response = await shopifyGraphql(query);
+  return response.data?.definitions?.nodes || [];
 }
 
 
@@ -1357,7 +1381,7 @@ async function exactProductMetafieldDefinition(definition, cache) {
   const key = text(definition?.key);
   if (!namespace || !key) return definition || null;
 
-  const cacheKey = `${namespace}.${key}`;
+  const cacheKey = `${text(definition?.id) || "no-id"}::${namespace}.${key}`;
   if (cache?.has(cacheKey)) return cache.get(cacheKey);
 
   const query = `query AifExactProductMetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
@@ -1914,18 +1938,19 @@ function hydratedMetaobjectDefinition(definition) {
 }
 
 async function metaobjectDefinitionForMetafield(definition, definitionTypeCache, metaobjectDefinitionsCache) {
-  const cacheKey = `${text(definition?.namespace)}.${text(definition?.key)}`;
+  const targetDefinitionIds = validationValues(definition, [
+    "metaobject_definition_id",
+    "metaobject_definition_ids",
+  ]);
+  const targetDefinitionId = targetDefinitionIds[0] || "";
+  const cacheKey = `${targetDefinitionId || "no-target"}::${text(definition?.namespace)}.${text(definition?.key)}`;
   const cached = definitionTypeCache?.get(cacheKey);
   if (cached && typeof cached === "object") return cached;
 
   // Shopify GraphQLnál a metaobject_reference és list.metaobject_reference
   // hivatalos célmeghatározása a metafield definition validationje.
   // Ez az elsődleges igazság, nem a namespace/key-ből kitalált type.
-  const definitionIds = validationValues(definition, [
-    "metaobject_definition_id",
-    "metaobject_definition_ids",
-  ]);
-  const definitionId = definitionIds[0] || "";
+  const definitionId = targetDefinitionId;
 
   if (definitionId) {
     const query = `query AifTargetMetaobjectDefinition($id: ID!) {
@@ -2142,6 +2167,69 @@ function metaobjectMatchScore(entry, candidateKeys) {
 }
 
 
+
+function standardTaxonomyMetaobjectFields({
+  metaobjectType,
+  metaDefinition,
+  taxonomyField,
+  taxonomyValue,
+  displayField,
+}) {
+  const taxonomyFieldType = text(taxonomyField?.type?.name);
+  const fields = [{
+    key: text(taxonomyField.key),
+    value: taxonomyFieldType === "list.product_taxonomy_value_reference"
+      ? JSON.stringify([text(taxonomyValue.id)])
+      : text(taxonomyValue.id),
+  }];
+
+  if (displayField && text(displayField.key) !== text(taxonomyField.key)) {
+    fields.push({ key: text(displayField.key), value: text(taxonomyValue.name) });
+  }
+
+  // Shopify's standard color-pattern metaobject requires both the color taxonomy
+  // reference and a pattern taxonomy reference. "Solid" is TaxonomyValue/2874.
+  // Without this field metaobjectUpsert fails even for otherwise valid Black/Gray/Navy.
+  if (metaobjectType === "shopify--color-pattern") {
+    const fieldDefinitions = Array.isArray(metaDefinition?.fieldDefinitions)
+      ? metaDefinition.fieldDefinitions
+      : [];
+
+    const colorField = fieldDefinitions.find((field) => text(field?.key) === "color_taxonomy_reference");
+    const patternField = fieldDefinitions.find((field) => text(field?.key) === "pattern_taxonomy_reference");
+
+    if (colorField && !fields.some((row) => row.key === "color_taxonomy_reference")) {
+      fields.push({
+        key: "color_taxonomy_reference",
+        value: text(colorField?.type?.name) === "list.product_taxonomy_value_reference"
+          ? JSON.stringify([text(taxonomyValue.id)])
+          : text(taxonomyValue.id),
+      });
+    }
+
+    if (patternField && !fields.some((row) => row.key === "pattern_taxonomy_reference")) {
+      fields.push({
+        key: "pattern_taxonomy_reference",
+        value: text(patternField?.type?.name) === "list.product_taxonomy_value_reference"
+          ? JSON.stringify(["gid://shopify/TaxonomyValue/2874"])
+          : "gid://shopify/TaxonomyValue/2874",
+      });
+    }
+  }
+
+  // Fill any remaining required simple text fields with the taxonomy display name.
+  for (const field of metaDefinition?.fieldDefinitions || []) {
+    const fieldKey = text(field?.key);
+    if (!field?.required || !fieldKey || fields.some((row) => row.key === fieldKey)) continue;
+    const typeName = text(field?.type?.name);
+    if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) {
+      fields.push({ key: fieldKey, value: text(taxonomyValue.name) });
+    }
+  }
+
+  return fields;
+}
+
 async function ensureTaxonomyBackedMetaobjects({
   definition,
   metaDefinition,
@@ -2188,28 +2276,13 @@ async function ensureTaxonomyBackedMetaobjects({
     let existing = entries.find((entry) => entryReferencesTaxonomyValue(entry, taxonomyValue.id)) || null;
 
     if (!existing) {
-      const taxonomyFieldType = text(taxonomyField?.type?.name);
-      const fields = [{
-        key: text(taxonomyField.key),
-        value: taxonomyFieldType === "list.product_taxonomy_value_reference"
-          ? JSON.stringify([text(taxonomyValue.id)])
-          : text(taxonomyValue.id),
-      }];
-
-      if (displayField && text(displayField.key) !== text(taxonomyField.key)) {
-        fields.push({ key: text(displayField.key), value: text(taxonomyValue.name) });
-      }
-
-      // Ha további kötelező egyszerű szövegmező van, kapja ugyanazt a
-      // felhasználóbarát nevet. Kötelező, ismeretlen referencia mezőt nem találgatunk.
-      for (const field of metaDefinition?.fieldDefinitions || []) {
-        const fieldKey = text(field?.key);
-        if (!field?.required || !fieldKey || fields.some((row) => row.key === fieldKey)) continue;
-        const typeName = text(field?.type?.name);
-        if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) {
-          fields.push({ key: fieldKey, value: text(taxonomyValue.name) });
-        }
-      }
+      const fields = standardTaxonomyMetaobjectFields({
+        metaobjectType,
+        metaDefinition,
+        taxonomyField,
+        taxonomyValue,
+        displayField,
+      });
 
       const handle = `aif-${metaobjectHandlePart(text(taxonomyValue.name))}-${text(taxonomyValue.id).split("/").pop() || "taxonomy"}`.slice(0, 190);
       const upserted = await upsertMetaobjectEntry({
@@ -2434,7 +2507,8 @@ function audienceCandidates(value) {
   if (normalizeKey(audience) === "femei") return ["Femei", "Feminin", "Women", "Female"];
   if (normalizeKey(audience) === "barbati") return ["Bărbați", "Barbati", "Masculin", "Men", "Male"];
   if (normalizeKey(audience) === "copii") return ["Copii", "Junior", "Kids", "Children"];
-  return [audience || "Unisex", "Unisex"];
+  if (!audience || normalizeKey(audience) === "unisex") return ["Bărbați", "Femei"];
+  return [audience];
 }
 
 function styleCandidates(value) {
@@ -2539,7 +2613,7 @@ function materialCandidates(values) {
   const out = [];
   const rules = [
     [/bumbac|cotton|pamut/, ["Cotton", "Bumbac", "Pamut"]],
-    [/poliester|polyester|poliészter|polieszter/, ["Polyester", "Poliester"]],
+    [/poliester|polyester|poliészter|polieszter|polister/, ["Polyester", "Poliester"]],
     [/elastan|elastane|spandex|elasztan/, ["Elastane", "Spandex", "Elastan"]],
     [/nylon|poliamid|polyamide/, ["Nylon", "Polyamide", "Poliamidă", "Poliamida"]],
     [/vascoza|viscoza|viscose|rayon/, ["Viscose", "Rayon", "Viscoză", "Viscoza"]],
@@ -2602,7 +2676,7 @@ async function setShopifyProductMetadata({
     },
     {
       field: "size",
-      aliases: ["Size", "Clothing size", "Mărime", "Marime", "Méret"],
+      aliases: ["Size", "Clothing size", "Accessory size", "Sock size", "Hat size", "Mărime", "Marime", "Méret"],
       preferredNamespaces: ["shopify"],
       candidates: sizeCandidates(sizes),
     },
@@ -2742,19 +2816,54 @@ async function setShopifyProductMetadata({
   }`;
   const response = await shopifyGraphql(mutation, { metafields: inputs });
   const payload = response.data?.metafieldsSet;
-  if (payload?.userErrors?.length) {
-    throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
-      code: "shopify_product_metadata_set_failed",
-      payload,
-      inputs,
-    });
+
+  if (!payload?.userErrors?.length) {
+    return {
+      updatedFields: inputFields,
+      skippedFields,
+      resolvedFields,
+      metafields: payload?.metafields || [],
+    };
+  }
+
+  // Shopify treats metafieldsSet as atomic. One category-constrained field can make
+  // the whole product batch fail. Retry each field separately so Brand / Color /
+  // Gender etc. still get saved even if one field is invalid for that category.
+  const updatedFields = [];
+  const metafields = [];
+  const batchErrors = payload.userErrors || [];
+
+  for (let index = 0; index < inputs.length; index += 1) {
+    const input = inputs[index];
+    const fieldName = inputFields[index] || `${input.namespace}.${input.key}`;
+    const singleResponse = await shopifyGraphql(mutation, { metafields: [input] });
+    const singlePayload = singleResponse.data?.metafieldsSet;
+
+    if (singlePayload?.userErrors?.length) {
+      skippedFields.push({
+        field: fieldName,
+        reason: "metafield_set_failed",
+        definition: {
+          namespace: input.namespace,
+          key: input.key,
+          type: input.type,
+        },
+        errors: singlePayload.userErrors,
+        candidates: null,
+      });
+      continue;
+    }
+
+    updatedFields.push(fieldName);
+    metafields.push(...(singlePayload?.metafields || []));
   }
 
   return {
-    updatedFields: inputFields,
+    updatedFields,
     skippedFields,
     resolvedFields,
-    metafields: payload?.metafields || [],
+    metafields,
+    batchErrors,
   };
 }
 
@@ -3048,6 +3157,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           metaobjectType: skipped.metaobjectType || null,
           availableAttributes: skipped.availableAttributes || null,
           availableEntries: skipped.availableEntries || null,
+          errors: skipped.errors || null,
           candidates: skipped.candidates || null,
           error: skipped.error || null,
           code: skipped.code || null,
