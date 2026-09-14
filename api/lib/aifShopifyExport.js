@@ -2930,6 +2930,278 @@ async function updateShopifyProductCategory(productId, categoryId) {
   return payload?.product?.category || null;
 }
 
+
+const AIF_DISPLAY_METAFIELD_DEFINITIONS = [
+  {
+    field: "brand",
+    name: "Brand",
+    namespace: "custom",
+    key: "allin_brand",
+    type: "single_line_text_field",
+    description: "AllInFashion admin megjelenítés – márka.",
+  },
+  {
+    field: "color",
+    name: "Szín",
+    namespace: "custom",
+    key: "allin_color",
+    type: "list.single_line_text_field",
+    description: "AllInFashion admin megjelenítés – termék színei.",
+  },
+  {
+    field: "size",
+    name: "Méret",
+    namespace: "custom",
+    key: "allin_size",
+    type: "list.single_line_text_field",
+    description: "AllInFashion admin megjelenítés – termék méretei.",
+  },
+  {
+    field: "fabric",
+    name: "Szövet",
+    namespace: "custom",
+    key: "allin_fabric",
+    type: "list.single_line_text_field",
+    description: "AllInFashion admin megjelenítés – anyag / szövet.",
+  },
+  {
+    field: "ageGroup",
+    name: "Korosztály",
+    namespace: "custom",
+    key: "allin_age_group",
+    type: "single_line_text_field",
+    description: "AllInFashion admin megjelenítés – korosztály.",
+  },
+  {
+    field: "targetGender",
+    name: "Célzott nem",
+    namespace: "custom",
+    key: "allin_target_gender",
+    type: "single_line_text_field",
+    description: "AllInFashion admin megjelenítés – célzott nem.",
+  },
+];
+
+function isLikelySupplierColorCode(value) {
+  const raw = text(value).trim();
+  if (!raw) return true;
+  return /^\d{2,4}[A-Z]?$/.test(raw) || /^[A-Z0-9]{2,5}$/.test(raw) && /\d/.test(raw);
+}
+
+function displayColorValues(values) {
+  const source = unique((Array.isArray(values) ? values : [values]).map(text).filter(Boolean));
+  const filtered = source.filter((value) => !isLikelySupplierColorCode(value));
+  return filtered.length ? filtered : source;
+}
+
+function displayTextList(values) {
+  return unique((Array.isArray(values) ? values : [values]).map(text).filter(Boolean));
+}
+
+async function ensureAllInDisplayMetafieldDefinitions(cache) {
+  const results = [];
+
+  for (const spec of AIF_DISPLAY_METAFIELD_DEFINITIONS) {
+    const cacheKey = `${spec.namespace}.${spec.key}`;
+    if (cache?.has(cacheKey)) {
+      results.push(cache.get(cacheKey));
+      continue;
+    }
+
+    const query = `query AifDisplayMetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
+      metafieldDefinition(identifier: $identifier) {
+        id
+        name
+        namespace
+        key
+        pinnedPosition
+        type { name }
+      }
+    }`;
+
+    let response = await shopifyGraphql(query, {
+      identifier: {
+        ownerType: "PRODUCT",
+        namespace: spec.namespace,
+        key: spec.key,
+      },
+    });
+
+    let definition = response.data?.metafieldDefinition || null;
+
+    if (!definition) {
+      const mutation = `mutation AifCreateDisplayMetafieldDefinition($definition: MetafieldDefinitionInput!) {
+        metafieldDefinitionCreate(definition: $definition) {
+          createdDefinition {
+            id
+            name
+            namespace
+            key
+            pinnedPosition
+            type { name }
+          }
+          userErrors { field message code }
+        }
+      }`;
+
+      const created = await shopifyGraphql(mutation, {
+        definition: {
+          name: spec.name,
+          namespace: spec.namespace,
+          key: spec.key,
+          description: spec.description,
+          type: spec.type,
+          ownerType: "PRODUCT",
+        },
+      });
+
+      const payload = created.data?.metafieldDefinitionCreate;
+      if (payload?.userErrors?.length) {
+        throw Object.assign(
+          new Error(payload.userErrors.map((row) => row.message).join(" | ")),
+          {
+            code: "shopify_display_metafield_definition_create_failed",
+            field: spec.field,
+            payload,
+          }
+        );
+      }
+      definition = payload?.createdDefinition || null;
+    }
+
+    if (definition?.id && (definition.pinnedPosition === null || definition.pinnedPosition === undefined)) {
+      const pinMutation = `mutation AifPinDisplayMetafieldDefinition($id: ID!) {
+        metafieldDefinitionPin(definitionId: $id) {
+          pinnedDefinition {
+            id
+            name
+            namespace
+            key
+            pinnedPosition
+            type { name }
+          }
+          userErrors { field message code }
+        }
+      }`;
+
+      const pinned = await shopifyGraphql(pinMutation, { id: definition.id });
+      const payload = pinned.data?.metafieldDefinitionPin;
+
+      if (payload?.userErrors?.length) {
+        throw Object.assign(
+          new Error(payload.userErrors.map((row) => row.message).join(" | ")),
+          {
+            code: "shopify_display_metafield_definition_pin_failed",
+            field: spec.field,
+            payload,
+          }
+        );
+      }
+
+      definition = payload?.pinnedDefinition || definition;
+    }
+
+    const result = { ...spec, definition };
+    cache?.set(cacheKey, result);
+    results.push(result);
+  }
+
+  return results;
+}
+
+async function setShopifyDisplayMetafields({
+  productId,
+  brand,
+  colors = [],
+  sizes = [],
+  materials = [],
+  ageGroup,
+  gender,
+  definitions,
+}) {
+  const product = text(productId);
+  if (!product) return { updatedFields: [], skippedFields: [] };
+
+  const values = {
+    brand: text(brand),
+    color: displayColorValues(colors),
+    size: displayTextList(sizes),
+    fabric: displayTextList(materials),
+    ageGroup: text(ageGroup),
+    targetGender: text(gender),
+  };
+
+  const inputs = [];
+  const inputFields = [];
+  const skippedFields = [];
+
+  for (const entry of definitions || []) {
+    const spec = entry || {};
+    const value = values[spec.field];
+
+    if (spec.type === "list.single_line_text_field") {
+      const list = displayTextList(value);
+      if (!list.length) {
+        skippedFields.push({ field: spec.field, reason: "missing_value" });
+        continue;
+      }
+      inputs.push({
+        ownerId: product,
+        namespace: spec.namespace,
+        key: spec.key,
+        type: spec.type,
+        value: JSON.stringify(list),
+      });
+      inputFields.push(spec.field);
+      continue;
+    }
+
+    const scalar = text(value);
+    if (!scalar) {
+      skippedFields.push({ field: spec.field, reason: "missing_value" });
+      continue;
+    }
+
+    inputs.push({
+      ownerId: product,
+      namespace: spec.namespace,
+      key: spec.key,
+      type: spec.type,
+      value: scalar,
+    });
+    inputFields.push(spec.field);
+  }
+
+  if (!inputs.length) return { updatedFields: [], skippedFields };
+
+  const mutation = `mutation AifSetDisplayProductMetafields($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      metafields { id namespace key value type }
+      userErrors { field message code }
+    }
+  }`;
+
+  const response = await shopifyGraphql(mutation, { metafields: inputs });
+  const payload = response.data?.metafieldsSet;
+
+  if (payload?.userErrors?.length) {
+    throw Object.assign(
+      new Error(payload.userErrors.map((row) => row.message).join(" | ")),
+      {
+        code: "shopify_display_metafields_set_failed",
+        payload,
+        productId: product,
+      }
+    );
+  }
+
+  return {
+    updatedFields: inputFields,
+    skippedFields,
+    metafields: payload?.metafields || [],
+  };
+}
+
 async function setShopifyProductMetadata({
   productId,
   categoryId,
@@ -3421,6 +3693,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   let styleUpdatedProducts = 0;
   let styleSkippedProducts = 0;
   let metadataUpdatedProducts = 0;
+  let displayMetadataUpdatedProducts = 0;
+  let displayMetadataSkippedProducts = 0;
   let categoryUpdatedProducts = 0;
   let categorySkippedProducts = 0;
   const productErrors = [];
@@ -3433,7 +3707,24 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const taxonomyCategoryAttributesCache = new Map();
   const taxonomyAttributeValuesCache = new Map();
   const taxonomyCategorySearchCache = new Map();
+  const displayMetafieldDefinitionCache = new Map();
+  let displayMetafieldDefinitions = [];
   let onlinePublicationId = "";
+
+  if (productTasks.size) {
+    try {
+      displayMetafieldDefinitions = await ensureAllInDisplayMetafieldDefinitions(
+        displayMetafieldDefinitionCache,
+      );
+    } catch (error) {
+      productWarnings.push({
+        scope: "displayMetadataDefinitions",
+        reason: "display_definition_setup_failed",
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
+    }
+  }
 
   if (!metadataOnly && exportRow.product_status === "active" && productTasks.size) {
     try {
@@ -3558,6 +3849,35 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           code: skipped.code || null,
         });
       }
+
+
+      if (displayMetafieldDefinitions.length) {
+        try {
+          const displayResult = await setShopifyDisplayMetafields({
+            productId: task.productId,
+            brand: task.brand,
+            colors: task.colors || [],
+            sizes: task.sizes || [],
+            materials: task.materials || [],
+            ageGroup: (task.ageGroups || [])[0] || "",
+            gender: (task.genders || [])[0] || task.audience || "",
+            definitions: displayMetafieldDefinitions,
+          });
+
+          if (displayResult.updatedFields.length) displayMetadataUpdatedProducts += 1;
+          if (displayResult.skippedFields?.length) displayMetadataSkippedProducts += 1;
+        } catch (error) {
+          displayMetadataSkippedProducts += 1;
+          productWarnings.push({
+            scope: "displayMetadata",
+            productId: task.productId,
+            category: task.categoryName || task.categoryId || null,
+            reason: "display_metafields_set_failed",
+            error: error?.message || String(error),
+            code: error?.code || null,
+          });
+        }
+      }
     } catch (error) {
       productErrors.push({
         scope: "product_finalize",
@@ -3607,6 +3927,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    displayMetadataUpdatedProducts,
+    displayMetadataSkippedProducts,
     categoryUpdatedProducts,
     categorySkippedProducts,
     metadataOnly,
@@ -3655,6 +3977,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     styleUpdatedProducts,
     styleSkippedProducts,
     metadataUpdatedProducts,
+    displayMetadataUpdatedProducts,
+    displayMetadataSkippedProducts,
     categoryUpdatedProducts,
     categorySkippedProducts,
     metadataOnly,
