@@ -45,7 +45,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const previousFrom = aifShiftIsoDate(previousTo, -(days - 1));
 
       const employee = text(req.query.employee);
-      const paymentStatus = normCode(req.query.paymentStatus || req.query.payment_status);
+      // AIF_ADMIN_SHOP_PAYMENT_METHOD_V1
+      // A Fizetés szűrő egyszerre tud fizetési állapotra (paid/partial/unpaid/credit)
+      // és konkrét fizetési módra (cash/card/bank_transfer) szűrni.
+      const paymentFilter = normCode(req.query.paymentStatus || req.query.payment_status);
+      const paymentMethod = ["cash", "card", "bank_transfer"].includes(paymentFilter)
+        ? paymentFilter
+        : "";
+      const paymentStatus = paymentMethod ? "" : paymentFilter;
       const saleType = normCode(req.query.saleType || req.query.sale_type);
       const brand = text(req.query.brand);
       const category = text(req.query.category);
@@ -80,6 +87,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
         if (paymentStatus) {
           const p = push(paymentStatus);
           where.push(`s.payment_status=${p}`);
+        }
+        if (paymentMethod) {
+          const p = push(paymentMethod);
+          where.push(`EXISTS (
+            SELECT 1
+            FROM aif_shop_sale_payments pmf
+            WHERE pmf.sale_id=s.id
+              AND pmf.method=${p}
+              AND abs(COALESCE(pmf.amount,0)) > 0
+          )`);
         }
         if (saleType) {
           const p = push(saleType);
@@ -156,6 +173,19 @@ export default function createAifAdminShopOverviewRouter(deps) {
           where.push(`e.actor=${p}`);
         }
         if (paymentStatus && paymentStatus !== "paid") where.push(`1=0`);
+        if (paymentMethod) {
+          const p = push(paymentMethod);
+          where.push(`(
+            e.settlement_method=${p}
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_exchange_settlements esf
+              WHERE esf.exchange_id=e.id
+                AND esf.method=${p}
+                AND abs(COALESCE(esf.amount,0)) > 0
+            )
+          )`);
+        }
         if (saleType && saleType !== "exchange") where.push(`1=0`);
         if (brand) {
           const p = push(brand);
@@ -474,6 +504,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
           const p = push(paymentStatus);
           where.push(`s.payment_status=${p}`);
         }
+        if (paymentMethod) {
+          const p = push(paymentMethod);
+          where.push(`EXISTS (
+            SELECT 1
+            FROM aif_shop_sale_payments pmf
+            WHERE pmf.sale_id=s.id
+              AND pmf.method=${p}
+              AND abs(COALESCE(pmf.amount,0)) > 0
+          )`);
+        }
         if (saleType) {
           const p = push(saleType);
           where.push(`s.sale_type=${p}`);
@@ -709,6 +749,20 @@ export default function createAifAdminShopOverviewRouter(deps) {
              sl.variant_id,
              s.sale_number, s.sold_at, s.actor, s.customer_name, s.customer_phone,
              s.status, s.payment_status, s.sale_type,
+             COALESCE(
+               (
+                 SELECT CASE
+                   WHEN count(DISTINCT pm.method)=1 THEN min(pm.method)
+                   WHEN count(DISTINCT pm.method)>1 THEN 'mixed'
+                   ELSE NULL
+                 END
+                 FROM aif_shop_sale_payments pm
+                 WHERE pm.sale_id=s.id
+                   AND abs(COALESCE(pm.amount,0)) > 0
+               ),
+               NULLIF(s.raw->>'paymentMethod',''),
+               NULLIF(s.raw->>'payment_method','')
+             ) AS payment_method,
              s.subtotal, s.discount_total, s.total, s.paid_total, s.balance_due,
              totals.item_count, totals.line_count,
              COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS product_title,
@@ -899,6 +953,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              e.customer_phone,
              'completed'::text AS status,
              'paid'::text AS payment_status,
+             e.settlement_method AS payment_method,
              'exchange'::text AS sale_type,
              e.replacement_total AS subtotal,
              0::numeric AS discount_total,
@@ -1194,6 +1249,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         customerPhone: row.customer_phone,
         status: row.status,
         paymentStatus: row.payment_status,
+        paymentMethod: row.payment_method || row.settlement_method || null,
         saleType: row.sale_type,
         subtotal: aifNumber(row.subtotal),
         discountTotal: aifNumber(row.discount_total),
