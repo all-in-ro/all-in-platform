@@ -1316,6 +1316,18 @@ export default function AllInAdminMagazinDashboard({
   const dayClosure = shiftDay?.dayClosure || null;
   const dayClosureAt = dayClosure?.closedAt || dayClosure?.createdAt || null;
   const dayClosureDate = shiftDay?.date || dayClosure?.date || applied.to;
+  const acceptedHandovers = useMemo(() => {
+    return [...(shiftDay?.handovers || [])]
+      .filter((item) => String(item.status || "").toLowerCase() === "accepted")
+      .sort((a, b) => {
+        const aTime = new Date(a.acceptedAt || a.createdAt || a.cutoffAt || 0).getTime();
+        const bTime = new Date(b.acceptedAt || b.createdAt || b.cutoffAt || 0).getTime();
+        return bTime - aTime;
+      });
+  }, [shiftDay]);
+  const latestHandover = acceptedHandovers[0] || null;
+  const latestHandoverAt = latestHandover?.acceptedAt || latestHandover?.createdAt || latestHandover?.cutoffAt || null;
+  const latestHandoverCash = latestHandover?.countedCash ?? latestHandover?.expectedCash ?? 0;
   const discountPercent = numberValue(summary?.salesBeforeDiscount) > 0
     ? numberValue(summary?.discountTotal) / numberValue(summary?.salesBeforeDiscount) * 100
     : 0;
@@ -1373,31 +1385,51 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </header>
 
-        {dayClosure ? (
-          <section className="relative overflow-hidden rounded-[22px] border border-emerald-200/38 bg-gradient-to-r from-[#176c5c] via-[#217564] to-[#2e5960] px-4 py-3.5 shadow-[0_16px_38px_rgba(7,62,53,0.26)]">
-            <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-emerald-100/65 to-transparent" />
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-100/38 bg-black/10 text-emerald-50">
-                <CheckCircle2 size={21} />
-              </span>
-              <div className="min-w-[240px] flex-1">
-                <p className="text-[9px] uppercase tracking-[0.16em] text-emerald-50/62">Napi zárás • {huDateLabel(dayClosureDate)}</p>
-                <h2 className="mt-0.5 text-lg font-normal text-white">Üzlet lezárva</h2>
-                <p className="mt-1 text-[12px] text-white/76">
-                  Lezárta: <span className="text-white">{dayClosure.actor || "-"}</span>
-                  <span className="mx-2 text-white/28">•</span>
-                  <span className="text-white">{timeOnly(dayClosureAt)}</span> órakor
-                </p>
+        {(dayClosure || latestHandover) ? (
+          <section className="grid gap-1.5">
+            {dayClosure ? (
+              <div className="relative overflow-hidden rounded-[16px] border border-white/45 bg-[#E21C2A] px-3 py-2.5 shadow-[0_9px_22px_rgba(226,28,42,0.20)]">
+                <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/35 bg-black/10 text-white">
+                    <CheckCircle2 size={16} />
+                  </span>
+                  <div className="min-w-[250px] flex-1">
+                    <p className="text-[8px] uppercase tracking-[0.16em] text-white/68">Napzárás • {huDateLabel(dayClosureDate)}</p>
+                    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                      <span className="text-[14px] leading-tight text-white">Üzlet lezárva</span>
+                      <span className="text-[11px] text-white/78">{dayClosure.actor || "-"} • {timeOnly(dayClosureAt)}</span>
+                    </div>
+                  </div>
+                  <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[9px]">
+                    <span className="rounded-lg border border-white/26 bg-black/10 px-2.5 py-1.5 text-white/86">Záró kassza: <span className="text-white">{money(dayClosure.countedCash)}</span></span>
+                    <span className="rounded-lg border border-white/26 bg-black/10 px-2.5 py-1.5 text-white/86">Eltérés: <span className="text-white">{money(dayClosure.cashDifference)}</span></span>
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-[10px]">
-                <span className="rounded-xl border border-white/14 bg-black/10 px-3 py-2 text-white/78">
-                  Záró kassza: <span className="text-white">{money(dayClosure.countedCash)}</span>
-                </span>
-                <span className="rounded-xl border border-white/14 bg-black/10 px-3 py-2 text-white/78">
-                  Eltérés: <span className="text-white">{money(dayClosure.cashDifference)}</span>
-                </span>
+            ) : null}
+
+            {latestHandover ? (
+              <div className="relative overflow-hidden rounded-[16px] border border-[#8ce7e2]/48 bg-[#2a8d8b] px-3 py-2.5 shadow-[0_9px_22px_rgba(42,141,139,0.20)]">
+                <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#d7fffd]/70 to-transparent" />
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/28 bg-black/10 text-white">
+                    <WalletCards size={16} />
+                  </span>
+                  <div className="min-w-[280px] flex-1">
+                    <p className="text-[8px] uppercase tracking-[0.16em] text-[#e8fffd]/68">Műszakátadás • {acceptedHandovers.length} átadás</p>
+                    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                      <span className="text-[14px] leading-tight text-white">{latestHandover.fromActor || "-"} → {latestHandover.toActor || "-"}</span>
+                      <span className="text-[11px] text-white/78">Átvette: {latestHandover.acceptedBy || latestHandover.toActor || "-"} • {timeOnly(latestHandoverAt)}</span>
+                    </div>
+                  </div>
+                  <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[9px]">
+                    <span className="rounded-lg border border-white/22 bg-black/10 px-2.5 py-1.5 text-white/86">Kassza: <span className="text-white">{money(latestHandoverCash)}</span></span>
+                    <span className="rounded-lg border border-white/22 bg-black/10 px-2.5 py-1.5 text-white/86">Eltérés: <span className="text-white">{money(latestHandover.cashDifference || 0)}</span></span>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : null}
           </section>
         ) : null}
 
