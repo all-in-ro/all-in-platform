@@ -1354,6 +1354,15 @@ function DimensionPanel({
     ? [Math.abs(metricValue(item.current, metric)), Math.abs(metricValue(item.comparison, metric))]
     : [Math.abs(metricValue(item.current, metric))]));
   const selectedNormalized = normalizedFilterValue(selectedValue);
+  const filteredProducts = activeDimension === "gender" && selectedNormalized
+    ? (dimensions?.product || []).slice(0, 12)
+    : [];
+  const filteredProductMax = Math.max(
+    1,
+    ...filteredProducts.flatMap((item) => comparisonAvailable
+      ? [Math.abs(metricValue(item.current, metric)), Math.abs(metricValue(item.comparison, metric))]
+      : [Math.abs(metricValue(item.current, metric))]),
+  );
 
   return (
     <section className={`${panel} overflow-hidden`}>
@@ -1447,6 +1456,71 @@ function DimensionPanel({
         })}
         {!items.length ? <div className="col-span-full rounded-2xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-white/38">Ebben a bontásban nincs megjeleníthető adat.</div> : null}
       </div>
+
+      {activeDimension === "gender" && selectedValue ? (
+        <div className="border-t border-white/8 bg-[#2f3a4c]/34 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.14em] text-[#bff8f5]/44">Szűrt termékek</p>
+              <h3 className="mt-1 text-sm text-white">Csak a(z) {selectedValue} termékek</h3>
+            </div>
+            <span className="inline-flex h-7 items-center rounded-full border border-[#8ce7e2]/28 bg-[#2a8d8b]/14 px-2.5 text-[9px] text-[#d7fffd]">
+              {filteredProducts.length} termékcsoport
+            </span>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2">
+            {filteredProducts.map((item) => {
+              const currentValue = metricValue(item.current, metric);
+              const comparisonValue = metricValue(item.comparison, metric);
+              const displayName = dimensionItemLabel("product", item);
+              const metaText = item.meta || `${integer(item.current.itemsSold)} db • ${integer(item.current.transactions)} tranzakció`;
+
+              return (
+                <button
+                  key={`gender-product:${item.key}`}
+                  type="button"
+                  onClick={() => onDrill("product", item)}
+                  className="group rounded-2xl border border-white/8 bg-white/[0.025] p-3 text-left transition hover:-translate-y-0.5 hover:border-[#7bd7d4]/28 hover:bg-white/[0.05] active:translate-y-0"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="truncate text-xs text-white/84" title={displayName}>{item.rank}. {displayName}</span>
+                      <span className="mt-1 block truncate text-[9px] text-white/34">{metaText}</span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="block text-xs text-white">{chartMetricConfig[metric].format(currentValue)}</span>
+                      {comparisonAvailable ? <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} /></span> : null}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 space-y-1">
+                    <div className="h-2 overflow-hidden rounded-full bg-[#101a28]">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]"
+                        style={{ width: `${Math.max(currentValue === 0 ? 0 : 3, Math.abs(currentValue) / filteredProductMax * 100)}%` }}
+                      />
+                    </div>
+                    {comparisonAvailable ? (
+                      <div className="h-1 overflow-hidden rounded-full bg-[#2b3749]">
+                        <div
+                          className="h-full rounded-full bg-[#9aa7b7]/70"
+                          style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / filteredProductMax * 100)}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+
+            {!filteredProducts.length ? (
+              <div className="col-span-full rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/38">
+                Ehhez a nemhez nincs megjeleníthető termék a kiválasztott időszakban.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2153,7 +2227,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (active === "brand") applyPatch({ brand: item.rawName || item.name });
     else if (active === "category") applyPatch({ category: item.rawName || item.name });
     else if (active === "subcategory") applyPatch({ subcategory: item.rawName || item.name });
-    else if (active === "gender") applyPatch({ gender: item.rawName || item.name });
+    else if (active === "gender") applyPatch({ gender: item.rawName || item.name }, false);
     else if (active === "size") applyPatch({ size: item.rawName || item.name });
     else if (active === "color") applyPatch({ color: item.rawName || item.name });
     else if (active === "payment") applyPatch({ payment: item.rawName || item.key });
@@ -2226,7 +2300,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (dimension === "brand") applyPatch({ brand: "" });
     else if (dimension === "category") applyPatch({ category: "" });
     else if (dimension === "subcategory") applyPatch({ subcategory: "" });
-    else if (dimension === "gender") applyPatch({ gender: "" });
+    else if (dimension === "gender") applyPatch({ gender: "" }, false);
     else if (dimension === "product") applyPatch({ product: "" });
     else if (dimension === "size") applyPatch({ size: "" });
     else if (dimension === "color") applyPatch({ color: "" });
