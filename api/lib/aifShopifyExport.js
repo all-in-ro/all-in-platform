@@ -177,6 +177,54 @@ function tagValue(value) {
     .slice(0, 80);
 }
 
+
+function canonicalCatalogTag(value) {
+  const key = tagValue(value);
+  if (!key) return "";
+
+  const compact = key.replace(/-/g, "");
+
+  // Lábbeli elírás / alias
+  if (
+    [
+      "incaltaminte",
+      "incaltaminmte"
+    ].includes(compact)
+  ) {
+    return "incaltaminte";
+  }
+
+  // Kötött / téli sapka aliasok
+  if (
+    [
+      "caciula",
+      "caciuli",
+      "beanie",
+      "beanies"
+    ].includes(compact)
+  ) {
+    return "caciula";
+  }
+
+  // Papucs aliasok
+  if (
+    [
+      "papuc",
+      "papuci",
+      "slap",
+      "slapi",
+      "flipflop",
+      "flipflops",
+      "slide",
+      "slides"
+    ].includes(compact)
+  ) {
+    return "papuci";
+  }
+
+  return key;
+}
+
 function price(value) {
   const parsed = decimal(value);
   return parsed === null ? "" : parsed.toFixed(2);
@@ -408,6 +456,119 @@ function shopifyStyle(row) {
 }
 
 function productCategory(row) {
+  /*
+   * AIF_PRODUCT_TYPE_TAXONOMY_V1
+   *
+   * Saját AllIn product_type elsőbbséget élvez a legacy / supplier
+   * kategóriákkal és a termékcímben előforduló véletlen szavakkal szemben.
+   */
+  const productTypeKey = text(row.product_type)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const productTitleKey = [
+    row.shopify_title,
+    row.title_ro,
+    row.title,
+  ]
+    .map(text)
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (productTypeKey === "tricouri") {
+    return "Apparel & Accessories > Clothing > Clothing Tops > T-Shirts";
+  }
+
+  if (productTypeKey === "pantaloni") {
+    return "Apparel & Accessories > Clothing > Pants";
+  }
+
+  if (productTypeKey === "pantaloni scurti") {
+    return "Apparel & Accessories > Clothing > Shorts";
+  }
+
+  if (productTypeKey === "colanti") {
+    return "Apparel & Accessories > Clothing > Pants > Leggings";
+  }
+
+  if (productTypeKey === "jachete") {
+    return "Apparel & Accessories > Clothing > Outerwear > Coats & Jackets";
+  }
+
+  if (productTypeKey === "bluza") {
+    return "Apparel & Accessories > Clothing > Clothing Tops";
+  }
+
+  if (productTypeKey === "sorturi de baie") {
+    return "Apparel & Accessories > Clothing > Swimwear > Swim Shorts";
+  }
+
+  if (productTypeKey === "papuci") {
+    return "Apparel & Accessories > Shoes > Slippers";
+  }
+
+  if (productTypeKey === "pantofi sport") {
+    return "Apparel & Accessories > Shoes";
+  }
+
+  if (productTypeKey === "caciula") {
+    return "Apparel & Accessories > Clothing Accessories > Hats > Beanies";
+  }
+
+  if (productTypeKey === "sepci") {
+    return "Apparel & Accessories > Clothing Accessories > Hats > Baseball Caps";
+  }
+
+  if (productTypeKey === "sosete") {
+    return "Apparel & Accessories > Clothing > Socks";
+  }
+
+  if (productTypeKey === "boxeri") {
+    return "Apparel & Accessories > Clothing > Men's Undergarments > Men's Underwear > Boxer Briefs";
+  }
+
+  if (productTypeKey === "genti") {
+    return "Apparel & Accessories > Handbags, Wallets & Cases";
+  }
+
+  if (productTypeKey === "bentita") {
+    return "Apparel & Accessories > Clothing Accessories";
+  }
+
+  if (productTypeKey === "hanorac") {
+    const hasHood =
+      /\bhoodie\b/.test(productTitleKey) ||
+      /\bgluga\b/.test(productTitleKey);
+
+    return hasHood
+      ? "Apparel & Accessories > Clothing > Clothing Tops > Hoodies"
+      : "Apparel & Accessories > Clothing > Clothing Tops > Sweatshirts";
+  }
+
+  if (productTypeKey === "veste") {
+    return "Apparel & Accessories > Clothing > Outerwear > Vests";
+  }
+
+  if (productTypeKey === "polar") {
+    const hasHood =
+      /\bhoodie\b/.test(productTitleKey) ||
+      /\bgluga\b/.test(productTitleKey);
+
+    return hasHood
+      ? "Apparel & Accessories > Clothing > Clothing Tops > Hoodies"
+      : "Apparel & Accessories > Clothing > Clothing Tops > Sweatshirts";
+  }
+
+  if (productTypeKey === "treninguri") {
+    return "Apparel & Accessories > Clothing > Activewear";
+  }
+
   const structuredHaystack = normalizeKey([
     row.category_name_ro,
     row.category_name_hu,
@@ -418,9 +579,40 @@ function productCategory(row) {
     row.product_type,
   ].filter(Boolean).join(" "));
 
-  // Explicit catalog classification wins over incidental title words.
-  // This prevents, for example, a Dress containing "tricou" in its title
-  // from being silently reclassified as a T-Shirt.
+  // Strong outerwear classification must win before an accidentally
+  // inherited Dress category from legacy / supplier catalog data.
+  //
+  // Important: generic "veste" alone is NOT enough, because Veste has its
+  // own storefront category. A vest is treated as jacket only when the
+  // product title clearly says Jacket / Down / Softshell / Puffer etc.
+  const titleHaystack = normalizeKey([
+    row.shopify_title,
+    row.title_ro,
+    row.title,
+  ].filter(Boolean).join(" "));
+
+  const structuredOuterwear =
+    /jacket|jacheta|jachete|geaca|geci|dzseki|kab[aá]t|palton|outerwear|softshell|puffer|parka/.test(structuredHaystack) ||
+    (
+      /(^|\s)(vest|vesta|veste)(\s|$)/.test(structuredHaystack) &&
+      /jacket|down|softshell|puffer|parka/.test(titleHaystack)
+    );
+
+  if (structuredOuterwear) {
+    return "Apparel & Accessories > Clothing > Outerwear > Coats & Jackets";
+  }
+
+  // Strong structured T-Shirt classification must win over an incorrectly
+  // inherited Dress category from legacy / supplier catalog data.
+  const structuredTshirt =
+    /\bt-?shirt\b|\btricou(?:ri)?\b/.test(structuredHaystack);
+
+  if (structuredTshirt) {
+    return "Apparel & Accessories > Clothing > Clothing Tops > T-Shirts";
+  }
+
+  // Explicit Dress classification wins over incidental title words,
+  // unless our own structured product data already identified a T-Shirt.
   if (/dress|ruha|rochie/.test(structuredHaystack)) {
     return "Apparel & Accessories > Clothing > Dresses";
   }
@@ -438,23 +630,29 @@ function productCategory(row) {
     structuredHaystack,
   ].filter(Boolean).join(" "));
 
+  // Papuci / Slapi / Flipflop / Slides
+  // Az általános Shoes szabály előtt kell eldönteni.
+  if (/papuc|slapi|flip[\s_-]?flop|slides?/.test(haystack)) {
+    return "Apparel & Accessories > Shoes > Slippers";
+  }
+
   if (/shoe|shoes|cip[oő]|pantof|incalt|incălț|sneaker|sportcip/.test(haystack)) {
     return "Apparel & Accessories > Shoes";
   }
-  if (/jacket|dzseki|kab[aá]t|geaca|palton|outerwear/.test(haystack)) {
+  if (/jacket|jacheta|jachete|dzseki|kab[aá]t|geaca|geci|palton|outerwear|softshell|puffer|parka/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Outerwear > Coats & Jackets";
   }
-  if (/t-?shirt|p[oó]l[oó]|tricou/.test(haystack)) {
+  if (/\bt-?shirt\b|p[oó]l[oó]|\btricou(?:ri)?\b/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Clothing Tops > T-Shirts";
   }
   if (/shirt|bluz|top|fels[oő]|camasa|cămaș/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Clothing Tops";
   }
+  if (/short|pantaloni[ _-]?scurti|r[oö]vidnadr[aá]g/.test(haystack)) {
+    return "Apparel & Accessories > Clothing > Shorts";
+  }
   if (/pants|trouser|nadr[aá]g|pantalon/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Pants";
-  }
-  if (/short|r[oö]vidnadr[aá]g/.test(haystack)) {
-    return "Apparel & Accessories > Clothing > Shorts";
   }
   if (/dress|ruha|rochie/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Dresses";
@@ -505,14 +703,27 @@ function descriptionHtml(row) {
 
 function buildTags(row) {
   const profile = shopifyAudienceProfile(row);
+
+  /*
+   * Az audience tagek kizárólag a normalizált profile-ból jöhetnek.
+   * Így junior / Fete / Băieți / Copii termék nem csúszhat vissza
+   * Bărbați vagy Femei alá egy nyers gender mező miatt.
+   */
   const reservedAudienceTags = new Set([
     "barbati", "barbat", "men", "male", "masculin",
     "femei", "femeie", "women", "female", "feminin", "dama",
     "copii", "copil", "kids", "kid", "children", "child", "junior",
-    "boys", "boy", "baieti", "baiat", "girls", "girl", "fete", "fata",
+    "boys", "boy", "baieti", "baiat",
+    "girls", "girl", "fete", "fata",
     "unisex",
   ]);
 
+  /*
+   * A katalógus tageket kanonizáljuk:
+   * incaltaminmte -> incaltaminte
+   * caciuli / beanie -> caciula
+   * slapi / flipflop / slides -> papuci
+   */
   const normalizedTags = [
     "allinfashion",
     row.brand_name,
@@ -522,12 +733,13 @@ function buildTags(row) {
     row.season,
     resolvedRowColorName(row),
   ]
-    .map(tagValue)
-    .filter((value) => value && !reservedAudienceTags.has(normalizeKey(value)));
+    .map(canonicalCatalogTag)
+    .filter(
+      (value) =>
+        value &&
+        !reservedAudienceTags.has(normalizeKey(value))
+    );
 
-  // Az audience címkék kizárólag a normalizált besorolásból jönnek.
-  // Így egy "Fete", "Băieți", "Copii" vagy "Dama" termék nem tud a
-  // Bărbați kollekcióba beesni csak azért, mert a nyers gender mező hibás volt.
   return unique([
     profile.audience,
     audienceTechnicalTag(row),
@@ -3125,8 +3337,96 @@ function shouldRepairExistingShopifyCategory(task) {
     return true;
   }
 
-  // Never auto-reclassify an already valid, specific category such as Dresses,
-  // T-Shirts, Jackets, etc. Metadata sync should not become a taxonomy bulldozer.
+  // A broad Shoes kategória biztonságosan finomítható Slippersre,
+  // ha az AllIn adat egyértelműen Papuci / Slapi / Flipflop.
+  if (
+    normalizedCategoryPath(currentName) ===
+      normalizedCategoryPath("Apparel & Accessories > Shoes") &&
+    normalizedCategoryPath(desired) ===
+      normalizedCategoryPath("Apparel & Accessories > Shoes > Slippers")
+  ) {
+    return true;
+  }
+
+  // Legacy / supplier classification can incorrectly leave an unmistakable
+  // jacket in Dresses. If productCategory() now confidently resolves the
+  // product as Coats & Jackets, this specific correction is safe.
+  if (
+    normalizedCategoryPath(currentName) ===
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") &&
+    normalizedCategoryPath(desired) ===
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Outerwear > Coats & Jackets")
+  ) {
+    return true;
+  }
+
+  // Legacy / supplier classification can also leave a real T-Shirt in Dresses.
+  // If productCategory() confidently resolves it as T-Shirts, repair it.
+  if (
+    normalizedCategoryPath(currentName) ===
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") &&
+    normalizedCategoryPath(desired) ===
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Clothing Tops > T-Shirts")
+  ) {
+    return true;
+  }
+
+  /*
+   * AIF_SAFE_CATEGORY_REPAIRS_V1
+   *
+   * Ezeknél a desired kategória már a saját product_type alapján készült,
+   * ezért a régi hibás Dresses / Pants besorolás biztonságosan javítható.
+   */
+  const currentKey = normalizedCategoryPath(currentName);
+  const desiredKey = normalizedCategoryPath(desired);
+
+  const safeRepairs = new Set([
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Clothing Tops > T-Shirts"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Clothing Tops > Hoodies"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Clothing Tops > Sweatshirts"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Clothing Tops"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Pants"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Pants > Leggings"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Shorts"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Swimwear > Swim Shorts"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Outerwear > Coats & Jackets"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Pants") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Shorts"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Outerwear > Vests"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Outerwear > Coats & Jackets") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Outerwear > Vests"),
+
+    normalizedCategoryPath("Apparel & Accessories > Clothing > Dresses") + "=>" +
+      normalizedCategoryPath("Apparel & Accessories > Clothing > Activewear")
+  ]);
+
+  if (safeRepairs.has(currentKey + "=>" + desiredKey)) {
+    return true;
+  }
+
+  // Never auto-reclassify an already valid, specific category unless one of
+  // the explicit safe repair rules above applies.
   return false;
 }
 
