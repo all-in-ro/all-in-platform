@@ -77,7 +77,6 @@ type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "c
 
 const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] shadow-[0_16px_36px_rgba(15,23,42,0.20)]";
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
-const primaryButton = `${button} border-[#9be9e5]/48 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:brightness-110`;
 const neutralButton = `${button} border-white/18 bg-[#3a475a]/90 hover:border-[#8ce7e2]/28 hover:bg-[#445369]`;
 const inputClass = "h-11 min-w-0 w-full rounded-[13px] border border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] px-3 text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 transition hover:border-white/28 focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
 
@@ -1318,10 +1317,46 @@ export default function AllInAdminMagazinDashboard({
     setApplied(next);
   }
 
-  function applyFilters() {
+  function applyInstantFilter(patch: Partial<typeof draft>) {
+    const next = { ...draft, ...patch };
     setPreset("custom");
-    setApplied({ ...draft });
+    setDraft(next);
+    setApplied(next);
   }
+
+  function applyTextFilters() {
+    const next = {
+      ...draft,
+      snCod: draft.snCod.trim(),
+      search: draft.search.trim(),
+    };
+    setPreset("custom");
+    setDraft(next);
+    setApplied(next);
+  }
+
+  useEffect(() => {
+    const nextSnCod = draft.snCod.trim();
+    const nextSearch = draft.search.trim();
+
+    if (
+      nextSnCod === applied.snCod &&
+      nextSearch === applied.search
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setPreset("custom");
+      setApplied((current) => ({
+        ...current,
+        snCod: nextSnCod,
+        search: nextSearch,
+      }));
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [draft.snCod, draft.search, applied.snCod, applied.search]);
 
   async function deleteSaleLine(mode: AifAdminShopSaleLineDeleteMode) {
     if (!deleteTarget || deleteSaving) return;
@@ -1618,11 +1653,10 @@ export default function AllInAdminMagazinDashboard({
                 <HungarianDatePicker
                   value={draft.from}
                   ariaLabel="Kezdő dátum"
-                  onChange={(value) => setDraft((current) => ({
-                    ...current,
-                    from: value,
-                    to: current.to && current.to < value ? value : current.to,
-                  }))}
+                  onChange={(value) => {
+                    const nextTo = draft.to && draft.to < value ? value : draft.to;
+                    applyInstantFilter({ from: value, to: nextTo });
+                  }}
                 />
               </div>
               <div className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
@@ -1630,18 +1664,17 @@ export default function AllInAdminMagazinDashboard({
                 <HungarianDatePicker
                   value={draft.to}
                   ariaLabel="Záró dátum"
-                  onChange={(value) => setDraft((current) => ({
-                    ...current,
-                    to: value,
-                    from: current.from && current.from > value ? value : current.from,
-                  }))}
+                  onChange={(value) => {
+                    const nextFrom = draft.from && draft.from > value ? value : draft.from;
+                    applyInstantFilter({ to: value, from: nextFrom });
+                  }}
                 />
               </div>
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Eladó
                 <SmartSelect
                   value={draft.employee}
-                  onChange={(value) => setDraft({ ...draft, employee: value })}
+                  onChange={(value) => applyInstantFilter({ employee: value })}
                   placeholder="Minden eladó"
                   options={[{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))]}
                 />
@@ -1650,7 +1683,7 @@ export default function AllInAdminMagazinDashboard({
                 Fizetés
                 <SmartSelect
                   value={draft.paymentStatus}
-                  onChange={(value) => setDraft({ ...draft, paymentStatus: value })}
+                  onChange={(value) => applyInstantFilter({ paymentStatus: value })}
                   placeholder="Minden fizetés"
                   options={[
                     { value: "", label: "Minden fizetés" },
@@ -1668,7 +1701,7 @@ export default function AllInAdminMagazinDashboard({
                 Típus
                 <SmartSelect
                   value={draft.saleType}
-                  onChange={(value) => setDraft({ ...draft, saleType: value })}
+                  onChange={(value) => applyInstantFilter({ saleType: value })}
                   placeholder="Minden eladás"
                   options={[
                     { value: "", label: "Minden eladás" },
@@ -1680,12 +1713,12 @@ export default function AllInAdminMagazinDashboard({
               </label>
             </div>
 
-            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(190px,0.75fr)_minmax(190px,0.75fr)_minmax(190px,0.75fr)_minmax(300px,1.65fr)_auto]">
+            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(190px,0.8fr)_minmax(190px,0.8fr)_minmax(190px,0.8fr)_minmax(320px,1.8fr)]">
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Márka
                 <SmartSelect
                   value={draft.brand}
-                  onChange={(value) => setDraft({ ...draft, brand: value })}
+                  onChange={(value) => applyInstantFilter({ brand: value })}
                   placeholder="Minden márka"
                   options={[{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))]}
                 />
@@ -1694,7 +1727,7 @@ export default function AllInAdminMagazinDashboard({
                 Alkategória
                 <SmartSelect
                   value={draft.category}
-                  onChange={(value) => setDraft({ ...draft, category: value })}
+                  onChange={(value) => applyInstantFilter({ category: value })}
                   placeholder="Minden alkategória"
                   options={[{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))]}
                 />
@@ -1708,7 +1741,7 @@ export default function AllInAdminMagazinDashboard({
                     value={draft.snCod}
                     onChange={(event) => setDraft({ ...draft, snCod: event.target.value })}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") applyFilters();
+                      if (event.key === "Enter") applyTextFilters();
                     }}
                     placeholder="Pl. CAM007"
                     autoComplete="off"
@@ -1725,18 +1758,12 @@ export default function AllInAdminMagazinDashboard({
                     value={draft.search}
                     onChange={(event) => setDraft({ ...draft, search: event.target.value })}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") applyFilters();
+                      if (event.key === "Enter") applyTextFilters();
                     }}
                     placeholder="Bizonylat, kliens, termék..."
                   />
                 </div>
               </label>
-              <div className="flex items-end">
-                <button className={`${primaryButton} w-full xl:min-w-[126px]`} type="button" onClick={applyFilters}>
-                  <Search size={15} />
-                  Alkalmazás
-                </button>
-              </div>
             </div>
           </div>
         </section>
