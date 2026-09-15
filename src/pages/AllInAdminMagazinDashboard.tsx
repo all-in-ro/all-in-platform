@@ -13,11 +13,13 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
+  Banknote,
   Bookmark,
   Boxes,
   CalendarDays,
   Check,
   CheckCircle2,
+  CreditCard,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +27,7 @@ import {
   Clock3,
   Filter,
   Home,
+  Landmark,
   Layers3,
   Loader2,
   MoreVertical,
@@ -69,7 +72,7 @@ export type AllInAdminMagazinDashboardProps = {
 };
 
 
-type SelectOption = { value: string; label: string };
+type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card" | "bank_transfer"; indent?: boolean };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
 const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] shadow-[0_16px_36px_rgba(15,23,42,0.20)]";
@@ -198,6 +201,68 @@ function paymentBadge(value: string) {
   return "border-white/16 bg-white/[0.06] text-white/65";
 }
 
+
+function PaymentMethodIcon({
+  method,
+  compact = false,
+}: {
+  method?: string | null;
+  compact?: boolean;
+}) {
+  const normalized = String(method || "").trim().toLowerCase();
+  const size = compact ? 14 : 15;
+
+  if (normalized === "cash") {
+    return (
+      <span
+        title="Készpénz"
+        aria-label="Készpénz"
+        className={`${compact ? "h-7 w-7 rounded-lg" : "h-8 w-8 rounded-xl"} inline-flex shrink-0 items-center justify-center border border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.20)]`}
+      >
+        <Banknote size={size} strokeWidth={2} />
+      </span>
+    );
+  }
+
+  if (normalized === "card") {
+    return (
+      <span
+        title="Kártya"
+        aria-label="Kártya"
+        className={`${compact ? "h-7 w-7 rounded-lg" : "h-8 w-8 rounded-xl"} inline-flex shrink-0 items-center justify-center border border-[#9bc8ff]/50 bg-[#3978b9] text-white shadow-[0_6px_16px_rgba(57,120,185,0.22)]`}
+      >
+        <CreditCard size={size} strokeWidth={2} />
+      </span>
+    );
+  }
+
+  if (normalized === "bank_transfer") {
+    return (
+      <span
+        title="Átutalás"
+        aria-label="Átutalás"
+        className={`${compact ? "h-7 w-7 rounded-lg" : "h-8 w-8 rounded-xl"} inline-flex shrink-0 items-center justify-center border border-[#c5b6ff]/42 bg-[#6657a8] text-white shadow-[0_6px_16px_rgba(102,87,168,0.20)]`}
+      >
+        <Landmark size={size} strokeWidth={2} />
+      </span>
+    );
+  }
+
+  if (normalized === "mixed") {
+    return (
+      <span
+        title="Vegyes fizetés"
+        aria-label="Vegyes fizetés"
+        className={`${compact ? "h-7 w-7 rounded-lg" : "h-8 w-8 rounded-xl"} inline-flex shrink-0 items-center justify-center border border-white/24 bg-[#3a475a] text-[#d7fffd]`}
+      >
+        <WalletCards size={size} strokeWidth={2} />
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function statusBadge(value: string) {
   if (value === "completed") return "border-[#7bd7d4]/28 bg-[#2a8d8b]/18 text-[#d5fffd]";
   if (value === "draft") return "border-amber-200/30 bg-amber-400/14 text-amber-50";
@@ -296,15 +361,19 @@ function SmartSelect({
         aria-expanded={open}
       >
         <span className="flex min-w-0 flex-1 items-center gap-2.5">
-          <span
-            className={`h-2 w-2 shrink-0 rounded-full transition ${
-              open
-                ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]"
-                : value
-                  ? "bg-[#63d8d3]"
-                  : "bg-white/28"
-            }`}
-          />
+          {selected?.paymentIcon ? (
+            <PaymentMethodIcon method={selected.paymentIcon} compact />
+          ) : (
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full transition ${
+                open
+                  ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]"
+                  : value
+                    ? "bg-[#63d8d3]"
+                    : "bg-white/28"
+              }`}
+            />
+          )}
           <span
             title={selected?.label || placeholder}
             className="min-w-0 flex-1 truncate"
@@ -373,7 +442,11 @@ function SmartSelect({
                       active ? "bg-[#bff8f5]" : "bg-white/0 group-hover/item:bg-white/18"
                     }`}
                   />
-                  <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>
+                  {option.paymentIcon ? <PaymentMethodIcon method={option.paymentIcon} compact /> : null}
+                  <span
+                    className={`min-w-0 flex-1 truncate ${option.indent && !option.paymentIcon ? "pl-7" : ""}`}
+                    style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}
+                  >
                     {option.label}
                   </span>
                   <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center">
@@ -1390,7 +1463,7 @@ export default function AllInAdminMagazinDashboard({
             {dayClosure ? (
               <div className="relative overflow-hidden rounded-[16px] border border-white/45 bg-[#E21C2A] px-3 py-2.5 shadow-[0_9px_22px_rgba(226,28,42,0.20)]">
                 <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-                <div className="grid min-w-0 grid-cols-[34px_minmax(190px,1.15fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
+                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.25fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
                   <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/35 bg-black/10 text-white">
                     <CheckCircle2 size={16} />
                   </span>
@@ -1582,6 +1655,8 @@ export default function AllInAdminMagazinDashboard({
                   options={[
                     { value: "", label: "Minden fizetés" },
                     { value: "paid", label: "Kifizetve" },
+                    { value: "cash", label: "Készpénz", paymentIcon: "cash", indent: true },
+                    { value: "card", label: "Kártya", paymentIcon: "card", indent: true },
                     { value: "partial", label: "Részben fizetve" },
                     { value: "unpaid", label: "Nincs fizetve" },
                     { value: "credit", label: "Hitel" },
@@ -1907,9 +1982,25 @@ export default function AllInAdminMagazinDashboard({
                       <td className="whitespace-nowrap px-3 py-3 text-right">{money(sale.lineTotal)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
                       <td className="min-w-[132px] px-2 py-3">
-                        <div className="flex justify-center gap-1.5">
+                        <div className="flex items-center justify-center gap-1.5">
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
-                          <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
+                          {(() => {
+                            const method = String(
+                              (sale as AifAdminShopRecentSale & { paymentMethod?: string | null }).paymentMethod
+                                || sale.settlementMethod
+                                || ""
+                            ).trim().toLowerCase();
+
+                            if (sale.paymentStatus === "paid" && method) {
+                              return <PaymentMethodIcon method={method} />;
+                            }
+
+                            return (
+                              <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>
+                                {paymentLabel(sale.paymentStatus)}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td className="sticky right-0 z-10 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#344154] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)] transition-colors group-hover:bg-[#39475a]">
