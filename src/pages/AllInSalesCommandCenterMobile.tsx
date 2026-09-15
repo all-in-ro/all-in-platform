@@ -631,6 +631,13 @@ export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { act
   const activeFilterCount = [draft.location !== "all" ? draft.location : "", draft.employee, draft.brand, draft.category, draft.subcategory, draft.gender, draft.size, draft.color, draft.payment, draft.product, draft.snCod, draft.search, draft.source !== "all" ? draft.source : "", draft.bucket !== "auto" ? draft.bucket : ""].filter(Boolean).length;
   const dimensionItems = data?.dimensions?.[dimension] || [];
   const dimensionMax = Math.max(1, ...dimensionItems.map((item) => Math.abs(metricValue(item.current, chartMetric))));
+  const genderFilteredProducts = dimension === "gender" && draft.gender
+    ? (data?.dimensions?.product || []).slice(0, 12)
+    : [];
+  const genderProductMax = Math.max(
+    1,
+    ...genderFilteredProducts.map((item) => Math.abs(metricValue(item.current, chartMetric))),
+  );
   const employees = (data?.employees || []).slice(0, 10);
   const employeeMax = Math.max(1, ...employees.map((item) => Math.abs(metricValue(item.current, chartMetric))));
   const detailRows = data?.details || [];
@@ -693,7 +700,65 @@ export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { act
 
           <section className={`${panel} overflow-hidden`}>
             <div className="border-b border-white/10 px-4 py-3.5"><div className="flex items-center justify-between"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Értékesítési bontás</p><h2 className="mt-0.5 text-base">Részletes bontás</h2></div><Layers3 size={18} className="text-[#8ee6e2]" /></div><div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">{(Object.keys(dimensionLabels) as AifSalesCommandDimensionKey[]).map((key) => <button key={key} type="button" onClick={() => setDimension(key)} className={`h-8 shrink-0 rounded-lg border px-2.5 text-[9px] ${dimension === key ? "border-[#9be9e5]/44 bg-[#2a8d8b]" : "border-white/10 bg-white/[0.03] text-white/48"}`}>{dimensionLabels[key]}</button>)}</div></div>
-            <div className="space-y-2 p-3">{dimensionItems.slice(0, 12).map((item) => { const value = metricValue(item.current, chartMetric); const label = dimensionItemLabel(dimension, item); return <button key={`${dimension}:${item.key}`} type="button" onClick={() => { if (dimension === "brand") patch({ brand: item.rawName || item.name }); else if (dimension === "category") patch({ category: item.rawName || item.name }); else if (dimension === "subcategory") patch({ subcategory: item.rawName || item.name }); else if (dimension === "gender") patch({ gender: item.rawName || item.name }); else if (dimension === "size") patch({ size: item.rawName || item.name }); else if (dimension === "color") patch({ color: item.rawName || item.name }); else if (dimension === "payment") patch({ payment: item.rawName || item.key }); else if (dimension === "store") patch({ location: item.meta || item.key || item.rawName || item.name }); else if (dimension === "product") patch({ product: item.meta || item.rawName || item.name }); }} className="w-full rounded-2xl border border-white/9 bg-[#293548] p-3 text-left"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-[12px] text-white">{item.rank}. {label}</p><p className="mt-1 truncate text-[9px] text-white/38">{integer(item.current.itemsSold)} db • {integer(item.current.transactions)} tranzakció</p></div><div className="shrink-0 text-right"><p className="text-[11px] text-white">{chartMetricConfig[chartMetric].format(value)}</p>{comparisonAvailable ? <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[chartMetric]} inverse={chartMetric === "discountTotal" || chartMetric === "unpaidTotal"} /></span> : null}</div></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1d2737]"><div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(value ? 4 : 0, Math.abs(value) / dimensionMax * 100)}%` }} /></div></button>; })}{!dimensionItems.length ? <div className="px-3 py-8 text-center text-xs text-white/42">Nincs adat ebben a bontásban.</div> : null}</div>
+            <div className="space-y-2 p-3">{dimensionItems.slice(0, 12).map((item) => {
+              const value = metricValue(item.current, chartMetric);
+              const label = dimensionItemLabel(dimension, item);
+              const genderValue = String(item.rawName || item.name || "");
+              const genderSelected = dimension === "gender" && Boolean(draft.gender) && genderValue.toLocaleLowerCase("hu-HU") === draft.gender.toLocaleLowerCase("hu-HU");
+              return <button key={`${dimension}:${item.key}`} type="button" onClick={() => {
+                if (dimension === "brand") patch({ brand: item.rawName || item.name });
+                else if (dimension === "category") patch({ category: item.rawName || item.name });
+                else if (dimension === "subcategory") patch({ subcategory: item.rawName || item.name });
+                else if (dimension === "gender") patch({ gender: genderSelected ? "" : genderValue });
+                else if (dimension === "size") patch({ size: item.rawName || item.name });
+                else if (dimension === "color") patch({ color: item.rawName || item.name });
+                else if (dimension === "payment") patch({ payment: item.rawName || item.key });
+                else if (dimension === "store") patch({ location: item.meta || item.key || item.rawName || item.name });
+                else if (dimension === "product") patch({ product: item.meta || item.rawName || item.name });
+              }} className={`w-full rounded-2xl border p-3 text-left transition ${genderSelected ? "border-[#8ce7e2]/46 bg-[#2a8d8b]/18 ring-1 ring-[#7bd7d4]/15" : "border-white/9 bg-[#293548]"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-[12px] text-white">{item.rank}. {label}</p>{genderSelected ? <span className="inline-flex h-5 items-center rounded-full border border-[#8ce7e2]/28 bg-[#2a8d8b]/18 px-1.5 text-[8px] text-[#d7fffd]">aktív</span> : null}</div><p className="mt-1 truncate text-[9px] text-white/38">{integer(item.current.itemsSold)} db • {integer(item.current.transactions)} tranzakció</p></div><div className="shrink-0 text-right"><p className="text-[11px] text-white">{chartMetricConfig[chartMetric].format(value)}</p>{comparisonAvailable ? <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[chartMetric]} inverse={chartMetric === "discountTotal" || chartMetric === "unpaidTotal"} /></span> : null}</div></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1d2737]"><div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(value ? 4 : 0, Math.abs(value) / dimensionMax * 100)}%` }} /></div></button>;
+            })}{!dimensionItems.length ? <div className="px-3 py-8 text-center text-xs text-white/42">Nincs adat ebben a bontásban.</div> : null}</div>
+
+            {dimension === "gender" && draft.gender ? (
+              <div className="border-t border-white/10 bg-[#2f3a4c]/34 p-3">
+                <div className="mb-2.5 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[8px] uppercase tracking-[0.13em] text-[#bff8f5]/44">Szűrt termékek</p>
+                    <h3 className="mt-0.5 text-[12px] text-white">Csak a(z) {draft.gender} termékek</h3>
+                  </div>
+                  <span className="rounded-full border border-[#8ce7e2]/24 bg-[#2a8d8b]/12 px-2 py-1 text-[8px] text-[#d7fffd]">{genderFilteredProducts.length} termékcsoport</span>
+                </div>
+
+                <div className="space-y-2">
+                  {genderFilteredProducts.map((item) => {
+                    const value = metricValue(item.current, chartMetric);
+                    const label = dimensionItemLabel("product", item);
+                    return (
+                      <button
+                        key={`gender-product:${item.key}`}
+                        type="button"
+                        onClick={() => patch({ product: item.meta || item.rawName || item.name })}
+                        className="w-full rounded-2xl border border-white/9 bg-[#293548] p-3 text-left"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-[12px] text-white">{item.rank}. {label}</p>
+                            <p className="mt-1 truncate text-[9px] text-white/38">{integer(item.current.itemsSold)} db • {integer(item.current.transactions)} tranzakció</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-[11px] text-white">{chartMetricConfig[chartMetric].format(value)}</p>
+                            {comparisonAvailable ? <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[chartMetric]} inverse={chartMetric === "discountTotal" || chartMetric === "unpaidTotal"} /></span> : null}
+                          </div>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1d2737]">
+                          <div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(value ? 4 : 0, Math.abs(value) / genderProductMax * 100)}%` }} />
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {!genderFilteredProducts.length ? <div className="px-3 py-6 text-center text-xs text-white/42">Ehhez a nemhez nincs megjeleníthető termék.</div> : null}
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className={`${panel} overflow-hidden`}>
