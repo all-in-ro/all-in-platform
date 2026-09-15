@@ -701,6 +701,175 @@ function descriptionHtml(row) {
   return blocks.join("\n");
 }
 
+
+function derivedCatalogTags(row) {
+  /*
+   * AIF_DERIVED_CATALOG_TAGS_V2
+   *
+   * Fontos:
+   * row.product_type a nyers AllIn / supplier típus.
+   * Pl. GEACA, GEACA SOFTSHELL, Training, BOXER,
+   * RUCSAC, BORSETA.
+   *
+   * A storefront fő terméktípus elsődleges forrása ezért
+   * subcategory_name_ro, ugyanúgy, ahogy az export többi
+   * részében is.
+   */
+
+  const normalize = (value) =>
+    text(value)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const catalogTypeKey =
+    normalize(
+      row?.subcategory_name_ro ||
+      row?.product_type
+    );
+
+  const rawTypeKey =
+    normalize(
+      row?.product_type
+    );
+
+  const titleKey =
+    normalize([
+      row?.shopify_title,
+      row?.title_ro,
+      row?.title,
+    ]
+      .map(text)
+      .filter(Boolean)
+      .join(" "));
+
+  const tags = [];
+
+  /*
+   * JACHETE
+   */
+
+  if (
+    catalogTypeKey === "jachete" &&
+    (
+      rawTypeKey.includes("softshell") ||
+      /\bsoftshell\b/.test(titleKey)
+    )
+  ) {
+    tags.push(
+      "jachete-softshell"
+    );
+  }
+
+  if (
+    catalogTypeKey === "jachete" &&
+    (
+      /\bdown jacket\b/.test(titleKey) ||
+      /\bpuffer\b/.test(titleKey) ||
+      /\bwinter\b/.test(titleKey) ||
+      /\biarna\b/.test(titleKey)
+    )
+  ) {
+    tags.push(
+      "jachete-iarna"
+    );
+  }
+
+  if (
+    catalogTypeKey === "jachete" &&
+    (
+      /\btechnical\b/.test(titleKey) ||
+      /\btehnic/.test(titleKey) ||
+      /\bwindbreaker\b/.test(titleKey) ||
+      /\bwind\b/.test(titleKey) ||
+      /\bvant\b/.test(titleKey)
+    )
+  ) {
+    tags.push(
+      "jachete-tehnice"
+    );
+  }
+
+  /*
+   * PANTALONI TRENING
+   *
+   * A nyers type=Training fontos a 4F TROUSERS
+   * modelleknél, ahol a cím nem mondja ki, hogy trening.
+   */
+
+  if (
+    catalogTypeKey === "pantaloni" &&
+    (
+      rawTypeKey === "training" ||
+      /trening/.test(titleKey) ||
+      /\bjogger/.test(titleKey) ||
+      /sweatpant/.test(titleKey) ||
+      /track pant/.test(titleKey)
+    )
+  ) {
+    tags.push(
+      "pantaloni-trening"
+    );
+  }
+
+  /*
+   * LENJERIE
+   */
+
+  if (
+    [
+      "boxeri",
+      "chiloti",
+      "tanga",
+      "sutiene",
+    ].includes(catalogTypeKey) ||
+    [
+      "boxer",
+      "boxeri",
+      "chiloti",
+      "tanga",
+      "sutien",
+      "sutiene",
+    ].includes(rawTypeKey)
+  ) {
+    tags.push(
+      "lenjerie-intima"
+    );
+  }
+
+  /*
+   * GENȚI
+   */
+
+  if (catalogTypeKey === "genti") {
+    if (
+      rawTypeKey === "rucsac" ||
+      /rucsac|backpack|sackpack/.test(
+        titleKey
+      )
+    ) {
+      tags.push(
+        "rucsacuri"
+      );
+    }
+
+    if (
+      rawTypeKey === "borseta" ||
+      /borset|crossbody|xbody|waist bag|bum bag/.test(
+        titleKey
+      )
+    ) {
+      tags.push(
+        "borsete"
+      );
+    }
+  }
+
+  return unique(tags);
+}
+
 function buildTags(row) {
   const profile = shopifyAudienceProfile(row);
 
@@ -740,6 +909,9 @@ function buildTags(row) {
         !reservedAudienceTags.has(normalizeKey(value))
     );
 
+  const derivedTags =
+    derivedCatalogTags(row);
+
   return unique([
     profile.audience,
     audienceTechnicalTag(row),
@@ -747,6 +919,7 @@ function buildTags(row) {
     `gender-${profile.gender}`,
     shopifyStyle(row),
     ...normalizedTags,
+    ...derivedTags,
   ]).join(", ");
 }
 
