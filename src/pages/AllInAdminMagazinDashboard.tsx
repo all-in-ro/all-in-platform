@@ -1390,20 +1390,34 @@ export default function AllInAdminMagazinDashboard({
             {dayClosure ? (
               <div className="relative overflow-hidden rounded-[16px] border border-white/45 bg-[#E21C2A] px-3 py-2.5 shadow-[0_9px_22px_rgba(226,28,42,0.20)]">
                 <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/35 bg-black/10 text-white">
+                <div className="grid min-w-0 grid-cols-[34px_minmax(190px,1.15fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/35 bg-black/10 text-white">
                     <CheckCircle2 size={16} />
                   </span>
-                  <div className="min-w-[250px] flex-1">
-                    <p className="text-[8px] uppercase tracking-[0.16em] text-white/68">Napzárás • {huDateLabel(dayClosureDate)}</p>
-                    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
-                      <span className="text-[14px] leading-tight text-white">Üzlet lezárva</span>
-                      <span className="text-[11px] text-white/78">{dayClosure.actor || "-"} • {timeOnly(dayClosureAt)}</span>
-                    </div>
+
+                  <div className="min-w-0">
+                    <p className="text-[8px] uppercase tracking-[0.15em] text-white/66">Napzárás • {huDateLabel(dayClosureDate)}</p>
+                    <p className="mt-0.5 truncate text-[14px] leading-tight text-white">Üzlet lezárva</p>
                   </div>
-                  <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[9px]">
-                    <span className="rounded-lg border border-white/26 bg-black/10 px-2.5 py-1.5 text-white/86">Záró kassza: <span className="text-white">{money(dayClosure.countedCash)}</span></span>
-                    <span className="rounded-lg border border-white/26 bg-black/10 px-2.5 py-1.5 text-white/86">Eltérés: <span className="text-white">{money(dayClosure.cashDifference)}</span></span>
+
+                  <div className="min-w-0 border-l border-white/18 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Lezárta</p>
+                    <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={dayClosure.actor || "-"}>{dayClosure.actor || "-"}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/18 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Idő</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(dayClosureAt)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/18 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Záró kassza</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(dayClosure.countedCash)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/18 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Eltérés</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(dayClosure.cashDifference)}</p>
                   </div>
                 </div>
               </div>
@@ -1412,20 +1426,38 @@ export default function AllInAdminMagazinDashboard({
             {latestHandover ? (
               <div className="relative overflow-hidden rounded-[16px] border border-[#8ce7e2]/48 bg-[#2a8d8b] px-3 py-2.5 shadow-[0_9px_22px_rgba(42,141,139,0.20)]">
                 <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#d7fffd]/70 to-transparent" />
-                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/28 bg-black/10 text-white">
+                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.25fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/28 bg-black/10 text-white">
                     <WalletCards size={16} />
                   </span>
-                  <div className="min-w-[280px] flex-1">
-                    <p className="text-[8px] uppercase tracking-[0.16em] text-[#e8fffd]/68">Műszakátadás • {acceptedHandovers.length} átadás</p>
-                    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
-                      <span className="text-[14px] leading-tight text-white">{latestHandover.fromActor || "-"} → {latestHandover.toActor || "-"}</span>
-                      <span className="text-[11px] text-white/78">Átvette: {latestHandover.acceptedBy || latestHandover.toActor || "-"} • {timeOnly(latestHandoverAt)}</span>
-                    </div>
+
+                  <div className="min-w-0">
+                    <p className="text-[8px] uppercase tracking-[0.15em] text-[#e8fffd]/68">Műszakátadás • {acceptedHandovers.length} átadás</p>
+                    <p className="mt-0.5 truncate text-[14px] leading-tight text-white" title={`${latestHandover.fromActor || "-"} → ${latestHandover.toActor || "-"}`}>
+                      {latestHandover.fromActor || "-"} → {latestHandover.toActor || "-"}
+                    </p>
                   </div>
-                  <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[9px]">
-                    <span className="rounded-lg border border-white/22 bg-black/10 px-2.5 py-1.5 text-white/86">Kassza: <span className="text-white">{money(latestHandoverCash)}</span></span>
-                    <span className="rounded-lg border border-white/22 bg-black/10 px-2.5 py-1.5 text-white/86">Eltérés: <span className="text-white">{money(latestHandover.cashDifference || 0)}</span></span>
+
+                  <div className="min-w-0 border-l border-white/16 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Átvette</p>
+                    <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={latestHandover.acceptedBy || latestHandover.toActor || "-"}>
+                      {latestHandover.acceptedBy || latestHandover.toActor || "-"}
+                    </p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/16 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Idő</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(latestHandoverAt)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/16 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Kassza</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(latestHandoverCash)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/16 pl-3">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Eltérés</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(latestHandover.cashDifference || 0)}</p>
                   </div>
                 </div>
               </div>
