@@ -1223,6 +1223,501 @@ export async function syncAifShopifyNewness(
 }
 
 
+
+/**
+ * AIF_SHOPIFY_NEWNESS_VISIBILITY_V1
+ *
+ * Noutăți storefront visibility:
+ * - desired > 0: Online Store publication ON + main menu directly after Copii
+ * - desired = 0: main menu item removed + Online Store publication OFF
+ *
+ * Idempotens: ha az állapot már helyes, semmit nem módosít.
+ */
+function aifNewnessMenuItemToInput(item) {
+  const input = {
+    id: item.id,
+    title: item.title,
+    type: item.type,
+    items: (item.items || []).map(aifNewnessMenuItemToInput),
+  };
+
+  if (item.url !== null && item.url !== undefined) {
+    input.url = item.url;
+  }
+
+  if (item.resourceId) {
+    input.resourceId = item.resourceId;
+  }
+
+  if (Array.isArray(item.tags) && item.tags.length) {
+    input.tags = item.tags;
+  }
+
+  return input;
+}
+
+function aifNewnessIsMenuItem(item, collectionId) {
+  return Boolean(
+    item &&
+    (
+      String(item.resourceId || "") === String(collectionId || "") ||
+      String(item.url || "").includes("/collections/noutati")
+    )
+  );
+}
+
+function aifNewnessThrowUserErrors(payload, label) {
+  const errors = payload?.userErrors || [];
+
+  if (!errors.length) return;
+
+  const message = errors
+    .map((error) => {
+      const field = Array.isArray(error?.field)
+        ? error.field.join(".")
+        : String(error?.field || "");
+
+      return `${field ? `${field}: ` : ""}${error?.message || "Shopify error"}`;
+    })
+    .join(" | ");
+
+  throw new Error(`${label}: ${message}`);
+}
+
+const AIF_NEWNESS_VISIBILITY_QUERY = `
+  query AifNewnessVisibility($publicationId: ID!) {
+    noutati: collectionByHandle(handle: "noutati") {
+      id
+      title
+      handle
+      publishedOnPublication(publicationId: $publicationId)
+    }
+
+    copii: collectionByHandle(handle: "copii") {
+      id
+      title
+      handle
+    }
+
+    menus(first: 50) {
+      nodes {
+        id
+        title
+        handle
+        isDefault
+
+        items {
+          id
+          title
+          type
+          url
+          resourceId
+          tags
+
+          items {
+            id
+            title
+            type
+            url
+            resourceId
+            tags
+
+            items {
+              id
+              title
+              type
+              url
+              resourceId
+              tags
+
+              items {
+                id
+                title
+                type
+                url
+                resourceId
+                tags
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function readAifNewnessVisibilityState(publicationId) {
+  const response = await shopifyGraphql(
+    AIF_NEWNESS_VISIBILITY_QUERY,
+    { publicationId }
+  );
+
+  const collection = response.data?.noutati;
+  const copii = response.data?.copii;
+
+  const mainMenu =
+    (response.data?.menus?.nodes || [])
+      .find((menu) => menu.handle === "main-menu");
+
+  if (!collection?.id) {
+    throw new Error("Noutăți collection nem található.");
+  }
+
+  if (!copii?.id) {
+    throw new Error("Copii collection nem található.");
+  }
+
+  if (!mainMenu?.id) {
+    throw new Error("Shopify main-menu nem található.");
+  }
+
+  const items = mainMenu.items || [];
+
+  const copiiIndex =
+    items.findIndex(
+      (item) =>
+        String(item.resourceId || "") === String(copii.id)
+        || String(item.url || "").includes("/collections/copii")
+    );
+
+  const noutatiIndices = [];
+
+  items.forEach((item, index) => {
+    if (aifNewnessIsMenuItem(item, collection.id)) {
+      noutatiIndices.push(index);
+    }
+  });
+
+  const inMenu = noutatiIndices.length > 0;
+
+  const directlyAfterCopii =
+    copiiIndex >= 0
+    && noutatiIndices.length === 1
+    && noutatiIndices[0] === copiiIndex + 1;
+
+  return {
+    collection,
+    copii,
+    mainMenu,
+    items,
+    published: collection.publishedOnPublication === true,
+    copiiIndex,
+    noutatiIndices,
+    inMenu,
+    directlyAfterCopii,
+  };
+}
+
+async function updateAifNewnessMainMenu({
+  state,
+  visible,
+}) {
+  const collection = state.collection;
+  const copii = state.copii;
+
+  const cleaned =
+    state.items
+      .filter(
+        (item) =>
+          !aifNewnessIsMenuItem(item, collection.id)
+      )
+      .map(aifNewnessMenuItemToInput);
+
+  if (visible) {
+    const copiiIndex =
+      cleaned.findIndex(
+        (item) =>
+          String(item.resourceId || "") === String(copii.id)
+          || String(item.url || "").includes("/collections/copii")
+      );
+
+    if (copiiIndex < 0) {
+      throw new Error(
+        "Copii menüpont nem található, ezért a Noutăți pozícióját nem módosítom."
+      );
+    }
+
+    cleaned.splice(
+      copiiIndex + 1,
+      0,
+      {
+        title: collection.title || "Noutăți",
+        type: "COLLECTION",
+        resourceId: collection.id,
+        url: `/collections/${collection.handle || "noutati"}`,
+        items: [],
+      }
+    );
+  }
+
+  const response = await shopifyGraphql(
+    `
+      mutation AifNewnessMenuUpdate(
+        $id: ID!
+        $title: String!
+        $items: [MenuItemUpdateInput!]!
+      ) {
+        menuUpdate(
+          id: $id
+          title: $title
+          items: $items
+        ) {
+          menu {
+            id
+            title
+            handle
+          }
+
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      id: state.mainMenu.id,
+      title: state.mainMenu.title || "Main menu",
+      items: cleaned,
+    }
+  );
+
+  aifNewnessThrowUserErrors(
+    response.data?.menuUpdate,
+    "Noutăți menuUpdate"
+  );
+}
+
+async function setAifNewnessPublication({
+  collectionId,
+  publicationId,
+  published,
+}) {
+  const mutationName =
+    published
+      ? "publishablePublish"
+      : "publishableUnpublish";
+
+  const response = await shopifyGraphql(
+    `
+      mutation AifNewnessPublication(
+        $id: ID!
+        $input: [PublicationInput!]!
+        $publicationId: ID!
+      ) {
+        ${mutationName}(
+          id: $id
+          input: $input
+        ) {
+          publishable {
+            publishedOnPublication(
+              publicationId: $publicationId
+            )
+          }
+
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      id: collectionId,
+      publicationId,
+      input: [
+        {
+          publicationId,
+        },
+      ],
+    }
+  );
+
+  aifNewnessThrowUserErrors(
+    response.data?.[mutationName],
+    `Noutăți ${mutationName}`
+  );
+}
+
+export async function syncAifShopifyNewnessVisibility(
+  options = {}
+) {
+  const desired =
+    Math.max(
+      0,
+      Number(options.desired || 0)
+    );
+
+  const dryRun =
+    options.dryRun === true;
+
+  const publicationId =
+    String(
+      options.publicationId
+      || process.env.SHOPIFY_ONLINE_STORE_PUBLICATION_ID
+      || "gid://shopify/Publication/305989910855"
+    ).trim();
+
+  const shouldBeVisible =
+    desired > 0;
+
+  const before =
+    await readAifNewnessVisibilityState(
+      publicationId
+    );
+
+  if (
+    shouldBeVisible
+    && before.copiiIndex < 0
+  ) {
+    throw new Error(
+      "Copii menüpont nem található a main-menu-ben."
+    );
+  }
+
+  const needsPublish =
+    shouldBeVisible
+    && !before.published;
+
+  const needsUnpublish =
+    !shouldBeVisible
+    && before.published;
+
+  const needsMenuUpdate =
+    shouldBeVisible
+      ? !before.directlyAfterCopii
+      : before.inMenu;
+
+  const actions = {
+    publish: needsPublish,
+    unpublish: needsUnpublish,
+    menuUpdate: needsMenuUpdate,
+  };
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      desired,
+      shouldBeVisible,
+      changed:
+        needsPublish
+        || needsUnpublish
+        || needsMenuUpdate,
+
+      actions,
+
+      before: {
+        published: before.published,
+        inMenu: before.inMenu,
+        directlyAfterCopii:
+          before.directlyAfterCopii,
+        copiiIndex: before.copiiIndex,
+        noutatiIndices:
+          before.noutatiIndices,
+      },
+    };
+  }
+
+  let changed = false;
+
+  if (shouldBeVisible) {
+    // Előbb publikálunk, csak utána tesszük ki a menübe.
+    if (needsPublish) {
+      await setAifNewnessPublication({
+        collectionId:
+          before.collection.id,
+        publicationId,
+        published: true,
+      });
+
+      changed = true;
+    }
+
+    if (needsMenuUpdate) {
+      await updateAifNewnessMainMenu({
+        state: before,
+        visible: true,
+      });
+
+      changed = true;
+    }
+  } else {
+    // Előbb eltüntetjük a menüből, csak utána unpublish.
+    if (needsMenuUpdate) {
+      await updateAifNewnessMainMenu({
+        state: before,
+        visible: false,
+      });
+
+      changed = true;
+    }
+
+    if (needsUnpublish) {
+      await setAifNewnessPublication({
+        collectionId:
+          before.collection.id,
+        publicationId,
+        published: false,
+      });
+
+      changed = true;
+    }
+  }
+
+  const after =
+    await readAifNewnessVisibilityState(
+      publicationId
+    );
+
+  const valid =
+    shouldBeVisible
+      ? (
+          after.published === true
+          && after.inMenu === true
+          && after.directlyAfterCopii === true
+        )
+      : (
+          after.published === false
+          && after.inMenu === false
+        );
+
+  if (!valid) {
+    throw new Error(
+      `Noutăți visibility verify failed: ${JSON.stringify({
+        desired,
+        shouldBeVisible,
+        published: after.published,
+        inMenu: after.inMenu,
+        directlyAfterCopii:
+          after.directlyAfterCopii,
+      })}`
+    );
+  }
+
+  return {
+    dryRun: false,
+    desired,
+    shouldBeVisible,
+    changed,
+    actions,
+
+    before: {
+      published: before.published,
+      inMenu: before.inMenu,
+      directlyAfterCopii:
+        before.directlyAfterCopii,
+    },
+
+    after: {
+      published: after.published,
+      inMenu: after.inMenu,
+      directlyAfterCopii:
+        after.directlyAfterCopii,
+    },
+  };
+}
+
+
 export async function processAifShopifyOutboxBatch(pool, options = {}) {
   const config = envConfig();
   if (!config.enabled) return { enabled: false, processed: 0, success: 0, errors: 0, message: "SHOPIFY_SYNC_ENABLED=false" };

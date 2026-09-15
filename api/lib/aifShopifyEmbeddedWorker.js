@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { processAifShopifyOutboxBatch, syncAifShopifyNewness } from "./aifShopify.js";
+import {
+  processAifShopifyOutboxBatch,
+  syncAifShopifyNewness,
+  syncAifShopifyNewnessVisibility,
+} from "./aifShopify.js";
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 
@@ -91,10 +95,24 @@ async function tick(state) {
             },
           );
 
+        const visibility =
+          await syncAifShopifyNewnessVisibility({
+            desired:
+              newness?.desired,
+            dryRun:
+              false,
+          });
+
+        newness = {
+          ...newness,
+          visibility,
+        };
+
         if (
           newness?.added ||
           newness?.removed ||
-          newness?.errors
+          newness?.errors ||
+          newness?.visibility?.changed
         ) {
           console.log(
             "AIF Shopify embedded newness sync",
@@ -129,7 +147,8 @@ async function tick(state) {
         orders.claimed ||
         outbound.processed ||
         newness?.added ||
-        newness?.removed
+        newness?.removed ||
+        newness?.visibility?.changed
       );
       schedule(state, hadWork ? state.busyDelayMs : state.idleDelayMs);
     }
