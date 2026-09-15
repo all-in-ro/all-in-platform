@@ -172,6 +172,17 @@ export async function ensureAifShopifyTables(client) {
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shopify_variant_map_sku_lower_uidx ON aif_shopify_variant_map (lower(sku))`);
   await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_variant_map_status_idx ON aif_shopify_variant_map (sync_status, updated_at DESC)`);
 
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS
+      aif_shopify_newness_legacy_exclusions (
+        shopify_product_id text PRIMARY KEY,
+        reason text NOT NULL
+          DEFAULT 'legacy_no_committed_reception_history',
+        created_at timestamptz NOT NULL
+          DEFAULT now()
+      )
+  `);
+
   await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_sync_outbox (
     variant_id uuid PRIMARY KEY REFERENCES aif_product_variants(id) ON DELETE CASCADE,
     desired_csikszereda_qty integer NOT NULL DEFAULT 0,
@@ -700,6 +711,517 @@ async function claimOutboxRows(pool, limit) {
 function retryDelaySeconds(attempts) {
   return Math.min(3600, Math.max(15, 15 * (2 ** Math.min(8, Math.max(0, Number(attempts || 1) - 1)))));
 }
+
+
+/*
+ * AIF_SHOPIFY_NEWNESS_DIRECT_TAG_READ_V2
+ *
+ * Nem Shopify search indexből olvasunk.
+ * A search index késhet a tagsAdd/tagsRemove után.
+ *
+ * Ehelyett közvetlenül a mapped Product node-ok
+ * aktuális tags mezőjét kérjük le.
+ */
+/*
+ * AIF_SHOPIFY_NEWNESS_DIRECT_TAG_READ_V3
+ *
+ * Az aktuális noutati állapotot közvetlenül az összes
+ * Shopify Product.tags mezőből olvassuk.
+ *
+ * NINCS tag search query, ezért nincs search-index késés.
+ * Az unmapped, de még létező Shopify termékeken maradt
+ * elavult noutati taget is képes eltávolítani.
+ */
+async function loadShopifyProductIdsByTag(tag) {
+  const tagged =
+    new Set();
+
+  const wantedTag =
+    text(tag).toLowerCase();
+
+  if (!wantedTag) {
+    return tagged;
+  }
+
+  let after = null;
+
+  for (
+    let page = 0;
+    page < 100;
+    page += 1
+  ) {
+    const response =
+      await shopifyGraphql(
+        `query AifAllProductTags(
+          $first: Int!,
+          $after: String
+        ) {
+          products(
+            first: $first
+            after: $after
+          ) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+
+            nodes {
+              id
+              tags
+            }
+          }
+        }`,
+        {
+          first: 250,
+          after,
+        },
+      );
+
+    const connection =
+      response.data?.products;
+
+    for (
+      const product
+      of connection?.nodes || []
+    ) {
+      const productId =
+        text(product?.id);
+
+      if (!productId) {
+        continue;
+      }
+
+      const hasTag =
+        (product?.tags || [])
+          .some(
+            value =>
+              text(value)
+                .toLowerCase() ===
+              wantedTag
+          );
+
+      if (hasTag) {
+        tagged.add(productId);
+      }
+    }
+
+    if (
+      !connection?.pageInfo
+        ?.hasNextPage
+    ) {
+      break;
+    }
+
+    after =
+      connection.pageInfo.endCursor;
+  }
+
+  return tagged;
+}
+
+async function mutateShopifyProductTag(
+  productId,
+  tag,
+  action,
+) {
+  const add =
+    action === "add";
+
+  const response =
+    await shopifyGraphql(
+      add
+        ? `mutation AifTagsAdd(
+            $id: ID!,
+            $tags: [String!]!
+          ) {
+            tagsAdd(
+              id: $id
+              tags: $tags
+            ) {
+              node {
+                id
+              }
+
+              userErrors {
+                field
+                message
+              }
+            }
+          }`
+        : `mutation AifTagsRemove(
+            $id: ID!,
+            $tags: [String!]!
+          ) {
+            tagsRemove(
+              id: $id
+              tags: $tags
+            ) {
+              node {
+                id
+              }
+
+              userErrors {
+                field
+                message
+              }
+            }
+          }`,
+      {
+        id: productId,
+        tags: [tag],
+      },
+    );
+
+  const payload =
+    add
+      ? response.data?.tagsAdd
+      : response.data?.tagsRemove;
+
+  if (
+    payload?.userErrors?.length
+  ) {
+    throw Object.assign(
+      new Error(
+        payload.userErrors
+          .map(
+            row =>
+              row?.message ||
+              String(row),
+          )
+          .join(" | "),
+      ),
+      {
+        code:
+          add
+            ? "shopify_tags_add_failed"
+            : "shopify_tags_remove_failed",
+        payload,
+      },
+    );
+  }
+
+  return true;
+}
+
+/*
+ * AIF_SHOPIFY_NEWNESS_V1
+ *
+ * "Noutăți" jelentése:
+ * az adott Shopify product mögötti bármely mapped variáns
+ * első VALÓDI, committed reception dátuma legfeljebb N napos.
+ *
+ * Fontos:
+ * - nem Shopify createdAt
+ * - nem stock migration
+ * - nem legutóbbi utánrendelés
+ * - hanem MIN(reception_date)
+ *
+ * Régi, reception history nélküli termék nem lesz automatikusan új.
+ */
+export async function syncAifShopifyNewness(
+  pool,
+  options = {},
+) {
+  if (
+    !pool ||
+    typeof pool.connect !== "function"
+  ) {
+    throw new Error(
+      "A Noutăți Shopify sync érvényes PostgreSQL poolt igényel.",
+    );
+  }
+
+  const config = envConfig();
+
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      reason:
+        "SHOPIFY_SYNC_ENABLED=false",
+      desired: 0,
+      currentlyTagged: 0,
+      toAdd: 0,
+      toRemove: 0,
+      added: 0,
+      removed: 0,
+      errors: 0,
+      errorItems: [],
+    };
+  }
+
+  const parsedDays =
+    Number(
+      options.days ??
+      process.env.SHOPIFY_NEWNESS_DAYS ??
+      30,
+    );
+
+  const days =
+    Math.min(
+      365,
+      Math.max(
+        1,
+        Number.isFinite(parsedDays)
+          ? Math.trunc(parsedDays)
+          : 30,
+      ),
+    );
+
+  const tag =
+    text(
+      options.tag ??
+      process.env.SHOPIFY_NEWNESS_TAG ??
+      "noutati",
+    ) || "noutati";
+
+  const dryRun =
+    bool(
+      options.dryRun ??
+      options.dry_run,
+      false,
+    );
+
+  const client =
+    await pool.connect();
+
+  let desiredRows = [];
+
+  try {
+    /*
+     * AIF_NEWNESS_SCHEMA_ENSURE_V4
+     */
+    await ensureAifShopifyTables(
+      client
+    );
+
+    const result =
+      await client.query(
+        `
+        WITH first_reception AS (
+          SELECT
+            svm.shopify_product_id,
+
+            MIN(r.reception_date)
+              AS first_reception_date
+
+          FROM aif_shopify_variant_map svm
+
+          JOIN aif_import_rows ir
+            ON ir.variant_id =
+               svm.variant_id
+           AND ir.status =
+               'committed'
+
+          JOIN aif_import_batches b
+            ON b.id =
+               ir.batch_id
+           AND b.status =
+               'committed'
+
+          JOIN aif_receptions r
+            ON r.id =
+               b.reception_id
+           AND r.status =
+               'committed'
+
+          WHERE
+            NULLIF(
+              trim(
+                svm.shopify_product_id
+              ),
+              ''
+            ) IS NOT NULL
+
+          GROUP BY
+            svm.shopify_product_id
+        )
+
+        SELECT
+          shopify_product_id,
+          first_reception_date
+
+        FROM first_reception
+
+        WHERE
+          first_reception_date
+            >= CURRENT_DATE
+               - ($1::int * INTERVAL '1 day')
+
+          AND first_reception_date
+            <= CURRENT_DATE
+
+          /*
+           * AIF_NEWNESS_LEGACY_EXCLUSION_V4
+           *
+           * A rendszer indulásakor már létező,
+           * érvényes committed reception history
+           * nélküli termék későbbi utánrendelése
+           * nem teszi a terméket újdonsággá.
+           */
+          AND NOT EXISTS (
+            SELECT 1
+            FROM
+              aif_shopify_newness_legacy_exclusions x
+            WHERE
+              x.shopify_product_id =
+                first_reception.shopify_product_id
+          )
+
+        ORDER BY
+          first_reception_date DESC,
+          shopify_product_id
+        `,
+        [days],
+      );
+
+    desiredRows =
+      result.rows;
+
+
+  } finally {
+    client.release();
+  }
+
+  const desired =
+    new Set(
+      desiredRows
+        .map(row =>
+          text(
+            row.shopify_product_id,
+          ),
+        )
+        .filter(Boolean),
+    );
+
+  const currentlyTagged =
+    await loadShopifyProductIdsByTag(tag);
+
+  const toAdd =
+    [...desired]
+      .filter(
+        id =>
+          !currentlyTagged.has(id),
+      );
+
+  const toRemove =
+    [...currentlyTagged]
+      .filter(
+        id =>
+          !desired.has(id),
+      );
+
+  if (dryRun) {
+    return {
+      enabled: true,
+      dryRun: true,
+      tag,
+      days,
+
+      desired:
+        desired.size,
+
+      currentlyTagged:
+        currentlyTagged.size,
+
+      toAdd:
+        toAdd.length,
+
+      toRemove:
+        toRemove.length,
+
+      added: 0,
+      removed: 0,
+      errors: 0,
+      errorItems: [],
+
+      addProductIds:
+        toAdd.slice(0, 100),
+
+      removeProductIds:
+        toRemove.slice(0, 100),
+    };
+  }
+
+  let added = 0;
+  let removed = 0;
+
+  const errorItems = [];
+
+  for (const productId of toAdd) {
+    try {
+      await mutateShopifyProductTag(
+        productId,
+        tag,
+        "add",
+      );
+
+      added += 1;
+    } catch (error) {
+      errorItems.push({
+        productId,
+        action: "add",
+        error:
+          error?.message ||
+          String(error),
+        code:
+          error?.code || null,
+      });
+    }
+  }
+
+  for (
+    const productId
+    of toRemove
+  ) {
+    try {
+      await mutateShopifyProductTag(
+        productId,
+        tag,
+        "remove",
+      );
+
+      removed += 1;
+    } catch (error) {
+      errorItems.push({
+        productId,
+        action: "remove",
+        error:
+          error?.message ||
+          String(error),
+        code:
+          error?.code || null,
+      });
+    }
+  }
+
+  return {
+    enabled: true,
+    dryRun: false,
+    tag,
+    days,
+
+    desired:
+      desired.size,
+
+    currentlyTagged:
+      currentlyTagged.size,
+
+    toAdd:
+      toAdd.length,
+
+    toRemove:
+      toRemove.length,
+
+    added,
+    removed,
+
+    errors:
+      errorItems.length,
+
+    errorItems,
+  };
+}
+
 
 export async function processAifShopifyOutboxBatch(pool, options = {}) {
   const config = envConfig();

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { processAifShopifyOutboxBatch } from "./aifShopify.js";
+import { processAifShopifyOutboxBatch, syncAifShopifyNewness } from "./aifShopify.js";
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 
@@ -61,10 +61,76 @@ async function tick(state) {
       }));
     }
 
+    let newness = null;
+
+    const newnessNow =
+      Date.now();
+
+    if (
+      newnessNow -
+        Number(
+          state.lastNewnessSyncAt || 0
+        )
+      >= state.newnessIntervalMs
+    ) {
+      /*
+       * Az időpontot a futás ELŐTT állítjuk,
+       * hogy Shopify/API hiba esetén se próbálja
+       * 500 ms-onként ugyanazt újra.
+       */
+      state.lastNewnessSyncAt =
+        newnessNow;
+
+      try {
+        newness =
+          await syncAifShopifyNewness(
+            state.pool,
+            {
+              days:
+                state.newnessDays,
+            },
+          );
+
+        if (
+          newness?.added ||
+          newness?.removed ||
+          newness?.errors
+        ) {
+          console.log(
+            "AIF Shopify embedded newness sync",
+            JSON.stringify({
+              instanceId:
+                state.instanceId,
+              ...newness,
+            }),
+          );
+        }
+      } catch (error) {
+        console.error(
+          "AIF Shopify embedded newness sync error",
+          {
+            instanceId:
+              state.instanceId,
+            message:
+              error?.message ||
+              String(error),
+            code:
+              error?.code || null,
+          },
+        );
+      }
+    }
+
     if (!inbound.enabled && !orders.enabled && !outbound.enabled) {
       schedule(state, state.disabledDelayMs);
     } else {
-      const hadWork = Boolean(inbound.claimed || orders.claimed || outbound.processed);
+      const hadWork = Boolean(
+        inbound.claimed ||
+        orders.claimed ||
+        outbound.processed ||
+        newness?.added ||
+        newness?.removed
+      );
       schedule(state, hadWork ? state.busyDelayMs : state.idleDelayMs);
     }
   } catch (error) {
@@ -117,6 +183,24 @@ export function startAifShopifyEmbeddedWorker(pool, options = {}) {
     ),
     disabledDelayMs: 30000,
     errorDelayMs: 15000,
+
+    newnessIntervalMs: boundedInt(
+      options.newnessIntervalMs ??
+        process.env.SHOPIFY_NEWNESS_SYNC_MS,
+      3_600_000,
+      60_000,
+      86_400_000,
+    ),
+
+    newnessDays: boundedInt(
+      options.newnessDays ??
+        process.env.SHOPIFY_NEWNESS_DAYS,
+      30,
+      1,
+      365,
+    ),
+
+    lastNewnessSyncAt: 0,
   };
 
   globalThis[GLOBAL_STATE_KEY] = state;
