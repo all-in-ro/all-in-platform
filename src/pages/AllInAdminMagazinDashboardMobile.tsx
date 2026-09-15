@@ -15,10 +15,12 @@ import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  Banknote,
   Bookmark,
   Building2,
   CalendarDays,
   CheckCircle2,
+  CreditCard,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -26,6 +28,7 @@ import {
   Filter,
   Home,
   Image as ImageIcon,
+  Landmark,
   Loader2,
   Percent,
   ReceiptText,
@@ -122,7 +125,7 @@ type CombinedSummary = {
   costMissingQty: number;
 };
 
-type SelectOption = { value: string; label: string };
+type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card" | "bank_transfer" | "mixed"; indent?: boolean };
 
 const panel = "rounded-[22px] border border-white/14 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.18)]";
 const inputClass = "h-10 w-full min-w-0 rounded-xl border border-white/16 bg-[#293649] px-3 text-[13px] font-normal text-white outline-none placeholder:text-white/34 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
@@ -272,6 +275,68 @@ function paymentBadge(value: string) {
   if (value === "partial") return "border-amber-200/30 bg-amber-400/14 text-amber-50";
   if (value === "credit" || value === "unpaid") return "border-rose-200/30 bg-rose-500/16 text-rose-50";
   return "border-white/16 bg-white/[0.06] text-white/65";
+}
+
+function PaymentMethodIcon({
+  method,
+  compact = false,
+}: {
+  method?: string | null;
+  compact?: boolean;
+}) {
+  const normalized = String(method || "").trim().toLowerCase();
+  const size = compact ? 13 : 14;
+  const shell = compact ? "h-7 w-7 rounded-lg" : "h-8 w-8 rounded-xl";
+
+  if (normalized === "cash") {
+    return (
+      <span
+        title="Készpénz"
+        aria-label="Készpénz"
+        className={`${shell} inline-flex shrink-0 items-center justify-center border border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.22)]`}
+      >
+        <Banknote size={size} strokeWidth={2.1} />
+      </span>
+    );
+  }
+
+  if (normalized === "card") {
+    return (
+      <span
+        title="Kártya"
+        aria-label="Kártya"
+        className={`${shell} inline-flex shrink-0 items-center justify-center border border-[#9bc8ff]/50 bg-[#3978b9] text-white shadow-[0_5px_14px_rgba(57,120,185,0.22)]`}
+      >
+        <CreditCard size={size} strokeWidth={2.1} />
+      </span>
+    );
+  }
+
+  if (normalized === "bank_transfer") {
+    return (
+      <span
+        title="Átutalás"
+        aria-label="Átutalás"
+        className={`${shell} inline-flex shrink-0 items-center justify-center border border-[#c5b6ff]/42 bg-[#6657a8] text-white shadow-[0_5px_14px_rgba(102,87,168,0.20)]`}
+      >
+        <Landmark size={size} strokeWidth={2.1} />
+      </span>
+    );
+  }
+
+  if (normalized === "mixed") {
+    return (
+      <span
+        title="Vegyes fizetés"
+        aria-label="Vegyes fizetés"
+        className={`${shell} inline-flex shrink-0 items-center justify-center border border-white/24 bg-[#3a475a] text-[#d7fffd]`}
+      >
+        <WalletCards size={size} strokeWidth={2.1} />
+      </span>
+    );
+  }
+
+  return null;
 }
 
 function statusBadge(value: string) {
@@ -701,7 +766,10 @@ function MobileSelect({
         aria-expanded={open}
         title={selected?.label || ""}
       >
-        <span className="min-w-0 flex-1 truncate">{selected?.label || "-"}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {selected?.paymentIcon ? <PaymentMethodIcon method={selected.paymentIcon} compact /> : null}
+          <span className="min-w-0 flex-1 truncate">{selected?.label || "-"}</span>
+        </span>
         <ChevronDown size={14} className={`shrink-0 text-white/58 transition ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
       </button>
 
@@ -758,7 +826,8 @@ function MobileSelect({
                     role="option"
                     aria-selected={active}
                   >
-                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {option.paymentIcon ? <PaymentMethodIcon method={option.paymentIcon} compact /> : null}
+                    <span className={`min-w-0 flex-1 truncate ${option.indent && !option.paymentIcon ? "pl-6" : ""}`}>{option.label}</span>
                     {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
                   </button>
                 );
@@ -1227,21 +1296,53 @@ export default function AllInAdminMagazinDashboardMobile({
     setShowAllSales(false);
   }
 
-  function applyFilters() {
-    if (!draft.from || !draft.to) {
+  function applyInstantFilter(patch: Partial<FilterState>) {
+    const next: FilterState = { ...draft, ...patch };
+    if (!next.from || !next.to) {
       setFilterError("Az időszak kezdete és vége kötelező.");
       return;
     }
-    if (draft.from > draft.to) {
+    if (next.from > next.to) {
       setFilterError("A kezdő dátum nem lehet későbbi a záró dátumnál.");
       return;
     }
-    setPreset(detectPreset(draft.from, draft.to));
-    setApplied({ ...draft, search: draft.search.trim() });
+    setDraft(next);
+    setApplied({
+      ...next,
+      snCod: next.snCod.trim(),
+      search: next.search.trim(),
+    });
+    setPreset(detectPreset(next.from, next.to));
     setFilterError("");
-    setFiltersOpen(false);
     setShowAllSales(false);
   }
+
+  function applyTextFilters() {
+    applyInstantFilter({
+      snCod: draft.snCod.trim(),
+      search: draft.search.trim(),
+    });
+  }
+
+  useEffect(() => {
+    const nextSnCod = draft.snCod.trim();
+    const nextSearch = draft.search.trim();
+
+    if (nextSnCod === applied.snCod && nextSearch === applied.search) return;
+
+    const timer = window.setTimeout(() => {
+      setApplied((current) => ({
+        ...current,
+        snCod: nextSnCod,
+        search: nextSearch,
+      }));
+      setPreset("custom");
+      setFilterError("");
+      setShowAllSales(false);
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [draft.snCod, draft.search, applied.snCod, applied.search]);
 
   function resetFilters() {
     const dates = presetDates("today");
@@ -1260,7 +1361,6 @@ export default function AllInAdminMagazinDashboardMobile({
     setDraft(next);
     setApplied(next);
     setFilterError("");
-    setFiltersOpen(false);
     setShowAllSales(false);
   }
 
@@ -1675,7 +1775,23 @@ export default function AllInAdminMagazinDashboardMobile({
                   <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
                     <div className="flex min-w-0 flex-wrap gap-1.5">
                       <span className={`rounded-full border px-2 py-1 text-[9px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
-                      <span className={`rounded-full border px-2 py-1 text-[9px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
+                      {(() => {
+                        const method = String(
+                          (sale as MobileSale & { paymentMethod?: string | null }).paymentMethod
+                            || sale.settlementMethod
+                            || ""
+                        ).trim().toLowerCase();
+
+                        if (sale.paymentStatus === "paid" && method) {
+                          return <PaymentMethodIcon method={method} compact />;
+                        }
+
+                        return (
+                          <span className={`rounded-full border px-2 py-1 text-[9px] ${paymentBadge(sale.paymentStatus)}`}>
+                            {paymentLabel(sale.paymentStatus)}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {sale.deletable !== false && sale.recordType !== "exchange" ? (
                       <button
@@ -1735,7 +1851,10 @@ export default function AllInAdminMagazinDashboardMobile({
                   <div className="mt-3 space-y-2">
                     {paymentTotals.slice(0, 8).map((item) => (
                       <div key={item.method} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs">
-                        <span className="min-w-0 truncate text-white/68">{item.label}</span>
+                        <span className="flex min-w-0 items-center gap-2 text-white/68">
+                          <PaymentMethodIcon method={item.method} compact />
+                          <span className="min-w-0 truncate">{item.label}</span>
+                        </span>
                         <span className="shrink-0 text-white">{money(item.amount)}</span>
                       </div>
                     ))}
@@ -1822,7 +1941,10 @@ export default function AllInAdminMagazinDashboardMobile({
                     Ettől
                     <FilterDatePicker
                       value={draft.from}
-                      onChange={(value) => setDraft({ ...draft, from: value })}
+                      onChange={(value) => {
+                        const nextTo = draft.to && draft.to < value ? value : draft.to;
+                        applyInstantFilter({ from: value, to: nextTo });
+                      }}
                       ariaLabel="Kezdő dátum"
                     />
                   </label>
@@ -1830,7 +1952,10 @@ export default function AllInAdminMagazinDashboardMobile({
                     Eddig
                     <FilterDatePicker
                       value={draft.to}
-                      onChange={(value) => setDraft({ ...draft, to: value })}
+                      onChange={(value) => {
+                        const nextFrom = draft.from && draft.from > value ? value : draft.from;
+                        applyInstantFilter({ to: value, from: nextFrom });
+                      }}
                       ariaLabel="Záró dátum"
                     />
                   </label>
@@ -1841,7 +1966,7 @@ export default function AllInAdminMagazinDashboardMobile({
                 Eladó
                 <MobileSelect
                   value={draft.employee}
-                  onChange={(value) => setDraft({ ...draft, employee: value })}
+                  onChange={(value) => applyInstantFilter({ employee: value })}
                   options={[{ value: "", label: "Minden eladó" }, ...filterOptions.employees.map((value) => ({ value, label: value }))]}
                 />
               </label>
@@ -1851,10 +1976,12 @@ export default function AllInAdminMagazinDashboardMobile({
                   Fizetés
                   <MobileSelect
                     value={draft.paymentStatus}
-                    onChange={(value) => setDraft({ ...draft, paymentStatus: value })}
+                    onChange={(value) => applyInstantFilter({ paymentStatus: value })}
                     options={[
                       { value: "", label: "Minden fizetés" },
                       { value: "paid", label: "Kifizetve" },
+                      { value: "cash", label: "Készpénz", paymentIcon: "cash", indent: true },
+                      { value: "card", label: "Kártya", paymentIcon: "card", indent: true },
                       { value: "partial", label: "Részben fizetve" },
                       { value: "unpaid", label: "Nincs fizetve" },
                       { value: "credit", label: "Hitel" },
@@ -1866,7 +1993,7 @@ export default function AllInAdminMagazinDashboardMobile({
                   Típus
                   <MobileSelect
                     value={draft.saleType}
-                    onChange={(value) => setDraft({ ...draft, saleType: value })}
+                    onChange={(value) => applyInstantFilter({ saleType: value })}
                     options={[
                       { value: "", label: "Minden eladás" },
                       { value: "sale", label: "Normál eladás" },
@@ -1882,7 +2009,7 @@ export default function AllInAdminMagazinDashboardMobile({
                   Márka
                   <MobileSelect
                     value={draft.brand}
-                    onChange={(value) => setDraft({ ...draft, brand: value })}
+                    onChange={(value) => applyInstantFilter({ brand: value })}
                     options={[{ value: "", label: "Minden márka" }, ...filterOptions.brands.map((value) => ({ value, label: value }))]}
                   />
                 </label>
@@ -1890,7 +2017,7 @@ export default function AllInAdminMagazinDashboardMobile({
                   Alkategória
                   <MobileSelect
                     value={draft.category}
-                    onChange={(value) => setDraft({ ...draft, category: value })}
+                    onChange={(value) => applyInstantFilter({ category: value })}
                     options={[{ value: "", label: "Minden alkategória" }, ...filterOptions.categories.map((value) => ({ value, label: value }))]}
                   />
                 </label>
@@ -1906,7 +2033,7 @@ export default function AllInAdminMagazinDashboardMobile({
                       value={draft.snCod}
                       onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, snCod: event.target.value })}
                       onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
-                        if (event.key === "Enter") applyFilters();
+                        if (event.key === "Enter") applyTextFilters();
                       }}
                       placeholder="CAM007"
                       autoComplete="off"
@@ -1923,7 +2050,7 @@ export default function AllInAdminMagazinDashboardMobile({
                       value={draft.search}
                       onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, search: event.target.value })}
                       onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
-                        if (event.key === "Enter") applyFilters();
+                        if (event.key === "Enter") applyTextFilters();
                       }}
                       placeholder="Kliens, termék..."
                     />
@@ -1932,20 +2059,16 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
             </div>
 
-            <footer className="sticky bottom-0 grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548]/98 px-2.5 py-2 backdrop-blur-xl">
+            <footer className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-white/10 bg-[#293548]/98 px-2.5 py-2 backdrop-blur-xl">
+              <span className="min-w-0 text-[9px] leading-tight text-white/42">
+                A szűrés választás után azonnal frissül.
+              </span>
               <button
                 type="button"
                 onClick={resetFilters}
-                className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[11px] text-white active:scale-[0.98]"
+                className="h-10 shrink-0 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[11px] text-white active:scale-[0.98]"
               >
                 Alaphelyzet
-              </button>
-              <button
-                type="button"
-                onClick={applyFilters}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[12px] text-white active:scale-[0.98]"
-              >
-                <Search size={15} /> Alkalmazás
               </button>
             </footer>
           </section>
