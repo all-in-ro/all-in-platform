@@ -43,7 +43,9 @@ import {
 import {
   apiAifAdminDeleteShopSaleLine,
   apiAifAdminShopOverview,
+  apiAifShopShiftDayOverview,
   type AifAdminShopOverviewResponse,
+  type AifShopShiftDayOverview,
   type AifAdminShopRankingItem,
   type AifAdminShopRecentSale,
   type AifAdminShopSaleLineDeleteMode,
@@ -84,6 +86,7 @@ type StoreDataset = {
   cityName: string;
   locationName: string;
   data: AifAdminShopOverviewResponse | null;
+  shiftData: AifShopShiftDayOverview | null;
 };
 
 type EmployeeRow = AifAdminShopOverviewResponse["employees"][number] & {
@@ -213,6 +216,17 @@ function dateTime(value?: string | null) {
     timeZone: "Europe/Bucharest",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function timeOnly(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("hu-HU", {
+    timeZone: "Europe/Bucharest",
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -847,6 +861,7 @@ function StorePerformanceCard({
   cityName,
   locationName,
   data,
+  shiftData,
   totalRevenue,
   active,
   onClick,
@@ -854,12 +869,15 @@ function StorePerformanceCard({
   cityName: string;
   locationName: string;
   data: AifAdminShopOverviewResponse | null;
+  shiftData: AifShopShiftDayOverview | null;
   totalRevenue: number;
   active: boolean;
   onClick: () => void;
 }) {
   const revenue = numberValue(data?.summary.revenue);
   const share = totalRevenue > 0 ? revenue / totalRevenue * 100 : 0;
+  const closure = shiftData?.dayClosure || null;
+  const closureAt = closure?.closedAt || closure?.createdAt || null;
   return (
     <button
       type="button"
@@ -880,6 +898,22 @@ function StorePerformanceCard({
           ? <CheckCircle2 size={18} className="shrink-0 text-[#bff8f5]" />
           : <Store size={18} className="shrink-0 text-white/38" />}
       </div>
+      {closure ? (
+        <div className="mt-3 rounded-xl border border-emerald-200/32 bg-emerald-500/12 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-emerald-50">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <CheckCircle2 size={13} className="shrink-0" />
+              <span className="truncate">Üzlet lezárva</span>
+            </span>
+            <span className="shrink-0 rounded-full border border-emerald-100/24 bg-black/10 px-2 py-0.5 text-[9px] text-white">
+              {timeOnly(closureAt)}
+            </span>
+          </div>
+          <p className="mt-1 truncate text-[9px] text-white/62" title={closure.actor || ""}>
+            Lezárta: <span className="text-white/88">{closure.actor || "-"}</span>
+          </p>
+        </div>
+      ) : null}
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#263244]">
         <div
           className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#70e2dd]"
@@ -1001,6 +1035,8 @@ export default function AllInAdminMagazinDashboardMobile({
   const [applied, setApplied] = useState<FilterState>(initialFilters);
   const [primaryData, setPrimaryData] = useState<AifAdminShopOverviewResponse | null>(null);
   const [otherData, setOtherData] = useState<AifAdminShopOverviewResponse | null>(null);
+  const [primaryShiftData, setPrimaryShiftData] = useState<AifShopShiftDayOverview | null>(null);
+  const [otherShiftData, setOtherShiftData] = useState<AifShopShiftDayOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1021,9 +1057,11 @@ export default function AllInAdminMagazinDashboardMobile({
     setLoading(true);
     setError("");
 
-    const [primaryResult, otherResult] = await Promise.allSettled([
+    const [primaryResult, otherResult, primaryShiftResult, otherShiftResult] = await Promise.allSettled([
       apiAifAdminShopOverview({ location: locationCode, ...applied }),
       apiAifAdminShopOverview({ location: otherLocationCode, ...applied }),
+      apiAifShopShiftDayOverview({ location: locationCode, date: applied.to || localIsoDate(new Date()) }),
+      apiAifShopShiftDayOverview({ location: otherLocationCode, date: applied.to || localIsoDate(new Date()) }),
     ]);
 
     if (loadId !== loadIdRef.current) return;
@@ -1042,6 +1080,9 @@ export default function AllInAdminMagazinDashboardMobile({
       setOtherData(null);
       messages.push(`${otherCityName} adatai nem tölthetők be.`);
     }
+
+    setPrimaryShiftData(primaryShiftResult.status === "fulfilled" ? primaryShiftResult.value : null);
+    setOtherShiftData(otherShiftResult.status === "fulfilled" ? otherShiftResult.value : null);
 
     if (messages.length === 2) {
       const reason = primaryResult.status === "rejected"
@@ -1090,14 +1131,16 @@ export default function AllInAdminMagazinDashboardMobile({
       cityName,
       locationName,
       data: primaryData,
+      shiftData: primaryShiftData,
     },
     {
       key: "other",
       cityName: otherCityName,
       locationName: otherLocationName,
       data: otherData,
+      shiftData: otherShiftData,
     },
-  ], [cityName, locationCode, locationName, otherCityName, otherData, otherLocationCode, otherLocationName, primaryData]);
+  ], [cityName, locationName, otherCityName, otherData, otherLocationName, otherShiftData, primaryData, primaryShiftData]);
 
   const scopedStores = useMemo(() => {
     if (scope === "all") return stores;
@@ -1373,6 +1416,7 @@ export default function AllInAdminMagazinDashboardMobile({
                 cityName={cityName}
                 locationName={locationName}
                 data={primaryData}
+                shiftData={primaryShiftData}
                 totalRevenue={networkRevenue}
                 active={scope === "primary"}
                 onClick={() => setScope((current) => current === "primary" ? "all" : "primary")}
@@ -1381,12 +1425,44 @@ export default function AllInAdminMagazinDashboardMobile({
                 cityName={otherCityName}
                 locationName={otherLocationName}
                 data={otherData}
+                shiftData={otherShiftData}
                 totalRevenue={networkRevenue}
                 active={scope === "other"}
                 onClick={() => setScope((current) => current === "other" ? "all" : "other")}
               />
             </div>
           </section>
+
+          {(primaryShiftData?.dayClosure || otherShiftData?.dayClosure) ? (
+            <section className="grid gap-2">
+              {[
+                { city: cityName, shift: primaryShiftData },
+                { city: otherCityName, shift: otherShiftData },
+              ].filter((item) => item.shift?.dayClosure).map((item) => {
+                const closure = item.shift!.dayClosure!;
+                const closedAt = closure.closedAt || closure.createdAt || null;
+                return (
+                  <div key={item.city} className="relative overflow-hidden rounded-[20px] border border-emerald-200/32 bg-gradient-to-r from-[#176c5c] to-[#2b5f61] px-3.5 py-3 shadow-[0_12px_28px_rgba(7,62,53,0.22)]">
+                    <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-emerald-100/60 to-transparent" />
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-emerald-100/34 bg-black/10 text-emerald-50">
+                        <CheckCircle2 size={19} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[8px] uppercase tracking-[0.13em] text-emerald-50/58">{item.city}</p>
+                        <p className="mt-0.5 text-[15px] text-white">Üzlet lezárva</p>
+                        <p className="mt-1 truncate text-[10px] text-white/68">
+                          Lezárta: <span className="text-white">{closure.actor || "-"}</span>
+                          <span className="mx-1.5 text-white/25">•</span>
+                          <span className="text-white">{timeOnly(closedAt)}</span> órakor
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
 
           <section className={`${panel} p-3.5`}>
             <div className="mb-3 flex items-center justify-between gap-3">
