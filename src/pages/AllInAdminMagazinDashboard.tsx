@@ -17,6 +17,7 @@ import {
   Boxes,
   CalendarDays,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -46,7 +47,9 @@ import {
 import {
   apiAifAdminDeleteShopSaleLine,
   apiAifAdminShopOverview,
+  apiAifShopShiftDayOverview,
   type AifAdminShopOverviewResponse,
+  type AifShopShiftDayOverview,
   type AifAdminShopRankingItem,
   type AifAdminShopRecentSale,
   type AifAdminShopSaleLineDeleteMode,
@@ -143,6 +146,17 @@ function dateTime(value?: string | null) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function timeOnly(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("hu-HU", {
+    timeZone: "Europe/Bucharest",
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -1184,6 +1198,7 @@ export default function AllInAdminMagazinDashboard({
   });
   const [applied, setApplied] = useState(draft);
   const [data, setData] = useState<AifAdminShopOverviewResponse | null>(null);
+  const [shiftDay, setShiftDay] = useState<AifShopShiftDayOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
@@ -1199,11 +1214,18 @@ export default function AllInAdminMagazinDashboard({
     setLoading(true);
     setError("");
     try {
-      const response = await apiAifAdminShopOverview({
-        location: locationCode,
-        ...applied,
-      });
+      const [response, shiftResponse] = await Promise.all([
+        apiAifAdminShopOverview({
+          location: locationCode,
+          ...applied,
+        }),
+        apiAifShopShiftDayOverview({
+          location: locationCode,
+          date: applied.to || localIsoDate(new Date()),
+        }).catch(() => null),
+      ]);
       setData(response);
+      setShiftDay(shiftResponse);
     } catch (loadError: any) {
       setError(loadError?.message || "Az üzleti vezérlőpult adatai nem tölthetők be.");
     } finally {
@@ -1291,6 +1313,9 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
+  const dayClosure = shiftDay?.dayClosure || null;
+  const dayClosureAt = dayClosure?.closedAt || dayClosure?.createdAt || null;
+  const dayClosureDate = shiftDay?.date || dayClosure?.date || applied.to;
   const discountPercent = numberValue(summary?.salesBeforeDiscount) > 0
     ? numberValue(summary?.discountTotal) / numberValue(summary?.salesBeforeDiscount) * 100
     : 0;
@@ -1347,6 +1372,34 @@ export default function AllInAdminMagazinDashboard({
             </div>
           </div>
         </header>
+
+        {dayClosure ? (
+          <section className="relative overflow-hidden rounded-[22px] border border-emerald-200/38 bg-gradient-to-r from-[#176c5c] via-[#217564] to-[#2e5960] px-4 py-3.5 shadow-[0_16px_38px_rgba(7,62,53,0.26)]">
+            <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-emerald-100/65 to-transparent" />
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-100/38 bg-black/10 text-emerald-50">
+                <CheckCircle2 size={21} />
+              </span>
+              <div className="min-w-[240px] flex-1">
+                <p className="text-[9px] uppercase tracking-[0.16em] text-emerald-50/62">Napi zárás • {huDateLabel(dayClosureDate)}</p>
+                <h2 className="mt-0.5 text-lg font-normal text-white">Üzlet lezárva</h2>
+                <p className="mt-1 text-[12px] text-white/76">
+                  Lezárta: <span className="text-white">{dayClosure.actor || "-"}</span>
+                  <span className="mx-2 text-white/28">•</span>
+                  <span className="text-white">{timeOnly(dayClosureAt)}</span> órakor
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                <span className="rounded-xl border border-white/14 bg-black/10 px-3 py-2 text-white/78">
+                  Záró kassza: <span className="text-white">{money(dayClosure.countedCash)}</span>
+                </span>
+                <span className="rounded-xl border border-white/14 bg-black/10 px-3 py-2 text-white/78">
+                  Eltérés: <span className="text-white">{money(dayClosure.cashDifference)}</span>
+                </span>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {[
