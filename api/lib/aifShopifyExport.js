@@ -4187,28 +4187,13 @@ async function setShopifyProductMetadata({
 }
 
 async function enqueueInitialMiercureaProductExportStock(client, variantId, quantity, reason = "product_export_reconcile") {
-  await ensureAifShopifyTables(client);
-  const desiredMiercureaQty = Math.max(0, integer(quantity, 0));
-  const idempotencyKey = randomUUID();
-  await client.query(
-    `INSERT INTO aif_shopify_sync_outbox (
-       variant_id, desired_csikszereda_qty, desired_kezdi_qty, reason,
-       status, attempts, idempotency_key, next_attempt_at, locked_at, last_error, created_at, updated_at
-     ) VALUES ($1::uuid,$2,0,$3,'pending',0,$4,now(),NULL,NULL,now(),now())
-     ON CONFLICT (variant_id) DO UPDATE SET
-       desired_csikszereda_qty=EXCLUDED.desired_csikszereda_qty,
-       desired_kezdi_qty=0,
-       reason=EXCLUDED.reason,
-       status='pending',
-       attempts=0,
-       idempotency_key=EXCLUDED.idempotency_key,
-       next_attempt_at=now(),
-       locked_at=NULL,
-       last_error=NULL,
-       updated_at=now()`,
-    [text(variantId), desiredMiercureaQty, text(reason) || "product_export_reconcile", idempotencyKey]
+  // A termékexport nem találhat ki külön készletet.
+  // Mindkét Shopify location mindig az AllIn aktuális, valós készletét kapja.
+  return enqueueAifShopifyVariant(
+    client,
+    variantId,
+    text(reason) || "product_export_reconcile"
   );
-  return { queued: true, csikszereda: desiredMiercureaQty, kezdi: 0, idempotencyKey };
 }
 
 export async function reconcileAifShopifyProductExport(client, exportId, options = {}) {
