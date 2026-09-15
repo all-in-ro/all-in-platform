@@ -16727,8 +16727,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const to = emptyToNull(req.query.to || req.query.dateTo || req.query.date_to);
     const limit = Math.min(3000, Math.max(1, Number(req.query.limit || 250)));
 
+    // AIF_STOCK_MOVES_BUSINESS_VIEW_V1
+    // A normál raktármozgás riport üzleti eseményeket mutat.
+    // Shopify echo/szinkron és incident repair sorok megmaradnak
+    // az audit naplóban, de nem hamisítják meg a napi Bejött/Kiment számokat.
+    const includeTechnical = ["1", "true", "yes"].includes(
+      text(req.query.includeTechnical || req.query.include_technical).toLowerCase()
+    );
+
     const args = [];
     const where = [];
+
+    if (!includeTechnical) {
+      where.push(`COALESCE(sm.source_type,'') NOT IN (
+        'shopify_inventory_webhook',
+        'shopify_incident_correction',
+        'shopify_incident_restore',
+        'stock_table_audit'
+      )`);
+    }
     if (location) {
       args.push(location);
       where.push(`(l.code=$${args.length} OR l.id::text=$${args.length})`);

@@ -949,37 +949,112 @@ function openMovementDocument(item: Pick<AifStockMoveItem, "raw">) {
   window.location.hash = `#allinproductmoves?document=${encodeURIComponent(id)}`;
 }
 
-function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw" | "qty_delta" | "direction">) {
+function movementLocationLabel(
+  item: Pick<AifStockMoveItem, "location_code" | "location_name">
+) {
+  const code = String(item.location_code || "").trim().toLowerCase();
+
+  if (code === "main_warehouse") {
+    return "Csíkszereda";
+  }
+
+  if (code === "magazin_targu_secuiesc") {
+    return "Kézdivásárhely";
+  }
+
+  const name = String(item.location_name || "")
+    .replace(/^Magazin\s*-\s*/i, "")
+    .trim();
+
+  return name || "üzlet";
+}
+
+function sourceLabel(
+  item: Pick<
+    AifStockMoveItem,
+    | "source_type"
+    | "movement_type"
+    | "raw"
+    | "qty_delta"
+    | "direction"
+    | "location_code"
+    | "location_name"
+  >
+) {
   const source = String(item.source_type || "").toLowerCase();
   const movement = String(item.movement_type || "").toLowerCase();
   const rawReason = String((item.raw as any)?.reason || "").toLowerCase();
   const rawDirection = String((item.raw as any)?.direction || "").toLowerCase();
-  const effectiveDirection = String(item.direction || rawDirection || "").toLowerCase();
-  const delta = n(item.qty_delta);
+
   const documentType = stockDocumentTypeFromMove(item);
-  if (documentType !== "all") return stockDocumentTypeLabel(documentType);
+
+  if (documentType !== "all") {
+    return stockDocumentTypeLabel(documentType);
+  }
+
   if (
     source.includes("archive") ||
     source.includes("removal") ||
     source.includes("stock_clear") ||
     rawReason.includes("archive") ||
     rawReason.includes("stock_clear")
-  ) return "Készletről kivétel";
+  ) {
+    return "Készletről kivétel";
+  }
+
+  // Valódi fizikai üzleti eladás.
   if (
-    source.includes("shopify") ||
+    source === "shop_sale" ||
+    (
+      movement === "sale" &&
+      source !== "shopify_inventory_webhook"
+    )
+  ) {
+    return `Eladás - ${movementLocationLabel(item)}`;
+  }
+
+  // Ezek technikai készletesemények, NEM eladások.
+  if (
+    source === "shopify_incident_correction" ||
+    source === "shopify_incident_restore"
+  ) {
+    return "Technikai készletjavítás";
+  }
+
+  if (
+    source === "shopify_inventory_webhook" ||
     movement === "shopify_adjustment" ||
     rawReason.includes("shopify_inventory")
   ) {
-    if (effectiveDirection === "out" || delta < 0) return "Shopify eladás";
-    if (effectiveDirection === "in" || delta > 0) return "Shopify készlet-visszaállítás";
-    return "Shopify készletkorrekció";
+    return "Shopify készletszinkron";
   }
-  if (source.includes("import_batch") || movement === "incoming") return "Bevételezés";
-  if (source.includes("sale") || movement === "sale") return "Eladás";
-  if (source.includes("transfer") || movement === "transfer") return "Áthelyezés";
-  if (source.includes("manual_stock_edit") || movement === "manual_adjustment" || movement === "adjustment") {
-    return rawDirection === "out" ? "Kézi kivétel" : rawDirection === "in" ? "Kézi bevétel" : "Kézi módosítás";
+
+  if (
+    source.includes("import_batch") ||
+    movement === "incoming"
+  ) {
+    return "Bevételezés";
   }
+
+  if (
+    source.includes("transfer") ||
+    movement === "transfer"
+  ) {
+    return "Áthelyezés";
+  }
+
+  if (
+    source.includes("manual_stock_edit") ||
+    movement === "manual_adjustment" ||
+    movement === "adjustment"
+  ) {
+    return rawDirection === "out"
+      ? "Kézi kivétel"
+      : rawDirection === "in"
+        ? "Kézi bevétel"
+        : "Kézi módosítás";
+  }
+
   return movement || source || "Mozgás";
 }
 
