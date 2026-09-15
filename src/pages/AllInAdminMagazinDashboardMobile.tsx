@@ -876,8 +876,6 @@ function StorePerformanceCard({
 }) {
   const revenue = numberValue(data?.summary.revenue);
   const share = totalRevenue > 0 ? revenue / totalRevenue * 100 : 0;
-  const closure = shiftData?.dayClosure || null;
-  const closureAt = closure?.closedAt || closure?.createdAt || null;
   return (
     <button
       type="button"
@@ -898,22 +896,6 @@ function StorePerformanceCard({
           ? <CheckCircle2 size={18} className="shrink-0 text-[#bff8f5]" />
           : <Store size={18} className="shrink-0 text-white/38" />}
       </div>
-      {closure ? (
-        <div className="mt-3 rounded-xl border border-emerald-200/32 bg-emerald-500/12 px-2.5 py-2">
-          <div className="flex items-center justify-between gap-2 text-[10px] text-emerald-50">
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <CheckCircle2 size={13} className="shrink-0" />
-              <span className="truncate">Üzlet lezárva</span>
-            </span>
-            <span className="shrink-0 rounded-full border border-emerald-100/24 bg-black/10 px-2 py-0.5 text-[9px] text-white">
-              {timeOnly(closureAt)}
-            </span>
-          </div>
-          <p className="mt-1 truncate text-[9px] text-white/62" title={closure.actor || ""}>
-            Lezárta: <span className="text-white/88">{closure.actor || "-"}</span>
-          </p>
-        </div>
-      ) : null}
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#263244]">
         <div
           className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#70e2dd]"
@@ -1433,31 +1415,57 @@ export default function AllInAdminMagazinDashboardMobile({
             </div>
           </section>
 
-          {(primaryShiftData?.dayClosure || otherShiftData?.dayClosure) ? (
-            <section className="grid gap-2">
-              {[
-                { city: cityName, shift: primaryShiftData },
-                { city: otherCityName, shift: otherShiftData },
-              ].filter((item) => item.shift?.dayClosure).map((item) => {
-                const closure = item.shift!.dayClosure!;
-                const closedAt = closure.closedAt || closure.createdAt || null;
+          {stores.some((store) => {
+            const accepted = (store.shiftData?.handovers || []).some((handover) => String(handover.status || "").toLowerCase() === "accepted");
+            return Boolean(store.shiftData?.dayClosure || accepted);
+          }) ? (
+            <section className="grid gap-1.5">
+              {stores.map((store) => {
+                const closure = store.shiftData?.dayClosure || null;
+                const acceptedHandovers = [...(store.shiftData?.handovers || [])]
+                  .filter((handover) => String(handover.status || "").toLowerCase() === "accepted")
+                  .sort((a, b) => {
+                    const aTime = new Date(a.acceptedAt || a.createdAt || a.cutoffAt || 0).getTime();
+                    const bTime = new Date(b.acceptedAt || b.createdAt || b.cutoffAt || 0).getTime();
+                    return bTime - aTime;
+                  });
+                const handover = acceptedHandovers[0] || null;
+                const closureAt = closure?.closedAt || closure?.createdAt || null;
+                const handoverAt = handover?.acceptedAt || handover?.createdAt || handover?.cutoffAt || null;
+
+                if (!closure && !handover) return null;
+
                 return (
-                  <div key={item.city} className="relative overflow-hidden rounded-[20px] border border-emerald-200/32 bg-gradient-to-r from-[#176c5c] to-[#2b5f61] px-3.5 py-3 shadow-[0_12px_28px_rgba(7,62,53,0.22)]">
-                    <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-emerald-100/60 to-transparent" />
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-emerald-100/34 bg-black/10 text-emerald-50">
-                        <CheckCircle2 size={19} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[8px] uppercase tracking-[0.13em] text-emerald-50/58">{item.city}</p>
-                        <p className="mt-0.5 text-[15px] text-white">Üzlet lezárva</p>
-                        <p className="mt-1 truncate text-[10px] text-white/68">
-                          Lezárta: <span className="text-white">{closure.actor || "-"}</span>
-                          <span className="mx-1.5 text-white/25">•</span>
-                          <span className="text-white">{timeOnly(closedAt)}</span> órakor
-                        </p>
+                  <div key={`${store.key}-day-status`} className="grid gap-1.5">
+                    {closure ? (
+                      <div className="relative overflow-hidden rounded-[16px] border border-white/45 bg-[#E21C2A] px-3 py-2.5 shadow-[0_8px_20px_rgba(226,28,42,0.18)]">
+                        <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/32 bg-black/10 text-white"><CheckCircle2 size={15} /></span>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[8px] uppercase tracking-[0.13em] text-white/64">{store.cityName} • napzárás</p>
+                            <p className="mt-0.5 truncate text-[13px] text-white">Üzlet lezárva</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white/76">{closure.actor || "-"} • {timeOnly(closureAt)}</p>
+                          </div>
+                          <span className="shrink-0 rounded-lg border border-white/24 bg-black/10 px-2 py-1 text-[9px] text-white">{money(closure.countedCash)}</span>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
+
+                    {handover ? (
+                      <div className="relative overflow-hidden rounded-[16px] border border-[#8ce7e2]/46 bg-[#2a8d8b] px-3 py-2.5 shadow-[0_8px_20px_rgba(42,141,139,0.18)]">
+                        <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[#d7fffd]/70 to-transparent" />
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/26 bg-black/10 text-white"><WalletCards size={15} /></span>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[8px] uppercase tracking-[0.13em] text-[#e8fffd]/64">{store.cityName} • műszakátadás • {acceptedHandovers.length}</p>
+                            <p className="mt-0.5 truncate text-[13px] text-white">{handover.fromActor || "-"} → {handover.toActor || "-"}</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white/76">Átvette: {handover.acceptedBy || handover.toActor || "-"} • {timeOnly(handoverAt)}</p>
+                          </div>
+                          <span className="shrink-0 rounded-lg border border-white/20 bg-black/10 px-2 py-1 text-[9px] text-white">{money(handover.countedCash ?? handover.expectedCash ?? 0)}</span>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
