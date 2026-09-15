@@ -988,12 +988,37 @@ function productGroupKey(row, groupingMode = "product_code") {
 }
 
 function variantOptionCombinationKey(row) {
-  return `${normalizeKey(row.color_name || row.color_code)}::${normalizeKey(row.size)}`;
+  if (row?.shopify_option_mode === "size_only" || row?.color_required === false) {
+    return `size::${normalizeKey(row.size)}`;
+  }
+  return `${normalizeKey(row.color_name)}::${normalizeKey(row.size)}`;
 }
 
 
+function canonicalHumanColorName(value) {
+  const raw = text(value);
+  if (!raw) return "";
+
+  const key = normalizeKey(raw)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  // Csak biztos legacy elírásokat normalizálunk. Ismeretlen színt nem találunk ki.
+  const aliases = new Map([
+    ["albastu", "albastru"],
+    ["albastr", "albastru"],
+    ["rosu", "roșu"],
+  ]);
+
+  return aliases.get(key) || raw;
+}
+
 function humanColorLabel(values) {
-  const source = unique((Array.isArray(values) ? values : [values]).map(text).filter(Boolean));
+  const source = unique(
+    (Array.isArray(values) ? values : [values])
+      .map(canonicalHumanColorName)
+      .filter(Boolean)
+  );
   return source.find((value) => !isLikelySupplierColorCode(value)) || "";
 }
 
@@ -1001,7 +1026,62 @@ function resolvedRowColorName(row) {
   return humanColorLabel([
     row?.color_name,
     row?.supplier_color_name,
+    row?.mapped_color_name,
   ]);
+}
+
+/*
+ * AIF_SHOPIFY_EXPORT_OPTION_NORMALIZATION_V2
+ *
+ * - live emberi színnév > supplier színnév > brand-color mapping
+ * - ha egy product-code csoportban pontosan egy emberi szín ismert,
+ *   az üres legacy variánsok azt biztonságosan öröklik
+ * - ha az egész csoport szín nélküli, csak Méret opcióval exportálunk
+ * - több ismert szín mellett egy üres szín továbbra is valódi hiba
+ */
+function normalizeExportRowsForOptions(rows, groupingMode = "product_code") {
+  const baseRows = (rows || []).map((row) => ({
+    ...row,
+    color_name: resolvedRowColorName(row),
+  }));
+
+  const grouped = new Map();
+  for (const row of baseRows) {
+    const groupKey = productGroupKey(row, groupingMode);
+    const list = grouped.get(groupKey) || [];
+    list.push(row);
+    grouped.set(groupKey, list);
+  }
+
+  const normalized = [];
+  for (const [groupKey, groupRows] of grouped.entries()) {
+    const groupColors = unique(
+      groupRows
+        .map((row) => resolvedRowColorName(row))
+        .map(canonicalHumanColorName)
+        .filter(Boolean)
+    );
+
+    const singleKnownColor = groupColors.length === 1 ? groupColors[0] : "";
+    const colorRequired = groupColors.length > 0;
+
+    for (const row of groupRows) {
+      const directColor = resolvedRowColorName(row);
+      const inheritedColor = !directColor && singleKnownColor ? singleKnownColor : "";
+      const finalColor = directColor || inheritedColor;
+
+      normalized.push({
+        ...row,
+        color_name: finalColor,
+        color_required: colorRequired,
+        color_inherited_from_group: Boolean(inheritedColor),
+        shopify_option_mode: colorRequired ? "color_size" : "size_only",
+        product_group_key: groupKey,
+      });
+    }
+  }
+
+  return normalized;
 }
 
 function validationForRow(row) {
@@ -1015,7 +1095,9 @@ function validationForRow(row) {
   if (!title) errors.push("Hiányzik a román terméknév / Shopify cím.");
   if (!sku) errors.push("Hiányzik a vonalkód, amely a Shopify SKU alapja.");
   if (!text(row.size)) errors.push("Hiányzik a méret.");
-  if (!text(row.color_name)) errors.push("Hiányzik a használható színnév. A beszállítói színkód önmagában nem exportálható Shopify színként.");
+  if (row.color_required !== false && !text(row.color_name)) {
+    errors.push("Hiányzik a használható színnév. Többszínű termékcsoportban a szín nem hagyható üresen.");
+  }
   if (sellPrice === null || sellPrice <= 0) errors.push("Hiányzik vagy hibás az eladási ár.");
   if (!image) errors.push("Hiányzik a nyilvános kép URL.");
   if (!/^https:\/\//i.test(image)) errors.push("A kép URL-nek nyilvános HTTPS címnek kell lennie.");
@@ -1029,6 +1111,12 @@ function validationForRow(row) {
   if (!text(row.subcategory_name_ro || row.product_type)) warnings.push("Nincs alkategória / terméktípus.");
   if (decimal(row.buy_price) === null) warnings.push("Nincs vételár / Cost per item.");
   if (!text(row.customs_tariff_code)) warnings.push("Nincs vámtarifa / HS kód.");
+  if (row.shopify_option_mode === "size_only") {
+    warnings.push("Nincs használható színadat; a Shopify-termék csak Méret opcióval exportálódik.");
+  }
+  if (row.color_inherited_from_group && text(row.color_name)) {
+    warnings.push(`A hiányzó színnév a termékcsoport egységes színéből öröklődött: ${text(row.color_name)}.`);
+  }
   if (integer(row.export_available_qty, 0) <= 0) warnings.push("A jelenlegi elérhető készlet 0.");
   if (row.shopify_mapped) warnings.push("A variáns már Shopifyhoz van kapcsolva.");
 
@@ -1173,6 +1261,7 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
        sc.supplier_color_code,
        sc.supplier_color_name,
        sc.supplier_size,
+       cc.mapped_color_name,
        COALESCE(
          v.attributes->>'customsTariffCode',
          v.attributes->>'customs_tariff_code',
@@ -1204,14 +1293,33 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
        ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
        LIMIT 1
      ) sc ON true
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(
+         NULLIF(trim(ct.name_ro),''),
+         NULLIF(trim(ct.name_hu),''),
+         NULLIF(trim(ct.code),'')
+       ) AS mapped_color_name
+       FROM aif_brand_color_codes bcc
+       JOIN aif_color_types ct ON ct.id=bcc.color_type_id
+       WHERE bcc.brand_id=m.brand_id
+         AND lower(trim(bcc.color_code)) = lower(trim(COALESCE(
+           NULLIF(sc.supplier_color_code,''),
+           NULLIF(v.color_code,''),
+           ''
+         )))
+         AND COALESCE(bcc.is_active,true)=true
+       ORDER BY bcc.updated_at DESC NULLS LAST, bcc.created_at DESC NULLS LAST
+       LIMIT 1
+     ) cc ON true
      LEFT JOIN aif_stock s ON s.variant_id=v.id
      LEFT JOIN aif_locations l ON l.id=s.location_id
      LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
      WHERE ${where}
-       AND COALESCE(v.status,'active') <> 'archived'
-       AND COALESCE(m.status,'active') <> 'archived'
+       AND lower(COALESCE(v.status,'active')) = 'active'
+       AND lower(COALESCE(m.status,'active')) = 'active'
      GROUP BY v.id, m.id, b.id, c.id, subc.id,
               sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_color_name, sc.supplier_size,
+              cc.mapped_color_name,
               svm.variant_id, svm.shopify_product_id, svm.shopify_variant_id, svm.shopify_inventory_item_id,
               svm.shopify_product_title, svm.shopify_variant_title, svm.sync_status
      ORDER BY COALESCE(b.name,''), m.title_ro, v.color_name, v.size`,
@@ -1247,12 +1355,9 @@ async function prepareExport(client, options = {}) {
   const includeMapped = bool(options.includeMapped, false);
   const rows = await loadExportCandidates(client, options.variantIds, selectionMode);
   // A Shopify felé csak ember által olvasható színnév mehet.
-  // Ha az AllIn color_name üres, a beszállító színnevét használjuk; a 035/449
-  // jellegű kódok megmaradnak azonosítónak, de nem lesznek vásárlói színértékek.
-  const normalizedRows = rows.map((row) => ({
-    ...row,
-    color_name: resolvedRowColorName(row),
-  }));
+  // A normalizáló a live színnév, supplier színnév és brand-color mapping alapján
+  // dolgozik; teljesen szín nélküli product-code csoportnál csak Méret opciót használ.
+  const normalizedRows = normalizeExportRowsForOptions(rows, groupingMode);
   const status = await getAifShopifyStatus(client);
   const location = status?.locations?.csikszereda || null;
   const locationName = text(location?.name);
@@ -1266,11 +1371,11 @@ async function prepareExport(client, options = {}) {
   const productImageByGroup = new Map();
   for (const row of normalizedRows) {
     const image = imageFromRow(row);
-    const groupKey = productGroupKey(row, groupingMode);
+    const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
     if (image && !productImageByGroup.has(groupKey)) productImageByGroup.set(groupKey, image);
   }
   const exportRows = normalizedRows.map((row) => {
-    const groupKey = productGroupKey(row, groupingMode);
+    const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
     return {
       ...row,
       grouping_mode: groupingMode,
@@ -1433,9 +1538,14 @@ function productRowsForItems(items, productStatus) {
   const productRows = [];
   const byVariant = new Map();
   for (const modelItems of byProduct.values()) {
+    const usesColorOption = modelItems.some((item) =>
+      item?.shopify_option_mode !== "size_only" && Boolean(text(item.color_name))
+    );
     const sortedItems = modelItems.slice().sort((a, b) => {
-      const colorCompare = text(a.color_name || a.color_code).localeCompare(text(b.color_name || b.color_code), "ro", { sensitivity: "base" });
-      if (colorCompare !== 0) return colorCompare;
+      if (usesColorOption) {
+        const colorCompare = text(a.color_name).localeCompare(text(b.color_name), "ro", { sensitivity: "base" });
+        if (colorCompare !== 0) return colorCompare;
+      }
       return text(a.size).localeCompare(text(b.size), "ro", { numeric: true, sensitivity: "base" });
     });
     const firstImage = sortedItems.map((item) => item.image_url).find(Boolean) || "";
@@ -1458,11 +1568,11 @@ function productRowsForItems(items, productStatus) {
         "Status": first ? productStatus : "",
         "SKU": item.sku,
         "Barcode": item.sku,
-        "Option1 name": "Culoare",
-        "Option1 value": text(item.color_name || item.color_code),
+        "Option1 name": usesColorOption ? "Culoare" : "Mărime",
+        "Option1 value": usesColorOption ? text(item.color_name) : text(item.size),
         "Option1 Linked To": "",
-        "Option2 name": "Mărime",
-        "Option2 value": text(item.size),
+        "Option2 name": usesColorOption ? "Mărime" : "",
+        "Option2 value": usesColorOption ? text(item.size) : "",
         "Option2 Linked To": "",
         "Option3 name": "",
         "Option3 value": "",
@@ -1485,7 +1595,9 @@ function productRowsForItems(items, productStatus) {
         "Fulfillment service": "manual",
         "Product image URL": first ? firstImage : "",
         "Image position": first && firstImage ? 1 : "",
-        "Image alt text": first && firstImage ? `${title} ${text(item.color_name || item.color_code)} ${text(item.size)}`.trim().slice(0, 125) : "",
+        "Image alt text": first && firstImage
+          ? `${title} ${usesColorOption ? text(item.color_name) : ""} ${text(item.size)}`.trim().slice(0, 125)
+          : "",
         "Variant image URL": item.image_url,
         "Gift card": "FALSE",
         "SEO title": first ? title.slice(0, 70) : "",
@@ -1519,14 +1631,26 @@ function productRowsForItems(items, productStatus) {
 function inventoryRowsForItems(items, locationName) {
   const rows = [];
   const byVariant = new Map();
+  const groupUsesColor = new Map();
+
+  for (const item of items || []) {
+    const groupKey = item.product_group_key || productGroupKey(item);
+    if (!groupUsesColor.has(groupKey)) groupUsesColor.set(groupKey, false);
+    if (item?.shopify_option_mode !== "size_only" && text(item.color_name)) {
+      groupUsesColor.set(groupKey, true);
+    }
+  }
+
   for (const item of items) {
+    const groupKey = item.product_group_key || productGroupKey(item);
+    const usesColorOption = Boolean(groupUsesColor.get(groupKey));
     const row = {
       "Handle": item.handle,
       "Title": text(item.shopify_title || item.title_ro),
-      "Option1 Name": "Culoare",
-      "Option1 Value": text(item.color_name || item.color_code),
-      "Option2 Name": "Mărime",
-      "Option2 Value": text(item.size),
+      "Option1 Name": usesColorOption ? "Culoare" : "Mărime",
+      "Option1 Value": usesColorOption ? text(item.color_name) : text(item.size),
+      "Option2 Name": usesColorOption ? "Mărime" : "",
+      "Option2 Value": usesColorOption ? text(item.size) : "",
       "Option3 Name": "",
       "Option3 Value": "",
       "SKU": item.sku,
@@ -1553,7 +1677,7 @@ function reportRowsForItems(items) {
     "Modell": item.shopify_title || item.title_ro,
     "Márka": item.brand_name,
     "Termékkód": productCode(item),
-    "Szín": item.color_name || item.color_code,
+    "Szín": item.color_name || "",
     "Méret": item.size,
     "Shopify SKU": item.sku,
     "AllIn belső SKU": item.internal_sku,
@@ -1595,7 +1719,7 @@ export async function previewAifShopifyProductExport(client, options = {}) {
       handle: item.handle,
       title: item.shopify_title || item.title_ro,
       brand: item.brand_name,
-      color: item.color_name || item.color_code,
+      color: item.color_name || "",
       size: item.size,
       sku: item.sku,
       imageUrl: item.image_url,
@@ -1691,7 +1815,7 @@ export async function createAifShopifyProductExport(client, options = {}) {
             productGroupKey: item.product_group_key || productGroupKey(item, prepared.groupingMode),
             groupingMode: prepared.groupingMode,
             handle: item.handle,
-            color: item.color_name || item.color_code,
+            color: item.color_name || "",
             size: item.size,
             internalSku: item.internal_sku,
             sku: item.sku,
@@ -3700,9 +3824,9 @@ const AIF_DISPLAY_METAFIELD_DEFINITIONS = [
 ];
 
 function isLikelySupplierColorCode(value) {
-  const raw = text(value).trim();
+  const raw = text(value).trim().toUpperCase();
   if (!raw) return true;
-  return /^\d{2,4}[A-Z]?$/.test(raw) || /^[A-Z0-9]{2,5}$/.test(raw) && /\d/.test(raw);
+  return /^\d{2,4}[A-Z]?$/.test(raw) || (/^[A-Z0-9]{2,5}$/.test(raw) && /\d/.test(raw));
 }
 
 function displayColorValues(values) {
