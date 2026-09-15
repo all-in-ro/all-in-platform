@@ -1593,23 +1593,30 @@ function ProductText({
   compact?: boolean;
 }) {
   const barcode = displayBarcode(item);
+  const fullName = displayName(item);
   return (
-    <div className="min-w-0">
-      <div className={`flex flex-wrap items-center ${compact ? "gap-1.5" : "gap-2"}`}>
-        {item.brand_name && <span className={`${compact ? "text-[10px]" : "text-xs"} font-normal uppercase tracking-[0.10em] text-[#9fd7d5]`}>{item.brand_name}</span>}
-        {item.category_name_ro && <span className={compact ? "text-[10px] text-white/42" : "text-[11px] text-white/42"}>{item.category_name_ro}</span>}
+    <div className="min-w-0 max-w-full overflow-hidden">
+      <div className={`flex min-w-0 flex-wrap items-center ${compact ? "gap-1.5" : "gap-2"}`}>
+        {item.brand_name && <span className={`${compact ? "text-[10px]" : "text-xs"} max-w-full truncate font-normal uppercase tracking-[0.10em] text-[#9fd7d5]`}>{item.brand_name}</span>}
+        {item.category_name_ro && <span className={`${compact ? "text-[10px]" : "text-[11px]"} max-w-full truncate text-white/42`}>{item.category_name_ro}</span>}
       </div>
-      <p className={`${compact ? "mt-0 truncate text-[13px] font-normal leading-tight" : "mt-0.5 truncate text-sm font-normal sm:text-[15px]"} text-white`}>{displayName(item)}</p>
-      <div className={`${compact ? "mt-0.5 gap-1.5 text-[10px]" : "mt-1 gap-2 text-xs"} flex flex-wrap items-center text-white/58`}>
+      <p
+        className={`${compact ? "mt-0 text-[13px] font-normal leading-tight" : "mt-0.5 text-sm font-normal sm:text-[15px]"} block max-w-full cursor-help truncate overflow-hidden text-ellipsis whitespace-nowrap text-white`}
+        title={fullName}
+        aria-label={fullName}
+      >
+        {fullName}
+      </p>
+      <div className={`${compact ? "mt-0.5 gap-1.5 text-[10px]" : "mt-1 gap-2 text-xs"} flex min-w-0 flex-wrap items-center overflow-hidden text-white/58`}>
         {barcode && (
-          <span className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
-            <Barcode size={compact ? 10 : 12} />
-            Vonalkód: {barcode}
+          <span className={`inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
+            <Barcode size={compact ? 10 : 12} className="shrink-0" />
+            <span className="truncate">Vonalkód: {barcode}</span>
           </span>
         )}
         {(item.color_name || item.size) && (
-          <span className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
-            {item.color_name || "-"} · {item.size || "-"}
+          <span className={`inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
+            <span className="truncate">{item.color_name || "-"} · {item.size || "-"}</span>
           </span>
         )}
       </div>
@@ -2487,7 +2494,7 @@ export default function AllInStockMoves() {
             </div>
 
             <div className="hidden overflow-auto lg:block">
-              <table className="w-full min-w-[1080px] border-collapse text-[13px]">
+              <table className="w-full table-fixed border-collapse text-[13px]">
                 <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72">
                   <tr>
                     <th className="w-10 px-2 py-2.5 text-center font-normal">
@@ -2500,14 +2507,14 @@ export default function AllInStockMoves() {
                         aria-label="Összes látható mozgás kijelölése"
                       />
                     </th>
-                    <th className="px-3 py-2.5 text-left font-normal">Termék</th>
-                    <th className="px-3 py-2.5 text-left font-normal">Dátum / óra</th>
-                    <th className="px-3 py-2.5 text-left font-normal">Helyszín</th>
-                    <th className="px-3 py-2.5 text-center font-normal">Mozgás</th>
-                    <th className="px-3 py-2.5 text-center font-normal">Előtte</th>
-                    <th className="px-3 py-2.5 text-center font-normal">Utána</th>
-                    <th className="px-3 py-2.5 text-left font-normal">Forrás</th>
-                    <th className="w-[214px] px-3 py-2.5 text-right font-normal">Művelet</th>
+                    <th className="w-auto px-3 py-2.5 text-left font-normal">Termék</th>
+                    <th className="w-[142px] px-3 py-2.5 text-left font-normal">Dátum / óra</th>
+                    <th className="w-[112px] px-3 py-2.5 text-left font-normal">Helyszín</th>
+                    <th className="w-[130px] px-3 py-2.5 text-center font-normal">Mozgás</th>
+                    <th className="w-[58px] px-2 py-2.5 text-center font-normal">Előtte</th>
+                    <th className="w-[58px] px-2 py-2.5 text-center font-normal">Utána</th>
+                    <th className="w-[142px] px-3 py-2.5 text-left font-normal">Forrás</th>
+                    <th className="w-[224px] px-3 py-2.5 text-right font-normal">Művelet</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2528,14 +2535,16 @@ export default function AllInStockMoves() {
                             aria-label={`${displayName(row)} mozgás kijelölése`}
                           />
                         </td>
-                        <td className="px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-2">
+                        <td className="min-w-0 overflow-hidden px-3 py-2">
+                          <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                             <ProductThumb item={row} compact />
-                            <ProductText item={row} compact />
+                            <div className="min-w-0 flex-1 overflow-hidden">
+                              <ProductText item={row} compact />
+                            </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-[12px] text-white/78">{formatDateTime(row.created_at)}</td>
-                        <td className="px-3 py-2 text-[12px] text-white/78">{row.location_name || "-"}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-[12px] text-white/78">{formatDateTime(row.created_at)}</td>
+                        <td className="truncate px-3 py-2 text-[12px] text-white/78" title={row.location_name || "-"}>{row.location_name || "-"}</td>
                         <td className="px-3 py-2 text-center">
                           {row.direction === "out" || n(row.qty_delta) < 0 ? (
                             openOrderInfo ? (
@@ -2565,8 +2574,8 @@ export default function AllInStockMoves() {
                         </td>
                         <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
                         <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
-                        <td className="px-3 py-2 text-[12px] text-white/70">
-                          <div className="grid gap-0.5">
+                        <td className="min-w-0 overflow-hidden px-3 py-2 text-[12px] text-white/70">
+                          <div className="grid min-w-0 gap-0.5">
                             <span>{sourceLabel(row)}</span>
                             {movementReasonText(row) ? <span className="text-[10px] leading-snug text-white/45">{movementReasonText(row)}</span> : null}
                             {movementDocumentNumber(row) ? (
@@ -2580,7 +2589,7 @@ export default function AllInStockMoves() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-right">
+                        <td className="whitespace-nowrap px-3 py-2 text-right">
                           <div className="ml-auto grid w-[198px] grid-cols-2 gap-1.5">
                             <button
                               type="button"
