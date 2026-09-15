@@ -1508,22 +1508,22 @@ export default function AllInAdminMagazinDashboard({
                     <p className="mt-0.5 truncate text-[14px] leading-tight text-white">Üzlet lezárva</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/18 pl-3">
+                  <div className="min-w-0 border-l border-white/18 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Lezárta</p>
                     <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={dayClosure.actor || "-"}>{dayClosure.actor || "-"}</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/18 pl-3">
+                  <div className="min-w-0 border-l border-white/18 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Idő</p>
                     <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(dayClosureAt)}</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/18 pl-3">
+                  <div className="min-w-0 border-l border-white/18 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Záró kassza</p>
                     <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(dayClosure.countedCash)}</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/18 pl-3">
+                  <div className="min-w-0 border-l border-white/18 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Eltérés</p>
                     <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(dayClosure.cashDifference)}</p>
                   </div>
@@ -1546,24 +1546,24 @@ export default function AllInAdminMagazinDashboard({
                     </p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/16 pl-3">
+                  <div className="min-w-0 border-l border-white/16 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Átvette</p>
                     <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={latestHandover.acceptedBy || latestHandover.toActor || "-"}>
                       {latestHandover.acceptedBy || latestHandover.toActor || "-"}
                     </p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/16 pl-3">
+                  <div className="min-w-0 border-l border-white/16 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Idő</p>
                     <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(latestHandoverAt)}</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/16 pl-3">
+                  <div className="min-w-0 border-l border-white/16 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Kassza</p>
                     <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(latestHandoverCash)}</p>
                   </div>
 
-                  <div className="min-w-0 border-l border-white/16 pl-3">
+                  <div className="min-w-0 border-l border-white/16 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Eltérés</p>
                     <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(latestHandover.cashDifference || 0)}</p>
                   </div>
