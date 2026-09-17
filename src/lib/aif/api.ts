@@ -2631,8 +2631,6 @@ export type AifShopCustomerSaleLineItem = {
   colorName?: string | null;
   size?: string | null;
   imageUrl?: string | null;
-  originalQuantity?: number;
-  returnedQty?: number;
   quantity: number;
   listPrice: number;
   unitPrice: number;
@@ -2659,6 +2657,11 @@ export type AifShopCustomerSaleHistoryItem = {
   balanceDue: number;
   lineCount: number;
   itemCount: number;
+  payments?: Array<{
+    method: string;
+    amount: number;
+    paidAt?: string | null;
+  }>;
   lines: AifShopCustomerSaleLineItem[];
 };
 
@@ -2811,6 +2814,44 @@ export function apiAifRecordShopCustomerPayment(
     {
       method: "POST",
       headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+
+export type AifShopCustomerSaleLineDiscountResult = {
+  ok: true;
+  unchanged?: boolean;
+  saleId: string;
+  lineId: string;
+  discountPercent: number;
+  discountAmount: number;
+  unitPrice: number;
+  lineTotal: number;
+  saleSubtotal?: number;
+  saleDiscountTotal?: number;
+  saleTotal: number;
+  paidTotal: number;
+  balanceDue: number;
+  paymentStatus: string;
+  openBalance: number;
+};
+
+export function apiAifSetShopCustomerSaleLineDiscount(
+  customerId: string,
+  saleId: string,
+  lineId: string,
+  input: {
+    location: string;
+    discountPercent: number;
+    note?: string | null;
+  },
+) {
+  return fetchAifJSON<AifShopCustomerSaleLineDiscountResult>(
+    `/shop-customers/${encodeURIComponent(customerId)}/sales/${encodeURIComponent(saleId)}/lines/${encodeURIComponent(lineId)}/discount`,
+    {
+      method: "PATCH",
       body: JSON.stringify(input),
     },
   );
@@ -3911,41 +3952,6 @@ export function apiAifCompleteShopExchange(input: {
   idempotencyKey: string;
 }) {
   return fetchAifJSON<AifShopExchangeResult>("/shop-returns/exchanges", {
-    method: "POST",
-    headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
-    body: JSON.stringify(input),
-  });
-}
-
-export type AifShopCustomerCreditReturnResult = {
-  ok: true;
-  duplicate?: boolean;
-  exchangeId: string;
-  exchangeNumber: string;
-  saleId: string;
-  saleLineId: string;
-  customerId: string;
-  returnedQty: number;
-  returnCredit: number;
-  openBalance: number;
-  saleTotal: number;
-  stock?: {
-    variantId: string;
-    qtyBefore: number;
-    qtyAfter: number;
-    qtyDelta: number;
-  };
-};
-
-export function apiAifReturnShopCustomerCreditLine(input: {
-  location: string;
-  customerId: string;
-  saleLineId: string;
-  returnedQty: number;
-  note?: string | null;
-  idempotencyKey: string;
-}) {
-  return fetchAifJSON<AifShopCustomerCreditReturnResult>("/shop-returns/customer-credit-return", {
     method: "POST",
     headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
     body: JSON.stringify(input),
