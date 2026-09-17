@@ -12,6 +12,7 @@ export type AifBrand = {
   is_active: boolean;
 };
 
+
 export type AifCategory = {
   id: string;
   code: string;
