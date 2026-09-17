@@ -1247,15 +1247,28 @@ export default function AllInMagazinClients({
                       <ShieldCheck size={15} /> Védett kliensadat • módosítás és törlés csak ADMIN
                     </span>
                   )}
+
+                  {detail && numberValue(detail.summary.openBalance) > 0.005 ? (
+                    <button
+                      type="button"
+                      onClick={openPaymentModal}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_7px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.99]"
+                      title="Tartozás befizetése"
+                    >
+                      <WalletCards size={15} />
+                      Befizetés
+                    </button>
+                  ) : null}
+
                   <button
                     type="button"
                     onClick={() => setYearPickerOpen(true)}
-                    className="inline-flex h-11 min-w-[112px] touch-manipulation items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#293548] px-3 text-sm text-white transition hover:border-[#72d8d4]/45 hover:bg-[#354153] active:bg-[#2a8d8b]"
+                    className="inline-flex h-10 min-w-[104px] touch-manipulation items-center justify-between gap-2.5 rounded-xl border border-white/16 bg-[#293548] px-3 text-sm text-white transition hover:border-[#72d8d4]/45 hover:bg-[#354153] active:bg-[#2a8d8b]"
                     title="Éves összesítés"
                   >
-                    <CalendarDays size={17} className="text-[#8ee6e2]" />
-                    <span className="text-base tabular-nums">{detailYear}</span>
-                    <ChevronDown size={17} className="text-white/55" />
+                    <CalendarDays size={16} className="text-[#8ee6e2]" />
+                    <span className="text-[15px] tabular-nums">{detailYear}</span>
+                    <ChevronDown size={16} className="text-white/55" />
                   </button>
                 </div>
               </div>
@@ -1266,14 +1279,14 @@ export default function AllInMagazinClients({
                 </div>
               ) : detail ? (
                 <div className="space-y-3">
-                  <div className="rounded-[24px] border border-white/14 bg-[#374357] p-4 sm:p-5">
-                    <div className="flex flex-wrap items-start gap-4">
-                      <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
-                        <UserRound size={25} />
+                  <div className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                    <div className="flex flex-wrap items-start gap-3">
+                      <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/16 text-[#d7fffd]">
+                        <UserRound size={22} />
                       </span>
                       <div className="min-w-0 flex-1">
-                        <h3 className="truncate text-2xl text-white">{detail.item.fullName}</h3>
-                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/55">
+                        <h3 className="truncate text-[21px] text-white">{detail.item.fullName}</h3>
+                        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/55">
                           {detail.item.phone ? <span className="inline-flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{detail.item.phone}</span> : null}
                           {detail.item.email ? <span className="inline-flex items-center gap-2"><Mail size={13} className="text-[#8ee6e2]" />{detail.item.email}</span> : null}
                           {customerAddressLabel(detail.item) ? <span className="inline-flex items-center gap-2"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(detail.item)}</span> : null}
@@ -1281,50 +1294,41 @@ export default function AllInMagazinClients({
                       </div>
                     </div>
 
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
-                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#9be9e5]/60">{detail.summary.year}. évi vásárlás</p>
-                        <p className="mt-3 whitespace-nowrap text-[36px] leading-none tracking-tight text-[#d7fffd] tabular-nums">
+                    <div className="mt-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="min-h-[104px] rounded-[17px] bg-[#293548] px-4 py-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+                        <p className="text-[9px] uppercase tracking-[0.13em] text-[#9be9e5]/58">{detail.summary.year}. évi vásárlás</p>
+                        <p className="mt-2.5 whitespace-nowrap text-[30px] leading-none tracking-tight text-[#d7fffd] tabular-nums">
                           {formatMoney(detail.summary.yearPurchaseTotal)}
                         </p>
                       </div>
 
-                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
-                        <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Összes vásárlás</p>
-                        <p className="mt-3 whitespace-nowrap text-[36px] leading-none tracking-tight text-white tabular-nums">
+                      <div className="min-h-[104px] rounded-[17px] bg-[#293548] px-4 py-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+                        <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Összes vásárlás</p>
+                        <p className="mt-2.5 whitespace-nowrap text-[30px] leading-none tracking-tight text-white tabular-nums">
                           {formatMoney(detail.summary.lifetimePurchaseTotal)}
                         </p>
                       </div>
 
-                      <div className={`min-h-[132px] rounded-[20px] px-4 py-4 ${
+                      <div className={`min-h-[104px] rounded-[17px] px-4 py-3.5 ${
                         numberValue(detail.summary.openBalance) > 0.005
-                          ? "bg-[#E21C2A] text-white shadow-[0_12px_28px_rgba(226,28,42,0.24)]"
-                          : "bg-[#2a8d8b]/18 text-[#d7fffd] shadow-[inset_0_0_0_1px_rgba(155,233,229,0.18)]"
+                          ? "bg-[#E21C2A] text-white shadow-[0_10px_24px_rgba(226,28,42,0.21)]"
+                          : "bg-[#2a8d8b]/18 text-[#d7fffd] shadow-[inset_0_0_0_1px_rgba(155,233,229,0.16)]"
                       }`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-[10px] uppercase tracking-[0.13em] opacity-72">Nyitott tartozás</p>
-                            <p className="mt-2 whitespace-nowrap text-[42px] leading-none tracking-tight tabular-nums">
-                              {formatMoney(detail.summary.openBalance)}
-                            </p>
-                            <p className="mt-2 text-[11px] opacity-72">{detail.summary.openSales} nyitott vásárlás</p>
-                          </div>
-                          {numberValue(detail.summary.openBalance) > 0.005 ? (
-                            <button
-                              type="button"
-                              onClick={openPaymentModal}
-                              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border border-white/35 bg-black/10 px-3 text-[12px] text-white transition hover:bg-white/12"
-                            >
-                              <WalletCards size={15} /> Befizetés
-                            </button>
-                          ) : null}
-                        </div>
+                        <p className="text-[9px] uppercase tracking-[0.13em] opacity-72">Nyitott tartozás</p>
+                        <p className="mt-2 whitespace-nowrap text-[33px] leading-none tracking-tight tabular-nums">
+                          {formatMoney(detail.summary.openBalance)}
+                        </p>
+                        <p className="mt-2 text-[10px] opacity-72">{detail.summary.openSales} nyitott vásárlás</p>
                       </div>
 
-                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
-                        <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Vásárlások száma</p>
-                        <p className="mt-3 text-[40px] leading-none tracking-tight text-white tabular-nums">{detail.summary.saleCount}</p>
-                        <p className="mt-3 text-[11px] text-white/45">Utolsó: {formatDateTime(detail.summary.lastSaleAt)}</p>
+                      <div className="min-h-[104px] rounded-[17px] bg-[#293548] px-4 py-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+                        <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Vásárlások száma</p>
+                        <div className="mt-2 flex items-end justify-between gap-3">
+                          <p className="text-[32px] leading-none tracking-tight text-white tabular-nums">{detail.summary.saleCount}</p>
+                          <p className="pb-0.5 text-right text-[9px] leading-tight text-white/38">
+                            Utolsó<br />{formatDateTime(detail.summary.lastSaleAt)}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
