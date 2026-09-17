@@ -1443,15 +1443,24 @@ export default function AllInShopOperations({
 
                 <div className="p-4">
                   {currentDayClosure ? (
-                    <div className="mb-3 flex items-center gap-3 rounded-2xl border border-white/55 bg-[#E21C2A] px-4 py-3 text-white shadow-[0_10px_24px_rgba(226,28,42,0.24)]">
-                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/32 bg-black/10 text-white">
-                        <LockKeyhole size={18} />
+                    <div className="mb-2 grid min-h-[46px] grid-cols-[44px_minmax(150px,1fr)_180px_88px_160px_130px] items-stretch overflow-hidden rounded-xl border border-white/58 bg-[#E21C2A] text-white shadow-[0_8px_20px_rgba(226,28,42,0.20)]">
+                      <span className="flex items-center justify-center border-r border-white/30 bg-black/8">
+                        <LockKeyhole size={17} />
                       </span>
-                      <div className="min-w-0">
-                        <p className="text-sm text-white">A mai kassza le van zárva</p>
-                        <p className="mt-1 text-xs text-white/82">
-                          {currentDayClosure.actor} • {formatTime(currentDayClosure.closedAt)} • megszámolva {formatMoney(currentDayClosure.countedCash)} • eltérés {formatMoney(currentDayClosure.cashDifference)}
-                        </p>
+                      <div className="flex min-w-0 items-center px-3">
+                        <span className="truncate text-[13px] text-white">A mai kassza le van zárva</span>
+                      </div>
+                      <div className="flex min-w-0 items-center border-l border-white/28 px-3">
+                        <span className="truncate text-[11px] text-white/92">{currentDayClosure.actor}</span>
+                      </div>
+                      <div className="flex items-center justify-center border-l border-white/28 px-2 text-[11px] tabular-nums text-white">
+                        {formatTime(currentDayClosure.closedAt)}
+                      </div>
+                      <div className="flex items-center justify-end border-l border-white/28 px-3 text-[11px] tabular-nums text-white">
+                        {formatMoney(currentDayClosure.countedCash)}
+                      </div>
+                      <div className="flex items-center justify-end border-l border-white/28 px-3 text-[11px] tabular-nums text-white">
+                        Eltérés&nbsp; {formatMoney(currentDayClosure.cashDifference)}
                       </div>
                     </div>
                   ) : null}
@@ -1643,20 +1652,18 @@ export default function AllInShopOperations({
                     </div>
                   ) : null}
 
-                  {summaryIsToday && handoverPreview?.canCreate === false && !currentOutgoingHandover && !currentIncomingHandover && handoverPreview.reason ? (
-                    <div className={`mb-3 flex items-center gap-3 rounded-2xl border px-4 py-3 ${
-                      currentDayClosure || String(handoverPreview.reason).toLocaleLowerCase("hu-HU").includes("lezár")
-                        ? "border-white/55 bg-[#E21C2A] text-white shadow-[0_10px_24px_rgba(226,28,42,0.22)]"
-                        : "border-amber-200/28 bg-amber-400/8 text-amber-50"
-                    }`}>
-                      <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${
-                        currentDayClosure || String(handoverPreview.reason).toLocaleLowerCase("hu-HU").includes("lezár")
-                          ? "border-white/30 bg-black/10 text-white"
-                          : "border-amber-100/20 bg-amber-300/10 text-amber-100"
-                      }`}>
+                  {summaryIsToday &&
+                  handoverPreview?.canCreate === false &&
+                  !currentOutgoingHandover &&
+                  !currentIncomingHandover &&
+                  handoverPreview.reason &&
+                  !currentDayClosure &&
+                  !String(handoverPreview.reason).toLocaleLowerCase("hu-HU").includes("lezár") ? (
+                    <div className="mb-3 flex items-center gap-3 rounded-xl border border-amber-200/28 bg-amber-400/8 px-3 py-2.5 text-amber-50">
+                      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-100/20 bg-amber-300/10 text-amber-100">
                         <TriangleAlert size={17} />
                       </span>
-                      <p className="text-sm leading-relaxed text-inherit">{handoverPreview.reason}</p>
+                      <p className="text-[12px] leading-relaxed text-amber-50/88">{handoverPreview.reason}</p>
                     </div>
                   ) : null}
 
@@ -1793,7 +1800,7 @@ export default function AllInShopOperations({
                 </div>
               </section>
 
-              <div className={`mt-3 grid gap-3 ${salesPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.62fr)]" : "xl:grid-cols-[minmax(0,1fr)_210px]"}`}>
+              <div className={`mt-3 grid gap-2.5 ${salesPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.48fr)]" : "xl:grid-cols-[minmax(0,1fr)_58px]"}`}>
                 <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1814,40 +1821,78 @@ export default function AllInShopOperations({
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`grid grid-cols-[68px_minmax(0,1fr)_90px] items-center gap-2.5 rounded-xl border p-2.5 transition ${
+                          className={`grid grid-cols-[68px_minmax(0,1fr)_118px] items-center gap-3 rounded-2xl border px-3 py-2.5 transition ${
                             unpaid
-                              ? "border-red-300/34 bg-[#3d3140] hover:border-red-200/48"
-                              : "border-white/10 bg-[#293548] hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
+                              ? "border-red-300/38 bg-[#3b303e] shadow-[inset_3px_0_0_#E21C2A]"
+                              : "border-white/10 bg-[#293548] hover:border-[#7bd7d4]/28 hover:bg-[#2d3a4d]"
                           }`}
                         >
                           <ProductImage src={item.imageUrl} title={item.title} compact />
-                          <div className="min-w-0 self-stretch">
-                            <p className="line-clamp-2 min-h-[32px] text-[13px] leading-4 text-white" title={item.title}>{item.title}</p>
-                            <p className="mt-1 line-clamp-1 text-[10px] text-white/52" title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}>
+
+                          <div className="min-w-0">
+                            <p className="truncate text-[14px] leading-5 text-white" title={item.title}>
+                              {item.title}
+                            </p>
+
+                            <p
+                              className="mt-0.5 truncate text-[11px] text-white/60"
+                              title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}
+                            >
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
-                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                              {item.customerName ? (
-                                <span className="inline-flex max-w-[240px] items-center gap-1 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[10px] text-[#d7fffd]" title={item.customerName}>
-                                  <UserRound size={11} className="shrink-0" /> <span className="truncate">{item.customerName}</span>
+
+                            <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/10 pt-2">
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                {item.customerName ? (
+                                  <span
+                                    className="inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/34 bg-[#2a8d8b]/18 px-2.5 py-1.5 text-[12px] text-white"
+                                    title={item.customerName}
+                                  >
+                                    <UserRound size={13} className="shrink-0 text-[#bff8f5]" />
+                                    <span className="truncate">{item.customerName}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-white/28">Nincs klienshez csatolva</span>
+                                )}
+
+                                {unpaid ? (
+                                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-200/70 bg-[#E21C2A] px-2.5 py-1.5 text-[11px] text-white shadow-[0_5px_14px_rgba(226,28,42,0.20)]">
+                                    <TriangleAlert size={12} />
+                                    {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
+                                  </span>
+                                ) : null}
+
+                                {item.recordType === "exchange" ? (
+                                  <span className="rounded-lg border border-[#9be9e5]/25 bg-[#2a8d8b]/12 px-2 py-1 text-[10px] text-[#d7fffd]">
+                                    Csere
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                                <span
+                                  className="max-w-[190px] truncate rounded-md border border-white/12 bg-black/10 px-2 py-1 font-mono text-[9px] text-white/58"
+                                  title={item.productCode || "–"}
+                                >
+                                  {item.productCode || "–"}
                                 </span>
-                              ) : null}
-                              {unpaid ? (
-                                <span className="inline-flex items-center gap-1 rounded-lg border border-red-200/65 bg-[#E21C2A] px-2 py-1 text-[10px] text-white shadow-[0_4px_10px_rgba(226,28,42,0.18)]">
-                                  <TriangleAlert size={11} /> {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
-                                </span>
-                              ) : null}
-                              {item.recordType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/25 bg-[#2a8d8b]/12 px-2 py-1 text-[9px] text-[#d7fffd]">Csere</span> : null}
-                            </div>
-                            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-                              <span className="max-w-full truncate rounded-md border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-1.5 py-0.5 font-mono text-[9px] text-[#cffffd]/68" title={item.productCode || "–"}>{item.productCode || "–"}</span>
-                              {item.saleNumber ? <span className="truncate text-[9px] text-white/36">{item.saleNumber} • {formatTime(item.soldAt)}</span> : null}
+                                {item.saleNumber ? (
+                                  <span className="whitespace-nowrap text-[10px] text-white/40">
+                                    {item.saleNumber} • {formatTime(item.soldAt)}
+                                  </span>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-2.5 text-right">
-                            <span className="inline-flex min-w-[62px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-sm text-[#d7fffd]">{item.qty} db</span>
-                            <p className="mt-1.5 whitespace-nowrap text-[13px] text-white">{formatMoney(item.revenue)}</p>
-                            {item.discountTotal > 0 ? <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">Kedv.: {formatMoney(item.discountTotal)}</p> : null}
+
+                          <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/10 pl-3 text-right">
+                            <span className="inline-flex min-w-[70px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2.5 py-1 text-sm text-[#d7fffd]">
+                              {item.qty} db
+                            </span>
+                            <p className="mt-1.5 whitespace-nowrap text-[14px] text-white">{formatMoney(item.revenue)}</p>
+                            {item.discountTotal > 0 ? (
+                              <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">Kedv.: {formatMoney(item.discountTotal)}</p>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -1856,21 +1901,39 @@ export default function AllInShopOperations({
                   </div>
                 </section>
 
-                <section className="self-start overflow-hidden rounded-[20px] border border-white/14 bg-[#374357]">
+                <section className={`self-start overflow-hidden border border-white/14 bg-[#374357] ${salesPanelOpen ? "rounded-[18px]" : "rounded-2xl"}`}>
                   <button
                     type="button"
                     onClick={() => setSalesPanelOpen((current) => !current)}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-white/[0.04]"
+                    className={`w-full transition hover:bg-white/[0.05] ${
+                      salesPanelOpen
+                        ? "flex items-center justify-between gap-3 px-3 py-3 text-left"
+                        : "flex min-h-[78px] flex-col items-center justify-center gap-2 px-1.5 py-2"
+                    }`}
                     aria-expanded={salesPanelOpen}
+                    title={salesPanelOpen ? "Bizonylatok összecsukása" : "Bizonylatok megnyitása"}
                   >
-                    <span className="flex min-w-0 items-center gap-2.5">
-                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><Receipt size={16} /></span>
-                      <span className="min-w-0">
-                        <span className="block text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</span>
-                        <span className="mt-0.5 block truncate text-sm text-white">{summaryData?.sales.length || 0} db</span>
-                      </span>
-                    </span>
-                    {salesPanelOpen ? <ChevronRight size={18} className="text-[#bff8f5]" /> : <ChevronLeft size={18} className="text-[#bff8f5]" />}
+                    {salesPanelOpen ? (
+                      <>
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]">
+                            <Receipt size={16} />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</span>
+                            <span className="mt-0.5 block truncate text-sm text-white">{summaryData?.sales.length || 0} db</span>
+                          </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-[#bff8f5]" />
+                      </>
+                    ) : (
+                      <>
+                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/14 text-[#d7fffd]">
+                          <Receipt size={17} />
+                        </span>
+                        <ChevronLeft size={17} className="text-[#bff8f5]" />
+                      </>
+                    )}
                   </button>
 
                   {salesPanelOpen ? (
@@ -1897,13 +1960,11 @@ export default function AllInShopOperations({
                           </div>
                         </button>
                       ))}
-                      {!summaryLoading && !(summaryData?.sales || []).length ? <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">Ezen a napon még nincs eladás.</div> : null}
+                      {!summaryLoading && !(summaryData?.sales || []).length ? (
+                        <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">Ezen a napon még nincs eladás.</div>
+                      ) : null}
                     </div>
-                  ) : (
-                    <div className="border-t border-white/8 px-3 py-3 text-[10px] leading-relaxed text-white/38">
-                      Csak akkor nyisd ki, ha egy bizonylat részleteire tényleg szükség van.
-                    </div>
-                  )}
+                  ) : null}
                 </section>
               </div>
 
