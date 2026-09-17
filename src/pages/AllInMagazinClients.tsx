@@ -15,6 +15,7 @@ import {
   MapPin,
   Phone,
   Pencil,
+  RotateCcw,
   Save,
   Search,
   ShieldCheck,
@@ -35,6 +36,7 @@ import {
   apiAifListRomaniaLocalities,
   apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
+  apiAifReturnShopCustomerCreditLine,
   apiAifUpdateShopCustomer,
   type AifRomaniaCounty,
   type AifRomaniaLocality,
@@ -71,6 +73,12 @@ type PaymentDraft = {
   method: AifShopCustomerPaymentMethod;
   reference: string;
   note: string;
+};
+
+type CustomerReturnTarget = {
+  sale: AifShopCustomerSaleHistoryItem;
+  line: AifShopCustomerSaleHistoryItem["lines"][number];
+  maxQty: number;
 };
 
 type ProductImagePreview = {
@@ -198,6 +206,13 @@ export default function AllInMagazinClients({
   const [localities, setLocalities] = useState<AifRomaniaLocality[]>([]);
   const [geoLoading, setGeoLoading] = useState(false);
   const [paymentDraft, setPaymentDraft] = useState<PaymentDraft>(EMPTY_PAYMENT);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [returnTarget, setReturnTarget] = useState<CustomerReturnTarget | null>(null);
+  const [returnQty, setReturnQty] = useState(1);
+  const [returnNote, setReturnNote] = useState("");
+  const [returnSaving, setReturnSaving] = useState(false);
+  const [returnError, setReturnError] = useState("");
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -211,6 +226,7 @@ export default function AllInMagazinClients({
   const [productImagePreview, setProductImagePreview] = useState<ProductImagePreview | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const paymentRequestKeyRef = useRef("");
+  const returnRequestKeyRef = useRef("");
 
   const locationCode = useMemo(
     () => locationCodeProp || locationCodeFromName(locationName),
@@ -284,11 +300,19 @@ export default function AllInMagazinClients({
     setSuccess("");
     setProductImagePreview(null);
     setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentOpen(false);
+    setPaymentError("");
+    setReturnTarget(null);
+    setReturnQty(1);
+    setReturnNote("");
+    setReturnSaving(false);
+    setReturnError("");
     setSaleDetachTarget(null);
     setSaleDetaching(false);
     setCustomerDeleteOpen(false);
     setCustomerDeleting(false);
     paymentRequestKeyRef.current = "";
+    returnRequestKeyRef.current = "";
     if (initialMode === "new") {
       const nextDraft = { ...EMPTY_DRAFT, countyCode: defaultCountyCode };
       setDraft(nextDraft);
@@ -308,6 +332,22 @@ export default function AllInMagazinClients({
       if (event.key !== "Escape") return;
       if (productImagePreview) {
         setProductImagePreview(null);
+        return;
+      }
+      if (returnTarget) {
+        if (!returnSaving) {
+          setReturnTarget(null);
+          setReturnError("");
+          returnRequestKeyRef.current = "";
+        }
+        return;
+      }
+      if (paymentOpen) {
+        if (!paymentSaving) {
+          setPaymentOpen(false);
+          setPaymentError("");
+          paymentRequestKeyRef.current = "";
+        }
         return;
       }
       if (yearPickerOpen) {
@@ -338,7 +378,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, productImagePreview, saleDetachTarget, saleDetaching, yearPickerOpen]);
+  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, paymentOpen, paymentSaving, productImagePreview, returnSaving, returnTarget, saleDetachTarget, saleDetaching, yearPickerOpen]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -386,10 +426,17 @@ export default function AllInMagazinClients({
     setSuccess("");
     setProductImagePreview(null);
     setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentOpen(false);
+    setPaymentError("");
+    setReturnTarget(null);
+    setReturnQty(1);
+    setReturnNote("");
+    setReturnError("");
     setSaleDetachTarget(null);
     setCustomerDeleteOpen(false);
     setYearPickerOpen(false);
     paymentRequestKeyRef.current = "";
+    returnRequestKeyRef.current = "";
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }
 
@@ -413,9 +460,16 @@ export default function AllInMagazinClients({
     setDetail(null);
     setDetailYear(currentYear);
     setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentOpen(false);
+    setPaymentError("");
+    setReturnTarget(null);
+    setReturnQty(1);
+    setReturnNote("");
+    setReturnError("");
     setSaleDetachTarget(null);
     setCustomerDeleteOpen(false);
     paymentRequestKeyRef.current = "";
+    returnRequestKeyRef.current = "";
     setError("");
     setSuccess("");
     void loadCustomerDetail(customer.id, currentYear);
@@ -557,20 +611,37 @@ export default function AllInMagazinClients({
     }
   }
 
+  function openPaymentModal() {
+    if (!detail || numberValue(detail.summary.openBalance) <= 0.005) return;
+    setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentError("");
+    paymentRequestKeyRef.current = "";
+    setPaymentOpen(true);
+  }
+
+  function closePaymentModal() {
+    if (paymentSaving) return;
+    setPaymentOpen(false);
+    setPaymentError("");
+    setPaymentDraft(EMPTY_PAYMENT);
+    paymentRequestKeyRef.current = "";
+  }
+
   async function recordPayment() {
     if (!selected || !detail) return;
     const amount = parseMoneyInput(paymentDraft.amount);
     const openBalance = numberValue(detail.summary.openBalance);
     if (amount <= 0) {
-      setError("A befizetés összege legyen nagyobb nullánál.");
+      setPaymentError("A befizetés összege legyen nagyobb nullánál.");
       return;
     }
     if (amount > openBalance + 0.005) {
-      setError(`A befizetés nem lehet nagyobb a nyitott tartozásnál: ${formatMoney(openBalance)}.`);
+      setPaymentError(`A befizetés nem lehet nagyobb a nyitott tartozásnál: ${formatMoney(openBalance)}.`);
       return;
     }
 
     setPaymentSaving(true);
+    setPaymentError("");
     setError("");
     setSuccess("");
     if (!paymentRequestKeyRef.current) paymentRequestKeyRef.current = createRequestKey();
@@ -588,14 +659,91 @@ export default function AllInMagazinClients({
       );
       setPaymentDraft(EMPTY_PAYMENT);
       paymentRequestKeyRef.current = "";
+      setPaymentOpen(false);
       await Promise.all([
         loadCustomerDetail(selected.id, detailYear),
         loadCustomers(query),
       ]);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A befizetés rögzítése nem sikerült.");
+      setPaymentError(caught instanceof Error ? caught.message : "A befizetés rögzítése nem sikerült.");
     } finally {
       setPaymentSaving(false);
+    }
+  }
+
+  function openReturnModal(
+    sale: AifShopCustomerSaleHistoryItem,
+    line: AifShopCustomerSaleHistoryItem["lines"][number],
+  ) {
+    const unitPrice = numberValue(line.unitPrice);
+    const due = numberValue(sale.balanceDue);
+    const remainingQty = Math.max(0, Math.floor(numberValue(line.quantity)));
+    const maxByDebt = unitPrice > 0 ? Math.floor((due + 0.005) / unitPrice) : 0;
+    const maxQty = Math.max(0, Math.min(remainingQty, maxByDebt));
+    if (!line.variantId || maxQty <= 0) {
+      setError("Ezt a terméket innen nem lehet biztonságosan visszavenni. Ha pénzvisszatérítés szükséges, használd a normál visszáru/csere folyamatot.");
+      return;
+    }
+    setReturnTarget({ sale, line, maxQty });
+    setReturnQty(1);
+    setReturnNote("");
+    setReturnError("");
+    returnRequestKeyRef.current = "";
+  }
+
+  function closeReturnModal() {
+    if (returnSaving) return;
+    setReturnTarget(null);
+    setReturnQty(1);
+    setReturnNote("");
+    setReturnError("");
+    returnRequestKeyRef.current = "";
+  }
+
+  async function returnCustomerCreditLine() {
+    if (!selected || !detail || !returnTarget) return;
+    const quantity = Math.max(1, Math.min(returnTarget.maxQty, Math.floor(numberValue(returnQty))));
+    const returnCredit = numberValue(returnTarget.line.unitPrice) * quantity;
+    if (quantity <= 0 || quantity > returnTarget.maxQty) {
+      setReturnError(`Legfeljebb ${returnTarget.maxQty} db vehető vissza ebből a tételből.`);
+      return;
+    }
+    if (returnCredit > numberValue(returnTarget.sale.balanceDue) + 0.005) {
+      setReturnError("Ez a visszavétel már pénzvisszatérítést igényelne. Használd a normál visszáru/csere folyamatot.");
+      return;
+    }
+
+    setReturnSaving(true);
+    setReturnError("");
+    setError("");
+    setSuccess("");
+    if (!returnRequestKeyRef.current) returnRequestKeyRef.current = createRequestKey();
+
+    try {
+      const response = await apiAifReturnShopCustomerCreditLine({
+        location: locationCode,
+        customerId: selected.id,
+        saleLineId: returnTarget.line.id,
+        returnedQty: quantity,
+        note: returnNote.trim() || null,
+        idempotencyKey: returnRequestKeyRef.current,
+      });
+      setSuccess(
+        `${returnTarget.line.productTitle || "A termék"} visszavéve készletre. Jóváírás: ${formatMoney(response.returnCredit)}. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
+      );
+      setReturnTarget(null);
+      setReturnQty(1);
+      setReturnNote("");
+      setReturnError("");
+      returnRequestKeyRef.current = "";
+      await Promise.all([
+        loadCustomerDetail(selected.id, detailYear),
+        loadCustomers(query),
+      ]);
+    } catch (caught) {
+      setReturnError(caught instanceof Error ? caught.message : "A termék visszavétele nem sikerült.");
+    } finally {
+      setReturnSaving(false);
     }
   }
 
@@ -973,143 +1121,54 @@ export default function AllInMagazinClients({
                     </div>
 
                     <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 p-3">
-                        <p className="text-[9px] uppercase tracking-[0.12em] text-[#d7fffd]/55">{detail.summary.year}. évi vásárlás</p>
-                        <p className="mt-2 text-3xl text-[#d7fffd] tabular-nums">{formatMoney(detail.summary.yearPurchaseTotal)}</p>
+                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#9be9e5]/60">{detail.summary.year}. évi vásárlás</p>
+                        <p className="mt-3 whitespace-nowrap text-[36px] leading-none tracking-tight text-[#d7fffd] tabular-nums">
+                          {formatMoney(detail.summary.yearPurchaseTotal)}
+                        </p>
                       </div>
-                      <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Összes vásárlás</p>
-                        <p className="mt-2 text-3xl text-white tabular-nums">{formatMoney(detail.summary.lifetimePurchaseTotal)}</p>
+
+                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Összes vásárlás</p>
+                        <p className="mt-3 whitespace-nowrap text-[36px] leading-none tracking-tight text-white tabular-nums">
+                          {formatMoney(detail.summary.lifetimePurchaseTotal)}
+                        </p>
                       </div>
-                      <div className={`rounded-2xl border p-4 ${
-                        numberValue(detail.summary.openBalance) > 0
-                          ? "border-red-300/80 bg-red-600 text-white shadow-[0_12px_28px_rgba(220,38,38,0.30)]"
-                          : "border-[#7bd7d4]/30 bg-[#2a8d8b]/16 text-[#d7fffd]"
+
+                      <div className={`min-h-[132px] rounded-[20px] px-4 py-4 ${
+                        numberValue(detail.summary.openBalance) > 0.005
+                          ? "bg-[#E21C2A] text-white shadow-[0_12px_28px_rgba(226,28,42,0.24)]"
+                          : "bg-[#2a8d8b]/18 text-[#d7fffd] shadow-[inset_0_0_0_1px_rgba(155,233,229,0.18)]"
                       }`}>
-                        <p className="text-[10px] uppercase tracking-[0.13em] opacity-75">Nyitott tartozás</p>
-                        <p className="mt-2 text-3xl tabular-nums sm:text-4xl">{formatMoney(detail.summary.openBalance)}</p>
-                        <p className="mt-1 text-xs opacity-70">{detail.summary.openSales} nyitott vásárlás</p>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] uppercase tracking-[0.13em] opacity-72">Nyitott tartozás</p>
+                            <p className="mt-2 whitespace-nowrap text-[42px] leading-none tracking-tight tabular-nums">
+                              {formatMoney(detail.summary.openBalance)}
+                            </p>
+                            <p className="mt-2 text-[11px] opacity-72">{detail.summary.openSales} nyitott vásárlás</p>
+                          </div>
+                          {numberValue(detail.summary.openBalance) > 0.005 ? (
+                            <button
+                              type="button"
+                              onClick={openPaymentModal}
+                              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border border-white/35 bg-black/10 px-3 text-[12px] text-white transition hover:bg-white/12"
+                            >
+                              <WalletCards size={15} /> Befizetés
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárlások száma</p>
-                        <p className="mt-2 text-3xl text-white tabular-nums">{detail.summary.saleCount}</p>
-                        <p className="mt-1 text-[10px] text-white/48">Utolsó: {formatDateTime(detail.summary.lastSaleAt)}</p>
+
+                      <div className="min-h-[132px] rounded-[20px] bg-[#293548] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Vásárlások száma</p>
+                        <p className="mt-3 text-[40px] leading-none tracking-tight text-white tabular-nums">{detail.summary.saleCount}</p>
+                        <p className="mt-3 text-[11px] text-white/45">Utolsó: {formatDateTime(detail.summary.lastSaleAt)}</p>
                       </div>
                     </div>
                   </div>
 
-                  {numberValue(detail.summary.openBalance) > 0 ? (
-                    <div className="rounded-[24px] border border-amber-200/24 bg-[#3a424f] p-4 sm:p-5">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-amber-200/25 bg-amber-300/10 text-amber-50">
-                            <WalletCards size={21} />
-                          </span>
-                          <div>
-                            <p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Tartozás rendezése</p>
-                            <h3 className="mt-1 text-lg text-white">Befizetés rögzítése</h3>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentDraft((current) => ({ ...current, amount: String(numberValue(detail.summary.openBalance).toFixed(2)) }))}
-                          className="inline-flex h-10 items-center gap-2 rounded-xl border border-amber-200/30 bg-amber-300/10 px-3 text-xs text-amber-50 hover:bg-amber-300/16"
-                        >
-                          Teljes tartozás: {formatMoney(detail.summary.openBalance)}
-                        </button>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(180px,0.7fr)_minmax(320px,1.2fr)]">
-                        <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                          Befizetett összeg *
-                          <div className="grid grid-cols-[1fr_auto] overflow-hidden rounded-xl border border-white/16 bg-[#273243] focus-within:border-[#72d8d4]">
-                            <input
-                              inputMode="decimal"
-                              value={paymentDraft.amount}
-                              onChange={(event) => {
-                                paymentRequestKeyRef.current = "";
-                                setPaymentDraft((current) => ({ ...current, amount: event.target.value.replace(/[^0-9.,]/g, "") }));
-                              }}
-                              className="h-12 min-w-0 bg-transparent px-3 text-right text-lg normal-case tracking-normal text-white outline-none"
-                              placeholder="0,00"
-                            />
-                            <span className="inline-flex h-12 items-center border-l border-white/12 px-3 text-sm text-white/55">RON</span>
-                          </div>
-                        </label>
-
-                        <div>
-                          <p className="text-[10px] uppercase tracking-[0.1em] text-white/48">Fizetési mód</p>
-                          <div className="mt-1.5 grid grid-cols-3 gap-2">
-                            {PAYMENT_METHODS.map((option) => {
-                              const Icon = option.icon;
-                              const active = paymentDraft.method === option.value;
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  onClick={() => {
-                                    paymentRequestKeyRef.current = "";
-                                    setPaymentDraft((current) => ({ ...current, method: option.value }));
-                                  }}
-                                  className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-xs transition ${
-                                    active
-                                      ? "border-[#9be9e5]/45 bg-[#2a8d8b] text-white"
-                                      : "border-white/14 bg-[#273243] text-white/65 hover:bg-white/[0.08]"
-                                  }`}
-                                >
-                                  <Icon size={16} /> {option.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                          Hivatkozás
-                          <input
-                            value={paymentDraft.reference}
-                            onChange={(event) => {
-                              paymentRequestKeyRef.current = "";
-                              setPaymentDraft((current) => ({ ...current, reference: event.target.value }));
-                            }}
-                            placeholder="Nyugtaszám, átutalási azonosító…"
-                            className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]"
-                          />
-                        </label>
-                        <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
-                          Megjegyzés
-                          <input
-                            value={paymentDraft.note}
-                            onChange={(event) => {
-                              paymentRequestKeyRef.current = "";
-                              setPaymentDraft((current) => ({ ...current, note: event.target.value }));
-                            }}
-                            placeholder="Opcionális"
-                            className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]"
-                          />
-                        </label>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
-                        <p className="max-w-2xl text-xs leading-relaxed text-white/48">
-                          A befizetés a legrégebbi nyitott vásárlástól indulva csökkenti a tartozást. Minden részlet és időpont megmarad az előzményekben.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => void recordPayment()}
-                          disabled={paymentSaving}
-                          className="inline-flex min-h-12 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-60"
-                        >
-                          {paymentSaving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
-                          Befizetés rögzítése
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
+                  <section className="rounded-[24px] bg-[#374357] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><ShoppingBag size={20} /></span>
@@ -1126,22 +1185,23 @@ export default function AllInMagazinClients({
                       </div>
                     </div>
 
-                    <div className="mt-4 max-h-[640px] space-y-3 overflow-y-auto pr-1" onScroll={hideProductImagePreview}>
+                    <div className="mt-4 space-y-3">
                       {detail.sales.length ? detail.sales.map((sale) => (
                         <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#293548]">
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303b4e] px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] bg-[#303b4e] px-4 py-3">
                             <div className="min-w-0">
-                              <p className="truncate text-sm text-white">{sale.saleNumber}</p>
-                              <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/48">
-                                <span className="inline-flex items-center gap-1.5"><CalendarDays size={13} className="text-[#8ee6e2]" />{formatDateTime(sale.soldAt)}</span>
-                                <span>{sale.locationName || "–"}</span>
-                                {sale.actor ? <span>Eladó: {sale.actor}</span> : null}
+                              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-white">
+                                <span className="inline-flex items-center gap-1.5"><CalendarDays size={14} className="text-[#8ee6e2]" />{formatDateTime(sale.soldAt)}</span>
+                                {sale.actor ? <span className="text-[#d7fffd]">Eladó: {sale.actor}</span> : null}
+                              </p>
+                              <p className="mt-1 truncate text-[9px] uppercase tracking-[0.08em] text-white/28">
+                                {sale.locationName || "–"} • Bizonylat: {sale.saleNumber}
                               </p>
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
                               <div className="text-right">
-                                <p className="text-[10px] uppercase tracking-[0.08em] text-white/40">Bizonylat összege</p>
-                                <p className="mt-1 text-xl text-white tabular-nums">{formatMoney(sale.total)}</p>
+                                <p className="text-[9px] uppercase tracking-[0.09em] text-white/34">Vásárlás összege</p>
+                                <p className="mt-1 text-[22px] tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
                               </div>
                               {canManageCustomerData ? (
                                 <button
@@ -1157,64 +1217,83 @@ export default function AllInMagazinClients({
                           </div>
 
                           <div className="space-y-2 p-3">
-                            {sale.lines?.length ? sale.lines.map((line) => (
-                              <div
-                                key={line.id || `${sale.id}-${line.lineNo}`}
-                                className="grid grid-cols-[68px_minmax(0,1fr)] gap-3 rounded-2xl border border-white/10 bg-[#253144] p-3 sm:grid-cols-[68px_minmax(0,1fr)_minmax(210px,auto)] sm:items-center"
-                              >
-                                <span
-                                  className={`flex h-[68px] w-[68px] shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in border-[#7bd7d4]/35 hover:border-[#9be9e5] hover:ring-4 hover:ring-[#2a8d8b]/18" : "border-white/12"}`}
-                                  onMouseEnter={(event) => {
-                                    if (line.imageUrl) showProductImagePreview(event.currentTarget, line.imageUrl, line.productTitle || "Termék");
-                                  }}
-                                  onMouseLeave={hideProductImagePreview}
-                                >
-                                  {line.imageUrl ? (
-                                    <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
-                                  ) : (
-                                    <ShoppingBag size={26} className="text-[#526173]" />
-                                  )}
-                                </span>
+                            {sale.lines?.length ? sale.lines.map((line) => {
+                              const unitPrice = numberValue(line.unitPrice);
+                              const saleBalance = numberValue(sale.balanceDue);
+                              const remainingQty = Math.max(0, Math.floor(numberValue(line.quantity)));
+                              const maxByDebt = unitPrice > 0 ? Math.floor((saleBalance + 0.005) / unitPrice) : 0;
+                              const maxReturnQty = Math.max(0, Math.min(remainingQty, maxByDebt));
+                              const canQuickReturn = Boolean(
+                                line.variantId
+                                && saleBalance > 0.005
+                                && maxReturnQty > 0
+                              );
 
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm text-white">{line.productTitle || "Névtelen termék"}</p>
-                                  <p className="mt-1 truncate text-[11px] text-white/50">
-                                    {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
-                                  </p>
-                                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/55">
-                                    <span className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/10 px-2 py-1"><CalendarDays size={11} />{formatDateTime(sale.soldAt)}</span>
-                                    {line.productCode ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Kód: {line.productCode}</span> : null}
-                                    {line.barcode ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Vonalkód: {line.barcode}</span> : null}
+                              return (
+                                <div
+                                  key={line.id || `${sale.id}-${line.lineNo}`}
+                                  className="grid grid-cols-[76px_minmax(0,1fr)] gap-4 border-t border-white/[0.10] px-3 py-3.5 first:border-t-0 sm:grid-cols-[76px_minmax(0,1fr)_220px] sm:items-center"
+                                >
+                                  <span
+                                    className={`flex h-[76px] w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in hover:ring-4 hover:ring-[#2a8d8b]/18" : ""}`}
+                                    onMouseEnter={(event) => {
+                                      if (line.imageUrl) showProductImagePreview(event.currentTarget, line.imageUrl, line.productTitle || "Termék");
+                                    }}
+                                    onMouseLeave={hideProductImagePreview}
+                                  >
+                                    {line.imageUrl ? (
+                                      <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
+                                    ) : (
+                                      <ShoppingBag size={27} className="text-[#526173]" />
+                                    )}
+                                  </span>
+
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[15px] text-white">{line.productTitle || "Névtelen termék"}</p>
+                                    <p className="mt-1 truncate text-[12px] text-white/55">
+                                      {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
+                                    </p>
+
+                                    <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.07] pt-2.5 text-[10px] text-white/38">
+                                      {line.productCode ? <span>Kód: {line.productCode}</span> : null}
+                                      {line.barcode ? <span>Vonalkód: {line.barcode}</span> : null}
+                                      {numberValue(line.returnedQty) > 0 ? (
+                                        <span className="inline-flex items-center gap-1 text-[#9be9e5]">
+                                          <RotateCcw size={11} /> Már visszahozva: {numberValue(line.returnedQty)} db
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+
+                                  <div className="col-span-2 flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-white/[0.07] pt-3 sm:col-span-1 sm:block sm:border-l sm:border-t-0 sm:border-white/[0.08] sm:pl-4 sm:pt-0 sm:text-right">
+                                    <div>
+                                      <p className="text-[10px] uppercase tracking-[0.09em] text-white/34">
+                                        {line.quantity} db • {formatMoney(line.unitPrice)} / db
+                                      </p>
+                                      <p className="mt-1 whitespace-nowrap text-[20px] tracking-tight text-white">
+                                        {formatMoney(line.lineTotal)}
+                                      </p>
+                                      {numberValue(line.discountPercent) > 0 ? (
+                                        <p className="mt-1 text-[10px] text-amber-100/72">
+                                          {numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény
+                                        </p>
+                                      ) : null}
+                                    </div>
+
+                                    {canQuickReturn ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openReturnModal(sale, line)}
+                                        className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2a8d8b] px-3 text-[11px] text-white transition hover:bg-[#319c99] sm:mt-2"
+                                        title="Próbára elvitt termék visszavétele készletre"
+                                      >
+                                        <RotateCcw size={14} /> Visszahozta
+                                      </button>
+                                    ) : null}
                                   </div>
                                 </div>
-
-                                <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1 sm:min-w-[230px]">
-                                  <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-center">
-                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-white/40">Darab</span>
-                                    <strong className="mt-1 block text-lg font-normal text-[#d7fffd]">{line.quantity} db</strong>
-                                  </span>
-                                  <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-right">
-                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-white/40">Egységár</span>
-                                    <strong className="mt-1 block text-sm font-normal text-white">{formatMoney(line.unitPrice)}</strong>
-                                  </span>
-                                  {numberValue(line.discountPercent) > 0 ? (
-                                    <span className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-3 py-2 text-center text-amber-50">
-                                      <span className="block text-[9px] uppercase tracking-[0.08em] text-amber-100/60">Kedvezmény</span>
-                                      <strong className="mt-1 block text-sm font-normal">{numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</strong>
-                                    </span>
-                                  ) : (
-                                    <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-center text-white/48">
-                                      <span className="block text-[9px] uppercase tracking-[0.08em]">Kedvezmény</span>
-                                      <strong className="mt-1 block text-sm font-normal">0%</strong>
-                                    </span>
-                                  )}
-                                  <span className="rounded-xl border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-3 py-2 text-right text-[#d7fffd]">
-                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-[#d7fffd]/58">Sorösszeg</span>
-                                    <strong className="mt-1 block text-base font-normal">{formatMoney(line.lineTotal)}</strong>
-                                  </span>
-                                </div>
-                              </div>
-                            )) : (
+                              );
+                            }) : (
                               <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-sm text-white/42">
                                 Ehhez a régi bizonylathoz nincs mentett terméksor.
                               </div>
@@ -1236,7 +1315,7 @@ export default function AllInMagazinClients({
                     </div>
                   </section>
 
-                  <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
+                  <section className="rounded-[24px] bg-[#374357] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><History size={19} /></span>
@@ -1248,7 +1327,7 @@ export default function AllInMagazinClients({
                       <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{detail.payments.length} bejegyzés</span>
                     </div>
 
-                    <div className="mt-3 grid max-h-[360px] gap-2 overflow-y-auto pr-1 lg:grid-cols-2">
+                    <div className="mt-3 grid gap-2 lg:grid-cols-2">
                       {detail.payments.length ? detail.payments.map((payment) => (
                         <div key={payment.id} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                           <div className="flex items-start justify-between gap-3">
@@ -1295,16 +1374,285 @@ export default function AllInMagazinClients({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-4 sm:px-5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"
-          >
-            <X size={17} /> Bezárás
-          </button>
-        </div>
       </div>
+
+      {paymentOpen && detail && selected ? (
+        <div
+          className="fixed inset-0 z-[330] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !paymentSaving) closePaymentModal();
+          }}
+        >
+          <section className="w-full max-w-[760px] overflow-hidden rounded-[28px] border border-[#9be9e5]/36 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.66)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/25 bg-white/10">
+                  <WalletCards size={21} />
+                </span>
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-white/58">Tartozás rendezése</p>
+                  <h3 className="mt-1 text-xl">Befizetés • {selected.fullName}</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={paymentSaving}
+                onClick={closePaymentModal}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white hover:bg-white/10 disabled:opacity-50"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="p-5">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-white/38">Jelenlegi tartozás</p>
+                  <p className="mt-1 text-[34px] tracking-tight text-red-100 tabular-nums">{formatMoney(detail.summary.openBalance)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    paymentRequestKeyRef.current = "";
+                    setPaymentDraft((current) => ({ ...current, amount: String(numberValue(detail.summary.openBalance).toFixed(2)) }));
+                  }}
+                  className="h-9 rounded-xl border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 text-[11px] text-[#d7fffd] hover:bg-[#2a8d8b]/24"
+                >
+                  Teljes tartozás
+                </button>
+              </div>
+
+              {paymentError ? (
+                <div className="mt-4 rounded-xl bg-[#E21C2A] px-3 py-2.5 text-[12px] text-white">{paymentError}</div>
+              ) : null}
+
+              <label className="mt-4 block">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-white/45">Befizetni kívánt összeg</span>
+                <div className="mt-2 grid grid-cols-[1fr_auto] overflow-hidden rounded-2xl bg-[#232e3f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.10)] focus-within:shadow-[inset_0_0_0_1px_rgba(114,216,212,0.75)]">
+                  <input
+                    autoFocus
+                    inputMode="decimal"
+                    value={paymentDraft.amount}
+                    onChange={(event) => {
+                      paymentRequestKeyRef.current = "";
+                      setPaymentError("");
+                      setPaymentDraft((current) => ({ ...current, amount: event.target.value.replace(/[^0-9.,]/g, "") }));
+                    }}
+                    className="h-20 min-w-0 bg-transparent px-5 text-right text-[34px] tracking-tight text-white outline-none"
+                    placeholder="0,00"
+                  />
+                  <span className="inline-flex h-20 items-center border-l border-white/10 px-5 text-lg text-white/48">RON</span>
+                </div>
+              </label>
+
+              <div className="mt-4">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Fizetési mód</p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {PAYMENT_METHODS.map((option) => {
+                    const Icon = option.icon;
+                    const active = paymentDraft.method === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          paymentRequestKeyRef.current = "";
+                          setPaymentDraft((current) => ({ ...current, method: option.value }));
+                        }}
+                        className={`flex h-12 items-center justify-center gap-2 rounded-xl px-3 text-[12px] transition ${
+                          active
+                            ? "bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.22)]"
+                            : "bg-[#273243] text-white/62 hover:bg-[#344055]"
+                        }`}
+                      >
+                        <Icon size={16} /> {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
+                  Hivatkozás
+                  <input
+                    value={paymentDraft.reference}
+                    onChange={(event) => {
+                      paymentRequestKeyRef.current = "";
+                      setPaymentDraft((current) => ({ ...current, reference: event.target.value }));
+                    }}
+                    placeholder="Nyugtaszám, átutalási azonosító…"
+                    className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
+                  />
+                </label>
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
+                  Megjegyzés
+                  <input
+                    value={paymentDraft.note}
+                    onChange={(event) => {
+                      paymentRequestKeyRef.current = "";
+                      setPaymentDraft((current) => ({ ...current, note: event.target.value }));
+                    }}
+                    placeholder="Opcionális"
+                    className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2 border-t border-white/[0.08] pt-4">
+                <button
+                  type="button"
+                  disabled={paymentSaving}
+                  onClick={closePaymentModal}
+                  className="h-11 rounded-xl bg-white/[0.06] px-4 text-sm text-white/74 hover:bg-white/[0.10] disabled:opacity-50"
+                >
+                  Mégse
+                </button>
+                <button
+                  type="button"
+                  disabled={paymentSaving}
+                  onClick={() => void recordPayment()}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-55"
+                >
+                  {paymentSaving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />}
+                  Befizetés rögzítése
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {returnTarget && detail && selected ? (
+        <div
+          className="fixed inset-0 z-[335] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !returnSaving) closeReturnModal();
+          }}
+        >
+          <section className="w-full max-w-[720px] overflow-hidden rounded-[28px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/25 bg-white/10">
+                  <RotateCcw size={21} />
+                </span>
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-white/58">Próbára elvitt termék</p>
+                  <h3 className="mt-1 text-xl">Visszahozta</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={returnSaving}
+                onClick={closeReturnModal}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white hover:bg-white/10 disabled:opacity-50"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="p-5">
+              <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-4">
+                <span className="flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-2xl bg-white/95">
+                  {returnTarget.line.imageUrl ? (
+                    <img src={returnTarget.line.imageUrl} alt={returnTarget.line.productTitle || "Termék"} className="h-full w-full object-contain" />
+                  ) : (
+                    <ShoppingBag size={32} className="text-[#526173]" />
+                  )}
+                </span>
+                <div className="min-w-0 self-center">
+                  <p className="truncate text-lg text-white">{returnTarget.line.productTitle || "Névtelen termék"}</p>
+                  <p className="mt-1 truncate text-[12px] text-white/52">
+                    {[returnTarget.line.brandName, returnTarget.line.subcategoryName || returnTarget.line.categoryName, returnTarget.line.colorName, returnTarget.line.size].filter(Boolean).join(" • ") || "–"}
+                  </p>
+                  <p className="mt-2 text-[11px] text-white/34">
+                    {formatDateTime(returnTarget.sale.soldAt)} • {returnTarget.sale.actor || "–"}
+                  </p>
+                </div>
+              </div>
+
+              {returnError ? (
+                <div className="mt-4 rounded-xl bg-[#E21C2A] px-3 py-2.5 text-[12px] text-white">{returnError}</div>
+              ) : null}
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Darab</p>
+                  {returnTarget.maxQty > 1 ? (
+                    <input
+                      type="number"
+                      min={1}
+                      max={returnTarget.maxQty}
+                      value={returnQty}
+                      onChange={(event) => {
+                        returnRequestKeyRef.current = "";
+                        setReturnError("");
+                        setReturnQty(Math.max(1, Math.min(returnTarget.maxQty, Number(event.target.value) || 1)));
+                      }}
+                      className="mt-2 h-11 w-full rounded-xl bg-[#202a3a] px-3 text-center text-xl text-white outline-none focus:ring-1 focus:ring-[#72d8d4]"
+                    />
+                  ) : (
+                    <p className="mt-2 text-[28px] text-white">1 db</p>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Jóváírás</p>
+                  <p className="mt-2 text-[24px] text-[#d7fffd] tabular-nums">
+                    {formatMoney(numberValue(returnTarget.line.unitPrice) * returnQty)}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Tartozás utána</p>
+                  <p className="mt-2 text-[24px] text-white tabular-nums">
+                    {formatMoney(Math.max(0, numberValue(returnTarget.sale.balanceDue) - numberValue(returnTarget.line.unitPrice) * returnQty))}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-[#2a8d8b]/12 px-4 py-3 text-[12px] leading-relaxed text-[#d7fffd]/78">
+                <p className="flex items-center gap-2 text-[#d7fffd]">
+                  <RotateCcw size={15} />
+                  A termék visszakerül a <span className="text-white">{locationName}</span> készletébe.
+                </p>
+                <p className="mt-1.5">A kliens tartozása ugyanebben a műveletben automatikusan csökken. Készlet és pénzügyi audit is készül.</p>
+              </div>
+
+              <label className="mt-4 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
+                Megjegyzés
+                <input
+                  value={returnNote}
+                  onChange={(event) => {
+                    returnRequestKeyRef.current = "";
+                    setReturnNote(event.target.value);
+                  }}
+                  placeholder="Opcionális"
+                  className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
+                />
+              </label>
+
+              <div className="mt-5 flex justify-end gap-2 border-t border-white/[0.08] pt-4">
+                <button
+                  type="button"
+                  disabled={returnSaving}
+                  onClick={closeReturnModal}
+                  className="h-11 rounded-xl bg-white/[0.06] px-4 text-sm text-white/74 hover:bg-white/[0.10] disabled:opacity-50"
+                >
+                  Mégse
+                </button>
+                <button
+                  type="button"
+                  disabled={returnSaving}
+                  onClick={() => void returnCustomerCreditLine()}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-55"
+                >
+                  {returnSaving ? <Loader2 size={17} className="animate-spin" /> : <RotateCcw size={17} />}
+                  Visszavétel és készletre tétel
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {productImagePreview ? (
         <div
