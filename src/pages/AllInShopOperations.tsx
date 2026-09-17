@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   CircleDollarSign,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Clock3,
   CreditCard,
