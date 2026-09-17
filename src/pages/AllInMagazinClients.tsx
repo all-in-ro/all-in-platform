@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  BadgePercent,
   Banknote,
   CalendarDays,
   CheckCircle2,
@@ -37,6 +38,7 @@ import {
   apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
   apiAifReturnShopCustomerCreditLine,
+  apiAifSetShopCustomerSaleLineDiscount,
   apiAifUpdateShopCustomer,
   type AifRomaniaCounty,
   type AifRomaniaLocality,
@@ -89,6 +91,11 @@ type CustomerReturnTarget = {
   sale: AifShopCustomerSaleHistoryItem;
   line: AifShopCustomerSaleHistoryItem["lines"][number];
   maxQty: number;
+};
+
+type CustomerDiscountTarget = {
+  sale: AifShopCustomerSaleHistoryItem;
+  line: AifShopCustomerSaleHistoryItem["lines"][number];
 };
 
 type ProductImagePreview = {
@@ -156,6 +163,17 @@ function parseMoneyInput(value: string) {
   const normalized = value.trim().replace(/\s+/g, "").replace(",", ".");
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function roundMoney(value: unknown) {
+  return Math.round((numberValue(value) + Number.EPSILON) * 100) / 100;
+}
+
+function discountedUnitPrice(listPrice: unknown, discountPercent: unknown) {
+  const price = numberValue(listPrice);
+  const discount = Math.max(0, Math.min(100, numberValue(discountPercent)));
+  if (discount <= 0) return roundMoney(price);
+  return Math.ceil((price * (1 - discount / 100)) * 100 - 1e-9) / 100;
 }
 
 function createRequestKey() {
@@ -228,6 +246,11 @@ export default function AllInMagazinClients({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [returnTarget, setReturnTarget] = useState<CustomerReturnTarget | null>(null);
+  const [discountTarget, setDiscountTarget] = useState<CustomerDiscountTarget | null>(null);
+  const [discountPercentDraft, setDiscountPercentDraft] = useState("");
+  const [discountNote, setDiscountNote] = useState("");
+  const [discountSaving, setDiscountSaving] = useState(false);
+  const [discountError, setDiscountError] = useState("");
   const [returnQty, setReturnQty] = useState(1);
   const [returnNote, setReturnNote] = useState("");
   const [returnSaving, setReturnSaving] = useState(false);
@@ -261,6 +284,34 @@ export default function AllInMagazinClients({
   );
   const customerHasOpenBalance = numberValue(detail?.summary.openBalance) > 0.005;
   const canManageCustomerData = role === "admin";
+
+  const discountPreview = useMemo(() => {
+    if (!discountTarget) return null;
+    const currentPercent = numberValue(discountTarget.line.discountPercent);
+    const proposedPercent = Math.max(0, Math.min(100, parseMoneyInput(discountPercentDraft)));
+    const quantity = Math.max(1, numberValue(discountTarget.line.quantity));
+    const listPrice = numberValue(discountTarget.line.listPrice);
+    const currentLineTotal = numberValue(discountTarget.line.lineTotal);
+    const unitPrice = discountedUnitPrice(listPrice, proposedPercent);
+    const lineTotal = roundMoney(unitPrice * quantity);
+    const discountAmount = roundMoney(Math.max(0, listPrice * quantity - lineTotal));
+    const saleTotal = roundMoney(numberValue(discountTarget.sale.total) - currentLineTotal + lineTotal);
+    const paidTotal = roundMoney(discountTarget.sale.paidTotal);
+    const balanceDue = roundMoney(Math.max(0, saleTotal - paidTotal));
+    return {
+      currentPercent,
+      proposedPercent,
+      listPrice,
+      unitPrice,
+      lineTotal,
+      discountAmount,
+      saleTotal,
+      paidTotal,
+      balanceDue,
+      wouldRefund: saleTotal + 0.005 < paidTotal,
+      changed: proposedPercent > currentPercent + 0.0001,
+    };
+  }, [discountPercentDraft, discountTarget]);
 
   async function loadLocalities(countyCode: string, selectedCode = "") {
     if (!countyCode) {
@@ -321,6 +372,11 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setDiscountTarget(null);
+    setDiscountPercentDraft("");
+    setDiscountNote("");
+    setDiscountSaving(false);
+    setDiscountError("");
     setReturnTarget(null);
     setReturnQty(1);
     setReturnNote("");
@@ -351,6 +407,15 @@ export default function AllInMagazinClients({
       if (event.key !== "Escape") return;
       if (productImagePreview) {
         setProductImagePreview(null);
+        return;
+      }
+      if (discountTarget) {
+        if (!discountSaving) {
+          setDiscountTarget(null);
+          setDiscountPercentDraft("");
+          setDiscountNote("");
+          setDiscountError("");
+        }
         return;
       }
       if (returnTarget) {
@@ -397,7 +462,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, paymentOpen, paymentSaving, productImagePreview, returnSaving, returnTarget, saleDetachTarget, saleDetaching, yearPickerOpen]);
+  }, [customerDeleteOpen, customerDeleting, discountSaving, discountTarget, mode, onClose, open, paymentOpen, paymentSaving, productImagePreview, returnSaving, returnTarget, saleDetachTarget, saleDetaching, yearPickerOpen]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -447,6 +512,11 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setDiscountTarget(null);
+    setDiscountPercentDraft("");
+    setDiscountNote("");
+    setDiscountSaving(false);
+    setDiscountError("");
     setReturnTarget(null);
     setReturnQty(1);
     setReturnNote("");
@@ -481,6 +551,11 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setDiscountTarget(null);
+    setDiscountPercentDraft("");
+    setDiscountNote("");
+    setDiscountSaving(false);
+    setDiscountError("");
     setReturnTarget(null);
     setReturnQty(1);
     setReturnNote("");
@@ -687,6 +762,74 @@ export default function AllInMagazinClients({
       setPaymentError(caught instanceof Error ? caught.message : "A befizetés rögzítése nem sikerült.");
     } finally {
       setPaymentSaving(false);
+    }
+  }
+
+  function openDiscountModal(
+    sale: AifShopCustomerSaleHistoryItem,
+    line: AifShopCustomerSaleHistoryItem["lines"][number],
+  ) {
+    if (numberValue(sale.balanceDue) <= 0.005) return;
+    const currentPercent = numberValue(line.discountPercent);
+    setDiscountTarget({ sale, line });
+    setDiscountPercentDraft(currentPercent > 0 ? String(currentPercent) : "");
+    setDiscountNote("");
+    setDiscountError("");
+  }
+
+  function closeDiscountModal() {
+    if (discountSaving) return;
+    setDiscountTarget(null);
+    setDiscountPercentDraft("");
+    setDiscountNote("");
+    setDiscountError("");
+  }
+
+  async function saveLateDiscount() {
+    if (!selected || !discountTarget || !discountPreview) return;
+    if (!discountPreview.changed) {
+      setDiscountError(
+        discountPreview.currentPercent > 0
+          ? `A kedvezmény legyen nagyobb a jelenlegi ${discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%-nál.`
+          : "Adj meg 0%-nál nagyobb kedvezményt.",
+      );
+      return;
+    }
+    if (discountPreview.wouldRefund) {
+      setDiscountError("Ekkora kedvezmény már pénzvisszatérítést igényelne. Itt csak a fennálló tartozás csökkenthető.");
+      return;
+    }
+
+    setDiscountSaving(true);
+    setDiscountError("");
+    setError("");
+    setSuccess("");
+    try {
+      const response = await apiAifSetShopCustomerSaleLineDiscount(
+        selected.id,
+        discountTarget.sale.id,
+        discountTarget.line.id,
+        {
+          location: locationCode,
+          discountPercent: discountPreview.proposedPercent,
+          note: discountNote.trim() || null,
+        },
+      );
+      setSuccess(
+        `${discountTarget.line.productTitle || "A termék"}: ${response.discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény mentve. ` +
+        `Kedvezmény: ${formatMoney(response.discountAmount)}. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
+      );
+      setDiscountTarget(null);
+      setDiscountPercentDraft("");
+      setDiscountNote("");
+      await Promise.all([
+        loadCustomerDetail(selected.id, detailYear),
+        loadCustomers(query),
+      ]);
+    } catch (caught) {
+      setDiscountError(caught instanceof Error ? caught.message : "Az utólagos kedvezmény mentése nem sikerült.");
+    } finally {
+      setDiscountSaving(false);
     }
   }
 
@@ -1352,16 +1495,33 @@ export default function AllInMagazinClients({
                                     )}
                                   </div>
 
-                                  <div className="hidden min-h-[38px] flex-col items-end justify-center lg:flex">
-                                    {hasDiscount ? (
-                                      <>
-                                        <span className="text-[11px] tabular-nums text-amber-100">
-                                          −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
-                                        </span>
-                                        <span className="mt-0.5 text-[10px] tabular-nums text-amber-100/68">
-                                          −{formatMoney(discountAmount)}
-                                        </span>
-                                      </>
+                                  <div className="hidden min-h-[38px] items-center justify-end lg:flex">
+                                    {saleBalance > 0.005 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openDiscountModal(sale, line)}
+                                        className={`inline-flex min-h-8 items-center justify-end gap-1.5 rounded-lg px-2 py-1 text-right transition ${
+                                          hasDiscount
+                                            ? "bg-amber-300/[0.07] text-amber-100 hover:bg-amber-300/[0.12]"
+                                            : "bg-[#2a8d8b]/10 text-[#bff8f5] hover:bg-[#2a8d8b]/20"
+                                        }`}
+                                        title={hasDiscount ? "További kedvezmény adása" : "Utólagos kedvezmény adása"}
+                                      >
+                                        <BadgePercent size={13} className="shrink-0 opacity-80" />
+                                        {hasDiscount ? (
+                                          <span className="leading-tight">
+                                            <span className="block text-[11px] tabular-nums">−{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</span>
+                                            <span className="block text-[9px] tabular-nums opacity-68">−{formatMoney(discountAmount)}</span>
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px]">Kedvezmény</span>
+                                        )}
+                                      </button>
+                                    ) : hasDiscount ? (
+                                      <span className="text-right leading-tight text-amber-100">
+                                        <span className="block text-[11px] tabular-nums">−{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</span>
+                                        <span className="block text-[9px] tabular-nums opacity-68">−{formatMoney(discountAmount)}</span>
+                                      </span>
                                     ) : (
                                       <span className="text-[11px] text-white/18">—</span>
                                     )}
@@ -1419,9 +1579,26 @@ export default function AllInMagazinClients({
                                         <>
                                           <p className="mt-1 text-[10px] text-white/28 line-through">{formatMoney(originalUnitPrice)}</p>
                                           <p className="text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
-                                          <p className="mt-0.5 text-[10px] text-amber-100/75">
+                                          <button
+                                            type="button"
+                                            onClick={() => openDiscountModal(sale, line)}
+                                            disabled={saleBalance <= 0.005}
+                                            className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-100/80 disabled:pointer-events-none"
+                                          >
+                                            <BadgePercent size={11} />
                                             −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • −{formatMoney(discountAmount)}
-                                          </p>
+                                          </button>
+                                        </>
+                                      ) : saleBalance > 0.005 ? (
+                                        <>
+                                          <p className="mt-1 text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
+                                          <button
+                                            type="button"
+                                            onClick={() => openDiscountModal(sale, line)}
+                                            className="mt-1 inline-flex items-center gap-1 text-[10px] text-[#bff8f5]"
+                                          >
+                                            <BadgePercent size={11} /> Kedvezmény adása
+                                          </button>
                                         </>
                                       ) : (
                                         <p className="mt-1 text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
@@ -1568,6 +1745,87 @@ export default function AllInMagazinClients({
         </div>
 
       </div>
+
+
+      {discountTarget && discountPreview && detail && selected ? (
+        <div
+          className="fixed inset-0 z-[332] grid place-items-center bg-slate-950/82 px-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !discountSaving) closeDiscountModal();
+          }}
+        >
+          <section className="w-full max-w-[760px] overflow-hidden rounded-[28px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_40px_130px_rgba(0,0,0,0.68)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#26384b] via-[#295e64] to-[#2a8d8b] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/22 bg-white/10"><BadgePercent size={21} /></span>
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-white/58">Nyitott tartozás • utólagos kedvezmény</p>
+                  <h3 className="mt-1 truncate text-xl">{discountTarget.line.productTitle || "Termék"}</h3>
+                </div>
+              </div>
+              <button type="button" disabled={discountSaving} onClick={closeDiscountModal} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white hover:bg-white/10 disabled:opacity-50"><X size={18} /></button>
+            </header>
+
+            <div className="p-5">
+              {discountError ? <div className="mb-4 rounded-xl bg-[#E21C2A] px-3 py-2.5 text-[12px] text-white">{discountError}</div> : null}
+
+              <div className="grid gap-4 sm:grid-cols-[250px_minmax(0,1fr)]">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Kedvezmény</p>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] overflow-hidden rounded-2xl bg-[#232e3f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.10)] focus-within:shadow-[inset_0_0_0_1px_rgba(114,216,212,0.75)]">
+                    <input
+                      autoFocus
+                      inputMode="decimal"
+                      value={discountPercentDraft}
+                      onChange={(event) => {
+                        setDiscountError("");
+                        setDiscountPercentDraft(event.target.value.replace(/[^0-9.,]/g, ""));
+                      }}
+                      className="h-20 min-w-0 bg-transparent px-4 text-right text-[34px] tracking-tight text-white outline-none"
+                      placeholder="0"
+                    />
+                    <span className="inline-flex h-20 items-center border-l border-white/10 px-4 text-xl text-white/48">%</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-5 gap-1.5">
+                    {[5, 10, 15, 20, 30].map((percent) => (
+                      <button
+                        key={percent}
+                        type="button"
+                        onClick={() => { setDiscountError(""); setDiscountPercentDraft(String(percent)); }}
+                        className={`h-9 rounded-lg text-[11px] transition ${Math.abs(discountPreview.proposedPercent - percent) < 0.001 ? "bg-[#2a8d8b] text-white" : "bg-[#273243] text-white/58 hover:bg-[#344055]"}`}
+                      >
+                        {percent}%
+                      </button>
+                    ))}
+                  </div>
+                  {discountPreview.currentPercent > 0 ? (
+                    <p className="mt-2 text-[10px] text-amber-100/65">Jelenlegi: {discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%. Innen csak növelhető.</p>
+                  ) : null}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-white/34">Eredeti ár / db</p><p className="mt-2 text-[20px] tabular-nums text-white">{formatMoney(discountPreview.listPrice)}</p></div>
+                  <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-[#9be9e5]/54">Új ár / db</p><p className="mt-2 text-[20px] tabular-nums text-[#d7fffd]">{formatMoney(discountPreview.unitPrice)}</p></div>
+                  <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-amber-100/52">Kedvezmény összesen</p><p className="mt-2 text-[20px] tabular-nums text-amber-100">−{formatMoney(discountPreview.discountAmount)}</p></div>
+                  <div className={`rounded-2xl p-3 ${discountPreview.balanceDue > 0.005 ? "bg-[#E21C2A] text-white" : "bg-[#2a8d8b]/18 text-[#d7fffd]"}`}><p className="text-[9px] uppercase tracking-[0.10em] opacity-70">Tartozás utána</p><p className="mt-2 text-[20px] tabular-nums">{formatMoney(discountPreview.balanceDue)}</p></div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl bg-[#242f41] px-4 py-3">
+                <div><p className="text-[9px] uppercase tracking-[0.10em] text-white/32">Új sorösszeg</p><p className="mt-1 text-[22px] tabular-nums text-white">{formatMoney(discountPreview.lineTotal)}</p></div>
+                <div className="text-right"><p className="text-[9px] uppercase tracking-[0.10em] text-white/32">Vásárlás új végösszege</p><p className="mt-1 text-[22px] tabular-nums text-[#d7fffd]">{formatMoney(discountPreview.saleTotal)}</p></div>
+              </div>
+
+              <label className="mt-4 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/42">Megjegyzés<input value={discountNote} onChange={(event) => setDiscountNote(event.target.value)} placeholder="Opcionális" className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]" /></label>
+
+              <div className="mt-5 flex justify-end gap-2 border-t border-white/[0.08] pt-4">
+                <button type="button" disabled={discountSaving} onClick={closeDiscountModal} className="h-11 rounded-xl bg-white/[0.06] px-4 text-sm text-white/74 hover:bg-white/[0.10] disabled:opacity-50">Mégse</button>
+                <button type="button" disabled={discountSaving || !discountPreview.changed || discountPreview.wouldRefund} onClick={() => void saveLateDiscount()} className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45">{discountSaving ? <Loader2 size={17} className="animate-spin" /> : <BadgePercent size={17} />}Kedvezmény mentése</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {paymentOpen && detail && selected ? (
         <div
