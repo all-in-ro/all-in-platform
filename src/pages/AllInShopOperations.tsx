@@ -21,10 +21,7 @@ import {
   Landmark,
   LockKeyhole,
   Loader2,
-  Mail,
-  MapPin,
   PackageSearch,
-  Phone,
   Receipt,
   RefreshCw,
   RotateCcw,
@@ -615,9 +612,13 @@ function CustomerQuickViewModal({
                       }`}
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-[12px] text-white">{sale.saleNumber}</p>
-                        <p className="mt-1 text-[10px] text-white/42">
-                          {formatExactDateTime(sale.soldAt)}{sale.actor ? ` • ${sale.actor}` : ""}
+                        <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-white">
+                          <span className="whitespace-nowrap tabular-nums">{formatExactDateTime(sale.soldAt)}</span>
+                          <span className="text-white/26">•</span>
+                          <span className="truncate text-[#d7fffd]">{sale.actor || "–"}</span>
+                        </p>
+                        <p className="mt-1 truncate text-[9px] uppercase tracking-[0.08em] text-white/30">
+                          Bizonylat: {sale.saleNumber}
                         </p>
                       </div>
                       <div className="text-left sm:text-right">
