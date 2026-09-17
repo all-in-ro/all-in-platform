@@ -2063,12 +2063,31 @@ export default function AllInShopOperations({
                     {dailyProductLines.map((item) => {
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
                       const unpaid = numberValue(item.balanceDue) > 0.005 || ["unpaid", "partial", "credit"].includes(paymentStatus);
+
+                      const linkedSale = (summaryData?.sales || []).find(
+                        (sale) =>
+                          String(sale.id || "") === String(item.saleId || "") &&
+                          String(sale.recordType || "sale") === String(item.recordType || "sale"),
+                      );
+                      const paymentLabel = String(
+                        linkedSale?.paymentLabel ||
+                        (unpaid ? "Utólag fizet" : "Nincs adat"),
+                      );
+                      const paymentKey = paymentLabel.toLocaleLowerCase("hu-HU");
+                      const PaymentIcon = paymentKey.includes("készpénz")
+                        ? Banknote
+                        : paymentKey.includes("bankkártya") || paymentKey.includes("kártya")
+                          ? CreditCard
+                          : paymentKey.includes("átutalás")
+                            ? Landmark
+                            : WalletCards;
+
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`group relative grid min-h-[104px] grid-cols-[78px_minmax(0,1fr)_210px] items-center gap-4 px-4 py-3.5 transition ${
+                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 px-4 py-3.5 transition ${
                             unpaid
-                              ? "bg-[#2d3546] hover:bg-[#313a4c]"
+                              ? "bg-[#2c3546] hover:bg-[#303a4b]"
                               : "bg-[#293548] hover:bg-[#2d3b4f]"
                           }`}
                         >
@@ -2084,7 +2103,7 @@ export default function AllInShopOperations({
                                 {item.title}
                               </p>
                               {item.recordType === "exchange" ? (
-                                <span className="shrink-0 rounded-md bg-[#2a8d8b]/18 px-2 py-0.5 text-[10px] text-[#cffffd]">Csere</span>
+                                <span className="shrink-0 rounded-md bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#cffffd]">Csere</span>
                               ) : null}
                             </div>
 
@@ -2095,61 +2114,88 @@ export default function AllInShopOperations({
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
 
-                            <div className="mt-2.5 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/[0.09] pt-2.5">
-                              <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                                {item.customerName ? (
-                                  item.customerId ? (
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void openCustomerQuickView(item.customerId, item.customerName || "");
-                                      }}
-                                      className="group/customer inline-flex max-w-[500px] items-center gap-2 rounded-xl bg-[#2a8d8b]/22 px-3 py-2 text-[13px] text-white transition hover:bg-[#2a8d8b]/36 hover:shadow-[0_5px_16px_rgba(42,141,139,0.18)]"
-                                      title="Kliens adatlap megnyitása"
-                                    >
-                                      <UserRound size={14} className="shrink-0 text-[#bff8f5]" />
-                                      <span className="truncate">{item.customerName}</span>
-                                      <ChevronRight size={13} className="shrink-0 text-[#bff8f5]/70 transition group-hover/customer:translate-x-0.5" />
-                                    </button>
-                                  ) : (
-                                    <span
-                                      className="inline-flex max-w-[500px] items-center gap-2 rounded-xl bg-[#2a8d8b]/12 px-3 py-2 text-[13px] text-white/82"
-                                      title={item.customerName}
-                                    >
-                                      <UserRound size={14} className="shrink-0 text-[#bff8f5]/70" />
-                                      <span className="truncate">{item.customerName}</span>
-                                    </span>
-                                  )
+                            <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-white/[0.08] pt-2.5">
+                              {item.customerName ? (
+                                item.customerId ? (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void openCustomerQuickView(item.customerId, item.customerName || "");
+                                    }}
+                                    className="group/customer inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-[#d7fffd] transition hover:text-white"
+                                    title="Kliens adatlap megnyitása"
+                                  >
+                                    <UserRound size={13} className="shrink-0 text-[#8ee6e2]" />
+                                    <span className="truncate">{item.customerName}</span>
+                                    <ChevronRight size={12} className="shrink-0 text-white/32 transition group-hover/customer:translate-x-0.5 group-hover/customer:text-white/65" />
+                                  </button>
                                 ) : (
-                                  <span className="text-[11px] text-white/28">Nincs klienshez csatolva</span>
-                                )}
-
-                                {unpaid ? (
-                                  <span className="inline-flex items-center gap-1.5 rounded-xl bg-[#E21C2A] px-3 py-2 text-[12px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
-                                    <TriangleAlert size={13} />
-                                    {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
+                                  <span
+                                    className="inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-white/62"
+                                    title={item.customerName}
+                                  >
+                                    <UserRound size={13} className="shrink-0 text-[#8ee6e2]/72" />
+                                    <span className="truncate">{item.customerName}</span>
                                   </span>
-                                ) : null}
-                              </div>
+                                )
+                              ) : (
+                                <span className="text-[11px] text-white/28">Nincs klienshez csatolva</span>
+                              )}
+
+                              <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+
+                              <span
+                                className="inline-flex items-center gap-1.5 text-[11px] text-white/66"
+                                title={`Fizetés: ${paymentLabel}`}
+                              >
+                                <PaymentIcon
+                                  size={14}
+                                  className={
+                                    paymentKey.includes("készpénz")
+                                      ? "text-[#8ee6e2]"
+                                      : paymentKey.includes("kártya")
+                                        ? "text-[#a9c8ff]"
+                                        : paymentKey.includes("átutalás")
+                                          ? "text-[#c7b5ff]"
+                                          : "text-white/52"
+                                  }
+                                />
+                                <span>{paymentLabel}</span>
+                              </span>
 
                               {item.soldAt ? (
-                                <span className="whitespace-nowrap text-[11px] tabular-nums text-white/38">
-                                  {formatTime(item.soldAt)}
-                                </span>
+                                <>
+                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] tabular-nums text-white/42">
+                                    <Clock3 size={13} className="text-white/32" />
+                                    {formatTime(item.soldAt)}
+                                  </span>
+                                </>
+                              ) : null}
+
+                              {unpaid ? (
+                                <>
+                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                  <span className="inline-flex items-center gap-1.5 rounded-md bg-[#E21C2A] px-2.5 py-1 text-[11px] text-white shadow-[0_3px_10px_rgba(226,28,42,0.16)]">
+                                    <TriangleAlert size={12} />
+                                    {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
+                                  </span>
+                                </>
                               ) : null}
                             </div>
                           </div>
 
                           <div className="flex h-full min-w-0 items-center justify-end">
                             <div className="text-right">
-                              <div className="flex items-baseline justify-end gap-3 whitespace-nowrap">
-                                <span className="text-[13px] tabular-nums text-white/52">{item.qty} db</span>
-                                <span className="h-6 w-px bg-white/12" aria-hidden="true" />
-                                <span className="text-[20px] tracking-tight text-white">{formatMoney(item.revenue)}</span>
-                              </div>
+                              <p className="text-[11px] uppercase tracking-[0.08em] text-white/34">
+                                {item.qty} db
+                              </p>
+                              <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-white">
+                                {formatMoney(item.revenue)}
+                              </p>
                               {item.discountTotal > 0 ? (
-                                <p className="mt-1 text-[10px] text-amber-100/78">
+                                <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100/76">
                                   Kedvezmény −{formatMoney(item.discountTotal)}
                                 </p>
                               ) : null}
