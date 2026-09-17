@@ -1248,18 +1248,6 @@ export default function AllInMagazinClients({
                     </span>
                   )}
 
-                  {detail && numberValue(detail.summary.openBalance) > 0.005 ? (
-                    <button
-                      type="button"
-                      onClick={openPaymentModal}
-                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_7px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.99]"
-                      title="Tartozás befizetése"
-                    >
-                      <WalletCards size={15} />
-                      Befizetés
-                    </button>
-                  ) : null}
-
                   <button
                     type="button"
                     onClick={() => setYearPickerOpen(true)}
@@ -1280,18 +1268,42 @@ export default function AllInMagazinClients({
               ) : detail ? (
                 <div className="space-y-3">
                   <div className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
-                    <div className="flex flex-wrap items-start gap-3">
-                      <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/16 text-[#d7fffd]">
-                        <UserRound size={22} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="truncate text-[21px] text-white">{detail.item.fullName}</h3>
-                        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/55">
-                          {detail.item.phone ? <span className="inline-flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{detail.item.phone}</span> : null}
-                          {detail.item.email ? <span className="inline-flex items-center gap-2"><Mail size={13} className="text-[#8ee6e2]" />{detail.item.email}</span> : null}
-                          {customerAddressLabel(detail.item) ? <span className="inline-flex items-center gap-2"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(detail.item)}</span> : null}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/16 text-[#d7fffd]">
+                          <UserRound size={22} />
+                        </span>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-[21px] text-white">{detail.item.fullName}</h3>
+                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/55">
+                            {detail.item.phone ? <span className="inline-flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{detail.item.phone}</span> : null}
+                            {detail.item.email ? <span className="inline-flex items-center gap-2"><Mail size={13} className="text-[#8ee6e2]" />{detail.item.email}</span> : null}
+                            {customerAddressLabel(detail.item) ? <span className="inline-flex items-center gap-2"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(detail.item)}</span> : null}
+                          </div>
                         </div>
                       </div>
+
+                      {numberValue(detail.summary.openBalance) > 0.005 ? (
+                        <button
+                          type="button"
+                          onClick={openPaymentModal}
+                          className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-[#9be9e5]/55 bg-[#2a8d8b] px-4 text-[12px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] active:scale-[0.99]"
+                          title="Tartozás befizetése"
+                        >
+                          <WalletCards size={16} />
+                          <span>
+                            <span className="block text-left leading-none">Befizetés</span>
+                            <span className="mt-1 block text-left text-[9px] leading-none text-white/68">
+                              {formatMoney(detail.summary.openBalance)}
+                            </span>
+                          </span>
+                        </button>
+                      ) : (
+                        <span className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd]/78">
+                          <CheckCircle2 size={14} />
+                          Nincs tartozás
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
