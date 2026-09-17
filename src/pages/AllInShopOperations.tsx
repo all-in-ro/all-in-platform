@@ -2059,7 +2059,7 @@ export default function AllInShopOperations({
                       ) : null}
                     </div>
                   </div>
-                  <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.07]">
+                  <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.14]">
                     {dailyProductLines.map((item) => {
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
                       const unpaid = numberValue(item.balanceDue) > 0.005 || ["unpaid", "partial", "credit"].includes(paymentStatus);
@@ -2085,7 +2085,7 @@ export default function AllInShopOperations({
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 px-4 py-3.5 transition ${
+                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
                             unpaid
                               ? "bg-[#2c3546] hover:bg-[#303a4b]"
                               : "bg-[#293548] hover:bg-[#2d3b4f]"
