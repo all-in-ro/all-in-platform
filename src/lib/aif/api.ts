@@ -2948,6 +2948,7 @@ export type AifShopDailyProductItem = {
   saleId?: string | null;
   saleNumber?: string | null;
   soldAt?: string | null;
+  customerId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
   paymentStatus?: string | null;
