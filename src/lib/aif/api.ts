@@ -12,7 +12,6 @@ export type AifBrand = {
   is_active: boolean;
 };
 
-
 export type AifCategory = {
   id: string;
   code: string;
@@ -2632,6 +2631,8 @@ export type AifShopCustomerSaleLineItem = {
   colorName?: string | null;
   size?: string | null;
   imageUrl?: string | null;
+  originalQuantity?: number;
+  returnedQty?: number;
   quantity: number;
   listPrice: number;
   unitPrice: number;
@@ -2819,7 +2820,6 @@ export function apiAifRecordShopCustomerPayment(
     },
   );
 }
-
 
 export type AifShopCustomerSaleLineDiscountResult = {
   ok: true;
@@ -3953,6 +3953,41 @@ export function apiAifCompleteShopExchange(input: {
   idempotencyKey: string;
 }) {
   return fetchAifJSON<AifShopExchangeResult>("/shop-returns/exchanges", {
+    method: "POST",
+    headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+    body: JSON.stringify(input),
+  });
+}
+
+export type AifShopCustomerCreditReturnResult = {
+  ok: true;
+  duplicate?: boolean;
+  exchangeId: string;
+  exchangeNumber: string;
+  saleId: string;
+  saleLineId: string;
+  customerId: string;
+  returnedQty: number;
+  returnCredit: number;
+  openBalance: number;
+  saleTotal: number;
+  stock?: {
+    variantId: string;
+    qtyBefore: number;
+    qtyAfter: number;
+    qtyDelta: number;
+  };
+};
+
+export function apiAifReturnShopCustomerCreditLine(input: {
+  location: string;
+  customerId: string;
+  saleLineId: string;
+  returnedQty: number;
+  note?: string | null;
+  idempotencyKey: string;
+}) {
+  return fetchAifJSON<AifShopCustomerCreditReturnResult>("/shop-returns/customer-credit-return", {
     method: "POST",
     headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
     body: JSON.stringify(input),
