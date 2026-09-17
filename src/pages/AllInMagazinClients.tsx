@@ -59,6 +59,7 @@ type Props = {
   onClose: () => void;
 };
 
+
 type CustomerDraft = {
   fullName: string;
   phone: string;
