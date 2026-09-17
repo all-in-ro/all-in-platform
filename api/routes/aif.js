@@ -20452,6 +20452,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         colorHex: line.colorHex || line.color_hex || null,
         size: line.size || null,
         imageUrl: line.imageUrl || line.image_url || null,
+        originalQuantity: aifNumber(line.originalQuantity ?? line.original_quantity ?? line.quantity),
+        returnedQty: aifNumber(line.returnedQty ?? line.returned_qty),
         quantity: aifNumber(line.quantity),
         listPrice: aifNumber(line.listPrice ?? line.list_price),
         unitPrice: aifNumber(line.unitPrice ?? line.unit_price),
@@ -20496,14 +20498,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          l.name AS location_name,
          COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
          count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
-         count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
+         count(s.id) FILTER (WHERE s.status='completed' AND s.total > 0.005)::int AS sale_count,
          COALESCE(sum(s.total) FILTER (
            WHERE s.status='completed'
              AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$2::int
          ),0)::numeric AS year_purchase_total,
          COALESCE(sum(s.total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_purchase_total,
          COALESCE(sum(s.paid_total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_paid_total,
-         max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
+         max(s.sold_at) FILTER (WHERE s.status='completed' AND s.total > 0.005) AS last_sale_at
        FROM aif_shop_customers c
        JOIN aif_locations l ON l.id=c.location_id
        LEFT JOIN aif_shop_sales s
@@ -21225,8 +21227,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            s.*,
            l.code AS location_code,
            l.name AS location_name,
-           count(sl.id)::int AS line_count,
-           COALESCE(sum(sl.quantity),0)::int AS item_count,
+           count(sl.id) FILTER (
+             WHERE GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0
+           )::int AS line_count,
+           COALESCE(sum(GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)),0)::int AS item_count,
            COALESCE(
              (
                SELECT jsonb_agg(
@@ -21325,14 +21329,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                      LIMIT 1
                    )
                  ),
-                 'quantity', sl.quantity,
+                 'originalQuantity', sl.quantity,
+                 'returnedQty', COALESCE(ret.returned_qty,0),
+                 'quantity', GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
                  'listPrice', sl.list_price,
                  'unitPrice', sl.unit_price,
-                 'discountAmount', sl.discount_amount,
+                 'discountAmount', round(
+                   GREATEST(sl.list_price - sl.unit_price,0)
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
+                   2
+                 ),
                  'discountPercent', sl.discount_percent,
-                 'lineTotal', sl.line_total
+                 'lineTotal', round(
+                   sl.unit_price * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
+                   2
+                 )
                ) ORDER BY sl.line_no ASC, sl.id ASC
-             ) FILTER (WHERE sl.id IS NOT NULL),
+             ) FILTER (
+               WHERE sl.id IS NOT NULL
+                 AND GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0
+             ),
              '[]'::jsonb
            ) AS lines
          FROM aif_shop_sales s
@@ -21347,9 +21363,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_color_types sale_ct
            ON sale_ct.id=sale_bcc.color_type_id
           AND sale_ct.is_active=true
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(sum(e.returned_qty),0)::int AS returned_qty
+           FROM aif_shop_exchanges e
+           WHERE e.source_sale_line_id=sl.id
+             AND e.status='completed'
+         ) ret ON true
          WHERE s.customer_id=$1
            AND s.location_id=$2
            AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
+           AND (s.total > 0.005 OR s.paid_total > 0.005)
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
          LIMIT $4`,
