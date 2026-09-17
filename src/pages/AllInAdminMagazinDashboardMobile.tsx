@@ -1534,8 +1534,17 @@ export default function AllInAdminMagazinDashboardMobile({
                 const handoverAt = handover?.acceptedAt || handover?.createdAt || handover?.cutoffAt || null;
                 const closureSnapshot = (closure?.snapshot || {}) as Record<string, any>;
                 const closureCashBalance = (closureSnapshot.cashBalance || {}) as Record<string, any>;
+                const closureAtMs = closureAt ? new Date(closureAt).getTime() : Number.POSITIVE_INFINITY;
+                const closureOpeningHandover = acceptedHandovers.find((item) => {
+                  const value = item.acceptedAt || item.createdAt || item.cutoffAt || null;
+                  if (!value) return false;
+                  const at = new Date(value).getTime();
+                  return Number.isFinite(at) && at <= closureAtMs;
+                }) || null;
                 const closureOpeningCash = numberValue(
-                  closureCashBalance.baselineCash
+                  closureOpeningHandover?.countedCash
+                    ?? closureOpeningHandover?.expectedCash
+                    ?? closureCashBalance.baselineCash
                     ?? closureSnapshot.openingCash
                     ?? 0,
                 );
