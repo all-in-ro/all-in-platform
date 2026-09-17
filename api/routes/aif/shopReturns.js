@@ -95,8 +95,8 @@ export default function createAifShopReturnsRouter({
          COALESCE(NULLIF(sl.color_name,''), NULLIF(v.color_name,''), NULLIF(v.color_code,'')) AS color_name,
          COALESCE(NULLIF(sl.size,''), NULLIF(v.size,'')) AS size,
          COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
-         s.sale_number, s.sold_at, s.actor, s.customer_name, s.customer_phone, s.status AS sale_status,
-         s.payment_status, s.balance_due,
+         s.sale_number, s.sold_at, s.actor, s.customer_id, s.customer_name, s.customer_phone, s.status AS sale_status,
+         s.sale_type, s.payment_status, s.subtotal, s.discount_total, s.total, s.paid_total, s.balance_due,
          s.location_id AS sale_location_id,
          l.code AS sale_location_code,
          l.name AS sale_location_name,
@@ -683,6 +683,397 @@ export default function createAifShopReturnsRouter({
       console.error("AIF shop return history failed", error);
       const status = Number(error?.statusCode || 500);
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A visszáru előzmények nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+
+
+  router.post("/customer-credit-return", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const customerId = text(body.customerId || body.customer_id);
+    const saleLineId = text(body.saleLineId || body.sale_line_id);
+    const returnedQty = Math.max(0, Number.parseInt(String(body.returnedQty ?? body.returned_qty ?? 1), 10) || 0);
+    const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+    const note = text(body.note) || null;
+
+    if (!isUuidText(customerId)) return res.status(400).json({ error: "Érvénytelen kliensazonosító." });
+    if (!isUuidText(saleLineId)) return res.status(400).json({ error: "Érvénytelen eladási tétel." });
+    if (!returnedQty) return res.status(400).json({ error: "Legalább 1 db visszahozott termék szükséges." });
+    if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik a visszavétel biztonsági azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, client, body.location);
+
+      const duplicate = await client.query(
+        `SELECT e.*, s.balance_due, s.total
+         FROM aif_shop_exchanges e
+         JOIN aif_shop_sales s ON s.id=e.source_sale_id
+         WHERE e.client_request_id=$1
+         LIMIT 1`,
+        [idempotencyKey]
+      );
+      if (duplicate.rowCount) {
+        const row = duplicate.rows[0];
+        const snapshot = row.original_snapshot && typeof row.original_snapshot === "object"
+          ? row.original_snapshot
+          : {};
+        if (
+          String(row.source_sale_line_id) !== saleLineId
+          || String(snapshot.customerId || "") !== customerId
+          || String(snapshot.source || "") !== "shop_customer_credit_return"
+        ) {
+          const collision = new Error("Ez a visszavételi azonosító már egy másik művelethez tartozik.");
+          collision.statusCode = 409;
+          collision.code = "customer_credit_return_idempotency_collision";
+          throw collision;
+        }
+        await client.query("COMMIT");
+        return res.json({
+          ok: true,
+          duplicate: true,
+          exchangeId: String(row.id),
+          exchangeNumber: row.exchange_number,
+          saleId: String(row.source_sale_id),
+          saleLineId: String(row.source_sale_line_id),
+          customerId,
+          returnedQty: aifNumber(row.returned_qty),
+          returnCredit: aifNumber(row.return_credit),
+          openBalance: aifNumber(row.balance_due),
+          saleTotal: aifNumber(row.total),
+        });
+      }
+
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+      await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_customer_credit_return:${saleLineId}`]);
+
+      const customerResult = await client.query(
+        `SELECT id, full_name, phone
+         FROM aif_shop_customers
+         WHERE id::text=$1
+           AND location_id=$2
+           AND is_active=true
+         FOR UPDATE`,
+        [customerId, location.id]
+      );
+      if (!customerResult.rowCount) {
+        const error = new Error("A kliens nem található ebben az üzletben vagy inaktív.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const customer = customerResult.rows[0];
+
+      const source = await loadSaleLine(client, saleLineId, { lock: true });
+      if (!source || source.sale_status !== "completed") {
+        const error = new Error("Az eladási tétel nem található vagy már nem érvényes.");
+        error.statusCode = 404;
+        throw error;
+      }
+      if (String(source.sale_location_id) !== String(location.id)) {
+        const error = new Error("A próbára elvitt terméket annál az üzletnél kell visszavenni, ahol az eladás történt.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_wrong_location";
+        throw error;
+      }
+      if (String(source.customer_id || "") !== String(customer.id)) {
+        const error = new Error("Ez a termék nem ehhez a klienshez tartozik.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_wrong_customer";
+        throw error;
+      }
+      if (!source.variant_id) {
+        const error = new Error("A termékvariáns nem azonosítható biztonságosan, ezért nem tehető vissza automatikusan készletre.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_variant_missing";
+        throw error;
+      }
+
+      const balanceBefore = aifRoundMoney(source.balance_due);
+      if (balanceBefore <= 0.005) {
+        const error = new Error("Ehhez a vásárláshoz már nincs nyitott tartozás. Használd a normál visszáru/csere folyamatot.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_no_open_balance";
+        throw error;
+      }
+
+      const remainingQty = Math.max(0, aifNumber(source.quantity) - aifNumber(source.returned_qty));
+      if (returnedQty > remainingQty) {
+        const error = new Error(`Ebből a tételből legfeljebb ${remainingQty} db vehető vissza.`);
+        error.statusCode = 409;
+        error.code = "customer_credit_return_quantity_exceeded";
+        throw error;
+      }
+
+      const unitPrice = aifRoundMoney(source.unit_price);
+      const listPrice = aifRoundMoney(source.list_price);
+      const returnCredit = aifRoundMoney(unitPrice * returnedQty);
+      if (returnCredit <= 0) {
+        const error = new Error("A visszahozott termék jóváírási értéke nem állapítható meg.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_value_missing";
+        throw error;
+      }
+      if (returnCredit > balanceBefore + 0.005) {
+        const error = new Error(
+          `Ezt a terméket innen nem lehet egyszerű tartozáscsökkentéssel visszavenni, mert ${returnCredit.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON jóváírás több a jelenlegi ${balanceBefore.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON tartozásnál. Ehhez normál visszáru/pénzvisszatérítés szükséges.`
+        );
+        error.statusCode = 409;
+        error.code = "customer_credit_return_requires_refund";
+        throw error;
+      }
+
+      const paidBefore = aifRoundMoney(source.paid_total);
+      const totalBefore = aifRoundMoney(source.total);
+      const subtotalBefore = aifRoundMoney(source.subtotal);
+      const discountBefore = aifRoundMoney(source.discount_total);
+      const returnSubtotal = aifRoundMoney(listPrice * returnedQty);
+      const returnDiscount = aifRoundMoney(Math.max(0, (listPrice - unitPrice) * returnedQty));
+      const subtotalAfter = aifRoundMoney(Math.max(0, subtotalBefore - returnSubtotal));
+      const discountAfter = aifRoundMoney(Math.max(0, discountBefore - returnDiscount));
+      const totalAfter = aifRoundMoney(Math.max(0, totalBefore - returnCredit));
+      const balanceAfter = aifRoundMoney(Math.max(0, balanceBefore - returnCredit));
+
+      if (paidBefore > totalAfter + 0.005) {
+        const error = new Error("A visszavétel pénzvisszatérítést is igényelne, ezért ezt a normál visszáru felületen kell kezelni.");
+        error.statusCode = 409;
+        error.code = "customer_credit_return_paid_amount_conflict";
+        throw error;
+      }
+
+      const stockResult = await client.query(
+        `SELECT qty, reserved_qty
+         FROM aif_stock
+         WHERE location_id=$1 AND variant_id=$2
+         FOR UPDATE`,
+        [location.id, source.variant_id]
+      );
+      const qtyBefore = stockResult.rowCount ? aifNumber(stockResult.rows[0].qty) : 0;
+      const reservedQty = stockResult.rowCount ? aifNumber(stockResult.rows[0].reserved_qty) : 0;
+      const qtyAfter = qtyBefore + returnedQty;
+
+      const exchangeNumber = await allocateExchangeNumber(client, location);
+      const actor = actorFrom(req);
+      const originalSnapshot = {
+        source: "shop_customer_credit_return",
+        mode: "trial_return",
+        customerId: String(customer.id),
+        customerName: customer.full_name || source.customer_name || null,
+        customerPhone: customer.phone || source.customer_phone || null,
+        saleNumber: source.sale_number,
+        soldAt: source.sold_at,
+        product: {
+          variantId: String(source.variant_id),
+          title: source.product_title,
+          productCode: source.product_code,
+          barcode: source.barcode,
+          brandName: source.brand_name,
+          colorName: source.color_name,
+          size: source.size,
+        },
+        returnedQty,
+        unitPrice,
+        listPrice,
+        returnCredit,
+        balanceBefore,
+        balanceAfter,
+        subtotalBefore,
+        subtotalAfter,
+        discountBefore,
+        discountAfter,
+        totalBefore,
+        totalAfter,
+        paidBefore,
+        processedAtLocation: {
+          id: String(location.id),
+          code: location.code,
+          name: location.name,
+        },
+      };
+
+      const exchangeInsert = await client.query(
+        `INSERT INTO aif_shop_exchanges (
+           exchange_number, location_id, source_location_id, source_sale_id, source_sale_line_id, source_variant_id,
+           returned_qty, return_unit_credit, return_credit, replacement_total, difference,
+           settlement_direction, settlement_method, settlement_amount,
+           customer_name, customer_phone, actor, note, authorization_id,
+           original_snapshot, replacement_snapshot, client_request_id, status, created_at, updated_at
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,
+           'none',NULL,0,$10,$11,$12,$13,NULL,$14::jsonb,'[]'::jsonb,$15,'completed',now(),now()
+         ) RETURNING *`,
+        [
+          exchangeNumber,
+          location.id,
+          source.sale_location_id,
+          source.sale_id,
+          source.sale_line_id,
+          source.variant_id,
+          returnedQty,
+          unitPrice,
+          returnCredit,
+          customer.full_name || source.customer_name || null,
+          customer.phone || source.customer_phone || null,
+          actor,
+          note,
+          JSON.stringify(originalSnapshot),
+          idempotencyKey,
+        ]
+      );
+      const exchange = exchangeInsert.rows[0];
+
+      await client.query(
+        `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+         VALUES ($1,$2,$3,$4,now())
+         ON CONFLICT (location_id, variant_id)
+         DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+        [location.id, source.variant_id, qtyAfter, reservedQty]
+      );
+
+      const movementLogged = await insertStockMovementSafe(client, {
+        movementType: "incoming",
+        sourceType: "shop_customer_credit_return",
+        sourcePrefix: "credit_ret",
+        fallbackSourceType: "manual_stock_edit",
+        sourceId: String(exchange.id),
+        locationId: location.id,
+        variantId: source.variant_id,
+        qtyDelta: returnedQty,
+        qtyBefore,
+        qtyAfter,
+        actor,
+        raw: {
+          reason: "shop_customer_credit_return",
+          mode: "trial_return",
+          exchangeId: String(exchange.id),
+          exchangeNumber,
+          customerId: String(customer.id),
+          customerName: customer.full_name || null,
+          sourceSaleId: String(source.sale_id),
+          sourceSaleLineId: String(source.sale_line_id),
+          saleNumber: source.sale_number,
+          returnedQty,
+          returnCredit,
+          balanceBefore,
+          balanceAfter,
+        },
+      });
+      if (!movementLogged) {
+        const error = new Error("A visszahozott termék készletmozgásának naplózása nem sikerült.");
+        error.statusCode = 500;
+        throw error;
+      }
+
+      const paymentStatusAfter = balanceAfter <= 0.005
+        ? "paid"
+        : paidBefore > 0.005
+          ? "partial"
+          : "credit";
+
+      await client.query(
+        `UPDATE aif_shop_sales
+         SET subtotal=$2,
+             discount_total=$3,
+             total=$4,
+             balance_due=$5,
+             payment_status=$6,
+             raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object(
+               'lastCustomerCreditReturn',
+               $7::jsonb
+             ),
+             updated_at=now()
+         WHERE id=$1`,
+        [
+          source.sale_id,
+          subtotalAfter,
+          discountAfter,
+          totalAfter,
+          balanceAfter,
+          paymentStatusAfter,
+          JSON.stringify({
+            exchangeId: String(exchange.id),
+            exchangeNumber,
+            customerId: String(customer.id),
+            returnedQty,
+            returnCredit,
+            balanceBefore,
+            balanceAfter,
+            totalBefore,
+            totalAfter,
+            actor,
+            at: new Date().toISOString(),
+          }),
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+         VALUES ($1,'customer_credit_return',$2,$3,$4::jsonb)`,
+        [
+          source.sale_id,
+          actor,
+          note || `Próbára elvitt termék visszahozva: ${source.product_title || source.product_code || source.sale_line_id}`,
+          JSON.stringify({
+            exchangeId: String(exchange.id),
+            exchangeNumber,
+            customerId: String(customer.id),
+            customerName: customer.full_name || null,
+            sourceSaleLineId: String(source.sale_line_id),
+            variantId: String(source.variant_id),
+            productTitle: source.product_title || null,
+            returnedQty,
+            returnCredit,
+            balanceBefore,
+            balanceAfter,
+            stockBefore: qtyBefore,
+            stockAfter: qtyAfter,
+            locationId: String(location.id),
+            locationCode: location.code,
+            locationName: location.name,
+          }),
+        ]
+      );
+
+      await client.query(
+        `UPDATE aif_shop_customers
+         SET updated_by=$2, updated_at=now()
+         WHERE id=$1 AND location_id=$3`,
+        [customer.id, actor, location.id]
+      );
+
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        duplicate: false,
+        exchangeId: String(exchange.id),
+        exchangeNumber,
+        saleId: String(source.sale_id),
+        saleLineId: String(source.sale_line_id),
+        customerId: String(customer.id),
+        returnedQty,
+        returnCredit,
+        openBalance: balanceAfter,
+        saleTotal: totalAfter,
+        stock: {
+          variantId: String(source.variant_id),
+          qtyBefore,
+          qtyAfter,
+          qtyDelta: returnedQty,
+        },
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF customer credit return failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A visszahozott termék rögzítése nem sikerült.",
+        code: error?.code || null,
+        openBalance: error?.openBalance ?? null,
+      });
+    } finally {
+      client.release();
     }
   });
 
