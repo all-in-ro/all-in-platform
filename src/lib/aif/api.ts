@@ -2944,6 +2944,16 @@ export type AifShopDailyPaymentItem = {
 
 export type AifShopDailyProductItem = {
   key: string;
+  lineId?: string | null;
+  saleId?: string | null;
+  saleNumber?: string | null;
+  soldAt?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  paymentStatus?: string | null;
+  balanceDue?: number;
+  saleType?: string | null;
+  recordType?: "sale" | "exchange" | string;
   title: string;
   productCode?: string | null;
   brandName?: string | null;
@@ -3064,6 +3074,7 @@ export type AifShopDailySummaryResponse = {
   };
   payments: AifShopDailyPaymentItem[];
   products: AifShopDailyProductItem[];
+  productLines?: AifShopDailyProductItem[];
   sales: AifShopDailySaleItem[];
 };
 
