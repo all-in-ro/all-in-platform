@@ -384,7 +384,7 @@ function shiftStatusLabel(status?: string | null) {
   return "Átvételre vár";
 }
 
-function ProductImage({ src, title, large = false }: { src?: string | null; title: string; large?: boolean }) {
+function ProductImage({ src, title, large = false, compact = false }: { src?: string | null; title: string; large?: boolean; compact?: boolean }) {
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPosition, setPreviewPosition] = useState({ left: 12, top: 12, size: 256 });
@@ -425,8 +425,8 @@ function ProductImage({ src, title, large = false }: { src?: string | null; titl
 
   if (!src) {
     return (
-      <span className={`flex shrink-0 items-center justify-center rounded-2xl border border-white/14 bg-white/95 ${large ? "h-24 w-24" : "h-20 w-20"}`}>
-        <PackageSearch size={large ? 34 : 28} className="text-[#526173]" />
+      <span className={`flex shrink-0 items-center justify-center rounded-2xl border border-white/14 bg-white/95 ${large ? "h-24 w-24" : compact ? "h-[68px] w-[68px]" : "h-20 w-20"}`}>
+        <PackageSearch size={large ? 34 : compact ? 24 : 28} className="text-[#526173]" />
       </span>
     );
   }
@@ -436,7 +436,7 @@ function ProductImage({ src, title, large = false }: { src?: string | null; titl
       <button
         ref={anchorRef}
         type="button"
-        className={`relative flex shrink-0 touch-manipulation items-center justify-center overflow-hidden rounded-2xl border border-white/14 bg-white/95 ${large ? "h-24 w-24" : "h-20 w-20"}`}
+        className={`relative flex shrink-0 touch-manipulation items-center justify-center overflow-hidden rounded-2xl border border-white/14 bg-white/95 ${large ? "h-24 w-24" : compact ? "h-[68px] w-[68px]" : "h-20 w-20"}`}
         onMouseEnter={() => { updatePreviewPosition(); setPreviewOpen(true); }}
         onMouseLeave={() => setPreviewOpen(false)}
         onClick={(event) => { event.stopPropagation(); updatePreviewPosition(); setPreviewOpen((current) => !current); }}
@@ -1237,7 +1237,7 @@ export default function AllInShopOperations({
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-3.5 sm:p-4">
           {error ? <div className="mb-4 rounded-2xl border border-red-300/50 bg-red-600/22 px-4 py-3 text-sm text-red-50">{error}</div> : null}
 
           {mode === "search" ? (
@@ -1537,7 +1537,7 @@ export default function AllInShopOperations({
                         </div>
                         <History size={20} className="text-[#8ee6e2]" />
                       </div>
-                      <div className="mt-3 max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                      <div className="mt-3 space-y-2">
                         {(cashData?.movements || []).slice(0, 8).map((movement) => (
                           <div key={movement.id} className={`rounded-xl border px-3 py-2.5 ${
                             movement.status === "pending"
@@ -1690,10 +1690,10 @@ export default function AllInShopOperations({
                   </div>
 
                   <div className="mt-3 grid gap-3 xl:grid-cols-[1.08fr_0.92fr]">
-                    <div className="rounded-[22px] border border-white/12 bg-[#344055] p-4">
+                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Dolgozónként külön</p>
+                          <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Dolgozónként külön</p>
                           <h4 className="mt-1 text-base text-white">Napi árulás</h4>
                         </div>
                         <UsersRound size={21} className="text-[#8ee6e2]" />
@@ -1702,12 +1702,12 @@ export default function AllInShopOperations({
                         {(shiftData?.employees || []).map((employee) => {
                           const active = employeeKey(employee.name) === employeeKey(actor);
                           return (
-                            <div key={employee.name} className={`rounded-2xl border p-3 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`}>
+                            <div key={employee.name} className={`rounded-xl border p-2.5 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`}>
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0"><p className="truncate text-sm text-white">{employee.name}</p><p className="mt-1 text-[10px] text-white/42">{employee.transactions} eladás • {employee.itemsSold} db</p></div>
                                 {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2 py-1 text-[9px] text-white">Te</span> : null}
                               </div>
-                              <p className="mt-2 text-xl text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
+                              <p className="mt-1.5 text-lg text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
                               <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-white/48">
                                 <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">KP {formatMoney(shiftPayment(employee, "cash").amount)}</span>
                                 <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Kártya {formatMoney(shiftPayment(employee, "card").amount)}</span>
@@ -1719,20 +1719,20 @@ export default function AllInShopOperations({
                       </div>
                     </div>
 
-                    <div className="rounded-[22px] border border-white/12 bg-[#344055] p-4">
+                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Visszanézhető napló</p>
+                          <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Visszanézhető napló</p>
                           <h4 className="mt-1 text-base text-white">Műszakátadások</h4>
                         </div>
                         <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/50">{shiftData?.handovers.length || 0} átadás</span>
                       </div>
-                      <div className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1">
+                      <div className="mt-3 space-y-2">
                         {(shiftData?.handovers || []).map((item, index) => {
                           const accepted = item.status === "accepted";
                           const pending = item.status === "pending";
                           return (
-                            <div key={item.id} className={`rounded-2xl border p-3 ${pending ? "border-amber-200/30 bg-amber-400/8" : accepted ? "border-[#9be9e5]/22 bg-[#2a8d8b]/10" : "border-white/10 bg-[#293548]"}`}>
+                            <div key={item.id} className={`rounded-xl border p-2.5 ${pending ? "border-amber-200/30 bg-amber-400/8" : accepted ? "border-[#9be9e5]/22 bg-[#2a8d8b]/10" : "border-white/10 bg-[#293548]"}`}>
                               <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0"><p className="truncate text-sm text-white">{index + 1}. {item.fromActor} <ArrowRight className="mx-1 inline" size={13} /> {item.toActor}</p><p className="mt-1 text-[10px] text-white/42">{formatTime(item.shiftStartAt)} → {formatTime(item.cutoffAt)}</p></div>
                                 <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] ${pending ? "border-amber-200/30 bg-amber-300/12 text-amber-50" : accepted ? "border-[#9be9e5]/30 bg-[#2a8d8b] text-white" : "border-white/12 bg-black/10 text-white/50"}`}>{shiftStatusLabel(item.status)}</span>
@@ -1757,40 +1757,40 @@ export default function AllInShopOperations({
                 </div>
               </section>
 
-              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-                <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
-                  <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p><h3 className="mt-1 text-lg">Eladott termékek</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.products.length || 0} termék</span></div>
-                  <div className="mt-3 max-h-[520px] space-y-2 overflow-y-auto pr-1">
+              <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+                <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
+                  <div className="flex items-center justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p><h3 className="mt-0.5 text-base">Eladott termékek</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.products.length || 0} termék</span></div>
+                  <div className="mt-2.5 space-y-1.5">
                     {(summaryData?.products || []).map((item) => (
                       <div
                         key={item.key}
-                        className="grid grid-cols-[80px_minmax(0,1fr)_96px] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3 transition hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
+                        className="grid grid-cols-[68px_minmax(0,1fr)_88px] items-center gap-2.5 rounded-xl border border-white/10 bg-[#293548] p-2.5 transition hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
                       >
-                        <ProductImage src={item.imageUrl} title={item.title} />
-                        <div className="min-w-0 self-stretch py-0.5">
-                          <p className="line-clamp-2 min-h-[36px] text-sm leading-[18px] text-white" title={item.title}>
+                        <ProductImage src={item.imageUrl} title={item.title} compact />
+                        <div className="min-w-0 self-stretch">
+                          <p className="line-clamp-2 min-h-[32px] text-[13px] leading-4 text-white" title={item.title}>
                             {item.title}
                           </p>
                           <p
-                            className="mt-1.5 line-clamp-1 text-[11px] text-white/52"
+                            className="mt-1 line-clamp-1 text-[10px] text-white/52"
                             title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}
                           >
                             {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                           </p>
                           <div className="mt-2 flex min-w-0">
                             <span
-                              className="max-w-full truncate rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1 font-mono text-[9px] text-[#cffffd]/68"
+                              className="max-w-full truncate rounded-md border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-1.5 py-0.5 font-mono text-[9px] text-[#cffffd]/68"
                               title={item.productCode || "–"}
                             >
                               {item.productCode || "–"}
                             </span>
                           </div>
                         </div>
-                        <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-3 text-right">
-                          <span className="inline-flex min-w-[68px] justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2.5 py-1.5 text-base text-[#d7fffd]">
+                        <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-2.5 text-right">
+                          <span className="inline-flex min-w-[62px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-sm text-[#d7fffd]">
                             {item.qty} db
                           </span>
-                          <p className="mt-2 whitespace-nowrap text-sm text-white">{formatMoney(item.revenue)}</p>
+                          <p className="mt-1.5 whitespace-nowrap text-[13px] text-white">{formatMoney(item.revenue)}</p>
                           {item.discountTotal > 0 ? (
                             <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">
                               Kedv.: {formatMoney(item.discountTotal)}
@@ -1803,15 +1803,15 @@ export default function AllInShopOperations({
                   </div>
                 </section>
 
-                <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
-                  <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</p><h3 className="mt-1 text-lg">Napi eladások</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.sales.length || 0} bizonylat</span></div>
-                  <div className="mt-3 max-h-[520px] space-y-2 overflow-y-auto pr-1">
+                <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
+                  <div className="flex items-center justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</p><h3 className="mt-0.5 text-base">Napi eladások</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.sales.length || 0} bizonylat</span></div>
+                  <div className="mt-2.5 space-y-1.5">
                     {(summaryData?.sales || []).map((sale) => (
                       <button
                         key={sale.id}
                         type="button"
                         onClick={() => void openSaleDetail(sale)}
-                        className={`group w-full rounded-2xl border p-3 text-left transition hover:-translate-y-[1px] hover:border-[#9be9e5]/38 hover:bg-[#314156] active:translate-y-0 ${
+                        className={`group w-full rounded-xl border p-2.5 text-left transition hover:-translate-y-[1px] hover:border-[#9be9e5]/38 hover:bg-[#314156] active:translate-y-0 ${
                           sale.balanceDue > 0 ? "border-red-300/32 bg-red-950/18" : "border-white/10 bg-[#293548]"
                         }`}
                         title="Kattints az eladás részleteihez"
@@ -1822,11 +1822,11 @@ export default function AllInShopOperations({
                             <p className="mt-1 text-[11px] text-white/45">{formatTime(sale.soldAt)} • {sale.paymentLabel}</p>
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
-                            <p className="text-lg text-white">{formatMoney(sale.total)}</p>
+                            <p className="text-base text-white">{formatMoney(sale.total)}</p>
                             <ChevronDown size={17} className="-rotate-90 text-white/25 transition group-hover:translate-x-0.5 group-hover:text-[#9be9e5]" />
                           </div>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/52">
+                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] text-white/52">
                           <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>
                           {sale.saleType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/28 bg-[#2a8d8b]/16 px-2 py-1 text-[#d7fffd]">Csere • különbözet</span> : null}
                           {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={12} />{sale.customerName}</span> : null}
@@ -1840,7 +1840,7 @@ export default function AllInShopOperations({
                 </section>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Kedvezmény összesen</p><p className="mt-2 text-xl text-amber-50">{formatMoney(daySummary.discountTotal)}</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Klienshez kapcsolva</p><p className="mt-2 text-xl">{daySummary.customerSales} eladás</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Első / utolsó eladás</p><p className="mt-2 text-xl">{formatTime(daySummary.firstSaleAt)} • {formatTime(daySummary.lastSaleAt)}</p></div>
@@ -2154,9 +2154,6 @@ export default function AllInShopOperations({
           document.body,
         ) : null}
 
-        <footer className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-5 py-4">
-          <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"><X size={17} /> Bezárás</button>
-        </footer>
       </section>
     </div>,
     document.body,
