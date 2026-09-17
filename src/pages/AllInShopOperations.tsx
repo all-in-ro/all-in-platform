@@ -41,6 +41,7 @@ import {
   apiAifCloseShopDay,
   apiAifCreateShopCashMovement,
   apiAifCreateShopShiftHandover,
+  apiAifGetShopCustomer,
   apiAifShopCashOverview,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
@@ -50,6 +51,7 @@ import {
   apiAifShopStockOverview,
   type AifShopCashMovementType,
   type AifShopCashOverview,
+  type AifShopCustomerDetail,
   type AifShopDailySummaryResponse,
   type AifShopDailySaleItem,
   type AifShopSaleCatalogItem,
@@ -465,6 +467,192 @@ function ProductImage({ src, title, large = false, compact = false }: { src?: st
 }
 
 
+
+function CustomerQuickViewModal({
+  detail,
+  loading,
+  error,
+  fallbackName,
+  year,
+  onClose,
+}: {
+  detail: AifShopCustomerDetail | null;
+  loading: boolean;
+  error: string;
+  fallbackName: string;
+  year: number;
+  onClose: () => void;
+}) {
+  const customer = detail?.item || null;
+  const summary = detail?.summary || null;
+  const address = customer
+    ? [
+        [customer.localityName || customer.city, customer.countyName].filter(Boolean).join(", "),
+        customer.address,
+        customer.postalCode,
+      ].filter(Boolean).join(" • ")
+    : "";
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[535] flex items-center justify-center bg-[#0f172a]/88 p-3 backdrop-blur-md sm:p-5"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section className="flex max-h-[91vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.68)]">
+        <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/10 text-white">
+              <UserRound size={23} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/58">Kliens adatlap</p>
+              <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">
+                {customer?.fullName || fallbackName || "Kliens"}
+              </h3>
+              <p className="mt-1 text-[11px] text-white/62">A kiválasztott kliens összes fontos adata</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white transition hover:bg-white/10"
+            aria-label="Kliens adatlap bezárása"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {loading ? (
+            <div className="flex min-h-[360px] items-center justify-center gap-3 text-white/58">
+              <Loader2 size={22} className="animate-spin text-[#8ee6e2]" />
+              Kliensadatlap betöltése…
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-red-300/45 bg-red-600/18 px-4 py-4 text-sm text-red-50">
+              {error}
+            </div>
+          ) : customer && summary ? (
+            <div className="space-y-3">
+              <section className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h4 className="truncate text-xl text-white">{customer.fullName}</h4>
+                    <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-white/58">
+                      {customer.phone ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Phone size={14} className="text-[#8ee6e2]" /> {customer.phone}
+                        </span>
+                      ) : null}
+                      {customer.email ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Mail size={14} className="text-[#8ee6e2]" /> {customer.email}
+                        </span>
+                      ) : null}
+                    </div>
+                    {address ? (
+                      <p className="mt-2 flex items-start gap-2 text-[12px] leading-relaxed text-white/52">
+                        <MapPin size={14} className="mt-0.5 shrink-0 text-[#8ee6e2]" />
+                        <span>{address}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="inline-flex items-center gap-2 rounded-xl border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 py-2 text-[11px] text-[#d7fffd]">
+                    <ShoppingBag size={14} />
+                    {summary.saleCount} vásárlás
+                  </span>
+                </div>
+              </section>
+
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-3">
+                  <p className="text-[9px] uppercase tracking-[0.11em] text-[#d7fffd]/56">{year}. évi vásárlás</p>
+                  <p className="mt-2 text-2xl tabular-nums text-[#d7fffd]">{formatMoney(summary.yearPurchaseTotal)}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Összes vásárlás</p>
+                  <p className="mt-2 text-2xl tabular-nums text-white">{formatMoney(summary.lifetimePurchaseTotal)}</p>
+                </div>
+                <div className={`rounded-2xl border p-3 ${
+                  numberValue(summary.openBalance) > 0.005
+                    ? "border-red-300/70 bg-[#E21C2A] text-white shadow-[0_8px_20px_rgba(226,28,42,0.20)]"
+                    : "border-[#7bd7d4]/25 bg-[#2a8d8b]/14 text-[#d7fffd]"
+                }`}>
+                  <p className="text-[9px] uppercase tracking-[0.11em] opacity-75">Nyitott tartozás</p>
+                  <p className="mt-2 text-2xl tabular-nums">{formatMoney(summary.openBalance)}</p>
+                  <p className="mt-1 text-[10px] opacity-70">{summary.openSales} nyitott vásárlás</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Utolsó vásárlás</p>
+                  <p className="mt-2 text-sm text-white">{summary.lastSaleAt ? formatExactDateTime(summary.lastSaleAt) : "–"}</p>
+                </div>
+              </div>
+
+              <section className="rounded-[22px] border border-white/12 bg-[#374357] p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárlási előzmények</p>
+                    <h4 className="mt-1 text-base text-white">Legutóbbi bizonylatok</h4>
+                  </div>
+                  <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">
+                    {detail.sales.length} bizonylat
+                  </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {detail.sales.slice(0, 12).map((sale) => (
+                    <div
+                      key={sale.id}
+                      className={`grid gap-2 rounded-xl border px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_150px_150px] sm:items-center ${
+                        numberValue(sale.balanceDue) > 0.005
+                          ? "border-red-300/30 bg-red-950/16"
+                          : "border-white/10 bg-[#293548]"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] text-white">{sale.saleNumber}</p>
+                        <p className="mt-1 text-[10px] text-white/42">
+                          {formatExactDateTime(sale.soldAt)}{sale.actor ? ` • ${sale.actor}` : ""}
+                        </p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-[9px] uppercase tracking-[0.08em] text-white/35">Összeg</p>
+                        <p className="mt-1 text-sm text-white">{formatMoney(sale.total)}</p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-[9px] uppercase tracking-[0.08em] text-white/35">Tartozás</p>
+                        <p className={`mt-1 text-sm ${numberValue(sale.balanceDue) > 0.005 ? "text-red-100" : "text-[#bdf8f5]"}`}>
+                          {formatMoney(sale.balanceDue)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  {!detail.sales.length ? (
+                    <div className="rounded-xl border border-dashed border-white/12 px-4 py-7 text-center text-sm text-white/40">
+                      Nincs vásárlási előzmény.
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+
+              {customer.notes ? (
+                <section className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3">
+                  <p className="text-[9px] uppercase tracking-[0.11em] text-white/38">Kliens megjegyzése</p>
+                  <p className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-white/66">{customer.notes}</p>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+
 function DailySaleDetailModal({
   sale,
   detail,
@@ -734,6 +922,12 @@ export default function AllInShopOperations({
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [salesPanelOpen, setSalesPanelOpen] = useState(false);
+  const [customerQuickId, setCustomerQuickId] = useState<string | null>(null);
+  const [customerQuickName, setCustomerQuickName] = useState("");
+  const [customerQuickYear, setCustomerQuickYear] = useState(new Date().getFullYear());
+  const [customerQuickDetail, setCustomerQuickDetail] = useState<AifShopCustomerDetail | null>(null);
+  const [customerQuickLoading, setCustomerQuickLoading] = useState(false);
+  const [customerQuickError, setCustomerQuickError] = useState("");
   const [selectedDailySale, setSelectedDailySale] = useState<AifShopDailySaleItem | null>(null);
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
@@ -935,6 +1129,39 @@ export default function AllInShopOperations({
   }
 
 
+  function closeCustomerQuickView() {
+    setCustomerQuickId(null);
+    setCustomerQuickName("");
+    setCustomerQuickDetail(null);
+    setCustomerQuickError("");
+    setCustomerQuickLoading(false);
+  }
+
+  async function openCustomerQuickView(customerId: string, customerName = "") {
+    const id = String(customerId || "").trim();
+    if (!id) return;
+    const year = Number(String(summaryDate || "").slice(0, 4)) || new Date().getFullYear();
+    setCustomerQuickId(id);
+    setCustomerQuickName(customerName);
+    setCustomerQuickYear(year);
+    setCustomerQuickDetail(null);
+    setCustomerQuickError("");
+    setCustomerQuickLoading(true);
+    try {
+      const response = await apiAifGetShopCustomer(id, {
+        location: locationCode,
+        year,
+        salesLimit: 50,
+        paymentsLimit: 50,
+      });
+      setCustomerQuickDetail(response);
+    } catch (caught) {
+      setCustomerQuickError(caught instanceof Error ? caught.message : "A kliens adatlapja nem tölthető be.");
+    } finally {
+      setCustomerQuickLoading(false);
+    }
+  }
+
   function closeSaleDetail() {
     setSelectedDailySale(null);
     setSaleDetail(null);
@@ -1116,6 +1343,11 @@ export default function AllInShopOperations({
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
     setSalesPanelOpen(false);
+    setCustomerQuickId(null);
+    setCustomerQuickName("");
+    setCustomerQuickDetail(null);
+    setCustomerQuickError("");
+    setCustomerQuickLoading(false);
     setSelectedDailySale(null);
     setSaleDetail(null);
     setSaleDetailError("");
@@ -1166,6 +1398,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (customerQuickId) {
+          closeCustomerQuickView();
+          return;
+        }
         if (selectedDailySale) {
           closeSaleDetail();
           return;
@@ -1195,7 +1431,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashMoveOpen, cashMoveSaving, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
+  }, [cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -1844,13 +2080,29 @@ export default function AllInShopOperations({
                             <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/10 pt-2">
                               <div className="flex min-w-0 flex-wrap items-center gap-2">
                                 {item.customerName ? (
-                                  <span
-                                    className="inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/34 bg-[#2a8d8b]/18 px-2.5 py-1.5 text-[12px] text-white"
-                                    title={item.customerName}
-                                  >
-                                    <UserRound size={13} className="shrink-0 text-[#bff8f5]" />
-                                    <span className="truncate">{item.customerName}</span>
-                                  </span>
+                                  item.customerId ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void openCustomerQuickView(item.customerId, item.customerName || "");
+                                      }}
+                                      className="group inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/42 bg-[#2a8d8b]/20 px-2.5 py-1.5 text-[12px] text-white transition hover:border-[#b9f5f2]/70 hover:bg-[#2a8d8b]/34 hover:shadow-[0_5px_16px_rgba(42,141,139,0.22)]"
+                                      title="Kliens adatlap megnyitása"
+                                    >
+                                      <UserRound size={13} className="shrink-0 text-[#bff8f5]" />
+                                      <span className="truncate">{item.customerName}</span>
+                                      <ChevronRight size={12} className="shrink-0 text-[#bff8f5]/70 transition group-hover:translate-x-0.5 group-hover:text-[#dffffd]" />
+                                    </button>
+                                  ) : (
+                                    <span
+                                      className="inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/24 bg-[#2a8d8b]/12 px-2.5 py-1.5 text-[12px] text-white/80"
+                                      title={item.customerName}
+                                    >
+                                      <UserRound size={13} className="shrink-0 text-[#bff8f5]/70" />
+                                      <span className="truncate">{item.customerName}</span>
+                                    </span>
+                                  )
                                 ) : (
                                   <span className="text-[10px] text-white/28">Nincs klienshez csatolva</span>
                                 )}
@@ -1976,6 +2228,17 @@ export default function AllInShopOperations({
             </>
           ) : null}
         </div>
+
+        {customerQuickId ? (
+          <CustomerQuickViewModal
+            detail={customerQuickDetail}
+            loading={customerQuickLoading}
+            error={customerQuickError}
+            fallbackName={customerQuickName}
+            year={customerQuickYear}
+            onClose={closeCustomerQuickView}
+          />
+        ) : null}
 
         {selectedDailySale ? (
           <DailySaleDetailModal
