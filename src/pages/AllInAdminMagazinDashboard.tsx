@@ -1435,7 +1435,15 @@ export default function AllInAdminMagazinDashboard({
   }, [shiftDay]);
   const latestHandover = acceptedHandovers[0] || null;
   const latestHandoverAt = latestHandover?.acceptedAt || latestHandover?.createdAt || latestHandover?.cutoffAt || null;
+  const latestHandoverOpeningCash = numberValue(latestHandover?.snapshot?.openingCash ?? 0);
   const latestHandoverCash = latestHandover?.countedCash ?? latestHandover?.expectedCash ?? 0;
+  const dayClosureSnapshot = (dayClosure?.snapshot || {}) as Record<string, any>;
+  const dayClosureCashBalance = (dayClosureSnapshot.cashBalance || {}) as Record<string, any>;
+  const dayClosureOpeningCash = numberValue(
+    dayClosureCashBalance.baselineCash
+      ?? dayClosureSnapshot.openingCash
+      ?? 0,
+  );
   const discountPercent = numberValue(summary?.salesBeforeDiscount) > 0
     ? numberValue(summary?.discountTotal) / numberValue(summary?.salesBeforeDiscount) * 100
     : 0;
@@ -1498,7 +1506,7 @@ export default function AllInAdminMagazinDashboard({
             {dayClosure ? (
               <div className="relative overflow-hidden rounded-[16px] border border-white/45 bg-[#E21C2A] px-3 py-2.5 shadow-[0_9px_22px_rgba(226,28,42,0.20)]">
                 <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.25fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
+                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.28fr)_82px_minmax(135px,0.82fr)_minmax(135px,0.78fr)_minmax(135px,0.78fr)_minmax(100px,0.58fr)] items-center gap-3">
                   <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/35 bg-black/10 text-white">
                     <CheckCircle2 size={16} />
                   </span>
@@ -1509,13 +1517,18 @@ export default function AllInAdminMagazinDashboard({
                   </div>
 
                   <div className="min-w-0 border-l border-white/18 px-3 text-center">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Idő</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(dayClosureAt)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/18 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Lezárta</p>
                     <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={dayClosure.actor || "-"}>{dayClosure.actor || "-"}</p>
                   </div>
 
                   <div className="min-w-0 border-l border-white/18 px-3 text-center">
-                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Idő</p>
-                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(dayClosureAt)}</p>
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-white/58">Kezdő kassza</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(dayClosureOpeningCash)}</p>
                   </div>
 
                   <div className="min-w-0 border-l border-white/18 px-3 text-center">
@@ -1534,7 +1547,7 @@ export default function AllInAdminMagazinDashboard({
             {latestHandover ? (
               <div className="relative overflow-hidden rounded-[16px] border border-[#8ce7e2]/48 bg-[#2a8d8b] px-3 py-2.5 shadow-[0_9px_22px_rgba(42,141,139,0.20)]">
                 <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#d7fffd]/70 to-transparent" />
-                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.25fr)_minmax(155px,0.9fr)_92px_minmax(165px,0.9fr)_minmax(110px,0.6fr)] items-center gap-3">
+                <div className="grid min-w-0 grid-cols-[34px_minmax(220px,1.28fr)_82px_minmax(135px,0.82fr)_minmax(135px,0.78fr)_minmax(135px,0.78fr)_minmax(100px,0.58fr)] items-center gap-3">
                   <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/28 bg-black/10 text-white">
                     <WalletCards size={16} />
                   </span>
@@ -1547,6 +1560,11 @@ export default function AllInAdminMagazinDashboard({
                   </div>
 
                   <div className="min-w-0 border-l border-white/16 px-3 text-center">
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Idő</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(latestHandoverAt)}</p>
+                  </div>
+
+                  <div className="min-w-0 border-l border-white/16 px-3 text-center">
                     <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Átvette</p>
                     <p className="mt-0.5 truncate text-[13px] leading-tight text-white" title={latestHandover.acceptedBy || latestHandover.toActor || "-"}>
                       {latestHandover.acceptedBy || latestHandover.toActor || "-"}
@@ -1554,8 +1572,8 @@ export default function AllInAdminMagazinDashboard({
                   </div>
 
                   <div className="min-w-0 border-l border-white/16 px-3 text-center">
-                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Idő</p>
-                    <p className="mt-0.5 whitespace-nowrap text-[14px] leading-tight text-white">{timeOnly(latestHandoverAt)}</p>
+                    <p className="text-[8px] uppercase tracking-[0.12em] text-[#e8fffd]/58">Kezdő kassza</p>
+                    <p className="mt-0.5 whitespace-nowrap text-[13px] leading-tight text-white">{money(latestHandoverOpeningCash)}</p>
                   </div>
 
                   <div className="min-w-0 border-l border-white/16 px-3 text-center">
