@@ -20452,8 +20452,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         colorHex: line.colorHex || line.color_hex || null,
         size: line.size || null,
         imageUrl: line.imageUrl || line.image_url || null,
-        originalQuantity: aifNumber(line.originalQuantity ?? line.original_quantity ?? line.quantity),
-        returnedQty: aifNumber(line.returnedQty ?? line.returned_qty),
         quantity: aifNumber(line.quantity),
         listPrice: aifNumber(line.listPrice ?? line.list_price),
         unitPrice: aifNumber(line.unitPrice ?? line.unit_price),
@@ -20498,14 +20496,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          l.name AS location_name,
          COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
          count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
-         count(s.id) FILTER (WHERE s.status='completed' AND s.total > 0.005)::int AS sale_count,
+         count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
          COALESCE(sum(s.total) FILTER (
            WHERE s.status='completed'
              AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$2::int
          ),0)::numeric AS year_purchase_total,
          COALESCE(sum(s.total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_purchase_total,
          COALESCE(sum(s.paid_total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_paid_total,
-         max(s.sold_at) FILTER (WHERE s.status='completed' AND s.total > 0.005) AS last_sale_at
+         max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
        FROM aif_shop_customers c
        JOIN aif_locations l ON l.id=c.location_id
        LEFT JOIN aif_shop_sales s
@@ -21227,10 +21225,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            s.*,
            l.code AS location_code,
            l.name AS location_name,
-           count(sl.id) FILTER (
-             WHERE GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0
-           )::int AS line_count,
-           COALESCE(sum(GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)),0)::int AS item_count,
+           count(sl.id)::int AS line_count,
+           COALESCE(sum(sl.quantity),0)::int AS item_count,
            COALESCE(
              (
                SELECT jsonb_agg(
@@ -21329,26 +21325,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                      LIMIT 1
                    )
                  ),
-                 'originalQuantity', sl.quantity,
-                 'returnedQty', COALESCE(ret.returned_qty,0),
-                 'quantity', GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
+                 'quantity', sl.quantity,
                  'listPrice', sl.list_price,
                  'unitPrice', sl.unit_price,
-                 'discountAmount', round(
-                   GREATEST(sl.list_price - sl.unit_price,0)
-                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
-                   2
-                 ),
+                 'discountAmount', sl.discount_amount,
                  'discountPercent', sl.discount_percent,
-                 'lineTotal', round(
-                   sl.unit_price * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
-                   2
-                 )
+                 'lineTotal', sl.line_total
                ) ORDER BY sl.line_no ASC, sl.id ASC
-             ) FILTER (
-               WHERE sl.id IS NOT NULL
-                 AND GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0
-             ),
+             ) FILTER (WHERE sl.id IS NOT NULL),
              '[]'::jsonb
            ) AS lines
          FROM aif_shop_sales s
@@ -21363,16 +21347,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_color_types sale_ct
            ON sale_ct.id=sale_bcc.color_type_id
           AND sale_ct.is_active=true
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(sum(e.returned_qty),0)::int AS returned_qty
-           FROM aif_shop_exchanges e
-           WHERE e.source_sale_line_id=sl.id
-             AND e.status='completed'
-         ) ret ON true
          WHERE s.customer_id=$1
            AND s.location_id=$2
            AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
-           AND (s.total > 0.005 OR s.paid_total > 0.005)
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
          LIMIT $4`,
@@ -21434,6 +21411,243 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error: error?.message || "A kliens adatlapja nem tölthető be.",
         code: error?.code || null,
       });
+    }
+  });
+
+
+  router.patch("/shop-customers/:customerId/sales/:saleId/lines/:lineId/discount", requireAuthed, async (req, res) => {
+    const customerId = text(req.params.customerId);
+    const saleId = text(req.params.saleId);
+    const lineId = text(req.params.lineId);
+    const body = req.body || {};
+    const requestedPercent = toMoney(body.discountPercent ?? body.discount_percent);
+    const note = emptyToNull(body.note);
+
+    if (!isUuidText(customerId) || !isUuidText(saleId) || !isUuidText(lineId)) {
+      return res.status(400).json({ error: "Érvénytelen kliens-, vásárlás- vagy terméksor azonosító." });
+    }
+    if (requestedPercent === null || requestedPercent < 0 || requestedPercent > 100) {
+      return res.status(400).json({ error: "A kedvezmény 0 és 100% között lehet." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, body.location);
+
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_customer_late_discount:${saleId}`]);
+
+      const customerLock = await client.query(
+        `SELECT id FROM aif_shop_customers
+         WHERE id::text=$1 AND location_id=$2 AND is_active=true
+         FOR UPDATE`,
+        [customerId, location.id],
+      );
+      if (!customerLock.rowCount) {
+        const error = new Error("A kliens nem található ebben az üzletben vagy inaktív.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const saleResult = await client.query(
+        `SELECT * FROM aif_shop_sales
+         WHERE id::text=$1 AND customer_id=$2 AND location_id=$3 AND status='completed'
+         FOR UPDATE`,
+        [saleId, customerLock.rows[0].id, location.id],
+      );
+      if (!saleResult.rowCount) {
+        const error = new Error("A klienshez tartozó vásárlás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const sale = saleResult.rows[0];
+      if (aifNumber(sale.balance_due) <= 0.005) {
+        const error = new Error("Utólagos kedvezmény csak nyitott tartozásos vásárlásnál adható.");
+        error.statusCode = 409;
+        error.code = "late_discount_sale_already_paid";
+        throw error;
+      }
+
+      const lineResult = await client.query(
+        `SELECT * FROM aif_shop_sale_lines
+         WHERE id::text=$1 AND sale_id=$2
+         FOR UPDATE`,
+        [lineId, sale.id],
+      );
+      if (!lineResult.rowCount) {
+        const error = new Error("A kiválasztott terméksor nem található ebben a vásárlásban.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const line = lineResult.rows[0];
+      const currentPercent = aifNumber(line.discount_percent);
+      const nextPercent = Math.max(0, Math.min(100, Number(requestedPercent)));
+
+      // Eladó utólag csak további kedvezményt adhat. Kedvezményt visszavenni innen nem lehet.
+      if (nextPercent + 0.0001 < currentPercent) {
+        const error = new Error(`A már megadott ${currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény innen nem csökkenthető. Az eladó csak további kedvezményt adhat.`);
+        error.statusCode = 409;
+        error.code = "late_discount_cannot_reduce";
+        throw error;
+      }
+
+      const quantity = Math.max(1, aifNumber(line.quantity));
+      const listPrice = aifRoundMoney(line.list_price);
+      const previousUnitPrice = aifRoundMoney(line.unit_price);
+      const previousLineTotal = aifRoundMoney(line.line_total);
+      const previousLineDiscount = aifRoundMoney(line.discount_amount);
+      const nextUnitPrice = aifDiscountedUnitPrice(listPrice, nextPercent);
+      const nextLineTotal = aifRoundMoney(nextUnitPrice * quantity);
+      const nextLineDiscount = aifRoundMoney(Math.max(0, listPrice * quantity - nextLineTotal));
+      const nextSaleTotal = aifRoundMoney(aifNumber(sale.total) - previousLineTotal + nextLineTotal);
+      const paidTotal = aifRoundMoney(sale.paid_total);
+
+      if (nextSaleTotal + 0.005 < paidTotal) {
+        const maxAdditionalDiscount = aifRoundMoney(Math.max(0, aifNumber(sale.total) - paidTotal));
+        const error = new Error(`Ekkora kedvezmény már pénzvisszatérítést igényelne. Ennél a vásárlásnál legfeljebb ${maxAdditionalDiscount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON további kedvezmény adható.`);
+        error.statusCode = 409;
+        error.code = "late_discount_exceeds_open_balance";
+        error.maxAdditionalDiscount = maxAdditionalDiscount;
+        throw error;
+      }
+
+      if (Math.abs(nextPercent - currentPercent) < 0.0001 && Math.abs(nextLineTotal - previousLineTotal) < 0.005) {
+        const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+        const snapshot = await aifLoadShopCustomerSnapshot(client, customerLock.rows[0].id, currentYear, location.id);
+        await client.query("COMMIT");
+        return res.json({
+          ok: true,
+          unchanged: true,
+          saleId: String(sale.id),
+          lineId: String(line.id),
+          discountPercent: currentPercent,
+          discountAmount: previousLineDiscount,
+          unitPrice: previousUnitPrice,
+          lineTotal: previousLineTotal,
+          saleTotal: aifNumber(sale.total),
+          paidTotal: aifNumber(sale.paid_total),
+          balanceDue: aifNumber(sale.balance_due),
+          paymentStatus: sale.payment_status,
+          openBalance: aifNumber(snapshot?.open_balance),
+        });
+      }
+
+      await client.query(
+        `UPDATE aif_shop_sale_lines
+         SET unit_price=$2,
+             discount_amount=$3,
+             discount_percent=$4,
+             line_total=$5,
+             raw=COALESCE(raw,'{}'::jsonb) || $6::jsonb
+         WHERE id=$1`,
+        [
+          line.id,
+          nextUnitPrice,
+          nextLineDiscount,
+          nextPercent,
+          nextLineTotal,
+          JSON.stringify({
+            lateDiscountUpdatedAt: new Date().toISOString(),
+            lateDiscountUpdatedBy: actorFrom(req),
+            lateDiscountPreviousPercent: currentPercent,
+            lateDiscountPreviousAmount: previousLineDiscount,
+            lateDiscountNote: note,
+          }),
+        ],
+      );
+
+      const totalsResult = await client.query(
+        `SELECT
+           COALESCE(sum(list_price * quantity),0)::numeric AS subtotal,
+           COALESCE(sum(line_total),0)::numeric AS total
+         FROM aif_shop_sale_lines
+         WHERE sale_id=$1`,
+        [sale.id],
+      );
+      const subtotal = aifRoundMoney(totalsResult.rows[0]?.subtotal);
+      const total = aifRoundMoney(totalsResult.rows[0]?.total);
+      const discountTotal = aifRoundMoney(Math.max(0, subtotal - total));
+      const balanceDue = aifRoundMoney(Math.max(0, total - paidTotal));
+      const paymentStatus = balanceDue <= 0.005 ? "paid" : paidTotal > 0.005 ? "partial" : "credit";
+
+      await client.query(
+        `UPDATE aif_shop_sales
+         SET subtotal=$2, discount_total=$3, total=$4, balance_due=$5, payment_status=$6, updated_at=now()
+         WHERE id=$1`,
+        [sale.id, subtotal, discountTotal, total, balanceDue, paymentStatus],
+      );
+
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+         VALUES ($1,'late_discount',$2,$3,$4::jsonb)`,
+        [
+          sale.id,
+          actorFrom(req),
+          note,
+          JSON.stringify({
+            source: "shop_customer_open_balance",
+            customerId: String(customerLock.rows[0].id),
+            lineId: String(line.id),
+            productTitle: line.product_title || null,
+            quantity,
+            before: {
+              discountPercent: currentPercent,
+              discountAmount: previousLineDiscount,
+              unitPrice: previousUnitPrice,
+              lineTotal: previousLineTotal,
+              saleTotal: aifNumber(sale.total),
+              balanceDue: aifNumber(sale.balance_due),
+            },
+            after: {
+              discountPercent: nextPercent,
+              discountAmount: nextLineDiscount,
+              unitPrice: nextUnitPrice,
+              lineTotal: nextLineTotal,
+              saleTotal: total,
+              balanceDue,
+            },
+          }),
+        ],
+      );
+
+      await client.query(
+        `UPDATE aif_shop_customers SET updated_by=$2, updated_at=now() WHERE id=$1 AND location_id=$3`,
+        [customerLock.rows[0].id, actorFrom(req), location.id],
+      );
+
+      const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+      const snapshot = await aifLoadShopCustomerSnapshot(client, customerLock.rows[0].id, currentYear, location.id);
+
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        unchanged: false,
+        saleId: String(sale.id),
+        lineId: String(line.id),
+        discountPercent: nextPercent,
+        discountAmount: nextLineDiscount,
+        unitPrice: nextUnitPrice,
+        lineTotal: nextLineTotal,
+        saleSubtotal: subtotal,
+        saleDiscountTotal: discountTotal,
+        saleTotal: total,
+        paidTotal,
+        balanceDue,
+        paymentStatus,
+        openBalance: aifNumber(snapshot?.open_balance),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF late customer sale discount failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az utólagos kedvezmény mentése nem sikerült.",
+        code: error?.code || null,
+        maxAdditionalDiscount: error?.maxAdditionalDiscount ?? null,
+      });
+    } finally {
+      client.release();
     }
   });
 
