@@ -21484,13 +21484,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currentPercent = aifNumber(line.discount_percent);
       const nextPercent = Math.max(0, Math.min(100, Number(requestedPercent)));
 
-      // Eladó utólag csak további kedvezményt adhat. Kedvezményt visszavenni innen nem lehet.
-      if (nextPercent + 0.0001 < currentPercent) {
-        const error = new Error(`A már megadott ${currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény innen nem csökkenthető. Az eladó csak további kedvezményt adhat.`);
-        error.statusCode = 409;
-        error.code = "late_discount_cannot_reduce";
-        throw error;
-      }
+      // A nyitott tartozásos tétel kedvezménye utólag módosítható vagy 0%-ra törölhető.
+      // A pénzvisszatérítést igénylő túl nagy kedvezményt az alábbi paidTotal-védelem továbbra is blokkolja.
 
       const quantity = Math.max(1, aifNumber(line.quantity));
       const listPrice = aifRoundMoney(line.list_price);
