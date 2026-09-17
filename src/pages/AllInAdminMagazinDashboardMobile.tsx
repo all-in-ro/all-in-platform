@@ -1532,6 +1532,14 @@ export default function AllInAdminMagazinDashboardMobile({
                 const handover = acceptedHandovers[0] || null;
                 const closureAt = closure?.closedAt || closure?.createdAt || null;
                 const handoverAt = handover?.acceptedAt || handover?.createdAt || handover?.cutoffAt || null;
+                const closureSnapshot = (closure?.snapshot || {}) as Record<string, any>;
+                const closureCashBalance = (closureSnapshot.cashBalance || {}) as Record<string, any>;
+                const closureOpeningCash = numberValue(
+                  closureCashBalance.baselineCash
+                    ?? closureSnapshot.openingCash
+                    ?? 0,
+                );
+                const handoverOpeningCash = numberValue(handover?.snapshot?.openingCash ?? 0);
 
                 if (!closure && !handover) return null;
 
@@ -1545,9 +1553,31 @@ export default function AllInAdminMagazinDashboardMobile({
                           <div className="min-w-0 flex-1">
                             <p className="text-[8px] uppercase tracking-[0.13em] text-white/64">{store.cityName} • napzárás</p>
                             <p className="mt-0.5 truncate text-[13px] text-white">Üzlet lezárva</p>
-                            <p className="mt-0.5 truncate text-[9px] text-white/76">{closure.actor || "-"} • {timeOnly(closureAt)}</p>
                           </div>
-                          <span className="shrink-0 rounded-lg border border-white/24 bg-black/10 px-2 py-1 text-[9px] text-white">{money(closure.countedCash)}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-[72px_minmax(0,1fr)] gap-1.5 border-t border-white/15 pt-2">
+                          <div className="rounded-lg bg-black/10 px-2 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.1em] text-white/55">Idő</p>
+                            <p className="mt-0.5 text-[10px] text-white">{timeOnly(closureAt)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg bg-black/10 px-2 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.1em] text-white/55">Lezárta</p>
+                            <p className="mt-0.5 truncate text-[10px] text-white" title={closure.actor || "-"}>{closure.actor || "-"}</p>
+                          </div>
+                        </div>
+                        <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                          <div className="min-w-0 rounded-lg border border-white/14 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-white/52">Kezdő kassza</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(closureOpeningCash)}>{money(closureOpeningCash)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg border border-white/14 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-white/52">Záró kassza</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(closure.countedCash)}>{money(closure.countedCash)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg border border-white/14 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-white/52">Eltérés</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(closure.cashDifference)}>{money(closure.cashDifference)}</p>
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -1560,9 +1590,31 @@ export default function AllInAdminMagazinDashboardMobile({
                           <div className="min-w-0 flex-1">
                             <p className="text-[8px] uppercase tracking-[0.13em] text-[#e8fffd]/64">{store.cityName} • műszakátadás • {acceptedHandovers.length}</p>
                             <p className="mt-0.5 truncate text-[13px] text-white">{handover.fromActor || "-"} → {handover.toActor || "-"}</p>
-                            <p className="mt-0.5 truncate text-[9px] text-white/76">Átvette: {handover.acceptedBy || handover.toActor || "-"} • {timeOnly(handoverAt)}</p>
                           </div>
-                          <span className="shrink-0 rounded-lg border border-white/20 bg-black/10 px-2 py-1 text-[9px] text-white">{money(handover.countedCash ?? handover.expectedCash ?? 0)}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-[72px_minmax(0,1fr)] gap-1.5 border-t border-white/14 pt-2">
+                          <div className="rounded-lg bg-black/10 px-2 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.1em] text-[#e8fffd]/55">Idő</p>
+                            <p className="mt-0.5 text-[10px] text-white">{timeOnly(handoverAt)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg bg-black/10 px-2 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.1em] text-[#e8fffd]/55">Átvette</p>
+                            <p className="mt-0.5 truncate text-[10px] text-white" title={handover.acceptedBy || handover.toActor || "-"}>{handover.acceptedBy || handover.toActor || "-"}</p>
+                          </div>
+                        </div>
+                        <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                          <div className="min-w-0 rounded-lg border border-white/13 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-[#e8fffd]/52">Kezdő kassza</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(handoverOpeningCash)}>{money(handoverOpeningCash)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg border border-white/13 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-[#e8fffd]/52">Kassza</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(handover.countedCash ?? handover.expectedCash ?? 0)}>{money(handover.countedCash ?? handover.expectedCash ?? 0)}</p>
+                          </div>
+                          <div className="min-w-0 rounded-lg border border-white/13 bg-black/10 px-1.5 py-1.5 text-center">
+                            <p className="text-[7px] uppercase tracking-[0.08em] text-[#e8fffd]/52">Eltérés</p>
+                            <p className="mt-0.5 truncate text-[9px] text-white" title={money(handover.cashDifference || 0)}>{money(handover.cashDifference || 0)}</p>
+                          </div>
                         </div>
                       </div>
                     ) : null}
