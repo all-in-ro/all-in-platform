@@ -2044,47 +2044,58 @@ export default function AllInShopOperations({
               </section>
 
               <div className={`mt-3 grid gap-2.5 ${salesPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.48fr)]" : "xl:grid-cols-[minmax(0,1fr)_58px]"}`}>
-                <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                <section className="rounded-[22px] bg-[#344055]/72 p-3 shadow-[0_10px_30px_rgba(15,23,42,0.16)]">
+                  <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/8 px-1 pb-2.5">
                     <div>
-                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p>
-                      <h3 className="mt-0.5 text-base">Eladott termékek</h3>
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-[#9be9e5]/55">Mit adtam el?</p>
+                      <h3 className="mt-0.5 text-[17px] text-white">Eladott termékek</h3>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{dailyProductLines.length} terméksor</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-white/42">{dailyProductLines.length} terméksor</span>
                       {daySummary.unpaidSales > 0 ? (
-                        <span className="rounded-full border border-red-300/60 bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white">{daySummary.unpaidSales} nyitott fizetés</span>
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
+                          <TriangleAlert size={11} /> {daySummary.unpaidSales} nyitott fizetés
+                        </span>
                       ) : null}
                     </div>
                   </div>
-                  <div className="mt-2.5 space-y-1.5">
+                  <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.07]">
                     {dailyProductLines.map((item) => {
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
                       const unpaid = numberValue(item.balanceDue) > 0.005 || ["unpaid", "partial", "credit"].includes(paymentStatus);
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`grid grid-cols-[68px_minmax(0,1fr)_118px] items-center gap-3 rounded-2xl border px-3 py-2.5 transition ${
+                          className={`group relative grid grid-cols-[68px_minmax(0,1fr)_145px] items-center gap-3 px-3 py-3 transition ${
                             unpaid
-                              ? "border-red-300/38 bg-[#3b303e] shadow-[inset_3px_0_0_#E21C2A]"
-                              : "border-white/10 bg-[#293548] hover:border-[#7bd7d4]/28 hover:bg-[#2d3a4d]"
+                              ? "bg-[#332f39] hover:bg-[#38313d]"
+                              : "bg-[#293548] hover:bg-[#2d3b4f]"
                           }`}
                         >
+                          {unpaid ? (
+                            <span className="absolute inset-y-0 left-0 w-1 bg-[#E21C2A]" aria-hidden="true" />
+                          ) : null}
+
                           <ProductImage src={item.imageUrl} title={item.title} compact />
 
                           <div className="min-w-0">
-                            <p className="truncate text-[14px] leading-5 text-white" title={item.title}>
-                              {item.title}
-                            </p>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="truncate text-[14px] leading-5 text-white" title={item.title}>
+                                {item.title}
+                              </p>
+                              {item.recordType === "exchange" ? (
+                                <span className="shrink-0 rounded-md bg-[#2a8d8b]/20 px-2 py-0.5 text-[9px] text-[#cffffd]">Csere</span>
+                              ) : null}
+                            </div>
 
                             <p
-                              className="mt-0.5 truncate text-[11px] text-white/60"
+                              className="mt-0.5 truncate text-[11px] text-white/56"
                               title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}
                             >
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
 
-                            <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/10 pt-2">
+                            <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-white/[0.08] pt-2">
                               <div className="flex min-w-0 flex-wrap items-center gap-2">
                                 {item.customerName ? (
                                   item.customerId ? (
@@ -2094,64 +2105,60 @@ export default function AllInShopOperations({
                                         event.stopPropagation();
                                         void openCustomerQuickView(item.customerId, item.customerName || "");
                                       }}
-                                      className="group inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/42 bg-[#2a8d8b]/20 px-2.5 py-1.5 text-[12px] text-white transition hover:border-[#b9f5f2]/70 hover:bg-[#2a8d8b]/34 hover:shadow-[0_5px_16px_rgba(42,141,139,0.22)]"
+                                      className="group/customer inline-flex max-w-[420px] items-center gap-1.5 rounded-lg bg-[#2a8d8b]/18 px-2.5 py-1.5 text-[12px] text-white transition hover:bg-[#2a8d8b]/32"
                                       title="Kliens adatlap megnyitása"
                                     >
                                       <UserRound size={13} className="shrink-0 text-[#bff8f5]" />
                                       <span className="truncate">{item.customerName}</span>
-                                      <ChevronRight size={12} className="shrink-0 text-[#bff8f5]/70 transition group-hover:translate-x-0.5 group-hover:text-[#dffffd]" />
+                                      <ChevronRight size={12} className="shrink-0 text-[#bff8f5]/65 transition group-hover/customer:translate-x-0.5 group-hover/customer:text-[#dffffd]" />
                                     </button>
                                   ) : (
                                     <span
-                                      className="inline-flex max-w-[360px] items-center gap-1.5 rounded-lg border border-[#8ee6e2]/24 bg-[#2a8d8b]/12 px-2.5 py-1.5 text-[12px] text-white/80"
+                                      className="inline-flex max-w-[420px] items-center gap-1.5 rounded-lg bg-[#2a8d8b]/10 px-2.5 py-1.5 text-[12px] text-white/78"
                                       title={item.customerName}
                                     >
-                                      <UserRound size={13} className="shrink-0 text-[#bff8f5]/70" />
+                                      <UserRound size={13} className="shrink-0 text-[#bff8f5]/68" />
                                       <span className="truncate">{item.customerName}</span>
                                     </span>
                                   )
                                 ) : (
-                                  <span className="text-[10px] text-white/28">Nincs klienshez csatolva</span>
+                                  <span className="text-[10px] text-white/26">Nincs klienshez csatolva</span>
                                 )}
 
                                 {unpaid ? (
-                                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-200/70 bg-[#E21C2A] px-2.5 py-1.5 text-[11px] text-white shadow-[0_5px_14px_rgba(226,28,42,0.20)]">
+                                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#E21C2A] px-2.5 py-1.5 text-[11px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
                                     <TriangleAlert size={12} />
                                     {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
                                   </span>
                                 ) : null}
-
-                                {item.recordType === "exchange" ? (
-                                  <span className="rounded-lg border border-[#9be9e5]/25 bg-[#2a8d8b]/12 px-2 py-1 text-[10px] text-[#d7fffd]">
-                                    Csere
-                                  </span>
-                                ) : null}
                               </div>
 
-                              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                                <span
-                                  className="max-w-[190px] truncate rounded-md border border-white/12 bg-black/10 px-2 py-1 font-mono text-[9px] text-white/58"
-                                  title={item.productCode || "–"}
-                                >
-                                  {item.productCode || "–"}
+                              <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[9px] text-white/30">
+                                <span className="truncate font-mono" title={item.productCode || "–"}>
+                                  Kód: {item.productCode || "–"}
                                 </span>
-                                {item.saleNumber ? (
-                                  <span className="whitespace-nowrap text-[10px] text-white/40">
-                                    {item.saleNumber} • {formatTime(item.soldAt)}
-                                  </span>
+                                {item.soldAt ? (
+                                  <span className="whitespace-nowrap tabular-nums">{formatTime(item.soldAt)}</span>
                                 ) : null}
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/10 pl-3 text-right">
-                            <span className="inline-flex min-w-[70px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2.5 py-1 text-sm text-[#d7fffd]">
-                              {item.qty} db
-                            </span>
-                            <p className="mt-1.5 whitespace-nowrap text-[14px] text-white">{formatMoney(item.revenue)}</p>
+                          <div className="flex h-full min-w-0 flex-col items-end justify-center text-right">
+                            <div className="flex items-baseline gap-1.5 text-white/48">
+                              <span className="text-[12px] tabular-nums">{item.qty}</span>
+                              <span className="text-[9px] uppercase tracking-[0.08em]">db</span>
+                            </div>
+                            <p className="mt-0.5 whitespace-nowrap text-[18px] tracking-tight text-white">
+                              {formatMoney(item.revenue)}
+                            </p>
                             {item.discountTotal > 0 ? (
-                              <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">Kedv.: {formatMoney(item.discountTotal)}</p>
-                            ) : null}
+                              <p className="mt-0.5 whitespace-nowrap text-[9px] text-amber-100/82">
+                                − {formatMoney(item.discountTotal)} kedvezmény
+                              </p>
+                            ) : (
+                              <span className="mt-0.5 h-[13px]" aria-hidden="true" />
+                            )}
                           </div>
                         </div>
                       );
