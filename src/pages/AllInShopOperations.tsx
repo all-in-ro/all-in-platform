@@ -731,6 +731,7 @@ export default function AllInShopOperations({
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [salesPanelOpen, setSalesPanelOpen] = useState(false);
   const [selectedDailySale, setSelectedDailySale] = useState<AifShopDailySaleItem | null>(null);
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
@@ -1112,6 +1113,7 @@ export default function AllInShopOperations({
     setError("");
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
+    setSalesPanelOpen(false);
     setSelectedDailySale(null);
     setSaleDetail(null);
     setSaleDetailError("");
@@ -1217,6 +1219,9 @@ export default function AllInShopOperations({
     firstSaleAt: null,
     lastSaleAt: null,
   };
+  const dailyProductLines = summaryData?.productLines?.length
+    ? summaryData.productLines
+    : (summaryData?.products || []);
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -1436,11 +1441,13 @@ export default function AllInShopOperations({
 
                 <div className="p-4">
                   {currentDayClosure ? (
-                    <div className="mb-3 flex items-start gap-3 rounded-2xl border border-emerald-200/28 bg-emerald-500/12 px-4 py-3">
-                      <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-100" size={18} />
+                    <div className="mb-3 flex items-center gap-3 rounded-2xl border border-white/55 bg-[#E21C2A] px-4 py-3 text-white shadow-[0_10px_24px_rgba(226,28,42,0.24)]">
+                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/32 bg-black/10 text-white">
+                        <LockKeyhole size={18} />
+                      </span>
                       <div className="min-w-0">
-                        <p className="text-sm text-emerald-50">A mai kassza le van zárva</p>
-                        <p className="mt-1 text-xs text-white/52">
+                        <p className="text-sm text-white">A mai kassza le van zárva</p>
+                        <p className="mt-1 text-xs text-white/82">
                           {currentDayClosure.actor} • {formatTime(currentDayClosure.closedAt)} • megszámolva {formatMoney(currentDayClosure.countedCash)} • eltérés {formatMoney(currentDayClosure.cashDifference)}
                         </p>
                       </div>
@@ -1635,9 +1642,19 @@ export default function AllInShopOperations({
                   ) : null}
 
                   {summaryIsToday && handoverPreview?.canCreate === false && !currentOutgoingHandover && !currentIncomingHandover && handoverPreview.reason ? (
-                    <div className="mb-3 flex items-start gap-3 rounded-2xl border border-amber-200/28 bg-amber-400/8 px-4 py-3">
-                      <TriangleAlert className="mt-0.5 shrink-0 text-amber-100" size={18} />
-                      <p className="text-xs leading-relaxed text-amber-50/82">{handoverPreview.reason}</p>
+                    <div className={`mb-3 flex items-center gap-3 rounded-2xl border px-4 py-3 ${
+                      currentDayClosure || String(handoverPreview.reason).toLocaleLowerCase("hu-HU").includes("lezár")
+                        ? "border-white/55 bg-[#E21C2A] text-white shadow-[0_10px_24px_rgba(226,28,42,0.22)]"
+                        : "border-amber-200/28 bg-amber-400/8 text-amber-50"
+                    }`}>
+                      <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${
+                        currentDayClosure || String(handoverPreview.reason).toLocaleLowerCase("hu-HU").includes("lezár")
+                          ? "border-white/30 bg-black/10 text-white"
+                          : "border-amber-100/20 bg-amber-300/10 text-amber-100"
+                      }`}>
+                        <TriangleAlert size={17} />
+                      </span>
+                      <p className="text-sm leading-relaxed text-inherit">{handoverPreview.reason}</p>
                     </div>
                   ) : null}
 
@@ -1689,28 +1706,37 @@ export default function AllInShopOperations({
                     </div>
                   </div>
 
-                  <div className="mt-3 grid gap-3 xl:grid-cols-[1.08fr_0.92fr]">
-                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3">
+                  <div className="mt-3 space-y-3">
+                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3.5">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Dolgozónként külön</p>
-                          <h4 className="mt-1 text-base text-white">Napi árulás</h4>
+                          <h4 className="mt-1 text-lg text-white">Napi árulás</h4>
                         </div>
-                        <UsersRound size={21} className="text-[#8ee6e2]" />
+                        <UsersRound size={22} className="text-[#8ee6e2]" />
                       </div>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] gap-2.5">
                         {(shiftData?.employees || []).map((employee) => {
                           const active = employeeKey(employee.name) === employeeKey(actor);
                           return (
-                            <div key={employee.name} className={`rounded-xl border p-2.5 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`}>
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0"><p className="truncate text-sm text-white">{employee.name}</p><p className="mt-1 text-[10px] text-white/42">{employee.transactions} eladás • {employee.itemsSold} db</p></div>
-                                {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2 py-1 text-[9px] text-white">Te</span> : null}
+                            <div key={employee.name} className={`rounded-2xl border p-3.5 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-base text-white">{employee.name}</p>
+                                  <p className="mt-1 text-[11px] text-white/48">{employee.transactions} eladás • {employee.itemsSold} db</p>
+                                </div>
+                                {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white">Te</span> : null}
                               </div>
-                              <p className="mt-1.5 text-lg text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
-                              <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-white/48">
-                                <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">KP {formatMoney(shiftPayment(employee, "cash").amount)}</span>
-                                <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Kártya {formatMoney(shiftPayment(employee, "card").amount)}</span>
+                              <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
+                              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                                <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+                                  <p className="text-white/40">Készpénz</p>
+                                  <p className="mt-1 text-sm text-white">{formatMoney(shiftPayment(employee, "cash").amount)}</p>
+                                </div>
+                                <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+                                  <p className="text-white/40">Bankkártya</p>
+                                  <p className="mt-1 text-sm text-white">{formatMoney(shiftPayment(employee, "card").amount)}</p>
+                                </div>
                               </div>
                             </div>
                           );
@@ -1719,33 +1745,41 @@ export default function AllInShopOperations({
                       </div>
                     </div>
 
-                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3">
+                    <div className="rounded-[20px] border border-white/12 bg-[#344055] p-3.5">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Visszanézhető napló</p>
-                          <h4 className="mt-1 text-base text-white">Műszakátadások</h4>
+                          <h4 className="mt-1 text-lg text-white">Műszakátadások</h4>
                         </div>
-                        <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/50">{shiftData?.handovers.length || 0} átadás</span>
+                        <span className="rounded-full border border-white/12 bg-black/10 px-3 py-1.5 text-[11px] text-white/58">{shiftData?.handovers.length || 0} átadás</span>
                       </div>
-                      <div className="mt-3 space-y-2">
+                      <div className="mt-3 space-y-2.5">
                         {(shiftData?.handovers || []).map((item, index) => {
                           const accepted = item.status === "accepted";
                           const pending = item.status === "pending";
                           return (
-                            <div key={item.id} className={`rounded-xl border p-2.5 ${pending ? "border-amber-200/30 bg-amber-400/8" : accepted ? "border-[#9be9e5]/22 bg-[#2a8d8b]/10" : "border-white/10 bg-[#293548]"}`}>
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0"><p className="truncate text-sm text-white">{index + 1}. {item.fromActor} <ArrowRight className="mx-1 inline" size={13} /> {item.toActor}</p><p className="mt-1 text-[10px] text-white/42">{formatTime(item.shiftStartAt)} → {formatTime(item.cutoffAt)}</p></div>
-                                <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] ${pending ? "border-amber-200/30 bg-amber-300/12 text-amber-50" : accepted ? "border-[#9be9e5]/30 bg-[#2a8d8b] text-white" : "border-white/12 bg-black/10 text-white/50"}`}>{shiftStatusLabel(item.status)}</span>
+                            <div key={item.id} className={`rounded-2xl border p-3.5 ${pending ? "border-amber-200/30 bg-amber-400/8" : accepted ? "border-[#9be9e5]/28 bg-[#2a8d8b]/10" : "border-white/10 bg-[#293548]"}`}>
+                              <div className="flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                  <p className="truncate text-base text-white">{index + 1}. {item.fromActor} <ArrowRight className="mx-1.5 inline" size={15} /> {item.toActor}</p>
+                                  <p className="mt-1 text-[11px] text-white/46">{formatTime(item.shiftStartAt)} → {formatTime(item.cutoffAt)}</p>
+                                </div>
+                                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${pending ? "border-amber-200/30 bg-amber-300/12 text-amber-50" : accepted ? "border-[#9be9e5]/30 bg-[#2a8d8b] text-white" : "border-white/12 bg-black/10 text-white/50"}`}>{shiftStatusLabel(item.status)}</span>
                               </div>
-                              <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-                                <div><p className="text-white/35">Műszak forgalma</p><p className="mt-1 text-white">{formatMoney(item.snapshot?.shift?.revenue || 0)}</p></div>
-                                <div><p className="text-white/35">Műszak KP</p><p className="mt-1 text-white">{formatMoney(shiftPayment(item.snapshot?.shift, "cash").amount)}</p></div>
-                                <div><p className="text-white/35">Műszak kártya</p><p className="mt-1 text-white">{formatMoney(shiftPayment(item.snapshot?.shift, "card").amount)}</p></div>
-                              </div>
-                              <div className="mt-2 grid grid-cols-3 gap-2 border-t border-white/8 pt-2 text-[10px]">
-                                <div><p className="text-white/35">Átadandó KP</p><p className="mt-1 text-white">{formatMoney(item.expectedCash)}</p></div>
-                                <div><p className="text-white/35">Megszámolva</p><p className="mt-1 text-white">{item.countedCash == null ? "–" : formatMoney(item.countedCash)}</p></div>
-                                <div><p className="text-white/35">Eltérés</p><p className={`mt-1 ${numberValue(item.cashDifference) !== 0 ? "text-red-100" : "text-[#bdf8f5]"}`}>{item.cashDifference == null ? "–" : formatMoney(item.cashDifference)}</p></div>
+                              <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                                {[
+                                  ["Műszak forgalma", formatMoney(item.snapshot?.shift?.revenue || 0)],
+                                  ["Műszak KP", formatMoney(shiftPayment(item.snapshot?.shift, "cash").amount)],
+                                  ["Műszak kártya", formatMoney(shiftPayment(item.snapshot?.shift, "card").amount)],
+                                  ["Átadandó KP", formatMoney(item.expectedCash)],
+                                  ["Megszámolva", item.countedCash == null ? "–" : formatMoney(item.countedCash)],
+                                  ["Eltérés", item.cashDifference == null ? "–" : formatMoney(item.cashDifference)],
+                                ].map(([label, value], metricIndex) => (
+                                  <div key={`${item.id}-${metricIndex}`} className="rounded-xl border border-white/9 bg-black/10 px-3 py-2.5">
+                                    <p className="text-[9px] uppercase tracking-[0.06em] text-white/38">{label}</p>
+                                    <p className={`mt-1.5 text-sm ${label === "Eltérés" && numberValue(item.cashDifference) !== 0 ? "text-red-100" : label === "Eltérés" ? "text-[#bdf8f5]" : "text-white"}`}>{value}</p>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           );
@@ -1757,86 +1791,117 @@ export default function AllInShopOperations({
                 </div>
               </section>
 
-              <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+              <div className={`mt-3 grid gap-3 ${salesPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.62fr)]" : "xl:grid-cols-[minmax(0,1fr)_210px]"}`}>
                 <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
-                  <div className="flex items-center justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p><h3 className="mt-0.5 text-base">Eladott termékek</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.products.length || 0} termék</span></div>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p>
+                      <h3 className="mt-0.5 text-base">Eladott termékek</h3>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{dailyProductLines.length} terméksor</span>
+                      {daySummary.unpaidSales > 0 ? (
+                        <span className="rounded-full border border-red-300/60 bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white">{daySummary.unpaidSales} nyitott fizetés</span>
+                      ) : null}
+                    </div>
+                  </div>
                   <div className="mt-2.5 space-y-1.5">
-                    {(summaryData?.products || []).map((item) => (
-                      <div
-                        key={item.key}
-                        className="grid grid-cols-[68px_minmax(0,1fr)_88px] items-center gap-2.5 rounded-xl border border-white/10 bg-[#293548] p-2.5 transition hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
-                      >
-                        <ProductImage src={item.imageUrl} title={item.title} compact />
-                        <div className="min-w-0 self-stretch">
-                          <p className="line-clamp-2 min-h-[32px] text-[13px] leading-4 text-white" title={item.title}>
-                            {item.title}
-                          </p>
-                          <p
-                            className="mt-1 line-clamp-1 text-[10px] text-white/52"
-                            title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}
-                          >
-                            {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
-                          </p>
-                          <div className="mt-2 flex min-w-0">
-                            <span
-                              className="max-w-full truncate rounded-md border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-1.5 py-0.5 font-mono text-[9px] text-[#cffffd]/68"
-                              title={item.productCode || "–"}
-                            >
-                              {item.productCode || "–"}
-                            </span>
+                    {dailyProductLines.map((item) => {
+                      const paymentStatus = String(item.paymentStatus || "").toLowerCase();
+                      const unpaid = numberValue(item.balanceDue) > 0.005 || ["unpaid", "partial", "credit"].includes(paymentStatus);
+                      return (
+                        <div
+                          key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
+                          className={`grid grid-cols-[68px_minmax(0,1fr)_90px] items-center gap-2.5 rounded-xl border p-2.5 transition ${
+                            unpaid
+                              ? "border-red-300/34 bg-[#3d3140] hover:border-red-200/48"
+                              : "border-white/10 bg-[#293548] hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
+                          }`}
+                        >
+                          <ProductImage src={item.imageUrl} title={item.title} compact />
+                          <div className="min-w-0 self-stretch">
+                            <p className="line-clamp-2 min-h-[32px] text-[13px] leading-4 text-white" title={item.title}>{item.title}</p>
+                            <p className="mt-1 line-clamp-1 text-[10px] text-white/52" title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}>
+                              {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
+                            </p>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {item.customerName ? (
+                                <span className="inline-flex max-w-[240px] items-center gap-1 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[10px] text-[#d7fffd]" title={item.customerName}>
+                                  <UserRound size={11} className="shrink-0" /> <span className="truncate">{item.customerName}</span>
+                                </span>
+                              ) : null}
+                              {unpaid ? (
+                                <span className="inline-flex items-center gap-1 rounded-lg border border-red-200/65 bg-[#E21C2A] px-2 py-1 text-[10px] text-white shadow-[0_4px_10px_rgba(226,28,42,0.18)]">
+                                  <TriangleAlert size={11} /> {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
+                                </span>
+                              ) : null}
+                              {item.recordType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/25 bg-[#2a8d8b]/12 px-2 py-1 text-[9px] text-[#d7fffd]">Csere</span> : null}
+                            </div>
+                            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                              <span className="max-w-full truncate rounded-md border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-1.5 py-0.5 font-mono text-[9px] text-[#cffffd]/68" title={item.productCode || "–"}>{item.productCode || "–"}</span>
+                              {item.saleNumber ? <span className="truncate text-[9px] text-white/36">{item.saleNumber} • {formatTime(item.soldAt)}</span> : null}
+                            </div>
+                          </div>
+                          <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-2.5 text-right">
+                            <span className="inline-flex min-w-[62px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-sm text-[#d7fffd]">{item.qty} db</span>
+                            <p className="mt-1.5 whitespace-nowrap text-[13px] text-white">{formatMoney(item.revenue)}</p>
+                            {item.discountTotal > 0 ? <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">Kedv.: {formatMoney(item.discountTotal)}</p> : null}
                           </div>
                         </div>
-                        <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-2.5 text-right">
-                          <span className="inline-flex min-w-[62px] justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-sm text-[#d7fffd]">
-                            {item.qty} db
-                          </span>
-                          <p className="mt-1.5 whitespace-nowrap text-[13px] text-white">{formatMoney(item.revenue)}</p>
-                          {item.discountTotal > 0 ? (
-                            <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">
-                              Kedv.: {formatMoney(item.discountTotal)}
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                    {!summaryLoading && !(summaryData?.products || []).length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladott termék.</p></div> : null}
+                      );
+                    })}
+                    {!summaryLoading && !dailyProductLines.length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladott termék.</p></div> : null}
                   </div>
                 </section>
 
-                <section className="rounded-[20px] border border-white/14 bg-[#374357] p-3">
-                  <div className="flex items-center justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</p><h3 className="mt-0.5 text-base">Napi eladások</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.sales.length || 0} bizonylat</span></div>
-                  <div className="mt-2.5 space-y-1.5">
-                    {(summaryData?.sales || []).map((sale) => (
-                      <button
-                        key={sale.id}
-                        type="button"
-                        onClick={() => void openSaleDetail(sale)}
-                        className={`group w-full rounded-xl border p-2.5 text-left transition hover:-translate-y-[1px] hover:border-[#9be9e5]/38 hover:bg-[#314156] active:translate-y-0 ${
-                          sale.balanceDue > 0 ? "border-red-300/32 bg-red-950/18" : "border-white/10 bg-[#293548]"
-                        }`}
-                        title="Kattints az eladás részleteihez"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm text-white">{sale.saleNumber}</p>
-                            <p className="mt-1 text-[11px] text-white/45">{formatTime(sale.soldAt)} • {sale.paymentLabel}</p>
+                <section className="self-start overflow-hidden rounded-[20px] border border-white/14 bg-[#374357]">
+                  <button
+                    type="button"
+                    onClick={() => setSalesPanelOpen((current) => !current)}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-white/[0.04]"
+                    aria-expanded={salesPanelOpen}
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><Receipt size={16} /></span>
+                      <span className="min-w-0">
+                        <span className="block text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</span>
+                        <span className="mt-0.5 block truncate text-sm text-white">{summaryData?.sales.length || 0} db</span>
+                      </span>
+                    </span>
+                    {salesPanelOpen ? <ChevronRight size={18} className="text-[#bff8f5]" /> : <ChevronLeft size={18} className="text-[#bff8f5]" />}
+                  </button>
+
+                  {salesPanelOpen ? (
+                    <div className="space-y-1.5 border-t border-white/10 p-2.5">
+                      {(summaryData?.sales || []).map((sale) => (
+                        <button
+                          key={sale.id}
+                          type="button"
+                          onClick={() => void openSaleDetail(sale)}
+                          className={`group w-full rounded-xl border p-2.5 text-left transition hover:border-[#9be9e5]/38 hover:bg-[#314156] ${sale.balanceDue > 0 ? "border-red-300/32 bg-red-950/18" : "border-white/10 bg-[#293548]"}`}
+                          title="Kattints az eladás részleteihez"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-[12px] text-white">{sale.saleNumber}</p>
+                              <p className="mt-1 text-[10px] text-white/45">{formatTime(sale.soldAt)} • {sale.paymentLabel}</p>
+                            </div>
+                            <p className="shrink-0 text-sm text-white">{formatMoney(sale.total)}</p>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <p className="text-base text-white">{formatMoney(sale.total)}</p>
-                            <ChevronDown size={17} className="-rotate-90 text-white/25 transition group-hover:translate-x-0.5 group-hover:text-[#9be9e5]" />
+                          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] text-white/52">
+                            <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>
+                            {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={11} />{sale.customerName}</span> : null}
+                            {sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-[#E21C2A] px-2 py-1 text-white">Hátralék: {formatMoney(sale.balanceDue)}</span> : null}
                           </div>
-                        </div>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] text-white/52">
-                          <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>
-                          {sale.saleType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/28 bg-[#2a8d8b]/16 px-2 py-1 text-[#d7fffd]">Csere • különbözet</span> : null}
-                          {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={12} />{sale.customerName}</span> : null}
-                          {sale.discountTotal > 0 ? <span className="rounded-lg border border-[#9be9e5]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[#d7fffd]">Kedv.: {formatMoney(sale.discountTotal)}</span> : null}
-                          {sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-red-600 px-2 py-1 text-white">Hátralék: {formatMoney(sale.balanceDue)}</span> : null}
-                        </div>
-                      </button>
-                    ))}
-                    {!summaryLoading && !(summaryData?.sales || []).length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><Receipt size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladás.</p></div> : null}
-                  </div>
+                        </button>
+                      ))}
+                      {!summaryLoading && !(summaryData?.sales || []).length ? <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">Ezen a napon még nincs eladás.</div> : null}
+                    </div>
+                  ) : (
+                    <div className="border-t border-white/8 px-3 py-3 text-[10px] leading-relaxed text-white/38">
+                      Csak akkor nyisd ki, ha egy bizonylat részleteire tényleg szükség van.
+                    </div>
+                  )}
                 </section>
               </div>
 
