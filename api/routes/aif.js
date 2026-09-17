@@ -24102,6 +24102,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         paymentsResult,
         productsResult,
         exchangeProductsResult,
+        productLinesResult,
+        exchangeProductLinesResult,
         salesResult,
         exchangeSalesResult,
       ] = await Promise.all([
@@ -24245,6 +24247,74 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         pool.query(
           `WITH filtered_sales AS (
              SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           )
+           SELECT
+             sl.id::text AS key,
+             sl.id::text AS line_id,
+             fs.id::text AS sale_id,
+             fs.sale_number,
+             fs.sold_at,
+             fs.customer_name,
+             fs.customer_phone,
+             fs.payment_status,
+             fs.balance_due,
+             fs.sale_type,
+             'sale'::text AS record_type,
+             COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS title,
+             sl.product_code,
+             sl.brand_name,
+             sl.subcategory_name,
+             sl.color_name,
+             sl.size,
+             COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+             sl.quantity::numeric AS qty,
+             sl.line_total::numeric AS revenue,
+             sl.discount_amount::numeric AS discount_total,
+             1::int AS transactions
+           FROM aif_shop_sale_lines sl
+           JOIN filtered_sales fs ON fs.id=sl.sale_id
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           ORDER BY fs.sold_at DESC, sl.line_no ASC`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${exchangeFilter}
+           )
+           SELECT
+             el.id::text AS key,
+             el.id::text AS line_id,
+             e.id::text AS sale_id,
+             e.exchange_number AS sale_number,
+             e.created_at AS sold_at,
+             e.customer_name,
+             e.customer_phone,
+             'paid'::text AS payment_status,
+             0::numeric AS balance_due,
+             'exchange'::text AS sale_type,
+             'exchange'::text AS record_type,
+             COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS title,
+             el.product_code,
+             el.brand_name,
+             COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+             el.color_name,
+             el.size,
+             COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+             el.quantity::numeric AS qty,
+             el.line_total::numeric AS revenue,
+             0::numeric AS discount_total,
+             1::int AS transactions
+           FROM filtered_exchanges e
+           JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
+           LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           ORDER BY e.created_at DESC, el.line_no ASC`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_sales AS (
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
            ), line_totals AS (
              SELECT sale_id, count(*)::int AS line_count, COALESCE(sum(quantity),0)::int AS item_count
              FROM aif_shop_sale_lines
@@ -24356,6 +24426,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         .sort((a, b) => b.qty - a.qty || b.revenue - a.revenue || String(a.title).localeCompare(String(b.title), "hu"))
         .slice(0, 200);
 
+      // Az üzleti eladó napi nézetében a kliens és a fizetési állapot csak
+      // konkrét bizonylatsorhoz köthető biztonságosan. Ezért az összesített
+      // products lista mellett külön sale-line szintű listát is visszaadunk.
+      const productLineRows = [...productLinesResult.rows, ...exchangeProductLinesResult.rows]
+        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
+        .slice(0, 300);
+
       const saleRows = [...salesResult.rows, ...exchangeSalesResult.rows]
         .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
         .slice(0, 200);
@@ -24390,6 +24467,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         payments,
         products: productRows.map((row) => ({
           key: row.key,
+          title: row.title,
+          productCode: row.product_code || null,
+          brandName: row.brand_name || null,
+          subcategoryName: row.subcategory_name || null,
+          colorName: row.color_name || null,
+          size: row.size || null,
+          imageUrl: row.image_url || null,
+          qty: aifNumber(row.qty),
+          revenue: aifNumber(row.revenue),
+          discountTotal: aifNumber(row.discount_total),
+          transactions: aifNumber(row.transactions),
+        })),
+        productLines: productLineRows.map((row) => ({
+          key: row.key,
+          lineId: row.line_id ? String(row.line_id) : null,
+          saleId: row.sale_id ? String(row.sale_id) : null,
+          saleNumber: row.sale_number || null,
+          soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+          customerName: row.customer_name || null,
+          customerPhone: row.customer_phone || null,
+          paymentStatus: row.payment_status || null,
+          balanceDue: aifNumber(row.balance_due),
+          saleType: row.sale_type || null,
+          recordType: row.record_type || "sale",
           title: row.title,
           productCode: row.product_code || null,
           brandName: row.brand_name || null,
