@@ -1439,8 +1439,17 @@ export default function AllInAdminMagazinDashboard({
   const latestHandoverCash = latestHandover?.countedCash ?? latestHandover?.expectedCash ?? 0;
   const dayClosureSnapshot = (dayClosure?.snapshot || {}) as Record<string, any>;
   const dayClosureCashBalance = (dayClosureSnapshot.cashBalance || {}) as Record<string, any>;
+  const dayClosureAtMs = dayClosureAt ? new Date(dayClosureAt).getTime() : Number.POSITIVE_INFINITY;
+  const closureOpeningHandover = acceptedHandovers.find((item) => {
+    const value = item.acceptedAt || item.createdAt || item.cutoffAt || null;
+    if (!value) return false;
+    const at = new Date(value).getTime();
+    return Number.isFinite(at) && at <= dayClosureAtMs;
+  }) || null;
   const dayClosureOpeningCash = numberValue(
-    dayClosureCashBalance.baselineCash
+    closureOpeningHandover?.countedCash
+      ?? closureOpeningHandover?.expectedCash
+      ?? dayClosureCashBalance.baselineCash
       ?? dayClosureSnapshot.openingCash
       ?? 0,
   );
