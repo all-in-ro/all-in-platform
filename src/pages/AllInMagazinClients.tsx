@@ -1287,16 +1287,11 @@ export default function AllInMagazinClients({
                         <button
                           type="button"
                           onClick={openPaymentModal}
-                          className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-[#9be9e5]/55 bg-[#2a8d8b] px-4 text-[12px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] active:scale-[0.99]"
+                          className="inline-flex h-11 min-w-[132px] shrink-0 items-center justify-center gap-2.5 rounded-xl border border-[#9be9e5]/55 bg-[#2a8d8b] px-5 text-[13px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] active:scale-[0.99]"
                           title="Tartozás befizetése"
                         >
-                          <WalletCards size={16} />
-                          <span>
-                            <span className="block text-left leading-none">Befizetés</span>
-                            <span className="mt-1 block text-left text-[9px] leading-none text-white/68">
-                              {formatMoney(detail.summary.openBalance)}
-                            </span>
-                          </span>
+                          <WalletCards size={17} />
+                          Befizetés
                         </button>
                       ) : (
                         <span className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd]/78">
