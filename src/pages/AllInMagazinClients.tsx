@@ -59,7 +59,6 @@ type Props = {
   onClose: () => void;
 };
 
-
 type CustomerDraft = {
   fullName: string;
   phone: string;
@@ -310,7 +309,7 @@ export default function AllInMagazinClients({
       paidTotal,
       balanceDue,
       wouldRefund: saleTotal + 0.005 < paidTotal,
-      changed: proposedPercent > currentPercent + 0.0001,
+      changed: Math.abs(proposedPercent - currentPercent) > 0.0001,
     };
   }, [discountPercentDraft, discountTarget]);
 
@@ -790,9 +789,7 @@ export default function AllInMagazinClients({
     if (!selected || !discountTarget || !discountPreview) return;
     if (!discountPreview.changed) {
       setDiscountError(
-        discountPreview.currentPercent > 0
-          ? `A kedvezmény legyen nagyobb a jelenlegi ${discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%-nál.`
-          : "Adj meg 0%-nál nagyobb kedvezményt.",
+        `A kedvezmény nem változott. Jelenlegi érték: ${discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%.`,
       );
       return;
     }
@@ -817,8 +814,9 @@ export default function AllInMagazinClients({
         },
       );
       setSuccess(
-        `${discountTarget.line.productTitle || "A termék"}: ${response.discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény mentve. ` +
-        `Kedvezmény: ${formatMoney(response.discountAmount)}. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
+        response.discountPercent <= 0.0001
+          ? `${discountTarget.line.productTitle || "A termék"}: a kedvezmény törölve. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`
+          : `${discountTarget.line.productTitle || "A termék"}: ${response.discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény mentve. Kedvezmény: ${formatMoney(response.discountAmount)}. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
       );
       setDiscountTarget(null);
       setDiscountPercentDraft("");
@@ -1787,27 +1785,50 @@ export default function AllInMagazinClients({
                     />
                     <span className="inline-flex h-20 items-center border-l border-white/10 px-4 text-xl text-white/48">%</span>
                   </div>
-                  <div className="mt-2 grid grid-cols-5 gap-1.5">
-                    {[5, 10, 15, 20, 30].map((percent) => (
+                  <div className="mt-2 grid grid-cols-6 gap-1.5">
+                    {[0, 5, 10, 15, 20, 30].map((percent) => (
                       <button
                         key={percent}
                         type="button"
                         onClick={() => { setDiscountError(""); setDiscountPercentDraft(String(percent)); }}
-                        className={`h-9 rounded-lg text-[11px] transition ${Math.abs(discountPreview.proposedPercent - percent) < 0.001 ? "bg-[#2a8d8b] text-white" : "bg-[#273243] text-white/58 hover:bg-[#344055]"}`}
+                        className={`h-9 rounded-lg text-[11px] transition ${
+                          Math.abs(discountPreview.proposedPercent - percent) < 0.001
+                            ? percent === 0
+                              ? "bg-white/14 text-white ring-1 ring-white/24"
+                              : "bg-[#2a8d8b] text-white"
+                            : percent === 0
+                              ? "bg-white/[0.06] text-white/72 hover:bg-white/[0.10]"
+                              : "bg-[#273243] text-white/58 hover:bg-[#344055]"
+                        }`}
+                        title={percent === 0 ? "Kedvezmény törlése" : `${percent}% kedvezmény`}
                       >
                         {percent}%
                       </button>
                     ))}
                   </div>
                   {discountPreview.currentPercent > 0 ? (
-                    <p className="mt-2 text-[10px] text-amber-100/65">Jelenlegi: {discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%. Innen csak növelhető.</p>
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <p className="text-[10px] text-amber-100/65">
+                        Jelenlegi: {discountPreview.currentPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%. Szabadon módosítható.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiscountError("");
+                          setDiscountPercentDraft("0");
+                        }}
+                        className="shrink-0 text-[10px] text-white/55 underline decoration-white/20 underline-offset-4 transition hover:text-white"
+                      >
+                        Kedvezmény törlése
+                      </button>
+                    </div>
                   ) : null}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-white/34">Eredeti ár / db</p><p className="mt-2 text-[20px] tabular-nums text-white">{formatMoney(discountPreview.listPrice)}</p></div>
                   <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-[#9be9e5]/54">Új ár / db</p><p className="mt-2 text-[20px] tabular-nums text-[#d7fffd]">{formatMoney(discountPreview.unitPrice)}</p></div>
-                  <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-amber-100/52">Kedvezmény összesen</p><p className="mt-2 text-[20px] tabular-nums text-amber-100">−{formatMoney(discountPreview.discountAmount)}</p></div>
+                  <div className="rounded-2xl bg-[#293548] p-3"><p className="text-[9px] uppercase tracking-[0.10em] text-amber-100/52">Kedvezmény összesen</p><p className={`mt-2 text-[20px] tabular-nums ${discountPreview.discountAmount > 0.005 ? "text-amber-100" : "text-white/42"}`}>{discountPreview.discountAmount > 0.005 ? `−${formatMoney(discountPreview.discountAmount)}` : formatMoney(0)}</p></div>
                   <div className={`rounded-2xl p-3 ${discountPreview.balanceDue > 0.005 ? "bg-[#E21C2A] text-white" : "bg-[#2a8d8b]/18 text-[#d7fffd]"}`}><p className="text-[9px] uppercase tracking-[0.10em] opacity-70">Tartozás utána</p><p className="mt-2 text-[20px] tabular-nums">{formatMoney(discountPreview.balanceDue)}</p></div>
                 </div>
               </div>
