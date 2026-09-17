@@ -1168,13 +1168,13 @@ export default function AllInMagazinClients({
                     </div>
                   </div>
 
-                  <section className="rounded-[24px] bg-[#374357] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]">
+                  <section className="rounded-[24px] bg-[#344055]/82 p-4 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><ShoppingBag size={20} /></span>
+                        <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#2a8d8b]/16 text-[#d7fffd]"><ShoppingBag size={20} /></span>
                         <div>
-                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárolt termékek</p>
-                          <h3 className="mt-1 text-lg text-white">{detail.summary.year}. évi terméklista</h3>
+                          <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Vásárolt termékek</p>
+                          <h3 className="mt-1 text-[19px] text-white">{detail.summary.year}. évi terméklista</h3>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -1187,8 +1187,8 @@ export default function AllInMagazinClients({
 
                     <div className="mt-4 space-y-3">
                       {detail.sales.length ? detail.sales.map((sale) => (
-                        <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#293548]">
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] bg-[#303b4e] px-4 py-3">
+                        <article key={sale.id} className="overflow-hidden rounded-[20px] bg-[#293548] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
+                          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.10] bg-[#303b4e] px-4 py-3.5">
                             <div className="min-w-0">
                               <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-white">
                                 <span className="inline-flex items-center gap-1.5"><CalendarDays size={14} className="text-[#8ee6e2]" />{formatDateTime(sale.soldAt)}</span>
@@ -1200,8 +1200,8 @@ export default function AllInMagazinClients({
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
                               <div className="text-right">
-                                <p className="text-[9px] uppercase tracking-[0.09em] text-white/34">Vásárlás összege</p>
-                                <p className="mt-1 text-[22px] tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
+                                <p className="text-[10px] uppercase tracking-[0.11em] text-white/38">Vásárlás összege</p>
+                                <p className="mt-1 text-[27px] leading-none tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
                               </div>
                               {canManageCustomerData ? (
                                 <button
@@ -1216,7 +1216,16 @@ export default function AllInMagazinClients({
                             </div>
                           </div>
 
-                          <div className="space-y-2 p-3">
+                          <div className="p-3">
+                            <div className="mb-1 hidden grid-cols-[76px_minmax(0,1fr)_72px_112px_124px_118px] items-center gap-3 px-3 pb-2 text-[9px] uppercase tracking-[0.10em] text-white/30 lg:grid">
+                              <span />
+                              <span>Termék</span>
+                              <span className="text-center">Darab</span>
+                              <span className="text-right">Egységár</span>
+                              <span className="text-right">Sorösszeg</span>
+                              <span className="text-right">Művelet</span>
+                            </div>
+                            <div className="overflow-hidden rounded-2xl bg-[#263245] divide-y divide-white/[0.12]">
                             {sale.lines?.length ? sale.lines.map((line) => {
                               const unitPrice = numberValue(line.unitPrice);
                               const saleBalance = numberValue(sale.balanceDue);
@@ -1232,7 +1241,7 @@ export default function AllInMagazinClients({
                               return (
                                 <div
                                   key={line.id || `${sale.id}-${line.lineNo}`}
-                                  className="grid grid-cols-[76px_minmax(0,1fr)] gap-4 border-t border-white/[0.10] px-3 py-3.5 first:border-t-0 sm:grid-cols-[76px_minmax(0,1fr)_220px] sm:items-center"
+                                  className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-3 px-3 py-3.5 transition hover:bg-white/[0.025] lg:grid-cols-[76px_minmax(0,1fr)_72px_112px_124px_118px]"
                                 >
                                   <span
                                     className={`flex h-[76px] w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in hover:ring-4 hover:ring-[#2a8d8b]/18" : ""}`}
@@ -1250,42 +1259,66 @@ export default function AllInMagazinClients({
 
                                   <div className="min-w-0">
                                     <p className="truncate text-[15px] text-white">{line.productTitle || "Névtelen termék"}</p>
-                                    <p className="mt-1 truncate text-[12px] text-white/55">
+                                    <p className="mt-1 truncate text-[12px] text-white/58">
                                       {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
                                     </p>
-
-                                    <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.07] pt-2.5 text-[10px] text-white/38">
-                                      {line.productCode ? <span>Kód: {line.productCode}</span> : null}
-                                      {line.barcode ? <span>Vonalkód: {line.barcode}</span> : null}
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-white/34">
+                                      {line.productCode ? <span>{line.productCode}</span> : null}
+                                      {line.barcode ? <span>• {line.barcode}</span> : null}
                                       {numberValue(line.returnedQty) > 0 ? (
                                         <span className="inline-flex items-center gap-1 text-[#9be9e5]">
-                                          <RotateCcw size={11} /> Már visszahozva: {numberValue(line.returnedQty)} db
+                                          <RotateCcw size={11} /> Visszahozva: {numberValue(line.returnedQty)} db
                                         </span>
                                       ) : null}
                                     </div>
                                   </div>
 
-                                  <div className="col-span-2 flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-white/[0.07] pt-3 sm:col-span-1 sm:block sm:border-l sm:border-t-0 sm:border-white/[0.08] sm:pl-4 sm:pt-0 sm:text-right">
-                                    <div>
-                                      <p className="text-[10px] uppercase tracking-[0.09em] text-white/34">
-                                        {line.quantity} db • {formatMoney(line.unitPrice)} / db
-                                      </p>
-                                      <p className="mt-1 whitespace-nowrap text-[20px] tracking-tight text-white">
-                                        {formatMoney(line.lineTotal)}
-                                      </p>
-                                      {numberValue(line.discountPercent) > 0 ? (
-                                        <p className="mt-1 text-[10px] text-amber-100/72">
-                                          {numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% kedvezmény
-                                        </p>
-                                      ) : null}
-                                    </div>
+                                  <div className="col-span-2 flex items-center justify-between border-t border-white/[0.08] pt-3 lg:col-span-1 lg:block lg:border-0 lg:pt-0 lg:text-center">
+                                    <span className="text-[15px] tabular-nums text-white">{line.quantity} db</span>
+                                  </div>
 
+                                  <div className="hidden text-right lg:block">
+                                    <p className="text-[15px] tabular-nums text-white/78">{formatMoney(line.unitPrice)}</p>
+                                    {numberValue(line.discountPercent) > 0 ? (
+                                      <p className="mt-1 text-[10px] text-amber-100/70">
+                                        −{numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
+                                      </p>
+                                    ) : null}
+                                  </div>
+
+                                  <div className="hidden text-right lg:block">
+                                    <p className="text-[20px] tracking-tight text-white tabular-nums">{formatMoney(line.lineTotal)}</p>
+                                  </div>
+
+                                  <div className="hidden justify-end lg:flex">
                                     {canQuickReturn ? (
                                       <button
                                         type="button"
                                         onClick={() => openReturnModal(sale, line)}
-                                        className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2a8d8b] px-3 text-[11px] text-white transition hover:bg-[#319c99] sm:mt-2"
+                                        className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#8ee6e2]/34 bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd] transition hover:border-[#b9f5f2]/62 hover:bg-[#2a8d8b]/26 hover:text-white"
                                         title="Próbára elvitt termék visszavétele készletre"
+                                      >
+                                        <RotateCcw size={14} /> Visszahozta
+                                      </button>
+                                    ) : numberValue(line.returnedQty) > 0 ? (
+                                      <span className="inline-flex items-center gap-1.5 text-[10px] text-[#9be9e5]">
+                                        <CheckCircle2 size={13} /> Visszavéve
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-white/20">–</span>
+                                    )}
+                                  </div>
+
+                                  <div className="col-span-2 flex items-center justify-between gap-3 lg:hidden">
+                                    <div>
+                                      <p className="text-[10px] uppercase tracking-[0.08em] text-white/32">Sorösszeg</p>
+                                      <p className="mt-1 text-[19px] text-white">{formatMoney(line.lineTotal)}</p>
+                                    </div>
+                                    {canQuickReturn ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openReturnModal(sale, line)}
+                                        className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#8ee6e2]/34 bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd]"
                                       >
                                         <RotateCcw size={14} /> Visszahozta
                                       </button>
@@ -1294,16 +1327,38 @@ export default function AllInMagazinClients({
                                 </div>
                               );
                             }) : (
-                              <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-sm text-white/42">
+                              <div className="px-4 py-8 text-center text-sm text-white/42">
                                 Ehhez a régi bizonylathoz nincs mentett terméksor.
                               </div>
                             )}
+                            </div>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2 border-t border-white/10 bg-black/5 px-3 py-3 text-[10px]">
-                            <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 text-white/55">{sale.itemCount} db összesen</span>
-                            <span className="rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1.5 text-[#d7fffd]">Fizetve: {formatMoney(sale.paidTotal)}</span>
-                            <span className={`rounded-lg border px-2 py-1.5 ${numberValue(sale.balanceDue) > 0 ? "border-rose-300/35 bg-rose-600 text-white" : "border-white/10 bg-black/10 text-white/55"}`}>Maradt: {formatMoney(sale.balanceDue)}</span>
+                          <div className="grid border-t border-white/[0.10] bg-[#242f41] sm:grid-cols-[0.72fr_1fr_1.18fr]">
+                            <div className="px-4 py-3.5">
+                              <p className="text-[9px] uppercase tracking-[0.11em] text-white/32">Termékek</p>
+                              <p className="mt-1 text-[19px] tabular-nums text-white">{sale.itemCount} db</p>
+                            </div>
+                            <div className="border-t border-white/[0.08] px-4 py-3.5 sm:border-l sm:border-t-0">
+                              <p className="text-[9px] uppercase tracking-[0.11em] text-[#9be9e5]/58">Fizetve</p>
+                              <p className="mt-1 text-[21px] tabular-nums text-[#d7fffd]">{formatMoney(sale.paidTotal)}</p>
+                            </div>
+                            <div className={`border-t px-4 py-3.5 sm:border-l sm:border-t-0 ${
+                              numberValue(sale.balanceDue) > 0
+                                ? "border-red-300/22 bg-[#E21C2A] text-white"
+                                : "border-white/[0.08]"
+                            }`}>
+                              <p className={`text-[9px] uppercase tracking-[0.11em] ${
+                                numberValue(sale.balanceDue) > 0 ? "text-white/70" : "text-white/32"
+                              }`}>
+                                {numberValue(sale.balanceDue) > 0 ? "Fennmaradó tartozás" : "Tartozás"}
+                              </p>
+                              <p className={`mt-1 text-[25px] leading-none tabular-nums ${
+                                numberValue(sale.balanceDue) > 0 ? "text-white" : "text-[#d7fffd]"
+                              }`}>
+                                {formatMoney(sale.balanceDue)}
+                              </p>
+                            </div>
                           </div>
                         </article>
                       )) : (
