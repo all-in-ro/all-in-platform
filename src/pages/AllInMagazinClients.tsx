@@ -75,6 +75,16 @@ type PaymentDraft = {
   note: string;
 };
 
+type CustomerSalePaymentView = {
+  method?: string | null;
+  amount?: number | null;
+  paidAt?: string | null;
+};
+
+type CustomerSaleHistoryWithPayments = AifShopCustomerSaleHistoryItem & {
+  payments?: CustomerSalePaymentView[];
+};
+
 type CustomerReturnTarget = {
   sale: AifShopCustomerSaleHistoryItem;
   line: AifShopCustomerSaleHistoryItem["lines"][number];
@@ -183,6 +193,15 @@ function customerAddressLabel(customer: AifShopCustomer) {
 function paymentMethodLabel(method: string) {
   const found = PAYMENT_METHODS.find((item) => item.value === method);
   return found?.label || method || "Egyéb";
+}
+
+function paymentMethodPresentation(method: string) {
+  const key = String(method || "").trim().toLowerCase();
+  if (key === "cash") return { label: "Készpénz", icon: Banknote, tone: "text-[#8ee6e2]" };
+  if (key === "card") return { label: "Kártya", icon: CreditCard, tone: "text-[#a9c8ff]" };
+  if (key === "bank_transfer") return { label: "Átutalás", icon: Landmark, tone: "text-[#cbbcff]" };
+  if (key === "credit") return { label: "Utólag", icon: WalletCards, tone: "text-amber-100" };
+  return { label: paymentMethodLabel(key || "other"), icon: WalletCards, tone: "text-white/48" };
 }
 
 export default function AllInMagazinClients({
@@ -1186,7 +1205,37 @@ export default function AllInMagazinClients({
                     </div>
 
                     <div className="mt-4 space-y-3">
-                      {detail.sales.length ? detail.sales.map((sale) => (
+                      {detail.sales.length ? detail.sales.map((sale) => {
+                        const rawSalePayments = Array.isArray((sale as CustomerSaleHistoryWithPayments).payments)
+                          ? ((sale as CustomerSaleHistoryWithPayments).payments || [])
+                          : [];
+                        const paymentMap = new Map<string, CustomerSalePaymentView>();
+                        for (const payment of rawSalePayments) {
+                          const key = String(payment?.method || "other").trim().toLowerCase() || "other";
+                          const current = paymentMap.get(key);
+                          paymentMap.set(key, {
+                            method: key,
+                            amount: numberValue(current?.amount) + numberValue(payment?.amount),
+                            paidAt: payment?.paidAt || current?.paidAt || null,
+                          });
+                        }
+                        const salePaymentRows = Array.from(paymentMap.values());
+                        if (numberValue(sale.balanceDue) > 0.005 && !salePaymentRows.some((item) => String(item.method) === "credit")) {
+                          salePaymentRows.push({
+                            method: "credit",
+                            amount: numberValue(sale.balanceDue),
+                            paidAt: null,
+                          });
+                        }
+                        if (!salePaymentRows.length) {
+                          salePaymentRows.push({
+                            method: numberValue(sale.balanceDue) > 0.005 ? "credit" : "other",
+                            amount: numberValue(sale.paidTotal),
+                            paidAt: null,
+                          });
+                        }
+
+                        return (
                         <article key={sale.id} className="overflow-hidden rounded-[20px] bg-[#293548] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
                           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.10] bg-[#303b4e] px-4 py-3.5">
                             <div className="min-w-0">
@@ -1200,8 +1249,8 @@ export default function AllInMagazinClients({
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
                               <div className="text-right">
-                                <p className="text-[10px] uppercase tracking-[0.11em] text-white/38">Vásárlás összege</p>
-                                <p className="mt-1 text-[27px] leading-none tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
+                                <p className="text-[9px] uppercase tracking-[0.11em] text-white/36">Vásárlás összege</p>
+                                <p className="mt-1 text-[24px] leading-none tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
                               </div>
                               {canManageCustomerData ? (
                                 <button
@@ -1217,12 +1266,14 @@ export default function AllInMagazinClients({
                           </div>
 
                           <div className="p-3">
-                            <div className="mb-1 hidden grid-cols-[76px_minmax(0,1fr)_72px_112px_124px_118px] items-center gap-3 px-3 pb-2 text-[9px] uppercase tracking-[0.10em] text-white/30 lg:grid">
+                            <div className="mb-1 hidden grid-cols-[66px_minmax(220px,1fr)_52px_108px_104px_118px_100px_104px] items-center gap-2.5 px-3 pb-2 text-[8px] uppercase tracking-[0.10em] text-white/30 lg:grid">
                               <span />
                               <span>Termék</span>
-                              <span className="text-center">Darab</span>
-                              <span className="text-right">Egységár</span>
-                              <span className="text-right">Sorösszeg</span>
+                              <span className="text-center">Db</span>
+                              <span className="text-right">Ár / db</span>
+                              <span className="text-right">Kedvezmény</span>
+                              <span className="text-right">Fizetendő</span>
+                              <span className="text-center">Fizetés</span>
                               <span className="text-right">Művelet</span>
                             </div>
                             <div className="overflow-hidden rounded-2xl bg-[#263245] divide-y divide-white/[0.12]">
@@ -1237,14 +1288,21 @@ export default function AllInMagazinClients({
                                 && saleBalance > 0.005
                                 && maxReturnQty > 0
                               );
+                              const originalUnitPrice = numberValue(line.listPrice);
+                              const finalUnitPrice = numberValue(line.unitPrice);
+                              const quantity = Math.max(0, numberValue(line.quantity));
+                              const calculatedDiscount = Math.max(0, (originalUnitPrice - finalUnitPrice) * quantity);
+                              const discountAmount = Math.max(numberValue(line.discountAmount), calculatedDiscount);
+                              const discountPercent = numberValue(line.discountPercent);
+                              const hasDiscount = discountAmount > 0.005 || discountPercent > 0.005 || originalUnitPrice > finalUnitPrice + 0.005;
 
                               return (
                                 <div
                                   key={line.id || `${sale.id}-${line.lineNo}`}
-                                  className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-3 px-3 py-3.5 transition hover:bg-white/[0.025] lg:grid-cols-[76px_minmax(0,1fr)_72px_112px_124px_118px]"
+                                  className="grid min-h-[92px] grid-cols-[66px_minmax(0,1fr)] items-center gap-3 px-3 py-2.5 transition hover:bg-white/[0.025] lg:grid-cols-[66px_minmax(220px,1fr)_52px_108px_104px_118px_100px_104px] lg:gap-2.5"
                                 >
                                   <span
-                                    className={`flex h-[76px] w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in hover:ring-4 hover:ring-[#2a8d8b]/18" : ""}`}
+                                    className={`flex h-[66px] w-[66px] shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in hover:ring-4 hover:ring-[#2a8d8b]/18" : ""}`}
                                     onMouseEnter={(event) => {
                                       if (line.imageUrl) showProductImagePreview(event.currentTarget, line.imageUrl, line.productTitle || "Termék");
                                     }}
@@ -1253,41 +1311,86 @@ export default function AllInMagazinClients({
                                     {line.imageUrl ? (
                                       <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
                                     ) : (
-                                      <ShoppingBag size={27} className="text-[#526173]" />
+                                      <ShoppingBag size={24} className="text-[#526173]" />
                                     )}
                                   </span>
 
                                   <div className="min-w-0">
-                                    <p className="truncate text-[15px] text-white">{line.productTitle || "Névtelen termék"}</p>
-                                    <p className="mt-1 truncate text-[12px] text-white/58">
+                                    <p className="truncate text-[14px] leading-5 text-white">{line.productTitle || "Névtelen termék"}</p>
+                                    <p className="mt-0.5 truncate text-[11px] text-white/56">
                                       {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
                                     </p>
-                                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-white/34">
+                                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] text-white/30">
                                       {line.productCode ? <span>{line.productCode}</span> : null}
                                       {line.barcode ? <span>• {line.barcode}</span> : null}
                                       {numberValue(line.returnedQty) > 0 ? (
                                         <span className="inline-flex items-center gap-1 text-[#9be9e5]">
-                                          <RotateCcw size={11} /> Visszahozva: {numberValue(line.returnedQty)} db
+                                          <RotateCcw size={10} /> Visszahozva: {numberValue(line.returnedQty)} db
                                         </span>
                                       ) : null}
                                     </div>
                                   </div>
 
-                                  <div className="col-span-2 flex items-center justify-between border-t border-white/[0.08] pt-3 lg:col-span-1 lg:block lg:border-0 lg:pt-0 lg:text-center">
-                                    <span className="text-[15px] tabular-nums text-white">{line.quantity} db</span>
+                                  <div className="col-span-2 flex items-center justify-between border-t border-white/[0.08] pt-2.5 lg:col-span-1 lg:block lg:border-0 lg:pt-0 lg:text-center">
+                                    <span className="text-[13px] tabular-nums text-white">{line.quantity} db</span>
+                                  </div>
+
+                                  <div className="hidden min-h-[38px] flex-col items-end justify-center lg:flex">
+                                    {hasDiscount ? (
+                                      <>
+                                        <span className="text-[10px] tabular-nums text-white/30 line-through">
+                                          {formatMoney(originalUnitPrice)}
+                                        </span>
+                                        <span className="mt-0.5 text-[13px] tabular-nums text-white/86">
+                                          {formatMoney(finalUnitPrice)}
+                                        </span>
+                                      </>
+                                    ) : (
+                                      <span className="text-[13px] tabular-nums text-white/78">
+                                        {formatMoney(finalUnitPrice)}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="hidden min-h-[38px] flex-col items-end justify-center lg:flex">
+                                    {hasDiscount ? (
+                                      <>
+                                        <span className="text-[11px] tabular-nums text-amber-100">
+                                          −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
+                                        </span>
+                                        <span className="mt-0.5 text-[10px] tabular-nums text-amber-100/68">
+                                          −{formatMoney(discountAmount)}
+                                        </span>
+                                      </>
+                                    ) : (
+                                      <span className="text-[11px] text-white/18">—</span>
+                                    )}
                                   </div>
 
                                   <div className="hidden text-right lg:block">
-                                    <p className="text-[15px] tabular-nums text-white/78">{formatMoney(line.unitPrice)}</p>
-                                    {numberValue(line.discountPercent) > 0 ? (
-                                      <p className="mt-1 text-[10px] text-amber-100/70">
-                                        −{numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
-                                      </p>
+                                    <p className="text-[18px] leading-none tracking-tight text-white tabular-nums">
+                                      {formatMoney(line.lineTotal)}
+                                    </p>
+                                  </div>
+
+                                  <div className="hidden min-w-0 flex-col items-center justify-center gap-1 lg:flex">
+                                    {salePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
+                                      const visual = paymentMethodPresentation(String(payment.method || ""));
+                                      const PaymentIcon = visual.icon;
+                                      return (
+                                        <span
+                                          key={`${sale.id}-${String(payment.method || "other")}-${paymentIndex}`}
+                                          className="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap text-[10px] text-white/66"
+                                          title={`${visual.label}: ${formatMoney(payment.amount)}`}
+                                        >
+                                          <PaymentIcon size={13} className={visual.tone} />
+                                          <span className="truncate">{visual.label}</span>
+                                        </span>
+                                      );
+                                    })}
+                                    {salePaymentRows.length > 2 ? (
+                                      <span className="text-[9px] text-white/30">+{salePaymentRows.length - 2}</span>
                                     ) : null}
-                                  </div>
-
-                                  <div className="hidden text-right lg:block">
-                                    <p className="text-[20px] tracking-tight text-white tabular-nums">{formatMoney(line.lineTotal)}</p>
                                   </div>
 
                                   <div className="hidden justify-end lg:flex">
@@ -1295,33 +1398,61 @@ export default function AllInMagazinClients({
                                       <button
                                         type="button"
                                         onClick={() => openReturnModal(sale, line)}
-                                        className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#8ee6e2]/34 bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd] transition hover:border-[#b9f5f2]/62 hover:bg-[#2a8d8b]/26 hover:text-white"
+                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#8ee6e2]/26 bg-[#2a8d8b]/10 px-2.5 text-[10px] text-[#d7fffd] transition hover:border-[#b9f5f2]/55 hover:bg-[#2a8d8b]/24 hover:text-white"
                                         title="Próbára elvitt termék visszavétele készletre"
                                       >
-                                        <RotateCcw size={14} /> Visszahozta
+                                        <RotateCcw size={13} /> Visszahozta
                                       </button>
                                     ) : numberValue(line.returnedQty) > 0 ? (
-                                      <span className="inline-flex items-center gap-1.5 text-[10px] text-[#9be9e5]">
-                                        <CheckCircle2 size={13} /> Visszavéve
+                                      <span className="inline-flex items-center gap-1 text-[10px] text-[#9be9e5]">
+                                        <CheckCircle2 size={12} /> Visszavéve
                                       </span>
                                     ) : (
-                                      <span className="text-[10px] text-white/20">–</span>
+                                      <span className="text-[10px] text-white/18">–</span>
                                     )}
                                   </div>
 
-                                  <div className="col-span-2 flex items-center justify-between gap-3 lg:hidden">
+                                  <div className="col-span-2 grid grid-cols-2 gap-2 border-t border-white/[0.08] pt-2.5 lg:hidden">
                                     <div>
-                                      <p className="text-[10px] uppercase tracking-[0.08em] text-white/32">Sorösszeg</p>
-                                      <p className="mt-1 text-[19px] text-white">{formatMoney(line.lineTotal)}</p>
+                                      <p className="text-[9px] uppercase tracking-[0.08em] text-white/30">Ár</p>
+                                      {hasDiscount ? (
+                                        <>
+                                          <p className="mt-1 text-[10px] text-white/28 line-through">{formatMoney(originalUnitPrice)}</p>
+                                          <p className="text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
+                                          <p className="mt-0.5 text-[10px] text-amber-100/75">
+                                            −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • −{formatMoney(discountAmount)}
+                                          </p>
+                                        </>
+                                      ) : (
+                                        <p className="mt-1 text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
+                                      )}
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-[9px] uppercase tracking-[0.08em] text-white/30">Fizetendő</p>
+                                      <p className="mt-1 text-[17px] text-white">{formatMoney(line.lineTotal)}</p>
+                                      <div className="mt-1 flex flex-wrap justify-end gap-2">
+                                        {salePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
+                                          const visual = paymentMethodPresentation(String(payment.method || ""));
+                                          const PaymentIcon = visual.icon;
+                                          return (
+                                            <span key={`m-${sale.id}-${paymentIndex}`} className="inline-flex items-center gap-1 text-[10px] text-white/58">
+                                              <PaymentIcon size={12} className={visual.tone} />
+                                              {visual.label}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
                                     </div>
                                     {canQuickReturn ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => openReturnModal(sale, line)}
-                                        className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#8ee6e2]/34 bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd]"
-                                      >
-                                        <RotateCcw size={14} /> Visszahozta
-                                      </button>
+                                      <div className="col-span-2 flex justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => openReturnModal(sale, line)}
+                                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#8ee6e2]/26 bg-[#2a8d8b]/10 px-2.5 text-[10px] text-[#d7fffd]"
+                                        >
+                                          <RotateCcw size={13} /> Visszahozta
+                                        </button>
+                                      </div>
                                     ) : null}
                                   </div>
                                 </div>
@@ -1334,26 +1465,32 @@ export default function AllInMagazinClients({
                             </div>
                           </div>
 
-                          <div className="grid border-t border-white/[0.10] bg-[#242f41] sm:grid-cols-[0.72fr_1fr_1.18fr]">
-                            <div className="px-4 py-3.5">
-                              <p className="text-[9px] uppercase tracking-[0.11em] text-white/32">Termékek</p>
-                              <p className="mt-1 text-[19px] tabular-nums text-white">{sale.itemCount} db</p>
+                          <div className="grid border-t border-white/[0.10] bg-[#242f41] sm:grid-cols-[0.62fr_0.86fr_1fr_1.12fr]">
+                            <div className="px-4 py-3">
+                              <p className="text-[8px] uppercase tracking-[0.11em] text-white/30">Termékek</p>
+                              <p className="mt-1 text-[17px] tabular-nums text-white">{sale.itemCount} db</p>
                             </div>
-                            <div className="border-t border-white/[0.08] px-4 py-3.5 sm:border-l sm:border-t-0">
-                              <p className="text-[9px] uppercase tracking-[0.11em] text-[#9be9e5]/58">Fizetve</p>
-                              <p className="mt-1 text-[21px] tabular-nums text-[#d7fffd]">{formatMoney(sale.paidTotal)}</p>
+                            <div className="border-t border-white/[0.08] px-4 py-3 sm:border-l sm:border-t-0">
+                              <p className="text-[8px] uppercase tracking-[0.11em] text-amber-100/48">Kedvezmény</p>
+                              <p className={`mt-1 text-[18px] tabular-nums ${numberValue(sale.discountTotal) > 0.005 ? "text-amber-100" : "text-white/28"}`}>
+                                {numberValue(sale.discountTotal) > 0.005 ? `−${formatMoney(sale.discountTotal)}` : formatMoney(0)}
+                              </p>
                             </div>
-                            <div className={`border-t px-4 py-3.5 sm:border-l sm:border-t-0 ${
+                            <div className="border-t border-white/[0.08] px-4 py-3 sm:border-l sm:border-t-0">
+                              <p className="text-[8px] uppercase tracking-[0.11em] text-[#9be9e5]/56">Fizetve</p>
+                              <p className="mt-1 text-[19px] tabular-nums text-[#d7fffd]">{formatMoney(sale.paidTotal)}</p>
+                            </div>
+                            <div className={`border-t px-4 py-3 sm:border-l sm:border-t-0 ${
                               numberValue(sale.balanceDue) > 0
                                 ? "border-red-300/22 bg-[#E21C2A] text-white"
                                 : "border-white/[0.08]"
                             }`}>
-                              <p className={`text-[9px] uppercase tracking-[0.11em] ${
-                                numberValue(sale.balanceDue) > 0 ? "text-white/70" : "text-white/32"
+                              <p className={`text-[8px] uppercase tracking-[0.11em] ${
+                                numberValue(sale.balanceDue) > 0 ? "text-white/70" : "text-white/30"
                               }`}>
                                 {numberValue(sale.balanceDue) > 0 ? "Fennmaradó tartozás" : "Tartozás"}
                               </p>
-                              <p className={`mt-1 text-[25px] leading-none tabular-nums ${
+                              <p className={`mt-1 text-[22px] leading-none tabular-nums ${
                                 numberValue(sale.balanceDue) > 0 ? "text-white" : "text-[#d7fffd]"
                               }`}>
                                 {formatMoney(sale.balanceDue)}
@@ -1361,7 +1498,8 @@ export default function AllInMagazinClients({
                             </div>
                           </div>
                         </article>
-                      )) : (
+                        );
+                      }) : (
                         <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
                           <ShoppingBag size={34} />
                           <p className="mt-2 text-sm">Ebben az évben nincs a klienshez kapcsolt vásárlás.</p>
