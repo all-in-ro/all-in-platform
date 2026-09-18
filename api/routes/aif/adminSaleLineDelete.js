@@ -94,6 +94,51 @@ async function insertSaleRestoreMovement(client, {
   }
 }
 
+async function loadSaleRestoreEvidence(client, {
+  saleId,
+  saleNumber,
+  locationId,
+  variantId,
+}) {
+  const result = await client.query(
+    `SELECT
+       COALESCE(sum(ABS(qty_delta)) FILTER (
+         WHERE qty_delta < 0
+           AND (source_type='shop_sale' OR raw->>'reason'='shop_sale')
+       ),0)::int AS sold_qty,
+       COALESCE(sum(qty_delta) FILTER (
+         WHERE qty_delta > 0
+       ),0)::int AS linked_positive_qty,
+       count(*) FILTER (
+         WHERE qty_delta < 0
+           AND (source_type='shop_sale' OR raw->>'reason'='shop_sale')
+       )::int AS sale_movement_count,
+       count(*) FILTER (WHERE qty_delta > 0)::int AS positive_movement_count
+     FROM aif_stock_movements
+     WHERE location_id=$1
+       AND variant_id=$2
+       AND (
+         source_id=$3
+         OR raw->>'saleId'=$3
+         OR raw->>'saleNumber'=$4
+       )`,
+    [locationId, variantId, String(saleId), saleNumber],
+  );
+
+  const row = result.rows[0] || {};
+  const soldQty = Math.max(0, Number(row.sold_qty || 0));
+  const linkedPositiveQty = Math.max(0, Number(row.linked_positive_qty || 0));
+  const availableToRestore = Math.max(0, soldQty - linkedPositiveQty);
+
+  return {
+    soldQty,
+    linkedPositiveQty,
+    availableToRestore,
+    saleMovementCount: Number(row.sale_movement_count || 0),
+    positiveMovementCount: Number(row.positive_movement_count || 0),
+  };
+}
+
 async function resizePaymentRows(client, {
   saleId,
   customerPaymentId = null,
@@ -384,8 +429,11 @@ function buildRouteHandler({ pool }) {
       const line = lineResult.rows[0];
       const actor = actorFrom(req);
       let restoredQty = 0;
+      let stockRestoreEvidence = null;
 
-      // Készlet-visszaállítás továbbra is csak lezárt, valódi variánshoz kötött eladásnál.
+      // Készlet-visszaállítás csak akkor engedhető, ha az eredeti eladás tényleges
+      // negatív készletmozgása bizonyítható. Régi/importált/hibás eladásnál nem
+      // gyártunk +1 fantomkészletet csak azért, mert a törlésnél ezt választották.
       if (mode === "restore_stock") {
         if (line.sale_status !== "completed") {
           const error = new Error("Készlet-visszaállítás csak lezárt eladásnál végezhető. Ennél a sornál használd a végleges törlést, vagy ellenőrizd előbb az állapotát.");
@@ -400,6 +448,37 @@ function buildRouteHandler({ pool }) {
           throw error;
         }
 
+        stockRestoreEvidence = await loadSaleRestoreEvidence(client, {
+          saleId: line.sale_id,
+          saleNumber: line.sale_number,
+          locationId: line.location_id,
+          variantId: line.variant_id,
+        });
+
+        const requestedRestoreQty = Math.max(0, Number(line.quantity || 0));
+        if (requestedRestoreQty <= 0) {
+          const error = new Error("Az eladási sor mennyisége hibás, ezért a készlet-visszaállítás nem végezhető el biztonságosan.");
+          error.statusCode = 409;
+          error.code = "sale_line_restore_invalid_quantity";
+          throw error;
+        }
+
+        if (stockRestoreEvidence.soldQty <= 0 || stockRestoreEvidence.saleMovementCount <= 0) {
+          const error = new Error("Ehhez az eladási sorhoz nem található igazolható eredeti készletlevonás. A készletet ezért nem teszem vissza, mert abból fantomkészlet keletkezhetne. Használd a végleges törlést készletmódosítás nélkül.");
+          error.statusCode = 409;
+          error.code = "sale_line_restore_unverified_sale_movement";
+          error.stockRestoreEvidence = stockRestoreEvidence;
+          throw error;
+        }
+
+        if (stockRestoreEvidence.availableToRestore + EPS < requestedRestoreQty) {
+          const error = new Error(`Az eredeti eladásból már nincs ${requestedRestoreQty} db biztonságosan visszaállítható mennyiség. Igazolt eladás: ${stockRestoreEvidence.soldQty} db, már visszatett/kapcsolt pozitív mozgás: ${stockRestoreEvidence.linkedPositiveQty} db.`);
+          error.statusCode = 409;
+          error.code = "sale_line_restore_quantity_not_available";
+          error.stockRestoreEvidence = stockRestoreEvidence;
+          throw error;
+        }
+
         const stockResult = await client.query(
           `SELECT qty, reserved_qty
            FROM aif_stock
@@ -410,7 +489,7 @@ function buildRouteHandler({ pool }) {
 
         const beforeQty = stockResult.rowCount ? Number(stockResult.rows[0].qty || 0) : 0;
         const reservedQty = stockResult.rowCount ? Number(stockResult.rows[0].reserved_qty || 0) : 0;
-        restoredQty = Math.max(0, Number(line.quantity || 0));
+        restoredQty = requestedRestoreQty;
         const afterQty = beforeQty + restoredQty;
 
         await client.query(
@@ -437,6 +516,10 @@ function buildRouteHandler({ pool }) {
             productCode: line.product_code || null,
             barcode: line.barcode || null,
             quantity: restoredQty,
+            originalSoldQty: stockRestoreEvidence.soldQty,
+            linkedPositiveQtyBeforeRestore: stockRestoreEvidence.linkedPositiveQty,
+            availableToRestoreBefore: stockRestoreEvidence.availableToRestore,
+            restoreVerified: true,
             locationCode: line.location_code,
             locationName: line.location_name,
           },
@@ -555,6 +638,7 @@ function buildRouteHandler({ pool }) {
               quantity: Number(line.quantity || 0),
               lineTotal: roundMoney(line.line_total),
               restoredQty,
+              stockRestoreEvidence,
               locationId: String(line.location_id),
               locationCode: line.location_code,
               locationName: line.location_name,
@@ -584,6 +668,7 @@ function buildRouteHandler({ pool }) {
         saleDeleted,
         stockRestored: mode === "restore_stock",
         restoredQty,
+        stockRestoreEvidence,
         remainingLineCount,
         remainingItemCount,
         remainingTotal,
@@ -604,6 +689,7 @@ function buildRouteHandler({ pool }) {
       return res.status(status >= 400 && status < 600 ? status : 500).json({
         error: error?.message || "Az eladási sor törlése nem sikerült.",
         code: error?.code || "admin_sale_line_delete_failed",
+        stockRestoreEvidence: error?.stockRestoreEvidence || null,
       });
     } finally {
       client.release();
