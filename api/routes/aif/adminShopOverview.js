@@ -456,7 +456,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
           0::numeric AS unpaid_total,
           0::int AS unpaid_sales,
           0::int AS credit_sales,
-          COALESCE(sum(replacement_qty - returned_qty),0)::numeric AS items_sold,
+          0::numeric AS items_sold,
           COALESCE(sum(replacement_cost - return_cost),0)::numeric AS estimated_cost,
           COALESCE(sum(cost_snapshot_qty),0)::numeric AS cost_snapshot_qty,
           COALESCE(sum(cost_fallback_qty),0)::numeric AS cost_fallback_qty,
@@ -841,7 +841,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
                (e.created_at AT TIME ZONE 'Europe/Bucharest')::date AS day,
                COALESCE(sum(e.difference),0)::numeric AS revenue,
                count(*)::int AS transactions,
-               COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold
+               0::numeric AS items_sold
              FROM filtered_exchanges e
              LEFT JOIN LATERAL (
                SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
@@ -923,7 +923,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              COALESCE(NULLIF(e.actor,''),'Ismeretlen') AS actor,
              COALESCE(sum(e.difference),0)::numeric AS revenue,
              count(*)::int AS transactions,
-             COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold,
+             0::numeric AS items_sold,
              0::numeric AS discount_total,
              0::numeric AS unpaid_total,
              COALESCE(avg(e.difference),0)::numeric AS average_basket
