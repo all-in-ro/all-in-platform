@@ -10960,17 +10960,44 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'compareAtPriceBefore','')::numeric ELSE NULL END AS old_compare_at_price,
                 CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'compareAtPriceAfter','')::numeric ELSE NULL END AS new_compare_at_price,
                 CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN sm.raw->'changedFields' ELSE NULL END AS price_change_fields,
-                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
-                  THEN COALESCE(NULLIF(sm.raw->>'buyPriceAfter','')::numeric, v.buy_price)
+                CASE
+                  WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
+                    THEN COALESCE(NULLIF(sm.raw->>'buyPriceAfter','')::numeric, v.buy_price)
+                  WHEN sm.source_type='shop_sale' OR sm.raw->>'reason'='shop_sale'
+                    THEN COALESCE(sale_line.buy_price_snapshot, v.buy_price)
                   ELSE COALESCE(im.buy_price_ron, im.buy_price, v.buy_price)
                 END AS effective_buy_price,
-                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
-                  THEN COALESCE(NULLIF(sm.raw->>'sellPriceAfter','')::numeric, v.sell_price)
+                CASE
+                  WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
+                    THEN COALESCE(NULLIF(sm.raw->>'sellPriceAfter','')::numeric, v.sell_price)
+                  WHEN sm.source_type='shop_sale' OR sm.raw->>'reason'='shop_sale'
+                    THEN COALESCE(
+                      NULLIF(sm.raw->>'unitPrice','')::numeric,
+                      sale_line.unit_price,
+                      NULLIF(sm.raw->>'listPrice','')::numeric,
+                      sale_line.list_price,
+                      v.sell_price
+                    )
                   ELSE COALESCE(im.sell_price_ron, im.sell_price, v.sell_price)
                 END AS effective_sell_price
          FROM aif_stock_movements sm
          JOIN aif_locations l ON l.id=sm.location_id
          JOIN aif_product_variants v ON v.id=sm.variant_id
+         LEFT JOIN LATERAL (
+           SELECT
+             sl.list_price,
+             sl.unit_price,
+             sl.line_total,
+             sl.buy_price_snapshot
+           FROM aif_shop_sale_lines sl
+           WHERE sl.sale_id::text=COALESCE(NULLIF(sm.raw->>'saleId',''), sm.source_id)
+             AND sl.variant_id=sm.variant_id
+           ORDER BY sl.line_no ASC
+           LIMIT 1
+         ) sale_line ON (
+           sm.source_type='shop_sale'
+           OR sm.raw->>'reason'='shop_sale'
+         )
          LEFT JOIN LATERAL (
            SELECT rw.id AS import_row_id, rw.row_no AS import_row_no,
                   rw.qty AS import_qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron,
