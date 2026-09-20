@@ -34,9 +34,10 @@ import {
   ShoppingCart,
   X,
 } from "lucide-react";
-import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
-import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
 import { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem } from "../components/ShopifyStatusIcon";
+
+const ShopifyProductExportModal = React.lazy(() => import("../components/ShopifyProductExportModal"));
+const ShopifySyncCenterModal = React.lazy(() => import("../components/ShopifySyncCenterModal"));
 import {
   apiAifAddItemsToOpenPurchaseOrders,
   apiAifGetPurchaseOrder,
@@ -15657,18 +15658,26 @@ export default function AllInWarehouse() {
         document.body,
       ) : null}
 
-      <ShopifyProductExportModal
-        open={shopifyExportModalOpen}
-        items={shopifyExportItems}
-        onClose={closeShopifyExportModal}
-        onChanged={handleShopifyExportChanged}
-      />
+      {shopifyExportModalOpen ? (
+        <React.Suspense fallback={null}>
+          <ShopifyProductExportModal
+            open
+            items={shopifyExportItems}
+            onClose={closeShopifyExportModal}
+            onChanged={handleShopifyExportChanged}
+          />
+        </React.Suspense>
+      ) : null}
 
-      <ShopifySyncCenterModal
-        open={shopifySyncCenterOpen}
-        onClose={() => setShopifySyncCenterOpen(false)}
-        onChanged={() => load()}
-      />
+      {shopifySyncCenterOpen ? (
+        <React.Suspense fallback={null}>
+          <ShopifySyncCenterModal
+            open
+            onClose={() => setShopifySyncCenterOpen(false)}
+            onChanged={() => load()}
+          />
+        </React.Suspense>
+      ) : null}
 
       {warehouseTransferToast && typeof document !== "undefined" ? createPortal(
         <div
