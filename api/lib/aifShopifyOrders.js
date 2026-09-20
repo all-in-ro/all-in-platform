@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { ensureAifShopifyTables } from "./aifShopify.js";
+import {
+  acquireAifShopifyProcessLock,
+  ensureAifShopifyTables,
+  isAifShopifyRetryablePgError,
+  waitAifShopifyRetry,
+} from "./aifShopify.js";
 import { verifyAifShopifyWebhook } from "./aifShopifyInbound.js";
 
 const ORDER_TOPICS = new Set([
@@ -328,8 +333,10 @@ export async function receiveAifShopifyOrderWebhook(pool, { rawBody, payload, he
 async function claimOrderEvents(pool, limit) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    // DDL/schema ellenőrzés tranzakción kívül: deploy átfedésnél
+    // ne keveredjen a queue sorok FOR UPDATE lockjaival.
     await ensureAifShopifyOrderSchema(client);
+    await client.query("BEGIN");
     const result = await client.query(
       `WITH picked AS (
          SELECT shopify_webhook_id
@@ -774,8 +781,9 @@ async function upsertRefund(client, event) {
 async function processOrderEvent(pool, event) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
     await ensureAifShopifyOrderSchema(client);
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL lock_timeout = '8s'`);
     const result = event.topic === "refunds/create"
       ? await upsertRefund(client, event)
       : await upsertOrder(client, event);
@@ -789,55 +797,121 @@ async function processOrderEvent(pool, event) {
   }
 }
 
-export async function processAifShopifyOrderBatch(pool, options = {}) {
-  const settings = config();
-  if (!settings.enabled) {
-    return { enabled: false, claimed: 0, processed: 0, ignored: 0, errors: 0, errorItems: [] };
-  }
-  if (!settings.secret) {
-    throw Object.assign(new Error("Hiányzik a SHOPIFY_CLIENT_SECRET ENV."), { code: "shopify_order_config_missing" });
-  }
 
-  const rows = await claimOrderEvents(pool, options.limit || 20);
-  let processed = 0;
-  let ignored = 0;
-  const errors = [];
+async function processOrderEventWithRetry(pool, event) {
+  let lastError = null;
 
-  for (const event of rows) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const result = await processOrderEvent(pool, event);
-      if (result.status === "processed") processed += 1;
-      else ignored += 1;
+      return await processOrderEvent(pool, event);
     } catch (error) {
-      const message = error?.message || String(error);
-      const delay = retryDelaySeconds(event.attempts);
-      const client = await pool.connect();
-      try {
-        await client.query(
-          `UPDATE aif_shopify_webhook_events
-           SET status='error',
-               error=$2,
-               locked_at=NULL,
-               next_attempt_at=now()+($3::text || ' seconds')::interval,
-               updated_at=now()
-           WHERE shopify_webhook_id=$1`,
-          [event.shopify_webhook_id, message.slice(0, 4000), delay]
-        );
-      } finally {
-        client.release();
+      lastError = error;
+
+      if (
+        attempt < 3
+        && isAifShopifyRetryablePgError(error)
+      ) {
+        await waitAifShopifyRetry(attempt);
+        continue;
       }
-      errors.push({ webhookId: event.shopify_webhook_id, topic: event.topic, error: message, code: error?.code || null, retryInSeconds: delay });
+
+      throw error;
     }
   }
 
-  return {
-    enabled: true,
-    claimed: rows.length,
-    processed,
-    ignored,
-    errors: errors.length,
-    errorItems: errors,
-  };
+  throw lastError;
+}
+
+export async function processAifShopifyOrderBatch(pool, options = {}) {
+  const settings = config();
+
+  if (!settings.enabled) {
+    return {
+      enabled: false,
+      claimed: 0,
+      processed: 0,
+      ignored: 0,
+      errors: 0,
+      lockSkipped: false,
+      errorItems: [],
+    };
+  }
+
+  if (!settings.secret) {
+    throw Object.assign(
+      new Error("Hiányzik a SHOPIFY_CLIENT_SECRET ENV."),
+      { code: "shopify_order_config_missing" },
+    );
+  }
+
+  const processLock = await acquireAifShopifyProcessLock(pool);
+  if (!processLock.locked) {
+    return {
+      enabled: true,
+      claimed: 0,
+      processed: 0,
+      ignored: 0,
+      errors: 0,
+      lockSkipped: true,
+      message: "shopify_processor_busy",
+      errorItems: [],
+    };
+  }
+
+  try {
+    const rows = await claimOrderEvents(pool, options.limit || 20);
+    let processed = 0;
+    let ignored = 0;
+    const errors = [];
+
+    for (const event of rows) {
+      try {
+        const result = await processOrderEventWithRetry(pool, event);
+
+        if (result.status === "processed") processed += 1;
+        else ignored += 1;
+      } catch (error) {
+        const message = error?.message || String(error);
+        const delay = retryDelaySeconds(event.attempts);
+        const client = await pool.connect();
+
+        try {
+          await client.query(
+            `UPDATE aif_shopify_webhook_events
+             SET status='error',
+                 error=$2,
+                 locked_at=NULL,
+                 next_attempt_at=now()+($3::text || ' seconds')::interval,
+                 updated_at=now()
+             WHERE shopify_webhook_id=$1`,
+            [event.shopify_webhook_id, message.slice(0, 4000), delay],
+          );
+        } finally {
+          client.release();
+        }
+
+        errors.push({
+          webhookId: event.shopify_webhook_id,
+          topic: event.topic,
+          error: message,
+          code: error?.code || null,
+          retryInSeconds: delay,
+        });
+      }
+    }
+
+    return {
+      enabled: true,
+      claimed: rows.length,
+      processed,
+      ignored,
+      errors: errors.length,
+      lockSkipped: false,
+      errorItems: errors,
+    };
+  } finally {
+    await processLock.release();
+  }
 }
 
 export async function listAifShopifyOrders(client, options = {}) {
