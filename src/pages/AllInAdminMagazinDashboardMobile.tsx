@@ -273,8 +273,14 @@ function saleStatusLabel(value: string) {
 function paymentBadge(value: string) {
   if (value === "paid") return "border-emerald-200/25 bg-emerald-400/12 text-emerald-50";
   if (value === "partial") return "border-amber-200/30 bg-amber-400/14 text-amber-50";
-  if (value === "credit" || value === "unpaid") return "border-rose-200/30 bg-rose-500/16 text-rose-50";
+  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_5px_14px_rgba(226,28,42,0.30)]";
+  if (value === "unpaid") return "border-rose-200/30 bg-rose-500/16 text-rose-50";
   return "border-white/16 bg-white/[0.06] text-white/65";
+}
+
+function saleTypeBadge(value: string) {
+  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_5px_14px_rgba(226,28,42,0.30)]";
+  return "border-white/12 bg-white/[0.05] text-white/62";
 }
 
 function PaymentMethodIcon({
@@ -1680,9 +1686,11 @@ export default function AllInAdminMagazinDashboardMobile({
             <KpiCard
               label="Kintlévőség"
               value={compactMoney(summary.unpaidTotal)}
-              hint={`${integer(summary.unpaidSales)} nyitott fizetés`}
+              hint={`${integer(summary.unpaidSales)} nyitott fizetés • koppints a hiteles sorokhoz`}
               icon={WalletCards}
               tone={summary.unpaidTotal > 0 ? "danger" : "normal"}
+              onClick={() => applyInstantFilter({ paymentStatus: "credit", saleType: "credit" })}
+              actionLabel={applied.paymentStatus === "credit" && applied.saleType === "credit" ? "Aktív" : "Hitel"}
             />
             <KpiCard
               label="Kedvezmény"
@@ -1818,7 +1826,11 @@ export default function AllInAdminMagazinDashboardMobile({
                     </div>
                     <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2">
                       <span className="shrink-0 text-white/34">Eladás típusa</span>
-                      <span className="min-w-0 flex-1 truncate text-right text-white/62">{saleTypeLabel(sale.saleType)}</span>
+                      <span className={`min-w-0 flex-1 text-right ${sale.saleType === "credit" ? "" : "truncate"}`}>
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${saleTypeBadge(sale.saleType)}`}>
+                          {saleTypeLabel(sale.saleType)}
+                        </span>
+                      </span>
                     </div>
                   </div>
 
