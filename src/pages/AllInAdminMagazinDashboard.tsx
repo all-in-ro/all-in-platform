@@ -201,8 +201,20 @@ function paymentBadge(value: string) {
   return "border-white/16 bg-white/[0.06] text-white/65";
 }
 
-function saleTypeBadge(value: string) {
-  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.30)]";
+function saleTypeDisplayLabel(value: string, balanceDue?: unknown) {
+  if (value === "credit") {
+    return numberValue(balanceDue) > 0.005 ? "Hitel" : "Rendezett hitel";
+  }
+  return saleTypeLabel(value);
+}
+
+function saleTypeBadge(value: string, balanceDue?: unknown) {
+  if (value === "credit" && numberValue(balanceDue) > 0.005) {
+    return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.30)]";
+  }
+  if (value === "credit") {
+    return "border-emerald-200/35 bg-emerald-400/14 text-emerald-50";
+  }
   return "border-white/12 bg-white/[0.05] text-white";
 }
 
@@ -2035,7 +2047,7 @@ export default function AllInAdminMagazinDashboard({
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
                       <td className="min-w-[145px] px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
-                      <td className="px-3 py-3 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${saleTypeBadge(sale.saleType)}`}>{saleTypeLabel(sale.saleType)}</span></td>
+                      <td className="px-3 py-3 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${saleTypeBadge(sale.saleType, sale.balanceDue)}`}>{saleTypeDisplayLabel(sale.saleType, sale.balanceDue)}</span></td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="px-3 py-3 text-right text-amber-50">
                         <p>{money(sale.lineDiscountAmount)}</p>
@@ -2125,7 +2137,7 @@ export default function AllInAdminMagazinDashboard({
                 {[
                   ["Eladó", receiptTarget.actor || "-"],
                   ["Kliens", receiptTarget.customerName || "Nincs kliens"],
-                  ["Eladás típusa", saleTypeLabel(receiptTarget.saleType)],
+                  ["Eladás típusa", saleTypeDisplayLabel(receiptTarget.saleType, receiptTarget.balanceDue)],
                   ["Fizetés", paymentLabel(receiptTarget.paymentStatus)],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="min-w-0 rounded-xl border border-white/10 bg-[#293548] px-3 py-2.5">
