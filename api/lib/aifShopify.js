@@ -2,6 +2,65 @@ import { randomUUID } from "node:crypto";
 
 const tokenCache = new Map();
 
+
+const AIF_SHOPIFY_PROCESS_LOCK_NAMESPACE = "allin_platform";
+const AIF_SHOPIFY_PROCESS_LOCK_NAME = "shopify_processor_v1";
+
+export function isAifShopifyRetryablePgError(error) {
+  return ["40P01", "40001", "55P03"].includes(String(error?.code || ""));
+}
+
+export async function waitAifShopifyRetry(attempt = 1) {
+  const safeAttempt = Math.max(1, Number(attempt || 1));
+  const delayMs = Math.min(1500, 150 * safeAttempt + Math.floor(Math.random() * 150));
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+export async function acquireAifShopifyProcessLock(pool) {
+  if (!pool || typeof pool.connect !== "function") {
+    throw new Error("A Shopify feldolgozási lockhoz érvényes PostgreSQL pool szükséges.");
+  }
+
+  const client = await pool.connect();
+  let locked = false;
+  let released = false;
+
+  try {
+    const result = await client.query(
+      `SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS locked`,
+      [AIF_SHOPIFY_PROCESS_LOCK_NAMESPACE, AIF_SHOPIFY_PROCESS_LOCK_NAME],
+    );
+    locked = result.rows[0]?.locked === true;
+
+    if (!locked) {
+      client.release();
+      return {
+        locked: false,
+        async release() {},
+      };
+    }
+
+    return {
+      locked: true,
+      async release() {
+        if (released) return;
+        released = true;
+        try {
+          await client.query(
+            `SELECT pg_advisory_unlock(hashtext($1), hashtext($2)) AS unlocked`,
+            [AIF_SHOPIFY_PROCESS_LOCK_NAMESPACE, AIF_SHOPIFY_PROCESS_LOCK_NAME],
+          );
+        } finally {
+          client.release();
+        }
+      },
+    };
+  } catch (error) {
+    if (!released) client.release();
+    throw error;
+  }
+}
+
 function text(value) {
   return String(value ?? "").trim();
 }
@@ -209,9 +268,20 @@ export async function ensureAifShopifyTables(client) {
     error text NULL,
     received_at timestamptz NOT NULL DEFAULT now(),
     processed_at timestamptz NULL,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    locked_at timestamptz NULL,
+    result jsonb NOT NULL DEFAULT '{}'::jsonb
   )`);
+  await client.query(`ALTER TABLE aif_shopify_webhook_events
+    ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS locked_at timestamptz NULL,
+    ADD COLUMN IF NOT EXISTS result jsonb NOT NULL DEFAULT '{}'::jsonb`);
   await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_webhook_events_status_idx ON aif_shopify_webhook_events (status, received_at)`);
+  await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_webhook_events_work_idx
+    ON aif_shopify_webhook_events (status, next_attempt_at, received_at)`);
 
   await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_sync_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -669,8 +739,10 @@ async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQt
 async function claimOutboxRows(pool, limit) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    // A DDL/schema ellenőrzés szándékosan a tranzakción KÍVÜL fut.
+    // Így deploy-átfedésnél nem keveredik táblazár a queue sorzárakkal.
     await ensureAifShopifyTables(client);
+    await client.query("BEGIN");
     const result = await client.query(
       `WITH picked AS (
          SELECT variant_id
@@ -1720,102 +1792,197 @@ export async function syncAifShopifyNewnessVisibility(
 
 export async function processAifShopifyOutboxBatch(pool, options = {}) {
   const config = envConfig();
-  if (!config.enabled) return { enabled: false, processed: 0, success: 0, errors: 0, message: "SHOPIFY_SYNC_ENABLED=false" };
-  const missing = missingConfig(config);
-  if (missing.length) throw Object.assign(new Error(`Hiányzó Shopify ENV: ${missing.join(", ")}`), { code: "shopify_config_missing" });
-
-  const rows = await claimOutboxRows(pool, options.limit || 20);
-  let success = 0;
-  let superseded = 0;
-  const errors = [];
-
-  for (const row of rows) {
-    const client = await pool.connect();
-    try {
-      const mapping = await client.query(
-        `SELECT * FROM aif_shopify_variant_map WHERE variant_id=$1 LIMIT 1`,
-        [row.variant_id]
-      );
-      if (!mapping.rowCount) throw Object.assign(new Error("Nincs Shopify variánstérkép ehhez az AllIn variánshoz."), { code: "shopify_mapping_missing" });
-      const map = mapping.rows[0];
-      const result = await setInventoryQuantities({
-        inventoryItemId: map.shopify_inventory_item_id,
-        csikszeredaQty: row.desired_csikszereda_qty,
-        kezdiQty: row.desired_kezdi_qty,
-        idempotencyKey: row.idempotency_key,
-        referenceId: row.idempotency_key,
-      });
-
-      await client.query("BEGIN");
-      const completed = await client.query(
-        `UPDATE aif_shopify_sync_outbox
-         SET status='done', locked_at=NULL, last_error=NULL, updated_at=now()
-         WHERE variant_id=$1
-           AND idempotency_key=$2
-           AND status='processing'
-         RETURNING variant_id`,
-        [row.variant_id, row.idempotency_key]
-      );
-      if (completed.rowCount) {
-        await client.query(
-          `UPDATE aif_shopify_variant_map
-           SET last_synced_csikszereda_qty=$2,
-               last_synced_kezdi_qty=$3,
-               last_synced_at=now(),
-               sync_status='synced',
-               last_error=NULL,
-               raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
-               updated_at=now()
-           WHERE variant_id=$1`,
-          [row.variant_id, row.desired_csikszereda_qty, row.desired_kezdi_qty, JSON.stringify({ lastInventorySet: result })]
-        );
-        success += 1;
-      } else {
-        superseded += 1;
-      }
-      await client.query("COMMIT");
-    } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      const message = error?.message || String(error);
-      const delay = retryDelaySeconds(row.attempts);
-      const failed = await client.query(
-        `UPDATE aif_shopify_sync_outbox
-         SET status='error',
-             locked_at=NULL,
-             last_error=$3,
-             idempotency_key=gen_random_uuid()::text,
-             next_attempt_at=now()+($4::text || ' seconds')::interval,
-             updated_at=now()
-         WHERE variant_id=$1
-           AND idempotency_key=$2
-           AND status='processing'
-         RETURNING variant_id`,
-        [row.variant_id, row.idempotency_key, message.slice(0, 4000), delay]
-      );
-      if (failed.rowCount) {
-        await client.query(
-          `UPDATE aif_shopify_variant_map
-           SET sync_status='error', last_error=$2, updated_at=now()
-           WHERE variant_id=$1`,
-          [row.variant_id, message.slice(0, 4000)]
-        );
-        errors.push({ variantId: row.variant_id, error: message, code: error?.code || null, retryInSeconds: delay });
-      } else {
-        superseded += 1;
-      }
-    } finally {
-      client.release();
-    }
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      processed: 0,
+      success: 0,
+      errors: 0,
+      superseded: 0,
+      lockSkipped: false,
+      message: "SHOPIFY_SYNC_ENABLED=false",
+    };
   }
 
-  return {
-    enabled: true,
-    processed: rows.length,
-    success,
-    errors: errors.length,
-    superseded,
-    errorItems: errors,
-  };
+  const missing = missingConfig(config);
+  if (missing.length) {
+    throw Object.assign(
+      new Error(`Hiányzó Shopify ENV: ${missing.join(", ")}`),
+      { code: "shopify_config_missing" },
+    );
+  }
+
+  /*
+   * Egyetlen DB-szintű Shopify processor futhat egyszerre.
+   * Ez nem csak egy Node processen belül véd, hanem Render deploy-átfedés,
+   * kézi process endpoint és másik instance között is.
+   */
+  const processLock = await acquireAifShopifyProcessLock(pool);
+  if (!processLock.locked) {
+    return {
+      enabled: true,
+      processed: 0,
+      success: 0,
+      errors: 0,
+      superseded: 0,
+      lockSkipped: true,
+      message: "shopify_processor_busy",
+    };
+  }
+
+  try {
+    const rows = await claimOutboxRows(pool, options.limit || 20);
+    let success = 0;
+    let superseded = 0;
+    const errors = [];
+
+    for (const row of rows) {
+      const client = await pool.connect();
+      try {
+        const mapping = await client.query(
+          `SELECT * FROM aif_shopify_variant_map WHERE variant_id=$1 LIMIT 1`,
+          [row.variant_id],
+        );
+        if (!mapping.rowCount) {
+          throw Object.assign(
+            new Error("Nincs Shopify variánstérkép ehhez az AllIn variánshoz."),
+            { code: "shopify_mapping_missing" },
+          );
+        }
+
+        const map = mapping.rows[0];
+
+        /*
+         * A Shopify oldali készletírás idempotens kulccsal történik.
+         * A külső hívást NEM ismételjük csak azért, mert utána a helyi DB lockolt.
+         */
+        const result = await setInventoryQuantities({
+          inventoryItemId: map.shopify_inventory_item_id,
+          csikszeredaQty: row.desired_csikszereda_qty,
+          kezdiQty: row.desired_kezdi_qty,
+          idempotencyKey: row.idempotency_key,
+          referenceId: row.idempotency_key,
+        });
+
+        let finalized = false;
+        let finalizeError = null;
+
+        for (let attempt = 1; attempt <= 3 && !finalized; attempt += 1) {
+          try {
+            await client.query("BEGIN");
+            await client.query(`SET LOCAL lock_timeout = '8s'`);
+
+            const completed = await client.query(
+              `UPDATE aif_shopify_sync_outbox
+               SET status='done', locked_at=NULL, last_error=NULL, updated_at=now()
+               WHERE variant_id=$1
+                 AND idempotency_key=$2
+                 AND status='processing'
+               RETURNING variant_id`,
+              [row.variant_id, row.idempotency_key],
+            );
+
+            if (completed.rowCount) {
+              await client.query(
+                `UPDATE aif_shopify_variant_map
+                 SET last_synced_csikszereda_qty=$2,
+                     last_synced_kezdi_qty=$3,
+                     last_synced_at=now(),
+                     sync_status='synced',
+                     last_error=NULL,
+                     raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
+                     updated_at=now()
+                 WHERE variant_id=$1`,
+                [
+                  row.variant_id,
+                  row.desired_csikszereda_qty,
+                  row.desired_kezdi_qty,
+                  JSON.stringify({ lastInventorySet: result }),
+                ],
+              );
+              success += 1;
+            } else {
+              superseded += 1;
+            }
+
+            await client.query("COMMIT");
+            finalized = true;
+          } catch (error) {
+            try { await client.query("ROLLBACK"); } catch {}
+            finalizeError = error;
+
+            if (
+              attempt < 3
+              && isAifShopifyRetryablePgError(error)
+            ) {
+              await waitAifShopifyRetry(attempt);
+              continue;
+            }
+
+            throw error;
+          }
+        }
+
+        if (!finalized && finalizeError) throw finalizeError;
+      } catch (error) {
+        try { await client.query("ROLLBACK"); } catch {}
+
+        const message = error?.message || String(error);
+        const delay = retryDelaySeconds(row.attempts);
+
+        /*
+         * Ha a sor közben egy frissebb enqueue miatt superseded lett,
+         * az idempotency kulcs feltétel megóvja az új állapotot.
+         */
+        const failed = await client.query(
+          `UPDATE aif_shopify_sync_outbox
+           SET status='error',
+               locked_at=NULL,
+               last_error=$3,
+               idempotency_key=gen_random_uuid()::text,
+               next_attempt_at=now()+($4::text || ' seconds')::interval,
+               updated_at=now()
+           WHERE variant_id=$1
+             AND idempotency_key=$2
+             AND status='processing'
+           RETURNING variant_id`,
+          [row.variant_id, row.idempotency_key, message.slice(0, 4000), delay],
+        );
+
+        if (failed.rowCount) {
+          await client.query(
+            `UPDATE aif_shopify_variant_map
+             SET sync_status='error', last_error=$2, updated_at=now()
+             WHERE variant_id=$1`,
+            [row.variant_id, message.slice(0, 4000)],
+          );
+
+          errors.push({
+            variantId: row.variant_id,
+            error: message,
+            code: error?.code || null,
+            retryInSeconds: delay,
+          });
+        } else {
+          superseded += 1;
+        }
+      } finally {
+        client.release();
+      }
+    }
+
+    return {
+      enabled: true,
+      processed: rows.length,
+      success,
+      errors: errors.length,
+      superseded,
+      lockSkipped: false,
+      errorItems: errors,
+    };
+  } finally {
+    await processLock.release();
+  }
 }
 
 export async function getAifShopifyStatus(client) {
