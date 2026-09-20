@@ -278,8 +278,20 @@ function paymentBadge(value: string) {
   return "border-white/16 bg-white/[0.06] text-white/65";
 }
 
-function saleTypeBadge(value: string) {
-  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_5px_14px_rgba(226,28,42,0.30)]";
+function saleTypeDisplayLabel(value: string, balanceDue?: unknown) {
+  if (value === "credit") {
+    return numberValue(balanceDue) > 0.005 ? "Hitel" : "Rendezett hitel";
+  }
+  return saleTypeLabel(value);
+}
+
+function saleTypeBadge(value: string, balanceDue?: unknown) {
+  if (value === "credit" && numberValue(balanceDue) > 0.005) {
+    return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_5px_14px_rgba(226,28,42,0.30)]";
+  }
+  if (value === "credit") {
+    return "border-emerald-200/35 bg-emerald-400/14 text-emerald-50";
+  }
   return "border-white/12 bg-white/[0.05] text-white/62";
 }
 
@@ -1827,8 +1839,8 @@ export default function AllInAdminMagazinDashboardMobile({
                     <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2">
                       <span className="shrink-0 text-white/34">Eladás típusa</span>
                       <span className={`min-w-0 flex-1 text-right ${sale.saleType === "credit" ? "" : "truncate"}`}>
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${saleTypeBadge(sale.saleType)}`}>
-                          {saleTypeLabel(sale.saleType)}
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${saleTypeBadge(sale.saleType, sale.balanceDue)}`}>
+                          {saleTypeDisplayLabel(sale.saleType, sale.balanceDue)}
                         </span>
                       </span>
                     </div>
