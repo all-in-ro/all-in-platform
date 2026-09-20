@@ -74,7 +74,7 @@ import {
   applyAifColumnMapping,
   readAifWorkbookWithAnalysis,
 } from "../lib/aif/xls";
-import AllInLegacyImport from "./AllInLegacyImport";
+const AllInLegacyImport = React.lazy(() => import("./AllInLegacyImport"));
 
 type Props = { onLogout?: () => void };
 
@@ -1942,7 +1942,20 @@ function AllInLegacyImportAutoload() {
           {autoloadError}
         </div>
       ) : null}
-      <AllInLegacyImport />
+      <React.Suspense
+        fallback={
+          <main className={page}>
+            <div className={wrap}>
+              <div className="rounded-[22px] border border-[#9be9e5]/20 bg-[#303b4d] px-4 py-6 text-center text-sm text-white/72 shadow-lg">
+                <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-[#8fe9e5]" />
+                Régi rendszer import betöltése…
+              </div>
+            </div>
+          </main>
+        }
+      >
+        <AllInLegacyImport />
+      </React.Suspense>
     </>
   );
 }
