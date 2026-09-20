@@ -1,41 +1,41 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { LogOut, UserRound, X } from "lucide-react";
 import Login from "./pages/Login";
-
 import AllInHome from "./pages/AllInHome";
-import AllInIncoming from "./pages/AllInIncoming";
-import AllInOrderHistory from "./pages/AllInOrderHistory";
-import AllInShopifyOrders from "./pages/AllInShopifyOrders";
-import AllInWarehouse from "./pages/AllInWarehouse";
-import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
-import AllInMagazinCiuc from "./pages/AllInMagazinCiuc";
-import AllInMagazinTargu from "./pages/AllInMagazinTargu";
-import AllInMagazinCiucSale from "./pages/AllInMagazinCiucSale";
-import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
-import AllInMagazinSale from "./pages/AllInMagazinSale";
-import AllInMagazinDynamic from "./pages/AllInMagazinDynamic";
-import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
-import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
-import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
-import AllInSalesCommandCenter from "./pages/AllInSalesCommandCenter";
-import AllInSalesCommandCenterMobile from "./pages/AllInSalesCommandCenterMobile";
-import AllInAdminClients from "./pages/AllInAdminClients";
-import AllInAdminClientsMobile from "./pages/AllInAdminClientsMobile";
+const AllInIncoming = lazy(() => import("./pages/AllInIncoming"));
+const AllInOrderHistory = lazy(() => import("./pages/AllInOrderHistory"));
+const AllInShopifyOrders = lazy(() => import("./pages/AllInShopifyOrders"));
+const AllInWarehouse = lazy(() => import("./pages/AllInWarehouse"));
+const AllInWarehouseMobile = lazy(() => import("./pages/AllInWarehouseMobile"));
 
-import AllInReserved from "./pages/AllInReserved";
-import AllInStockMoves from "./pages/AllInStockMoves";
-import AllInInventory from "./pages/AllInInventory";
-import AllInInventoryMobile from "./pages/AllInInventoryMobile";
-import AllInSuppliers from "./pages/AllInSuppliers";
-import AllInReceptions from "./pages/AllInReceptions";
-import AllInBarcodes from "./pages/AllInBarcodes";
+const AllInMagazinCiuc = lazy(() => import("./pages/AllInMagazinCiuc"));
+const AllInMagazinTargu = lazy(() => import("./pages/AllInMagazinTargu"));
+const AllInMagazinCiucSale = lazy(() => import("./pages/AllInMagazinCiucSale"));
+const AllInMagazinTarguSale = lazy(() => import("./pages/AllInMagazinTarguSale"));
+const AllInMagazinSale = lazy(() => import("./pages/AllInMagazinSale"));
+const AllInMagazinDynamic = lazy(() => import("./pages/AllInMagazinDynamic"));
+const AllInAdminMagazinCiuc = lazy(() => import("./pages/AllInAdminMagazinCiuc"));
+const AllInAdminMagazinTargu = lazy(() => import("./pages/AllInAdminMagazinTargu"));
+const AllInAdminMagazinDashboardMobile = lazy(() => import("./pages/AllInAdminMagazinDashboardMobile"));
+const AllInSalesCommandCenter = lazy(() => import("./pages/AllInSalesCommandCenter"));
+const AllInSalesCommandCenterMobile = lazy(() => import("./pages/AllInSalesCommandCenterMobile"));
+const AllInAdminClients = lazy(() => import("./pages/AllInAdminClients"));
+const AllInAdminClientsMobile = lazy(() => import("./pages/AllInAdminClientsMobile"));
 
-import AllInProductMoves from "./pages/AllInProductMoves";
-import AllInVacations from "./pages/AllInVacations";
-import AllInUsers from "./pages/AllInUsers";
-import AllInCars from "./pages/AllInCars";
-import AllInCarExpenses from "./pages/AllInCarExpenses";
+const AllInReserved = lazy(() => import("./pages/AllInReserved"));
+const AllInStockMoves = lazy(() => import("./pages/AllInStockMoves"));
+const AllInInventory = lazy(() => import("./pages/AllInInventory"));
+const AllInInventoryMobile = lazy(() => import("./pages/AllInInventoryMobile"));
+const AllInSuppliers = lazy(() => import("./pages/AllInSuppliers"));
+const AllInReceptions = lazy(() => import("./pages/AllInReceptions"));
+const AllInBarcodes = lazy(() => import("./pages/AllInBarcodes"));
+
+const AllInProductMoves = lazy(() => import("./pages/AllInProductMoves"));
+const AllInVacations = lazy(() => import("./pages/AllInVacations"));
+const AllInUsers = lazy(() => import("./pages/AllInUsers"));
+const AllInCars = lazy(() => import("./pages/AllInCars"));
+const AllInCarExpenses = lazy(() => import("./pages/AllInCarExpenses"));
 
 type ShopId = string;
 type ScreenName =
@@ -86,6 +86,16 @@ const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
 const LAST_ACTIVITY_AT_KEY = "allin:last-activity-at:v1";
 const SESSION_REQUIRED_HEADER = "X-AllIn-Auth";
 const SESSION_REQUIRED_VALUE = "session-required";
+
+function ScreenLoader() {
+  return (
+    <div className="grid min-h-screen place-items-center bg-[#4b5362] px-4 text-white">
+      <div className="rounded-2xl border border-white/14 bg-[#303a4c] px-5 py-4 text-sm text-white/70 shadow-2xl">
+        Oldal betöltése…
+      </div>
+    </div>
+  );
+}
 
 function readSharedLastActivityAt() {
   if (typeof window === "undefined") return 0;
@@ -617,87 +627,89 @@ export default function App() {
 
   return (
     <>
-      {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
-      {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
-      {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
-      {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
-      {screen.name === "magazintargusale" && <AllInMagazinTarguSale {...(commonProps as any)} />}
-      {screen.name === "shopsale" && session.role === "shop" && (
-        <AllInMagazinSale
-          actor={session.actor}
-          role="shop"
-          shopId={session.shopId}
-          locationCode={session.locationCode || session.shopId}
-          locationName={session.locationName || session.shopName || session.shopId}
-          cityName={session.shopName || session.locationName || session.shopId}
-          homeHash="shopadmin"
-          administrationEnabled
-          onLogout={requestLogout}
-        />
-      )}
-      {screen.name === "shopadmin" && session.role === "shop" && (
-        <AllInMagazinDynamic
-          actor={session.actor}
-          role="shop"
-          shopId={session.shopId}
-          locationCode={session.locationCode || session.shopId}
-          locationName={session.locationName || session.shopName || session.shopId}
-          cityName={session.shopName || session.locationName || session.shopId}
-          saleHash="shopsale"
-          onLogout={requestLogout}
-        />
-      )}
-      {screen.name === "adminmagazinciuc" && (adminShopMobile ? (
-        <AllInAdminMagazinDashboardMobile
-          actor={session.actor}
-          role={session.role}
-          locationCode="main_warehouse"
-          locationName="Magazin - Miercurea Ciuc"
-          cityName="Csíkszereda"
-          otherLocationCode="magazin_targu_secuiesc"
-          otherLocationName="Magazin - Târgu Secuiesc"
-          otherCityName="Kézdivásárhely"
-        />
-      ) : <AllInAdminMagazinCiuc {...(commonProps as any)} />)}
-      {screen.name === "adminmagazintargu" && (adminShopMobile ? (
-        <AllInAdminMagazinDashboardMobile
-          actor={session.actor}
-          role={session.role}
-          locationCode="magazin_targu_secuiesc"
-          locationName="Magazin - Târgu Secuiesc"
-          cityName="Kézdivásárhely"
-          otherLocationCode="main_warehouse"
-          otherLocationName="Magazin - Miercurea Ciuc"
-          otherCityName="Csíkszereda"
-        />
-      ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
-      {screen.name === "salescenter" && (salesCenterMobile ? (
-        <AllInSalesCommandCenterMobile actor={session.actor} role={session.role} />
-      ) : (
-        <AllInSalesCommandCenter actor={session.actor} role={session.role} />
-      ))}
-      {screen.name === "adminclients" && (adminClientsMobile ? (
-        <AllInAdminClientsMobile actor={session.actor} role={session.role} />
-      ) : (
-        <AllInAdminClients actor={session.actor} role={session.role} />
-      ))}
-      {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
-      {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
-      {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
-      {screen.name === "warehouse" && (warehouseMobile ? <AllInWarehouseMobile {...(commonProps as any)} /> : <AllInWarehouse {...(commonProps as any)} />)}
+      <Suspense fallback={<ScreenLoader />}>
+        {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
+        {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
+        {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
+        {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
+        {screen.name === "magazintargusale" && <AllInMagazinTarguSale {...(commonProps as any)} />}
+        {screen.name === "shopsale" && session.role === "shop" && (
+          <AllInMagazinSale
+            actor={session.actor}
+            role="shop"
+            shopId={session.shopId}
+            locationCode={session.locationCode || session.shopId}
+            locationName={session.locationName || session.shopName || session.shopId}
+            cityName={session.shopName || session.locationName || session.shopId}
+            homeHash="shopadmin"
+            administrationEnabled
+            onLogout={requestLogout}
+          />
+        )}
+        {screen.name === "shopadmin" && session.role === "shop" && (
+          <AllInMagazinDynamic
+            actor={session.actor}
+            role="shop"
+            shopId={session.shopId}
+            locationCode={session.locationCode || session.shopId}
+            locationName={session.locationName || session.shopName || session.shopId}
+            cityName={session.shopName || session.locationName || session.shopId}
+            saleHash="shopsale"
+            onLogout={requestLogout}
+          />
+        )}
+        {screen.name === "adminmagazinciuc" && (adminShopMobile ? (
+          <AllInAdminMagazinDashboardMobile
+            actor={session.actor}
+            role={session.role}
+            locationCode="main_warehouse"
+            locationName="Magazin - Miercurea Ciuc"
+            cityName="Csíkszereda"
+            otherLocationCode="magazin_targu_secuiesc"
+            otherLocationName="Magazin - Târgu Secuiesc"
+            otherCityName="Kézdivásárhely"
+          />
+        ) : <AllInAdminMagazinCiuc {...(commonProps as any)} />)}
+        {screen.name === "adminmagazintargu" && (adminShopMobile ? (
+          <AllInAdminMagazinDashboardMobile
+            actor={session.actor}
+            role={session.role}
+            locationCode="magazin_targu_secuiesc"
+            locationName="Magazin - Târgu Secuiesc"
+            cityName="Kézdivásárhely"
+            otherLocationCode="main_warehouse"
+            otherLocationName="Magazin - Miercurea Ciuc"
+            otherCityName="Csíkszereda"
+          />
+        ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
+        {screen.name === "salescenter" && (salesCenterMobile ? (
+          <AllInSalesCommandCenterMobile actor={session.actor} role={session.role} />
+        ) : (
+          <AllInSalesCommandCenter actor={session.actor} role={session.role} />
+        ))}
+        {screen.name === "adminclients" && (adminClientsMobile ? (
+          <AllInAdminClientsMobile actor={session.actor} role={session.role} />
+        ) : (
+          <AllInAdminClients actor={session.actor} role={session.role} />
+        ))}
+        {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
+        {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
+        {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
+        {screen.name === "warehouse" && (warehouseMobile ? <AllInWarehouseMobile {...(commonProps as any)} /> : <AllInWarehouse {...(commonProps as any)} />)}
 
-      {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
-      {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
-      {screen.name === "inventory" && (inventoryMobile ? <AllInInventoryMobile {...(commonProps as any)} /> : <AllInInventory {...(commonProps as any)} />)}
-      {screen.name === "suppliers" && <AllInSuppliers {...(commonProps as any)} />}
-      {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
-      {screen.name === "barcodes" && <AllInBarcodes {...(commonProps as any)} />}
+        {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
+        {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
+        {screen.name === "inventory" && (inventoryMobile ? <AllInInventoryMobile {...(commonProps as any)} /> : <AllInInventory {...(commonProps as any)} />)}
+        {screen.name === "suppliers" && <AllInSuppliers {...(commonProps as any)} />}
+        {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
+        {screen.name === "barcodes" && <AllInBarcodes {...(commonProps as any)} />}
 
-      {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
-      {screen.name === "vacations" && <AllInVacations {...(commonProps as any)} />}
-      {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
-      {screen.name === "carexpenses" && <AllInCarExpenses {...(commonProps as any)} />}
-      {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
+        {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
+        {screen.name === "vacations" && <AllInVacations {...(commonProps as any)} />}
+        {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
+        {screen.name === "carexpenses" && <AllInCarExpenses {...(commonProps as any)} />}
+        {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
+      </Suspense>
 
       {logoutOpen ? (
         <div
