@@ -21511,9 +21511,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currentPercent = aifNumber(line.discount_percent);
       const nextPercent = Math.max(0, Math.min(100, Number(requestedPercent)));
 
-      // A nyitott tartozásos tétel kedvezménye utólag módosítható vagy 0%-ra törölhető.
-      // A pénzvisszatérítést igénylő túl nagy kedvezményt az alábbi paidTotal-védelem továbbra is blokkolja.
+      // Már részben vagy teljesen visszavett tétel árát nem írjuk át utólag.
+      // A visszáru a saját pillanatképével már pénzügyi és készlet-eseménnyé vált;
+      // ha ezt a sale line-t később átáraznánk, a történeti visszáru és a tartozás szétesne.
+      const returnedQtyResult = await client.query(
+        `SELECT COALESCE(sum(returned_qty),0)::numeric AS returned_qty
+         FROM aif_shop_exchanges
+         WHERE source_sale_line_id=$1
+           AND status='completed'`,
+        [line.id],
+      );
+      const returnedQty = Math.max(0, aifNumber(returnedQtyResult.rows[0]?.returned_qty));
+      if (returnedQty > 0.0001) {
+        const error = new Error("Ehhez a terméksorhoz már tartozik lezárt visszáru, ezért az utólagos kedvezmény nem módosítható. A visszáru történeti árát és a kliens tartozását nem írjuk át utólag.");
+        error.statusCode = 409;
+        error.code = "late_discount_returned_line_locked";
+        throw error;
+      }
 
+      // A nyitott tartozásos tétel kedvezménye utólag módosítható vagy 0%-ra törölhető.
+      // A tartozást NEM számoljuk újra sale.total - paid_total képlettel, mert a balance_due
+      // már tartalmazhat korábbi visszáru-jóváírást. Csak ennek a sornak az értékváltozását
+      // vezetjük rá a már helyes aktuális tartozásra.
       const quantity = Math.max(1, aifNumber(line.quantity));
       const listPrice = aifRoundMoney(line.list_price);
       const previousUnitPrice = aifRoundMoney(line.unit_price);
@@ -21522,17 +21541,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const nextUnitPrice = aifDiscountedUnitPrice(listPrice, nextPercent);
       const nextLineTotal = aifRoundMoney(nextUnitPrice * quantity);
       const nextLineDiscount = aifRoundMoney(Math.max(0, listPrice * quantity - nextLineTotal));
-      const nextSaleTotal = aifRoundMoney(aifNumber(sale.total) - previousLineTotal + nextLineTotal);
       const paidTotal = aifRoundMoney(sale.paid_total);
+      const previousBalanceDue = aifRoundMoney(sale.balance_due);
+      const balanceDelta = aifRoundMoney(nextLineTotal - previousLineTotal);
+      const nextBalanceDueRaw = aifRoundMoney(previousBalanceDue + balanceDelta);
 
-      if (nextSaleTotal + 0.005 < paidTotal) {
-        const maxAdditionalDiscount = aifRoundMoney(Math.max(0, aifNumber(sale.total) - paidTotal));
+      if (nextBalanceDueRaw < -0.005) {
+        const maxAdditionalDiscount = aifRoundMoney(Math.max(0, previousBalanceDue));
         const error = new Error(`Ekkora kedvezmény már pénzvisszatérítést igényelne. Ennél a vásárlásnál legfeljebb ${maxAdditionalDiscount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON további kedvezmény adható.`);
         error.statusCode = 409;
         error.code = "late_discount_exceeds_open_balance";
         error.maxAdditionalDiscount = maxAdditionalDiscount;
         throw error;
       }
+      const balanceDue = aifRoundMoney(Math.max(0, nextBalanceDueRaw));
 
       if (Math.abs(nextPercent - currentPercent) < 0.0001 && Math.abs(nextLineTotal - previousLineTotal) < 0.005) {
         const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
@@ -21574,6 +21596,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             lateDiscountUpdatedBy: actorFrom(req),
             lateDiscountPreviousPercent: currentPercent,
             lateDiscountPreviousAmount: previousLineDiscount,
+            lateDiscountPreviousBalanceDue: previousBalanceDue,
+            lateDiscountBalanceDelta: balanceDelta,
+            lateDiscountNextBalanceDue: balanceDue,
+            lateDiscountBalanceStrategy: "previous_balance_plus_line_delta",
             lateDiscountNote: note,
           }),
         ],
@@ -21590,7 +21616,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const subtotal = aifRoundMoney(totalsResult.rows[0]?.subtotal);
       const total = aifRoundMoney(totalsResult.rows[0]?.total);
       const discountTotal = aifRoundMoney(Math.max(0, subtotal - total));
-      const balanceDue = aifRoundMoney(Math.max(0, total - paidTotal));
       const paymentStatus = balanceDue <= 0.005 ? "paid" : paidTotal > 0.005 ? "partial" : "credit";
 
       await client.query(
@@ -21613,6 +21638,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             lineId: String(line.id),
             productTitle: line.product_title || null,
             quantity,
+            returnedQty,
+            balanceStrategy: "previous_balance_plus_line_delta",
+            balanceDelta,
             before: {
               discountPercent: currentPercent,
               discountAmount: previousLineDiscount,
