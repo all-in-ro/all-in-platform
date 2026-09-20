@@ -45,6 +45,13 @@ async function tick(state) {
       }));
     }
 
+    // Másik Render instance vagy kézi Shopify process már dolgozik.
+    // Nem próbáljuk ugyanabban a tickben még kétszer megszerezni ugyanazt a DB lockot.
+    if (inbound.lockSkipped) {
+      schedule(state, state.idleDelayMs);
+      return;
+    }
+
     const orders = await processAifShopifyOrderBatch(state.pool, {
       limit: state.limit,
     });
@@ -55,6 +62,11 @@ async function tick(state) {
       }));
     }
 
+    if (orders.lockSkipped) {
+      schedule(state, state.idleDelayMs);
+      return;
+    }
+
     const outbound = await processAifShopifyOutboxBatch(state.pool, {
       limit: state.limit,
     });
@@ -63,6 +75,11 @@ async function tick(state) {
         instanceId: state.instanceId,
         ...outbound,
       }));
+    }
+
+    if (outbound.lockSkipped) {
+      schedule(state, state.idleDelayMs);
+      return;
     }
 
     let newness = null;
