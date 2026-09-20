@@ -196,8 +196,14 @@ function saleStatusLabel(value: string) {
 function paymentBadge(value: string) {
   if (value === "paid") return "border-emerald-200/25 bg-emerald-400/12 text-emerald-50";
   if (value === "partial") return "border-amber-200/30 bg-amber-400/14 text-amber-50";
-  if (value === "credit" || value === "unpaid") return "border-rose-200/30 bg-rose-500/16 text-rose-50";
+  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.30)]";
+  if (value === "unpaid") return "border-rose-200/30 bg-rose-500/16 text-rose-50";
   return "border-white/16 bg-white/[0.06] text-white/65";
+}
+
+function saleTypeBadge(value: string) {
+  if (value === "credit") return "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.30)]";
+  return "border-white/12 bg-white/[0.05] text-white";
 }
 
 
@@ -1841,11 +1847,13 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Kintlévőség"
             value={money(summary?.unpaidTotal)}
-            hint={`${integer(summary?.unpaidSales)} nyitott fizetés`}
+            hint={`${integer(summary?.unpaidSales)} nyitott fizetés • kattints a hiteles sorokhoz`}
             icon={WalletCards}
             current={numberValue(summary?.unpaidTotal)}
             previous={numberValue(previous?.unpaidTotal)}
             tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"}
+            onClick={() => applyInstantFilter({ paymentStatus: "credit", saleType: "credit" })}
+            actionLabel={applied.paymentStatus === "credit" && applied.saleType === "credit" ? "Hitel szűrő aktív" : "Hitel szűrés"}
           />
           <MetricCard
             title="Becsült árrés"
@@ -2027,7 +2035,7 @@ export default function AllInAdminMagazinDashboard({
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
                       <td className="min-w-[145px] px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
-                      <td className="px-3 py-3 text-center"><span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">{saleTypeLabel(sale.saleType)}</span></td>
+                      <td className="px-3 py-3 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${saleTypeBadge(sale.saleType)}`}>{saleTypeLabel(sale.saleType)}</span></td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="px-3 py-3 text-right text-amber-50">
                         <p>{money(sale.lineDiscountAmount)}</p>
