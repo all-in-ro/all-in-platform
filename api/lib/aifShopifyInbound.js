@@ -1,5 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { ensureAifShopifyTables, shopifyGraphql } from "./aifShopify.js";
+import {
+  acquireAifShopifyProcessLock,
+  ensureAifShopifyTables,
+  isAifShopifyRetryablePgError,
+  shopifyGraphql,
+  waitAifShopifyRetry,
+} from "./aifShopify.js";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -144,8 +150,10 @@ async function fetchCurrentAvailable(inventoryItemId, locationId) {
 async function claimInboundEvents(pool, limit) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    // A schema/DDL ellenőrzés nem futhat ugyanabban a tranzakcióban,
+    // amelyik queue sorokat lockol. Deploy-átfedésnél ez tipikus deadlock-forrás.
     await ensureInboundSchema(client);
+    await client.query("BEGIN");
     const result = await client.query(
       `WITH picked AS (
          SELECT shopify_webhook_id
@@ -258,6 +266,7 @@ async function processInboundEvent(pool, event, config) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(`SET LOCAL lock_timeout = '8s'`);
     const mapping = await client.query(
       `SELECT variant_id, sku
        FROM aif_shopify_variant_map
@@ -350,10 +359,44 @@ async function processInboundEvent(pool, event, config) {
   }
 }
 
+
+async function processInboundEventWithRetry(pool, event, config) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await processInboundEvent(pool, event, config);
+    } catch (error) {
+      lastError = error;
+
+      if (
+        attempt < 3
+        && isAifShopifyRetryablePgError(error)
+      ) {
+        await waitAifShopifyRetry(attempt);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError;
+}
+
 export async function processAifShopifyInboundBatch(pool, options = {}) {
   const config = envConfig();
   if (!config.enabled) {
-    return { enabled: false, processed: 0, changed: 0, ignored: 0, errors: 0, errorItems: [] };
+    return {
+      enabled: false,
+      claimed: 0,
+      processed: 0,
+      changed: 0,
+      ignored: 0,
+      errors: 0,
+      lockSkipped: false,
+      errorItems: [],
+    };
   }
 
   const missing = [
@@ -363,56 +406,88 @@ export async function processAifShopifyInboundBatch(pool, options = {}) {
     ["AIF_LOCATION_CSIKSZEREDA_ID", config.aifCsikszeredaLocationId],
     ["AIF_LOCATION_KEZDI_ID", config.aifKezdiLocationId],
   ].filter(([, value]) => !value).map(([name]) => name);
+
   if (missing.length) {
-    throw Object.assign(new Error(`Hiányzó Shopify inbound ENV: ${missing.join(", ")}`), { code: "shopify_inbound_config_missing" });
+    throw Object.assign(
+      new Error(`Hiányzó Shopify inbound ENV: ${missing.join(", ")}`),
+      { code: "shopify_inbound_config_missing" },
+    );
   }
 
-  const rows = await claimInboundEvents(pool, options.limit || 20);
-  let processed = 0;
-  let changed = 0;
-  let ignored = 0;
-  const errors = [];
+  const processLock = await acquireAifShopifyProcessLock(pool);
+  if (!processLock.locked) {
+    return {
+      enabled: true,
+      claimed: 0,
+      processed: 0,
+      changed: 0,
+      ignored: 0,
+      errors: 0,
+      lockSkipped: true,
+      message: "shopify_processor_busy",
+      errorItems: [],
+    };
+  }
 
-  for (const event of rows) {
-    try {
-      const result = await processInboundEvent(pool, event, config);
-      if (result.status === "processed") {
-        processed += 1;
-        if (result.changed) changed += 1;
-      } else {
-        ignored += 1;
-      }
-    } catch (error) {
-      const message = error?.message || String(error);
-      const delay = retryDelaySeconds(event.attempts);
-      const client = await pool.connect();
+  try {
+    const rows = await claimInboundEvents(pool, options.limit || 20);
+    let processed = 0;
+    let changed = 0;
+    let ignored = 0;
+    const errors = [];
+
+    for (const event of rows) {
       try {
-        await client.query(
-          `UPDATE aif_shopify_webhook_events
-           SET status='error',
-               error=$2,
-               locked_at=NULL,
-               next_attempt_at=now()+($3::text || ' seconds')::interval,
-               updated_at=now()
-           WHERE shopify_webhook_id=$1`,
-          [event.shopify_webhook_id, message.slice(0, 4000), delay]
-        );
-      } finally {
-        client.release();
-      }
-      errors.push({ webhookId: event.shopify_webhook_id, error: message, code: error?.code || null, retryInSeconds: delay });
-    }
-  }
+        const result = await processInboundEventWithRetry(pool, event, config);
 
-  return {
-    enabled: true,
-    claimed: rows.length,
-    processed,
-    changed,
-    ignored,
-    errors: errors.length,
-    errorItems: errors,
-  };
+        if (result.status === "processed") {
+          processed += 1;
+          if (result.changed) changed += 1;
+        } else {
+          ignored += 1;
+        }
+      } catch (error) {
+        const message = error?.message || String(error);
+        const delay = retryDelaySeconds(event.attempts);
+        const client = await pool.connect();
+
+        try {
+          await client.query(
+            `UPDATE aif_shopify_webhook_events
+             SET status='error',
+                 error=$2,
+                 locked_at=NULL,
+                 next_attempt_at=now()+($3::text || ' seconds')::interval,
+                 updated_at=now()
+             WHERE shopify_webhook_id=$1`,
+            [event.shopify_webhook_id, message.slice(0, 4000), delay],
+          );
+        } finally {
+          client.release();
+        }
+
+        errors.push({
+          webhookId: event.shopify_webhook_id,
+          error: message,
+          code: error?.code || null,
+          retryInSeconds: delay,
+        });
+      }
+    }
+
+    return {
+      enabled: true,
+      claimed: rows.length,
+      processed,
+      changed,
+      ignored,
+      errors: errors.length,
+      lockSkipped: false,
+      errorItems: errors,
+    };
+  } finally {
+    await processLock.release();
+  }
 }
 
 export async function listAifShopifyInboundEvents(client, options = {}) {
