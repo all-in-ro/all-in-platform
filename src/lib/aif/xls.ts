@@ -1,5 +1,13 @@
-import * as XLSX from "xlsx";
 import type { AifParsedRow, AifSupplier } from "./api";
+
+let aifXlsxModulePromise: Promise<typeof import("xlsx")> | null = null;
+
+function loadAifXlsxModule() {
+  if (!aifXlsxModulePromise) {
+    aifXlsxModulePromise = import("xlsx");
+  }
+  return aifXlsxModulePromise;
+}
 
 export type AifColumnField =
   | "ignore"
@@ -442,7 +450,10 @@ export function aifRowErrors(row: AifParsedRow): string[] {
 }
 
 export async function readAifWorkbookWithAnalysis(file: File, supplier?: AifSupplier | null): Promise<AifWorkbookParseResult> {
-  const buffer = await file.arrayBuffer();
+  const [buffer, XLSX] = await Promise.all([
+    file.arrayBuffer(),
+    loadAifXlsxModule(),
+  ]);
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
