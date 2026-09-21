@@ -1049,6 +1049,7 @@ function CustomerPurchasesModal({
   const [bonMode, setBonMode] = useState(false);
   const [selectedBonLineIds, setSelectedBonLineIds] = useState<Set<string>>(new Set());
   const [bonFormOpen, setBonFormOpen] = useState(false);
+  const [bonConfirmOpen, setBonConfirmOpen] = useState(false);
   const [bonBusy, setBonBusy] = useState(false);
   const [bonError, setBonError] = useState("");
   const [bonDocumentDate, setBonDocumentDate] = useState(bucharestIsoToday());
@@ -1120,6 +1121,8 @@ function CustomerPurchasesModal({
       const next = !current;
       if (!next) {
         setSelectedBonLineIds(new Set());
+        setBonFormOpen(false);
+        setBonConfirmOpen(false);
         setBonError("");
       }
       return next;
@@ -1155,6 +1158,23 @@ function CustomerPurchasesModal({
     }
   }
 
+  function openBonFinalConfirmation() {
+    setBonError("");
+    if (!selectedBonRows.length) {
+      setBonError("Legalább egy terméksort válassz ki.");
+      return;
+    }
+    if (!bonDocumentDate) {
+      setBonError("A dokumentum dátuma kötelező.");
+      return;
+    }
+    if (!bonPurpose.trim()) {
+      setBonError("A felhasználási cél / indok kötelező.");
+      return;
+    }
+    setBonConfirmOpen(true);
+  }
+
   async function createBonConsum() {
     if (bonBusy) return;
     if (!selectedBonRows.length) {
@@ -1182,6 +1202,7 @@ function CustomerPurchasesModal({
       });
 
       printOfficialBonConsum({ document: response.document, lines: response.lines || [] });
+      setBonConfirmOpen(false);
       setBonFormOpen(false);
       setBonMode(false);
       setSelectedBonLineIds(new Set());
@@ -1627,11 +1648,118 @@ function CustomerPurchasesModal({
               <span className="text-[10px] text-white/42">Véglegesítés után BC sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className={neutralButton}>Mégse</button>
-                <button type="button" onClick={() => void createBonConsum()} disabled={bonBusy || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
-                  {bonBusy ? <Loader2 size={16} className="animate-spin" /> : <FileCheck2 size={16} />}
-                  {bonBusy ? "Véglegesítés..." : "Véglegesítés + PDF"}
+                <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
+                  <FileCheck2 size={16} />
+                  Tovább a véglegesítéshez
                 </button>
               </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {bonConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-[560] grid place-items-center bg-slate-950/90 px-3 py-4 backdrop-blur-md"
+          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+            if (event.currentTarget === event.target && !bonBusy) setBonConfirmOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[650px] overflow-hidden rounded-[26px] border border-[#ff8792]/65 bg-[#303a4c] text-white shadow-[0_36px_110px_rgba(0,0,0,0.72),0_0_34px_rgba(226,28,42,0.16)]">
+            <header className="relative overflow-hidden border-b border-white/14 bg-gradient-to-r from-[#5b2430] via-[#8f2634] to-[#E21C2A] px-4 py-4">
+              <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+              <div className="relative flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/34 bg-black/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
+                    <AlertTriangle size={21} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[9px] uppercase tracking-[0.17em] text-white/68">Utolsó megerősítés</p>
+                    <h3 className="mt-1 text-xl text-white">Bon de consum véglegesítése</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-white/72">
+                      Ez már hivatalos BC sorszámot hoz létre és módosítja a kapcsolódó kliens- és eladási nyilvántartást.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBonConfirmOpen(false)}
+                  disabled={bonBusy}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/24 bg-black/10 text-white transition hover:bg-white/[0.10] disabled:opacity-45"
+                  aria-label="Megerősítés bezárása"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+            </header>
+
+            <div className="space-y-3 p-4">
+              <div className="rounded-2xl border border-[#ff9aa4]/35 bg-[#E21C2A]/10 px-3.5 py-3 text-sm leading-relaxed text-rose-50">
+                <strong className="font-medium text-white">Biztosan véglegesíted?</strong>
+                <p className="mt-1 text-xs leading-5 text-rose-50/82">
+                  A kijelölt hiteles terméksorok kikerülnek a kliens tartozásából. A rendszer az eredeti készletkivezetést Bon de consumhoz kapcsolja, de a készletet nem vonja le másodszor.
+                </p>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Kliens</p>
+                  <p className="mt-1.5 truncate text-sm text-white" title={customerName}>{customerName}</p>
+                  <p className="mt-1 text-[10px] text-white/44">{storeName}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Dokumentum</p>
+                  <p className="mt-1.5 text-sm text-white">Bon de consum • 14-3-4A</p>
+                  <p className="mt-1 text-[10px] text-white/44">{bonDocumentDate}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Kijelölt mennyiség</p>
+                  <p className="mt-1.5 text-lg text-white">{integer(selectedBonTotals.lines)} sor • {integer(selectedBonTotals.qty)} db</p>
+                  <p className="mt-1 text-[10px] text-white/44">Primitor: {bonRecipient.trim() || customerName}</p>
+                </div>
+                <div className="rounded-2xl border border-[#ff9aa4]/28 bg-[#4a303a] p-3">
+                  <p className="text-[8px] uppercase tracking-[0.11em] text-rose-100/55">Teljes eladási érték</p>
+                  <p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.retail)}</p>
+                  <p className="mt-1 text-[10px] text-rose-100/58">Beszerzési érték: {money(selectedBonTotals.purchase)}</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-[#293548] px-3.5 py-3">
+                <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Scop / felhasználási cél</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-white/86">{bonPurpose.trim()}</p>
+                {bonNote.trim() ? (
+                  <>
+                    <div className="my-2 border-t border-white/8" />
+                    <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Megjegyzés</p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-white/62">{bonNote.trim()}</p>
+                  </>
+                ) : null}
+              </div>
+
+              <div className="flex items-start gap-2 rounded-xl border border-amber-200/22 bg-amber-400/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-50/78">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                <span>A következő piros gomb az egyetlen pont, ahol a rendszer ténylegesen létrehozza a BC bizonylatot és elvégzi az adatbázis-módosításokat.</span>
+              </div>
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
+              <button
+                type="button"
+                onClick={() => setBonConfirmOpen(false)}
+                disabled={bonBusy}
+                className={neutralButton}
+              >
+                <X size={16} /> Mégse, vissza
+              </button>
+              <button
+                type="button"
+                onClick={() => void createBonConsum()}
+                disabled={bonBusy}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#ff9aa4]/70 bg-[#E21C2A] px-4 text-sm text-white shadow-[0_10px_24px_rgba(226,28,42,0.30)] transition hover:bg-[#C91522] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bonBusy ? <Loader2 size={16} className="animate-spin" /> : <FileCheck2 size={16} />}
+                {bonBusy ? "Véglegesítés folyamatban..." : "Igen, véglegesítés + PDF"}
+              </button>
             </footer>
           </section>
         </div>
