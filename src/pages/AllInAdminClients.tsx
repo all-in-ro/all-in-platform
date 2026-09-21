@@ -168,6 +168,9 @@ type AdminCustomerSale = {
 type BonConsumDocumentSummary = {
   id: string;
   documentNumber: string;
+  series?: string | null;
+  sequenceNumber?: number | null;
+  sequenceYear?: number | null;
   documentDate?: string | null;
   locationId?: string | null;
   locationCode?: string | null;
@@ -223,6 +226,16 @@ type BonConsumDocumentLine = {
 type BonConsumDocumentDetail = {
   document: BonConsumDocumentSummary;
   lines: BonConsumDocumentLine[];
+};
+
+type BonConsumNumberSettings = {
+  series: string;
+  nextNumber: number;
+  digits: number;
+  includeYear: boolean;
+  yearlyReset: boolean;
+  sequenceYear: number;
+  previewNumber?: string | null;
 };
 
 type AdminCustomerPurchasesResponse = {
@@ -316,6 +329,8 @@ async function apiAdminCreateBonConsum(
     purpose: string;
     recipientName?: string | null;
     note?: string | null;
+    series: string;
+    sequenceNumber: number;
     lineIds: string[];
   },
 ) {
@@ -332,6 +347,12 @@ async function apiAdminCreateBonConsum(
 async function apiAdminGetBonConsum(documentId: string) {
   return adminClientJson<{ ok: true } & BonConsumDocumentDetail>(
     `/api/aif/bon-consum/${encodeURIComponent(documentId)}`,
+  );
+}
+
+async function apiAdminGetBonConsumSettings() {
+  return adminClientJson<{ ok: true; settings: BonConsumNumberSettings }>(
+    "/api/aif/bon-consum/settings",
   );
 }
 
@@ -766,6 +787,23 @@ function bucharestIsoToday() {
   return `${map.year}-${map.month}-${map.day}`;
 }
 
+function bonConsumNumberPreview(
+  series: string,
+  sequenceNumber: string | number,
+  documentDate: string,
+  settings?: BonConsumNumberSettings | null,
+) {
+  const cleanSeries = String(series || "BC").trim().toUpperCase() || "BC";
+  const parsedNumber = Number(sequenceNumber);
+  const safeNumber = Number.isInteger(parsedNumber) && parsedNumber > 0 ? parsedNumber : 1;
+  const digits = Math.min(10, Math.max(3, Number(settings?.digits || 6)));
+  const year = Number(String(documentDate || bucharestIsoToday()).slice(0, 4)) || new Date().getFullYear();
+  const sequence = String(safeNumber).padStart(digits, "0");
+  return settings?.includeYear === false
+    ? `${cleanSeries}/${sequence}`
+    : `${cleanSeries}/${year}/${sequence}`;
+}
+
 function bonConsumLineEligibility(sale: AdminCustomerSale, line: AdminCustomerSaleLine) {
   if (String(sale.status || "").toLowerCase() !== "completed") {
     return { eligible: false, reason: "Csak lezárt, aktív vásárlás vezethető át." };
@@ -1056,6 +1094,10 @@ function CustomerPurchasesModal({
   const [bonPurpose, setBonPurpose] = useState("");
   const [bonRecipient, setBonRecipient] = useState(customerName);
   const [bonNote, setBonNote] = useState("");
+  const [bonNumberSettings, setBonNumberSettings] = useState<BonConsumNumberSettings | null>(null);
+  const [bonSeries, setBonSeries] = useState("BC");
+  const [bonSequenceNumber, setBonSequenceNumber] = useState("1");
+  const [bonNumberingBusy, setBonNumberingBusy] = useState(false);
   const [bonPrintBusyId, setBonPrintBusyId] = useState("");
 
   const orderedSales = useMemo(
@@ -1144,6 +1186,25 @@ function CustomerPurchasesModal({
     setSelectedBonLineIds(allSelected ? new Set() : new Set(all));
   }
 
+  async function openBonConsumForm() {
+    if (!selectedBonRows.length || bonBusy) return;
+    setBonError("");
+    setBonFormOpen(true);
+    setBonNumberingBusy(true);
+    try {
+      const response = await apiAdminGetBonConsumSettings();
+      const settings = response.settings;
+      setBonNumberSettings(settings);
+      setBonSeries(String(settings?.series || "BC"));
+      setBonSequenceNumber(String(Math.max(1, Number(settings?.nextNumber || 1))));
+    } catch (caught) {
+      setBonNumberSettings(null);
+      setBonError(caught instanceof Error ? caught.message : "A Bon de consum számozási beállításai nem tölthetők be.");
+    } finally {
+      setBonNumberingBusy(false);
+    }
+  }
+
   async function printArchivedBonConsum(documentId: string) {
     if (!documentId || bonPrintBusyId) return;
     setBonPrintBusyId(documentId);
@@ -1172,6 +1233,19 @@ function CustomerPurchasesModal({
       setBonError("A felhasználási cél / indok kötelező.");
       return;
     }
+    if (!bonSeries.trim()) {
+      setBonError("A Bon de consum sorozat megadása kötelező.");
+      return;
+    }
+    const sequenceNumber = Number(bonSequenceNumber);
+    if (!Number.isInteger(sequenceNumber) || sequenceNumber <= 0) {
+      setBonError("A Bon de consum száma pozitív egész szám legyen.");
+      return;
+    }
+    if (!bonNumberSettings) {
+      setBonError("A Bon de consum számozási beállításai még nem töltődtek be.");
+      return;
+    }
     setBonConfirmOpen(true);
   }
 
@@ -1189,6 +1263,15 @@ function CustomerPurchasesModal({
       setBonError("A felhasználási cél / indok kötelező.");
       return;
     }
+    if (!bonSeries.trim()) {
+      setBonError("A Bon de consum sorozat megadása kötelező.");
+      return;
+    }
+    const sequenceNumber = Number(bonSequenceNumber);
+    if (!Number.isInteger(sequenceNumber) || sequenceNumber <= 0) {
+      setBonError("A Bon de consum száma pozitív egész szám legyen.");
+      return;
+    }
 
     setBonBusy(true);
     setBonError("");
@@ -1198,6 +1281,8 @@ function CustomerPurchasesModal({
         purpose: bonPurpose.trim(),
         recipientName: bonRecipient.trim() || customerName,
         note: bonNote.trim() || null,
+        series: bonSeries.trim().toUpperCase(),
+        sequenceNumber,
         lineIds: selectedBonRows.map((row) => row.line.id),
       });
 
@@ -1209,6 +1294,13 @@ function CustomerPurchasesModal({
       setBonPurpose("");
       setBonNote("");
       setBonDocumentDate(bucharestIsoToday());
+      setBonSequenceNumber(String(sequenceNumber + 1));
+      setBonNumberSettings((current) => current ? {
+        ...current,
+        series: bonSeries.trim().toUpperCase(),
+        nextNumber: sequenceNumber + 1,
+        sequenceYear: Number(bonDocumentDate.slice(0, 4)) || current.sequenceYear,
+      } : current);
       await onReload();
     } catch (caught) {
       setBonError(caught instanceof Error ? caught.message : "A Bon de consum létrehozása nem sikerült.");
@@ -1589,7 +1681,7 @@ function CustomerPurchasesModal({
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={toggleBonMode} disabled={bonBusy} className={neutralButton}><X size={16} /> Mégse</button>
-                <button type="button" onClick={() => { setBonError(""); setBonFormOpen(true); }} disabled={!selectedBonRows.length || bonBusy} className={primaryButton}><FileCheck2 size={16} /> Bon de consum készítése</button>
+                <button type="button" onClick={() => void openBonConsumForm()} disabled={!selectedBonRows.length || bonBusy} className={primaryButton}><FileCheck2 size={16} /> Bon de consum készítése</button>
               </div>
             </>
           ) : (
@@ -1625,6 +1717,41 @@ function CustomerPurchasesModal({
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1.5 text-xs text-white/62">
+                  Sorozat
+                  <input
+                    value={bonSeries}
+                    disabled={bonNumberingBusy}
+                    onChange={(event) => setBonSeries(event.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20))}
+                    className={`${control} w-full font-mono`}
+                    placeholder="pl. BC"
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/62">
+                  Bizonylatszám
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={bonSequenceNumber}
+                    disabled={bonNumberingBusy}
+                    onChange={(event) => setBonSequenceNumber(event.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                    className={`${control} w-full font-mono`}
+                    placeholder="1"
+                  />
+                </label>
+                <div className="sm:col-span-2 rounded-2xl border border-[#9be9e5]/24 bg-[#214c52]/55 px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Létrejövő Bon de consum sorszám</p>
+                      <p className="mt-1 font-mono text-lg text-white">{bonNumberingBusy ? "Betöltés…" : bonConsumNumberPreview(bonSeries, bonSequenceNumber, bonDocumentDate, bonNumberSettings)}</p>
+                    </div>
+                    <div className="text-right text-[10px] leading-relaxed text-white/48">
+                      <p>Ezt a számot most te állítod be.</p>
+                      <p>A következő automatikusan innen folytatja: <strong className="font-normal text-[#d7fffd]">{Number(bonSequenceNumber) > 0 ? Number(bonSequenceNumber) + 1 : "–"}</strong></p>
+                    </div>
+                  </div>
+                </div>
+                <label className="grid gap-1.5 text-xs text-white/62">
                   Dokumentum dátuma
                   <input type="date" value={bonDocumentDate} onChange={(event) => setBonDocumentDate(event.target.value)} className={`${control} w-full`} />
                 </label>
@@ -1658,7 +1785,7 @@ function CustomerPurchasesModal({
               <span className="text-[10px] text-white/42">Véglegesítés után Bon de consum sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className={neutralButton}>Mégse</button>
-                <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
+                <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || bonNumberingBusy || !bonNumberSettings || !selectedBonRows.length || !bonPurpose.trim() || !bonSeries.trim() || Number(bonSequenceNumber) <= 0} className={primaryButton}>
                   <FileCheck2 size={16} />
                   Tovább a véglegesítéshez
                 </button>
@@ -1720,7 +1847,8 @@ function CustomerPurchasesModal({
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Dokumentum</p>
                   <p className="mt-1.5 text-sm text-white">Bon de consum • 14-3-4A</p>
-                  <p className="mt-1 text-[10px] text-white/44">{bonDocumentDate}</p>
+                  <p className="mt-1 font-mono text-[13px] text-[#d7fffd]">{bonConsumNumberPreview(bonSeries, bonSequenceNumber, bonDocumentDate, bonNumberSettings)}</p>
+                  <p className="mt-1 text-[10px] text-white/44">Dátum: {bonDocumentDate} • következő szám: {Number(bonSequenceNumber) > 0 ? Number(bonSequenceNumber) + 1 : "–"}</p>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Kijelölt mennyiség</p>
