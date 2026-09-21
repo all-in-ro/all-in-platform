@@ -21774,6 +21774,52 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.patch("/bon-consum/settings", requireAuthed, requireAifAdminOnly, async (req, res) => {
+    const body = req.body || {};
+    const series = cleanAifBonConsumSeries(body.series, "");
+    const nextNumber = Number(body.nextNumber ?? body.next_number);
+    if (!series) return res.status(400).json({ error: "A Bon de consum sorozat megadása kötelező." });
+    if (!Number.isInteger(nextNumber) || nextNumber <= 0 || nextNumber > 9999999999) {
+      return res.status(400).json({ error: "A következő Bon de consum bizonylatszám 1 és 9 999 999 999 közötti egész szám lehet." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await ensureAifConsumptionDocumentsSchema();
+      await client.query("BEGIN");
+      const locked = await client.query(`SELECT * FROM aif_consumption_document_settings WHERE id=1 FOR UPDATE`);
+      const current = locked.rows[0] || {};
+      const year = Number(aifBucharestIsoDate().slice(0, 4));
+      const digits = Math.min(10, Math.max(3, Number(current.digits || 6)));
+      const includeYear = current.include_year !== false;
+      const sequence = String(nextNumber).padStart(digits, "0");
+      const candidate = includeYear ? `${series}/${year}/${sequence}` : `${series}/${sequence}`;
+      const duplicate = await client.query(`SELECT 1 FROM aif_consumption_documents WHERE document_number=$1 LIMIT 1`, [candidate]);
+      if (duplicate.rowCount) {
+        throw Object.assign(new Error(`A ${candidate} Bon de consum sorszám már létezik. Állíts be másik következő számot.`), { statusCode: 409, code: "bon_consum_document_number_exists" });
+      }
+      const updated = await client.query(
+        `UPDATE aif_consumption_document_settings
+         SET series=$1, next_number=$2, sequence_year=$3, updated_at=now(), updated_by=$4
+         WHERE id=1
+         RETURNING *`,
+        [series, nextNumber, year, actorFrom(req)]
+      );
+      await client.query("COMMIT");
+      return res.json({ ok: true, settings: aifBonConsumSettingsResponse(updated.rows[0] || {}, year) });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF bon consum settings update failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A Bon de consum számozási beállításai nem menthetők.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/bon-consum/:id", requireAuthed, requireAifAdminOnly, async (req, res) => {
     try {
       await ensureAifConsumptionDocumentsSchema();
@@ -21794,8 +21840,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const purpose = text(body.purpose || body.reason || body.scop);
     const recipientName = emptyToNull(body.recipientName || body.recipient_name || body.primitor);
     const note = emptyToNull(body.note || body.notes);
-    const requestedSeries = text(body.series || body.documentSeries || body.document_series);
-    const requestedSequenceNumber = body.sequenceNumber ?? body.sequence_number ?? body.documentNumber ?? body.document_number;
     const rawItems = Array.isArray(body.items)
       ? body.items
       : Array.isArray(body.lineIds)
@@ -21808,11 +21852,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!isUuidText(customerId)) return res.status(400).json({ error: "Érvénytelen kliensazonosító." });
     if (!locationInput) return res.status(400).json({ error: "A készlethely kötelező." });
     if (!purpose) return res.status(400).json({ error: "A Bon de consum felhasználási célja kötelező." });
-    if (!requestedSeries) return res.status(400).json({ error: "A Bon de consum sorozat megadása kötelező." });
-    const parsedSequenceNumber = Number(requestedSequenceNumber);
-    if (!Number.isInteger(parsedSequenceNumber) || parsedSequenceNumber <= 0 || parsedSequenceNumber > 9999999999) {
-      return res.status(400).json({ error: "A Bon de consum száma 1 és 9 999 999 999 közötti egész szám lehet." });
-    }
     if (!lineIds.length) return res.status(400).json({ error: "Legalább egy terméksort válassz ki a Bon de consumhoz." });
     if (lineIds.length > 250) return res.status(400).json({ error: "Egy Bon de consum legfeljebb 250 terméksort tartalmazhat." });
     if (lineIds.some((id) => !isUuidText(id))) return res.status(400).json({ error: "A kijelölt terméksorok között érvénytelen azonosító van." });
@@ -21966,8 +22005,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const actor = actorFrom(req);
       const number = await allocateAifBonConsumDocumentNumber(client, {
-        series: requestedSeries,
-        sequenceNumber: parsedSequenceNumber,
         sequenceYear: Number(documentDate.slice(0, 4)),
         actor,
       });
