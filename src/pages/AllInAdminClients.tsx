@@ -16,6 +16,7 @@ import {
   ChevronRight,
   CircleDollarSign,
   Edit3,
+  FileCheck2,
   Filter,
   Home,
   ImagePlus,
@@ -24,6 +25,7 @@ import {
   MapPin,
   Medal,
   Phone,
+  Printer,
   ReceiptText,
   RefreshCw,
   Save,
@@ -131,6 +133,8 @@ type AdminCustomerSaleLine = {
   discountAmount: number;
   discountPercent: number;
   lineTotal: number;
+  buyPriceSnapshot?: number | null;
+  snCod?: string | null;
 };
 
 type AdminCustomerSalePayment = {
@@ -161,6 +165,66 @@ type AdminCustomerSale = {
   lines: AdminCustomerSaleLine[];
 };
 
+type BonConsumDocumentSummary = {
+  id: string;
+  documentNumber: string;
+  documentDate?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  customerId?: string | null;
+  customerName: string;
+  customerPhone?: string | null;
+  recipientName?: string | null;
+  purpose: string;
+  note?: string | null;
+  actor?: string | null;
+  status?: string | null;
+  totalQty: number;
+  purchaseTotal: number;
+  retailTotal: number;
+  actualSaleTotal: number;
+  discountTotal: number;
+  currencyCode?: string | null;
+  lineCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+type BonConsumDocumentLine = {
+  id: string;
+  lineNo: number;
+  sourceSaleId?: string | null;
+  sourceSaleLineId?: string | null;
+  sourceSaleNumber?: string | null;
+  sourceSoldAt?: string | null;
+  variantId?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  snCod?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  purchaseUnitPrice: number;
+  listUnitPrice: number;
+  actualUnitPrice: number;
+  salesTvaRate?: number | null;
+  purchaseValue: number;
+  retailValue: number;
+  actualSaleValue: number;
+  discountValue: number;
+};
+
+type BonConsumDocumentDetail = {
+  document: BonConsumDocumentSummary;
+  lines: BonConsumDocumentLine[];
+};
+
 type AdminCustomerPurchasesResponse = {
   ok: true;
   item: AdminShopCustomerRecord;
@@ -176,6 +240,7 @@ type AdminCustomerPurchasesResponse = {
     lastSaleAt?: string | null;
   };
   sales: AdminCustomerSale[];
+  consumptionDocuments?: BonConsumDocumentSummary[];
 };
 
 type RomaniaCountyOption = { code: string; name: string };
@@ -239,6 +304,34 @@ async function apiAdminCustomerPurchases(customerId: string, location: string, y
   });
   return adminClientJson<AdminCustomerPurchasesResponse>(
     `/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`,
+  );
+}
+
+
+async function apiAdminCreateBonConsum(
+  customerId: string,
+  location: string,
+  payload: {
+    documentDate: string;
+    purpose: string;
+    recipientName?: string | null;
+    note?: string | null;
+    lineIds: string[];
+  },
+) {
+  return adminClientJson<{ ok: true } & BonConsumDocumentDetail>(
+    `/api/aif/shop-customers/${encodeURIComponent(customerId)}/bon-consum`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, location }),
+    },
+  );
+}
+
+async function apiAdminGetBonConsum(documentId: string) {
+  return adminClientJson<{ ok: true } & BonConsumDocumentDetail>(
+    `/api/aif/bon-consum/${encodeURIComponent(documentId)}`,
   );
 }
 
@@ -637,25 +730,333 @@ function WarehouseProductImage({
   return <>{thumb}{preview}</>;
 }
 
+
+function officialHtmlEscape(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function officialNumber(value: unknown, digits = 2) {
+  return numberValue(value).toLocaleString("ro-RO", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function officialFileSafe(value: unknown) {
+  return String(value || "bon_de_consum")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "bon_de_consum";
+}
+
+function bucharestIsoToday() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function bonConsumLineEligibility(sale: AdminCustomerSale, line: AdminCustomerSaleLine) {
+  if (String(sale.status || "").toLowerCase() !== "completed") {
+    return { eligible: false, reason: "Csak lezárt, aktív vásárlás vezethető át." };
+  }
+  const hasPayment = numberValue(sale.paidTotal) > 0.005
+    || (sale.payments || []).some((payment) => numberValue(payment.amount) > 0.005);
+  if (hasPayment || !["credit", "unpaid"].includes(String(sale.paymentStatus || "").toLowerCase())) {
+    return { eligible: false, reason: "Ehhez a vásárláshoz már fizetés kapcsolódik." };
+  }
+  if (line.buyPriceSnapshot === null || line.buyPriceSnapshot === undefined || !Number.isFinite(Number(line.buyPriceSnapshot))) {
+    return { eligible: false, reason: "Hiányzik az eladáskori beszerzésiár-snapshot." };
+  }
+  if (numberValue(line.listPrice) <= 0) {
+    return { eligible: false, reason: "Hiányzik a teljes eladási listaár." };
+  }
+  return { eligible: true, reason: "" };
+}
+
+function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
+  const doc = detail.document;
+  const lines = detail.lines || [];
+  const generated = new Date().toLocaleDateString("ro-RO", { timeZone: "Europe/Bucharest" });
+  const rows = lines.map((line, index) => {
+    const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
+    const tva = line.salesTvaRate === null || line.salesTvaRate === undefined
+      ? "-"
+      : `${officialNumber(line.salesTvaRate, Number.isInteger(Number(line.salesTvaRate)) ? 0 : 2)}%`;
+    const source = [line.sourceSaleNumber, line.sourceSoldAt ? formatDate(line.sourceSoldAt) : ""].filter(Boolean).join(" • ");
+    return `<tr>
+      <td class="center">${index + 1}</td>
+      <td>
+        <strong>${officialHtmlEscape(line.productTitle || "Produs")}</strong>
+        <div class="muted">${officialHtmlEscape(variant || "-")}</div>
+      </td>
+      <td class="code">${officialHtmlEscape(line.productCode || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.snCod || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
+      <td class="center">buc.</td>
+      <td class="qty">${officialNumber(line.quantity, 0)}</td>
+      <td class="money">${officialNumber(line.purchaseUnitPrice)}</td>
+      <td class="money">${officialNumber(line.listUnitPrice)}</td>
+      <td class="money">${officialNumber(line.actualUnitPrice)}</td>
+      <td class="center">${officialHtmlEscape(tva)}</td>
+      <td class="money">${officialNumber(line.purchaseValue)}</td>
+      <td class="money strongValue">${officialNumber(line.retailValue)}</td>
+      <td class="money">${officialNumber(line.actualSaleValue)}</td>
+      <td class="money">${officialNumber(line.discountValue)}</td>
+      <td class="source">${officialHtmlEscape(source || "-")}</td>
+    </tr>`;
+  }).join("");
+
+  return `<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8" />
+<title>${officialHtmlEscape(`Bon de consum ${doc.documentNumber}`)}</title>
+<style>
+  @page { size:A4 landscape; margin:10mm; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; background:#fff; color:#172033; }
+  body { font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .doc { width:100%; }
+  .top { display:grid; grid-template-columns:minmax(0,1fr) minmax(74mm,.86fr); gap:9mm; align-items:start; padding-bottom:4mm; border-bottom:2px solid #255f54; }
+  .company { color:#183d36; font-size:16px; font-weight:700; letter-spacing:.03em; }
+  .companyMeta { margin-top:2mm; color:#465467; font-size:8.5px; line-height:1.45; }
+  .docBox { border:1px solid #b9c7c4; border-radius:3mm; overflow:hidden; }
+  .docBox h3 { margin:0; padding:2mm 3mm; background:#255f54; color:#fff; font-size:8px; letter-spacing:.09em; text-transform:uppercase; }
+  .docBoxBody { padding:2mm 3mm; background:#f5f8f7; }
+  .docLine { display:flex; justify-content:space-between; gap:5mm; padding:1mm 0; border-bottom:1px solid #d8e0de; }
+  .docLine:last-child { border-bottom:0; }
+  .docLine span { color:#667382; }
+  .docLine strong { text-align:right; color:#172033; }
+  .title { padding:4mm 0 3mm; text-align:center; }
+  .eyebrow { color:#255f54; font-size:8px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
+  h1 { margin:1.2mm 0 0; font-size:20px; letter-spacing:.04em; }
+  .subtitle { margin-top:1mm; color:#526070; font-size:9px; }
+  .meta { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-bottom:3mm; }
+  .metaBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.2mm 2.6mm; background:#f7faf9; min-height:13mm; }
+  .metaBox span { display:block; color:#6a7683; font-size:7px; letter-spacing:.08em; text-transform:uppercase; }
+  .metaBox strong { display:block; margin-top:1mm; font-size:9.5px; color:#172033; font-weight:600; overflow-wrap:anywhere; }
+  .declaration { margin-bottom:3mm; border-left:3px solid #255f54; background:#f5f8f7; padding:2.2mm 3mm; color:#354353; line-height:1.45; }
+  .trace { margin:0 0 3mm; border:1px solid #d7b65a; border-radius:2.2mm; background:#fff9e8; padding:2mm 2.7mm; color:#75580f; line-height:1.4; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  thead { display:table-header-group; }
+  tr { break-inside:avoid; page-break-inside:avoid; }
+  th { background:#26384b; color:#fff; border:1px solid #26384b; padding:1.7mm 1mm; font-size:6.5px; line-height:1.15; text-transform:uppercase; text-align:center; font-weight:500; }
+  td { border:1px solid #d4dcdf; padding:1.25mm 1mm; font-size:7.4px; line-height:1.18; vertical-align:middle; overflow-wrap:anywhere; }
+  tbody tr:nth-child(even) td { background:#f8fafb; }
+  td strong { display:block; font-size:7.8px; color:#172033; }
+  .muted { margin-top:.7mm; color:#64748b; font-size:6.6px; }
+  .center { text-align:center; }
+  .qty { text-align:center; font-size:8.5px; font-weight:700; color:#255f54; }
+  .money { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .strongValue { font-weight:700; color:#183d36; }
+  .code { font-family:"Courier New",monospace; text-align:center; font-size:6.6px; }
+  .source { font-size:6.5px; color:#435164; }
+  th:nth-child(1),td:nth-child(1){width:5mm}
+  th:nth-child(2),td:nth-child(2){width:41mm}
+  th:nth-child(3),td:nth-child(3){width:18mm}
+  th:nth-child(4),td:nth-child(4){width:14mm}
+  th:nth-child(5),td:nth-child(5){width:23mm}
+  th:nth-child(6),td:nth-child(6){width:8mm}
+  th:nth-child(7),td:nth-child(7){width:9mm}
+  th:nth-child(8),td:nth-child(8){width:18mm}
+  th:nth-child(9),td:nth-child(9){width:18mm}
+  th:nth-child(10),td:nth-child(10){width:18mm}
+  th:nth-child(11),td:nth-child(11){width:9mm}
+  th:nth-child(12),td:nth-child(12){width:19mm}
+  th:nth-child(13),td:nth-child(13){width:20mm}
+  th:nth-child(14),td:nth-child(14){width:19mm}
+  th:nth-child(15),td:nth-child(15){width:16mm}
+  th:nth-child(16),td:nth-child(16){width:28mm}
+  tfoot td { background:#eef4f2; border-top:2px solid #255f54; font-weight:700; }
+  .totalLabel { text-align:right; color:#183d36; letter-spacing:.07em; }
+  .retailTotal { background:#255f54 !important; color:#fff; font-size:8.5px; }
+  .summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-top:3mm; }
+  .summaryBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.3mm 2.7mm; background:#f7faf9; }
+  .summaryBox span { display:block; color:#6a7683; font-size:7px; text-transform:uppercase; letter-spacing:.07em; }
+  .summaryBox strong { display:block; margin-top:1mm; font-size:11px; color:#172033; }
+  .summaryBox.retail { border-color:#255f54; background:#eef7f4; }
+  .summaryBox.retail strong { color:#183d36; }
+  .signatures { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4mm; margin-top:10mm; break-inside:avoid; }
+  .signature { min-height:24mm; border:1px solid #ccd7d4; border-radius:2.5mm; padding:2.5mm; }
+  .signatureTitle { color:#255f54; font-size:7.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+  .signatureLine { margin-top:8mm; border-top:1px solid #667382; padding-top:1.2mm; color:#667382; font-size:7px; text-align:center; }
+  .signatureDate { margin-top:2mm; color:#7b8793; font-size:7px; text-align:center; }
+  .footer { display:flex; justify-content:space-between; gap:8mm; margin-top:4mm; padding-top:2mm; border-top:1px solid #d7dfdd; color:#7b8793; font-size:7px; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="top">
+    <div>
+      <div class="company">TITAN EURO-COM SRL</div>
+      <div class="companyMeta">
+        <div><strong>CUI:</strong> RO17495362</div>
+        <div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div>
+        <div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div>
+      </div>
+    </div>
+    <div class="docBox">
+      <h3>Datele documentului</h3>
+      <div class="docBoxBody">
+        <div class="docLine"><span>Nr. document</span><strong>${officialHtmlEscape(doc.documentNumber)}</strong></div>
+        <div class="docLine"><span>Data documentului</span><strong>${officialHtmlEscape(doc.documentDate || "-")}</strong></div>
+        <div class="docLine"><span>Cod formular</span><strong>14-3-4A</strong></div>
+        <div class="docLine"><span>Întocmit de</span><strong>${officialHtmlEscape(doc.actor || "-")}</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="title">
+    <div class="eyebrow">Document intern de gestiune</div>
+    <h1>BON DE CONSUM</h1>
+    <div class="subtitle">Scoatere din gestiune / consum pe baza unor ieșiri de stoc documentate</div>
+  </div>
+
+  <div class="meta">
+    <div class="metaBox"><span>Gestiune</span><strong>${officialHtmlEscape(doc.locationName || "-")}</strong></div>
+    <div class="metaBox"><span>Referință client</span><strong>${officialHtmlEscape(doc.customerName || "-")}${doc.customerPhone ? `<br>${officialHtmlEscape(doc.customerPhone)}` : ""}</strong></div>
+    <div class="metaBox"><span>Primitor</span><strong>${officialHtmlEscape(doc.recipientName || doc.customerName || "-")}</strong></div>
+    <div class="metaBox"><span>Scop / destinație</span><strong>${officialHtmlEscape(doc.purpose || "-")}</strong></div>
+  </div>
+
+  <div class="declaration">Prin prezentul document se consemnează consumul și scoaterea din gestiune a produselor enumerate mai jos. Valorile de achiziție și de vânzare sunt preluate din instantaneele istorice salvate la momentul ieșirii inițiale din stoc, fără recalculare după prețurile curente.</div>
+  <div class="trace"><strong>Trasabilitate:</strong> documentul reîncadrează ieșiri de stoc deja înregistrate în sistem și nu dublează diminuarea cantitativă. Prețul de achiziție este snapshot-ul istoric al liniei de vânzare; prețul de vânzare este lista completă istorică, înainte de reducerea acordată clientului.${doc.note ? ` Observații: ${officialHtmlEscape(doc.note)}` : ""}</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. RON</th><th>P.U. vânzare listă RON</th><th>P.U. efectiv RON</th>
+        <th>TVA</th><th>Val. achiz. RON</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
+      </tr>
+    </thead>
+    <tbody>${rows || `<tr><td colspan="16" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" class="totalLabel">TOTAL</td>
+        <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
+        <td colspan="4"></td>
+        <td class="money">${officialNumber(doc.purchaseTotal)}</td>
+        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
+        <td class="money">${officialNumber(doc.actualSaleTotal)}</td>
+        <td class="money">${officialNumber(doc.discountTotal)}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="summary">
+    <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
+    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare efectiv înregistrată</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Reducere istorică</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+  </div>
+
+  <div class="signatures">
+    <div class="signature"><div class="signatureTitle">Întocmit de / Administrator</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+    <div class="signature"><div class="signatureTitle">Gestionar</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+    <div class="signature"><div class="signatureTitle">Predat către / Primitor</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+    <div class="signature"><div class="signatureTitle">Verificat / Contabilitate</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+  </div>
+
+  <div class="footer">
+    <span>Document generat din sistemul AllInFashion.</span>
+    <span>${officialHtmlEscape(doc.documentNumber)} • Generat: ${officialHtmlEscape(generated)}</span>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+function printOfficialBonConsum(detail: BonConsumDocumentDetail) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "0";
+  iframe.style.width = "297mm";
+  iframe.style.height = "210mm";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  document.body.appendChild(iframe);
+  const win = iframe.contentWindow;
+  const iframeDoc = win?.document;
+  if (!win || !iframeDoc) {
+    iframe.remove();
+    throw new Error("A böngésző nem engedte megnyitni a Bon de consum nyomtatási keretét.");
+  }
+  let cleaned = false;
+  let timer: number | undefined;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (timer) window.clearTimeout(timer);
+    iframe.remove();
+  };
+  win.addEventListener("afterprint", cleanup, { once: true });
+  iframeDoc.open();
+  iframeDoc.write(buildOfficialBonConsumHtml(detail));
+  iframeDoc.title = `bon_de_consum_${officialFileSafe(detail.document.documentNumber)}.pdf`;
+  iframeDoc.close();
+  win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
+    win.focus();
+    win.print();
+    timer = window.setTimeout(cleanup, 60000);
+  }));
+}
+
 function CustomerPurchasesModal({
+  customerId,
   customerName,
   storeName,
   storeCode,
+  location,
   year,
   sales,
+  consumptionDocuments,
   loading,
   error,
+  canManage,
+  onReload,
   onClose,
 }: {
+  customerId: string;
   customerName: string;
   storeName: string;
   storeCode?: string | null;
+  location: string;
   year: number;
   sales: AdminCustomerSale[];
+  consumptionDocuments: BonConsumDocumentSummary[];
   loading: boolean;
   error: string;
+  canManage: boolean;
+  onReload: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [bonMode, setBonMode] = useState(false);
+  const [selectedBonLineIds, setSelectedBonLineIds] = useState<Set<string>>(new Set());
+  const [bonFormOpen, setBonFormOpen] = useState(false);
+  const [bonBusy, setBonBusy] = useState(false);
+  const [bonError, setBonError] = useState("");
+  const [bonDocumentDate, setBonDocumentDate] = useState(bucharestIsoToday());
+  const [bonPurpose, setBonPurpose] = useState("");
+  const [bonRecipient, setBonRecipient] = useState(customerName);
+  const [bonNote, setBonNote] = useState("");
+  const [bonPrintBusyId, setBonPrintBusyId] = useState("");
+
   const orderedSales = useMemo(
     () => [...sales].sort((a, b) => new Date(String(b.soldAt || 0)).getTime() - new Date(String(a.soldAt || 0)).getTime()),
     [sales],
@@ -676,14 +1077,133 @@ function CustomerPurchasesModal({
     balance: 0,
   }), [orderedSales]);
 
+  const bonCandidates = useMemo(() => orderedSales.flatMap((sale) =>
+    (sale.lines || []).map((line) => ({
+      sale,
+      line,
+      eligibility: bonConsumLineEligibility(sale, line),
+    }))
+  ), [orderedSales]);
+
+  const eligibleBonCandidates = useMemo(
+    () => bonCandidates.filter((row) => row.eligibility.eligible),
+    [bonCandidates],
+  );
+
+  const selectedBonRows = useMemo(
+    () => bonCandidates.filter((row) => selectedBonLineIds.has(row.line.id)),
+    [bonCandidates, selectedBonLineIds],
+  );
+
+  const selectedBonTotals = useMemo(() => selectedBonRows.reduce((acc, row) => {
+    const qty = numberValue(row.line.quantity);
+    acc.lines += 1;
+    acc.qty += qty;
+    acc.purchase += qty * numberValue(row.line.buyPriceSnapshot);
+    acc.retail += qty * numberValue(row.line.listPrice);
+    acc.actual += numberValue(row.line.lineTotal);
+    acc.discount += numberValue(row.line.discountAmount);
+    return acc;
+  }, { lines: 0, qty: 0, purchase: 0, retail: 0, actual: 0, discount: 0 }), [selectedBonRows]);
+
+  useEffect(() => {
+    setBonRecipient(customerName);
+  }, [customerName]);
+
+  useEffect(() => {
+    const validIds = new Set(bonCandidates.filter((row) => row.eligibility.eligible).map((row) => row.line.id));
+    setSelectedBonLineIds((current) => new Set(Array.from(current).filter((id) => validIds.has(id))));
+  }, [bonCandidates]);
+
+  function toggleBonMode() {
+    setBonMode((current) => {
+      const next = !current;
+      if (!next) {
+        setSelectedBonLineIds(new Set());
+        setBonError("");
+      }
+      return next;
+    });
+  }
+
+  function toggleBonLine(lineId: string) {
+    setSelectedBonLineIds((current) => {
+      const next = new Set(current);
+      if (next.has(lineId)) next.delete(lineId);
+      else next.add(lineId);
+      return next;
+    });
+  }
+
+  function selectAllBonLines() {
+    const all = eligibleBonCandidates.map((row) => row.line.id);
+    const allSelected = all.length > 0 && all.every((id) => selectedBonLineIds.has(id));
+    setSelectedBonLineIds(allSelected ? new Set() : new Set(all));
+  }
+
+  async function printArchivedBonConsum(documentId: string) {
+    if (!documentId || bonPrintBusyId) return;
+    setBonPrintBusyId(documentId);
+    setBonError("");
+    try {
+      const response = await apiAdminGetBonConsum(documentId);
+      printOfficialBonConsum({ document: response.document, lines: response.lines || [] });
+    } catch (caught) {
+      setBonError(caught instanceof Error ? caught.message : "A Bon de consum PDF nem tölthető be.");
+    } finally {
+      setBonPrintBusyId("");
+    }
+  }
+
+  async function createBonConsum() {
+    if (bonBusy) return;
+    if (!selectedBonRows.length) {
+      setBonError("Legalább egy terméksort válassz ki.");
+      return;
+    }
+    if (!bonDocumentDate) {
+      setBonError("A dokumentum dátuma kötelező.");
+      return;
+    }
+    if (!bonPurpose.trim()) {
+      setBonError("A felhasználási cél / indok kötelező.");
+      return;
+    }
+
+    setBonBusy(true);
+    setBonError("");
+    try {
+      const response = await apiAdminCreateBonConsum(customerId, location, {
+        documentDate: bonDocumentDate,
+        purpose: bonPurpose.trim(),
+        recipientName: bonRecipient.trim() || customerName,
+        note: bonNote.trim() || null,
+        lineIds: selectedBonRows.map((row) => row.line.id),
+      });
+
+      printOfficialBonConsum({ document: response.document, lines: response.lines || [] });
+      setBonFormOpen(false);
+      setBonMode(false);
+      setSelectedBonLineIds(new Set());
+      setBonPurpose("");
+      setBonNote("");
+      setBonDocumentDate(bucharestIsoToday());
+      await onReload();
+    } catch (caught) {
+      setBonError(caught instanceof Error ? caught.message : "A Bon de consum létrehozása nem sikerült.");
+    } finally {
+      setBonBusy(false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-[485] grid place-items-center bg-slate-950/88 px-3 py-4 backdrop-blur-md"
       onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
-        if (event.currentTarget === event.target) onClose();
+        if (event.currentTarget === event.target && !bonBusy) onClose();
       }}
     >
-      <section className="flex max-h-[94vh] w-full max-w-[1220px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/32 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
+      <section className="flex max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/32 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
         <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#285d60] px-4 py-4 sm:px-5">
           <div className="flex min-w-0 items-start gap-3">
             <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.07] text-[#d7fffd]">
@@ -700,9 +1220,25 @@ function CustomerPurchasesModal({
               </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1]" aria-label="Vásárlások bezárása">
-            <X size={18} />
-          </button>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {canManage ? (
+              <button
+                type="button"
+                onClick={toggleBonMode}
+                disabled={loading || bonBusy}
+                className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white transition disabled:opacity-45 ${
+                  bonMode
+                    ? "border-[#bff8f5]/55 bg-[#2a8d8b] shadow-[0_8px_20px_rgba(42,141,139,0.24)]"
+                    : "border-white/18 bg-black/10 hover:border-[#9be9e5]/38 hover:bg-white/[0.08]"
+                }`}
+              >
+                <FileCheck2 size={15} /> {bonMode ? "Kijelölés befejezése" : "Bon de consum"}
+              </button>
+            ) : null}
+            <button type="button" onClick={onClose} disabled={bonBusy} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1] disabled:opacity-45" aria-label="Vásárlások bezárása">
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
@@ -729,6 +1265,68 @@ function CustomerPurchasesModal({
             </div>
           </div>
 
+          {bonMode ? (
+            <section className="mt-3 overflow-hidden rounded-[22px] border border-[#9be9e5]/35 bg-gradient-to-r from-[#214c52] to-[#293548] shadow-[0_12px_28px_rgba(15,23,42,0.18)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#cffffd]/60">Admin • Bon de consum</p>
+                  <p className="mt-1 text-sm text-white">Jelöld ki azokat a még ki nem fizetett terméksorokat, amelyeket hivatalos fogyasztási bizonylatra vezetsz át.</p>
+                </div>
+                <button type="button" onClick={selectAllBonLines} disabled={!eligibleBonCandidates.length} className="h-9 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-3 text-xs text-[#d7fffd] disabled:opacity-40">
+                  {eligibleBonCandidates.length > 0 && eligibleBonCandidates.every((row) => selectedBonLineIds.has(row.line.id)) ? "Kijelölés törlése" : `Mind kijelöl (${eligibleBonCandidates.length})`}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 border-t border-white/10 px-4 py-3 sm:grid-cols-4">
+                <div><p className="text-[8px] uppercase text-white/38">Kijelölve</p><p className="mt-1 text-base text-white">{integer(selectedBonTotals.lines)} sor • {integer(selectedBonTotals.qty)} db</p></div>
+                <div><p className="text-[8px] uppercase text-white/38">Beszerzési érték</p><p className="mt-1 text-base text-white">{money(selectedBonTotals.purchase)}</p></div>
+                <div><p className="text-[8px] uppercase text-white/38">Teljes eladási érték</p><p className="mt-1 text-base text-[#d7fffd]">{money(selectedBonTotals.retail)}</p></div>
+                <div><p className="text-[8px] uppercase text-white/38">Eredeti kedvezmény</p><p className="mt-1 text-base text-white">{money(selectedBonTotals.discount)}</p></div>
+              </div>
+            </section>
+          ) : null}
+
+          {consumptionDocuments.length ? (
+            <section className="mt-3 overflow-hidden rounded-[22px] border border-[#9be9e5]/20 bg-[#293548]">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Hivatalos akták</p>
+                  <h4 className="mt-0.5 text-sm text-white">Bon de consum archívum • {year}</h4>
+                </div>
+                <span className="rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#d7fffd]">{consumptionDocuments.length} bizonylat</span>
+              </div>
+              <div className="grid gap-2 p-3 lg:grid-cols-2">
+                {consumptionDocuments.map((doc) => (
+                  <div key={doc.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#344154] p-3">
+                    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#9be9e5]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><FileCheck2 size={17} /></span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-white">{doc.documentNumber}</span>
+                        <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/48">{doc.documentDate || "-"}</span>
+                      </div>
+                      <p className="mt-1 truncate text-[10px] text-white/50" title={doc.purpose}>{doc.purpose}</p>
+                      <p className="mt-1 text-[10px] text-white/42">{integer(doc.totalQty)} db • vétel: {money(doc.purchaseTotal)} • teljes eladási: {money(doc.retailTotal)}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void printArchivedBonConsum(doc.id)}
+                      disabled={Boolean(bonPrintBusyId)}
+                      className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-3 text-[11px] text-white transition hover:bg-white/[0.09] disabled:opacity-45"
+                    >
+                      {bonPrintBusyId === doc.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />} PDF
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {bonError ? (
+            <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-200/30 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{bonError}</span>
+            </div>
+          ) : null}
+
           {error ? (
             <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-200/30 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">
               <AlertTriangle size={16} className="mt-0.5 shrink-0" />
@@ -753,8 +1351,8 @@ function CustomerPurchasesModal({
                   : sale.locationCode === "magazin_targu_secuiesc"
                     ? "Kézdivásárhely"
                     : (sale.locationName || storeName);
-                const paymentMethods = Array.from(
-                  new Set((sale.payments || []).map((payment) => String(payment?.method || "").trim()).filter(Boolean)),
+                const paymentMethods: string[] = Array.from(
+                  new Set<string>((sale.payments || []).map((payment) => String(payment?.method || "").trim()).filter(Boolean)),
                 );
 
                 return (
@@ -799,8 +1397,39 @@ function CustomerPurchasesModal({
                     <div className="divide-y divide-white/[0.07]">
                       {(sale.lines || []).map((line) => {
                         const hasDiscount = numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005;
+                        const eligibility = bonConsumLineEligibility(sale, line);
+                        const bonSelected = selectedBonLineIds.has(line.id);
                         return (
-                          <div key={line.id} className="grid gap-3 px-4 py-3.5 transition hover:bg-white/[0.025] sm:grid-cols-[78px_minmax(0,1fr)] lg:grid-cols-[78px_minmax(0,1fr)_310px] lg:items-center">
+                          <div
+                            key={line.id}
+                            className={`grid gap-3 px-4 py-3.5 transition hover:bg-white/[0.025] ${
+                              bonMode
+                                ? "sm:grid-cols-[42px_78px_minmax(0,1fr)] lg:grid-cols-[42px_78px_minmax(0,1fr)_310px]"
+                                : "sm:grid-cols-[78px_minmax(0,1fr)] lg:grid-cols-[78px_minmax(0,1fr)_310px]"
+                            } ${bonSelected ? "bg-[#2a8d8b]/12 ring-1 ring-inset ring-[#9be9e5]/32" : ""}`}
+                          >
+                            {bonMode ? (
+                              <label
+                                className={`flex min-h-[78px] items-center justify-center rounded-xl border ${
+                                  eligibility.eligible
+                                    ? bonSelected
+                                      ? "border-[#bff8f5]/55 bg-[#2a8d8b]"
+                                      : "border-[#9be9e5]/24 bg-[#2a8d8b]/10"
+                                    : "border-white/8 bg-black/10 opacity-50"
+                                }`}
+                                title={eligibility.eligible ? "Kijelölés Bon de consumhoz" : eligibility.reason}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={bonSelected}
+                                  disabled={!eligibility.eligible}
+                                  onChange={() => toggleBonLine(line.id)}
+                                  className="h-5 w-5 accent-[#2a8d8b]"
+                                  aria-label={eligibility.eligible ? `${line.productTitle || "Termék"} kijelölése` : eligibility.reason}
+                                />
+                              </label>
+                            ) : null}
+
                             <WarehouseProductImage
                               src={line.imageUrl}
                               alt={line.productTitle || "Termékkép"}
@@ -812,6 +1441,7 @@ function CustomerPurchasesModal({
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="min-w-0 text-[15px] leading-snug text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
                                 {line.brandName ? <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/56">{line.brandName}</span> : null}
+                                {bonMode && !eligibility.eligible ? <span className="rounded-full border border-rose-200/22 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-50">{eligibility.reason}</span> : null}
                               </div>
 
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -829,11 +1459,17 @@ function CustomerPurchasesModal({
                                 <span className="rounded-lg border border-white/12 bg-[#293548] px-2.5 py-1.5 text-[11px] text-white/82">Darab: <strong className="font-normal text-white">{integer(line.quantity)}</strong></span>
                               </div>
 
-                              <div className="mt-2.5 grid max-w-[650px] gap-2 sm:grid-cols-2">
+                              <div className="mt-2.5 grid max-w-[760px] gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                 {line.productCode ? (
                                   <div className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2">
                                     <span className="block text-[9px] uppercase tracking-[0.1em] text-white/46">Termékkód</span>
                                     <strong className="mt-1 block break-all font-mono text-[12px] font-normal leading-snug text-white/92">{line.productCode}</strong>
+                                  </div>
+                                ) : null}
+                                {line.snCod ? (
+                                  <div className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2">
+                                    <span className="block text-[9px] uppercase tracking-[0.1em] text-white/46">S/N/COD</span>
+                                    <strong className="mt-1 block break-all font-mono text-[12px] font-normal leading-snug text-white/92">{line.snCod}</strong>
                                   </div>
                                 ) : null}
                                 {line.barcode ? (
@@ -844,9 +1480,16 @@ function CustomerPurchasesModal({
                                 ) : null}
                               </div>
 
-                              <div className="mt-2.5 inline-flex items-center gap-2.5 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/20 px-3 py-2 text-[12px] text-[#d7fffd]">
-                                <span className="font-medium text-[#bff8f5]">Vásárolva</span>
-                                <strong className="font-mono text-[12px] font-normal text-white">{formatDateTime(sale.soldAt)}</strong>
+                              <div className="mt-2.5 flex flex-wrap gap-2">
+                                <span className="inline-flex items-center gap-2.5 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/20 px-3 py-2 text-[12px] text-[#d7fffd]">
+                                  <span className="font-medium text-[#bff8f5]">Vásárolva</span>
+                                  <strong className="font-mono text-[12px] font-normal text-white">{formatDateTime(sale.soldAt)}</strong>
+                                </span>
+                                {line.buyPriceSnapshot !== null && line.buyPriceSnapshot !== undefined ? (
+                                  <span className="inline-flex items-center rounded-xl border border-white/12 bg-[#293548] px-3 py-2 text-[11px] text-white/72">
+                                    Bevételi / vételár snapshot: <strong className="ml-1 font-normal text-white">{money(line.buyPriceSnapshot)}</strong>
+                                  </span>
+                                ) : null}
                               </div>
                             </div>
 
@@ -889,10 +1532,96 @@ function CustomerPurchasesModal({
           ) : null}
         </div>
 
-        <footer className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
-          <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+          {bonMode ? (
+            <>
+              <div className="min-w-0">
+                <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bon de consum kijelölés</p>
+                <p className="mt-1 text-sm text-white">
+                  {integer(selectedBonTotals.lines)} sor • {integer(selectedBonTotals.qty)} db •
+                  <span className="ml-1 text-[#d7fffd]">teljes eladási érték {money(selectedBonTotals.retail)}</span>
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={toggleBonMode} disabled={bonBusy} className={neutralButton}><X size={16} /> Mégse</button>
+                <button type="button" onClick={() => { setBonError(""); setBonFormOpen(true); }} disabled={!selectedBonRows.length || bonBusy} className={primaryButton}><FileCheck2 size={16} /> Bon de consum készítése</button>
+              </div>
+            </>
+          ) : (
+            <div className="ml-auto">
+              <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
+            </div>
+          )}
         </footer>
       </section>
+
+      {bonFormOpen ? (
+        <div
+          className="fixed inset-0 z-[530] grid place-items-center bg-slate-950/82 px-3 py-4 backdrop-blur-md"
+          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+            if (event.currentTarget === event.target && !bonBusy) setBonFormOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[780px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_34px_100px_rgba(0,0,0,0.64)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#233044] via-[#28545b] to-[#2a8d8b] px-4 py-4">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.08] text-[#d7fffd]"><FileCheck2 size={20} /></span>
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-white/50">Hivatalos készletbizonylat</p>
+                  <h3 className="mt-1 text-xl text-white">Bon de consum • 14-3-4A</h3>
+                  <p className="mt-1 text-xs text-white/55">{customerName} • {storeName}</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white disabled:opacity-45"><X size={17} /></button>
+            </header>
+
+            <div className="space-y-3 p-4">
+              {bonError ? <div className="flex items-start gap-2 rounded-2xl border border-rose-200/28 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><span>{bonError}</span></div> : null}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1.5 text-xs text-white/62">
+                  Dokumentum dátuma
+                  <input type="date" value={bonDocumentDate} onChange={(event) => setBonDocumentDate(event.target.value)} className={`${control} w-full`} />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/62">
+                  Primitor / átvevő
+                  <input value={bonRecipient} onChange={(event) => setBonRecipient(event.target.value)} className={`${control} w-full`} placeholder="Név" />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/62 sm:col-span-2">
+                  Scop / felhasználási cél
+                  <input value={bonPurpose} onChange={(event) => setBonPurpose(event.target.value)} className={`${control} w-full`} placeholder="pl. protocol, reprezentare, consum intern..." autoFocus />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/62 sm:col-span-2">
+                  Megjegyzés
+                  <textarea value={bonNote} onChange={(event) => setBonNote(event.target.value)} className="min-h-[82px] rounded-xl border border-white/16 bg-[#293548] px-3 py-2 text-sm text-white outline-none focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15" placeholder="Opcionális, csak a dokumentumhoz tartozó megjegyzés" />
+                </label>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-4">
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Kijelölve</p><p className="mt-1.5 text-lg text-white">{integer(selectedBonTotals.qty)} db</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Beszerzési érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.purchase)}</p></div>
+                <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b]/15 p-3"><p className="text-[8px] uppercase text-[#cffffd]/60">Teljes eladási érték</p><p className="mt-1.5 text-lg text-[#efffff]">{money(selectedBonTotals.retail)}</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Eredeti érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.actual)}</p></div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-200/22 bg-amber-400/8 px-3.5 py-3 text-xs leading-relaxed text-amber-50/82">
+                <strong className="font-normal text-amber-50">Fontos:</strong> a kijelölt hiteles terméksorok kikerülnek a kliens tartozásából. A készletet a rendszer nem vonja le még egyszer, mert az eredeti eladáskor már kiment; az eredeti készletmozgást Bon de consum mozgássá minősíti át. Ha vételár-snapshot, listaár vagy egyértelmű eredeti készletmozgás hiányzik, a backend leállítja a műveletet, nem talál ki adatot.
+              </div>
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
+              <span className="text-[10px] text-white/42">Véglegesítés után BC sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className={neutralButton}>Mégse</button>
+                <button type="button" onClick={() => void createBonConsum()} disabled={bonBusy || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
+                  {bonBusy ? <Loader2 size={16} className="animate-spin" /> : <FileCheck2 size={16} />}
+                  {bonBusy ? "Véglegesítés..." : "Véglegesítés + PDF"}
+                </button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -933,6 +1662,7 @@ function CustomerDetailModal({
   const [purchasesBusy, setPurchasesBusy] = useState(false);
   const [purchasesError, setPurchasesError] = useState("");
   const [purchaseSales, setPurchaseSales] = useState<AdminCustomerSale[]>([]);
+  const [purchaseConsumptionDocuments, setPurchaseConsumptionDocuments] = useState<BonConsumDocumentSummary[]>([]);
 
   const activeStore = useMemo(() => {
     return editableStores.find((store) => `${store.locationId || store.locationCode}:${store.customerId}` === activeStoreKey)
@@ -980,6 +1710,7 @@ function CustomerDetailModal({
     setPurchasesOpen(false);
     setPurchasesError("");
     setPurchaseSales([]);
+    setPurchaseConsumptionDocuments([]);
     void loadLiveCustomer();
   }, [activeStoreKey]);
 
@@ -1059,17 +1790,26 @@ function CustomerDetailModal({
   const selectedOpenSales = liveCustomer ? numberValue(liveCustomer.openSales) : numberValue(item.currentOpenSales);
   const deleteBlocked = selectedOpenBalance > 0.005;
 
+  async function reloadPurchases() {
+    if (!activeCustomerId || !activeLocation) return null;
+    const response = await apiAdminCustomerPurchases(activeCustomerId, activeLocation, year);
+    setPurchaseSales(Array.isArray(response.sales) ? response.sales : []);
+    setPurchaseConsumptionDocuments(Array.isArray(response.consumptionDocuments) ? response.consumptionDocuments : []);
+    return response;
+  }
+
   async function openPurchases() {
     if (!activeCustomerId || !activeLocation) return;
     setPurchasesOpen(true);
     setPurchasesBusy(true);
     setPurchasesError("");
     setPurchaseSales([]);
+    setPurchaseConsumptionDocuments([]);
     try {
-      const response = await apiAdminCustomerPurchases(activeCustomerId, activeLocation, year);
-      setPurchaseSales(Array.isArray(response.sales) ? response.sales : []);
+      await reloadPurchases();
     } catch (caught) {
       setPurchaseSales([]);
+      setPurchaseConsumptionDocuments([]);
       setPurchasesError(caught instanceof Error ? caught.message : "A vásárlási előzmények nem tölthetők be.");
     } finally {
       setPurchasesBusy(false);
@@ -1417,13 +2157,30 @@ function CustomerDetailModal({
 
       {purchasesOpen ? (
         <CustomerPurchasesModal
+          customerId={activeCustomerId}
           customerName={displayName}
           storeName={activeStoreName}
           storeCode={activeStore?.locationCode}
+          location={activeLocation}
           year={year}
           sales={purchaseSales}
+          consumptionDocuments={purchaseConsumptionDocuments}
           loading={purchasesBusy}
           error={purchasesError}
+          canManage={canManage}
+          onReload={async () => {
+            setPurchasesBusy(true);
+            setPurchasesError("");
+            try {
+              await reloadPurchases();
+              await loadLiveCustomer();
+              await onChanged(`Bon de consum rögzítve • ${displayName} • ${activeStoreName}.`);
+            } catch (caught) {
+              setPurchasesError(caught instanceof Error ? caught.message : "A Bon de consum utáni frissítés nem sikerült.");
+            } finally {
+              setPurchasesBusy(false);
+            }
+          }}
           onClose={() => setPurchasesOpen(false)}
         />
       ) : null}
