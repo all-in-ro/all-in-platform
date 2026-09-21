@@ -448,6 +448,27 @@ function paymentMethodLabel(value?: string | null) {
   return value ? String(value) : "–";
 }
 
+function saleSettledAt(sale: AdminCustomerSale) {
+  if (String(sale.paymentStatus || "").toLowerCase() !== "paid") return null;
+  if (numberValue(sale.balanceDue) > 0.005) return null;
+
+  let latestPaidAt: string | null = null;
+  let latestTime = -Infinity;
+
+  for (const payment of sale.payments || []) {
+    const method = String(payment?.method || "").trim().toLowerCase();
+    if (method === "credit" || numberValue(payment?.amount) <= 0.005 || !payment?.paidAt) continue;
+
+    const time = new Date(payment.paidAt).getTime();
+    if (!Number.isFinite(time) || time <= latestTime) continue;
+
+    latestTime = time;
+    latestPaidAt = payment.paidAt;
+  }
+
+  return latestPaidAt;
+}
+
 function safeColorHex(value?: string | null) {
   const raw = String(value || "").trim();
   if (/^#[0-9a-f]{3}$/i.test(raw) || /^#[0-9a-f]{6}$/i.test(raw) || /^#[0-9a-f]{8}$/i.test(raw)) return raw;
@@ -1519,6 +1540,7 @@ function CustomerPurchasesModal({
                       .filter((method) => Boolean(method) && method.toLowerCase() !== "credit"),
                   ),
                 );
+                const settledAt = saleSettledAt(sale);
 
                 return (
                   <article key={sale.id} className="overflow-hidden rounded-[24px] border border-white/12 bg-[#344154] shadow-[0_16px_34px_rgba(15,23,42,0.16)]">
@@ -1670,6 +1692,13 @@ function CustomerPurchasesModal({
                                   <span className="font-medium text-[#bff8f5]">Vásárolva</span>
                                   <strong className="font-mono text-[12px] font-normal text-white">{formatDateTime(sale.soldAt)}</strong>
                                 </span>
+                                {settledAt ? (
+                                  <span className="inline-flex items-center gap-2 rounded-xl border border-emerald-200/32 bg-emerald-500/14 px-3 py-2 text-[12px] text-emerald-50">
+                                    <CheckCircle2 size={14} className="shrink-0 text-emerald-200" />
+                                    <span className="font-medium text-emerald-100">Kifizetve</span>
+                                    <strong className="font-mono text-[12px] font-normal text-white">{formatDateTime(settledAt)}</strong>
+                                  </span>
+                                ) : null}
                                 {line.buyPriceSnapshot !== null && line.buyPriceSnapshot !== undefined ? (
                                   <span className="inline-flex items-center rounded-xl border border-white/12 bg-[#293548] px-3 py-2 text-[11px] text-white/72">
                                     Eladáskori vételár: <strong className="ml-1 font-normal text-white">{money(line.buyPriceSnapshot)}</strong>
