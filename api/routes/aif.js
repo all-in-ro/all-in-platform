@@ -20624,6 +20624,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return {
       id: String(row.id || ""),
       documentNumber: row.document_number || "",
+      series: row.series || "BC",
+      sequenceNumber: aifNumber(row.sequence_number),
+      sequenceYear: aifNumber(row.sequence_year),
       documentDate: row.document_date ? String(row.document_date).slice(0, 10) : null,
       locationId: row.location_id ? String(row.location_id) : null,
       locationCode: row.location_code || null,
@@ -20679,30 +20682,103 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function allocateAifBonConsumDocumentNumber(client) {
+  function cleanAifBonConsumSeries(value, fallback = "BC") {
+    const raw = text(value);
+    const cleaned = raw
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]+/g, "")
+      .slice(0, 20);
+    return cleaned || fallback;
+  }
+
+  function aifBonConsumSettingsResponse(row = {}, yearOverride = null) {
+    const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+    const yearlyReset = row.yearly_reset !== false;
+    const storedYear = Number(row.sequence_year || currentYear);
+    const targetYear = Number(yearOverride || currentYear);
+    const sequenceYear = yearlyReset && storedYear !== targetYear ? targetYear : storedYear;
+    const series = cleanAifBonConsumSeries(row.series || "BC");
+    const nextNumber = yearlyReset && storedYear !== targetYear
+      ? 1
+      : Math.max(1, Number(row.next_number || 1));
+    const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
+    const includeYear = row.include_year !== false;
+    const sequence = String(nextNumber).padStart(digits, "0");
+    return {
+      series,
+      nextNumber,
+      digits,
+      includeYear,
+      yearlyReset,
+      sequenceYear,
+      previewNumber: includeYear ? `${series}/${sequenceYear}/${sequence}` : `${series}/${sequence}`,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedBy: row.updated_by || null,
+    };
+  }
+
+  async function allocateAifBonConsumDocumentNumber(client, options = {}) {
     await ensureAifConsumptionDocumentsSchema();
     const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+    const requestedYear = Number(options.sequenceYear || currentYear);
     const locked = await client.query(`SELECT * FROM aif_consumption_document_settings WHERE id=1 FOR UPDATE`);
     const row = locked.rows[0] || {};
-    let nextNumber = Math.max(1, Number(row.next_number || 1));
-    let sequenceYear = Number(row.sequence_year || currentYear);
-    if (row.yearly_reset !== false && sequenceYear !== currentYear) {
-      nextNumber = 1;
-      sequenceYear = currentYear;
+
+    const requestedSeriesRaw = text(options.series || "");
+    const series = cleanAifBonConsumSeries(requestedSeriesRaw || row.series || "BC", "");
+    if (!series) {
+      throw Object.assign(new Error("A Bon de consum sorozat nem lehet üres."), { statusCode: 400, code: "bon_consum_invalid_series" });
     }
-    const series = cleanAifTransferDocumentSeries(row.series || "BC") || "BC";
+
+    let storedNextNumber = Math.max(1, Number(row.next_number || 1));
+    let storedYear = Number(row.sequence_year || currentYear);
+    if (row.yearly_reset !== false && storedYear !== requestedYear) {
+      storedNextNumber = 1;
+      storedYear = requestedYear;
+    }
+
+    const hasRequestedNumber = options.sequenceNumber !== null && options.sequenceNumber !== undefined && String(options.sequenceNumber).trim() !== "";
+    const requestedNumber = hasRequestedNumber ? Number(options.sequenceNumber) : storedNextNumber;
+    if (!Number.isInteger(requestedNumber) || requestedNumber <= 0 || requestedNumber > 9999999999) {
+      throw Object.assign(new Error("A Bon de consum száma 1 és 9 999 999 999 közötti egész szám lehet."), { statusCode: 400, code: "bon_consum_invalid_sequence_number" });
+    }
+
     const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
-    const sequence = String(nextNumber).padStart(digits, "0");
-    const documentNumber = row.include_year === false
-      ? `${series}/${sequence}`
-      : `${series}/${sequenceYear}/${sequence}`;
+    const includeYear = row.include_year !== false;
+    const sequence = String(requestedNumber).padStart(digits, "0");
+    const documentNumber = includeYear
+      ? `${series}/${requestedYear}/${sequence}`
+      : `${series}/${sequence}`;
+
+    const duplicate = await client.query(
+      `SELECT id FROM aif_consumption_documents WHERE document_number=$1 LIMIT 1`,
+      [documentNumber]
+    );
+    if (duplicate.rowCount) {
+      throw Object.assign(new Error(`A ${documentNumber} Bon de consum sorszám már létezik. Adj meg másik számot.`), {
+        statusCode: 409,
+        code: "bon_consum_document_number_exists",
+      });
+    }
+
     await client.query(
       `UPDATE aif_consumption_document_settings
-       SET next_number=$1, sequence_year=$2, updated_at=now()
+       SET series=$1, next_number=$2, sequence_year=$3, updated_at=now(), updated_by=$4
        WHERE id=1`,
-      [nextNumber + 1, sequenceYear]
+      [series, requestedNumber + 1, requestedYear, text(options.actor || "system") || "system"]
     );
-    return { documentNumber, series, sequenceNumber: nextNumber, sequenceYear };
+
+    return {
+      documentNumber,
+      series,
+      sequenceNumber: requestedNumber,
+      sequenceYear: requestedYear,
+      nextNumber: requestedNumber + 1,
+      digits,
+      includeYear,
+    };
   }
 
   async function loadAifBonConsumDocument(client, id) {
@@ -21687,6 +21763,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     next();
   }
 
+  router.get("/bon-consum/settings", requireAuthed, requireAifAdminOnly, async (_req, res) => {
+    try {
+      await ensureAifConsumptionDocumentsSchema();
+      const result = await pool.query(`SELECT * FROM aif_consumption_document_settings WHERE id=1 LIMIT 1`);
+      res.json({ ok: true, settings: aifBonConsumSettingsResponse(result.rows[0] || {}) });
+    } catch (error) {
+      console.error("AIF bon consum settings failed", error);
+      res.status(500).json({ error: error?.message || "A Bon de consum számozási beállításai nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
   router.get("/bon-consum/:id", requireAuthed, requireAifAdminOnly, async (req, res) => {
     try {
       await ensureAifConsumptionDocumentsSchema();
@@ -21707,6 +21794,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const purpose = text(body.purpose || body.reason || body.scop);
     const recipientName = emptyToNull(body.recipientName || body.recipient_name || body.primitor);
     const note = emptyToNull(body.note || body.notes);
+    const requestedSeries = text(body.series || body.documentSeries || body.document_series);
+    const requestedSequenceNumber = body.sequenceNumber ?? body.sequence_number ?? body.documentNumber ?? body.document_number;
     const rawItems = Array.isArray(body.items)
       ? body.items
       : Array.isArray(body.lineIds)
@@ -21719,6 +21808,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!isUuidText(customerId)) return res.status(400).json({ error: "Érvénytelen kliensazonosító." });
     if (!locationInput) return res.status(400).json({ error: "A készlethely kötelező." });
     if (!purpose) return res.status(400).json({ error: "A Bon de consum felhasználási célja kötelező." });
+    if (!requestedSeries) return res.status(400).json({ error: "A Bon de consum sorozat megadása kötelező." });
+    const parsedSequenceNumber = Number(requestedSequenceNumber);
+    if (!Number.isInteger(parsedSequenceNumber) || parsedSequenceNumber <= 0 || parsedSequenceNumber > 9999999999) {
+      return res.status(400).json({ error: "A Bon de consum száma 1 és 9 999 999 999 közötti egész szám lehet." });
+    }
     if (!lineIds.length) return res.status(400).json({ error: "Legalább egy terméksort válassz ki a Bon de consumhoz." });
     if (lineIds.length > 250) return res.status(400).json({ error: "Egy Bon de consum legfeljebb 250 terméksort tartalmazhat." });
     if (lineIds.some((id) => !isUuidText(id))) return res.status(400).json({ error: "A kijelölt terméksorok között érvénytelen azonosító van." });
@@ -21801,7 +21895,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           throw Object.assign(new Error(`${row.sale_number}: csak lezárt, aktív hiteles eladás vezethető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_sale_not_completed" });
         }
         if (paidSaleIds.has(String(row.sale_id)) || Number(row.paid_total || 0) > 0.005 || !["credit", "unpaid"].includes(String(row.payment_status || ""))) {
-          throw Object.assign(new Error(`${row.sale_number}: ehhez a vásárláshoz már pénzügyi rendezés kapcsolódik, ezért automatikusan nem minősíthető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_sale_has_payment" });
+          throw Object.assign(new Error(`${row.sale_number}: ehhez a vásárláshoz már fizetés kapcsolódik, ezért nem vezethető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_sale_has_payment" });
         }
         if (exchangeLineIds.has(String(row.id))) {
           throw Object.assign(new Error(`${row.sale_number}: a kijelölt terméksorhoz visszáru vagy csere kapcsolódik, ezért nem vezethető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_line_has_exchange" });
@@ -21815,7 +21909,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const actualUnitPrice = toMoney(row.unit_price);
         if (!Number.isInteger(qty) || qty <= 0) throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: érvénytelen eladott mennyiség.`), { statusCode: 409 });
         if (purchaseUnitPrice === null) {
-          throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: nincs eladáskori beszerzésiár-snapshot. Hivatalos Bon de consumhoz nem találunk ki vételárat.`), { statusCode: 409, code: "bon_consum_missing_purchase_price" });
+          throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: hiányzik az eladáskor rögzített vételár. Hivatalos Bon de consumhoz nem találunk ki adatot.`), { statusCode: 409, code: "bon_consum_missing_purchase_price" });
         }
         if (listUnitPrice === null || listUnitPrice <= 0) {
           throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: nincs érvényes teljes eladási listaár. Hivatalos Bon de consumhoz ezt előbb rendezni kell.`), { statusCode: 409, code: "bon_consum_missing_list_price" });
@@ -21842,7 +21936,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [location.id, row.variant_id, String(row.sale_id)]
         );
         if (movementResult.rows.length !== 1) {
-          throw Object.assign(new Error(`${row.sale_number}: a készletkivezetés eredeti mozgása nem azonosítható egyértelműen. Bon de consumot nem gyártunk bizonytalan készlettörténetből.`), { statusCode: 409, code: "bon_consum_stock_movement_ambiguous" });
+          throw Object.assign(new Error(`${row.sale_number}: nem azonosítható egyértelműen, melyik készletmozgás tartozik ehhez az eladáshoz. A Bon de consum ezért nem véglegesíthető.`), { statusCode: 409, code: "bon_consum_stock_movement_ambiguous" });
         }
         const movement = movementResult.rows[0];
         if (Number(movement.qty_delta || 0) !== -qty) {
@@ -21870,8 +21964,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
-      const number = await allocateAifBonConsumDocumentNumber(client);
       const actor = actorFrom(req);
+      const number = await allocateAifBonConsumDocumentNumber(client, {
+        series: requestedSeries,
+        sequenceNumber: parsedSequenceNumber,
+        sequenceYear: Number(documentDate.slice(0, 4)),
+        actor,
+      });
       const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
       const purchaseTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.purchaseValue, 0));
       const retailTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.retailValue, 0));
@@ -21914,6 +22013,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               actualSale: "sale_line_actual_value",
             },
             stockEffect: "reclassified_existing_sale_movement_no_second_stock_decrease",
+            numbering: {
+              series: number.series,
+              sequenceNumber: number.sequenceNumber,
+              sequenceYear: number.sequenceYear,
+              nextNumber: number.nextNumber,
+              source: "admin_manual_start_with_continuation",
+            },
           }),
         ]
       );
