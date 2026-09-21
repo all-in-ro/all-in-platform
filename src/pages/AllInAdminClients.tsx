@@ -776,7 +776,7 @@ function bonConsumLineEligibility(sale: AdminCustomerSale, line: AdminCustomerSa
     return { eligible: false, reason: "Ehhez a vásárláshoz már fizetés kapcsolódik." };
   }
   if (line.buyPriceSnapshot === null || line.buyPriceSnapshot === undefined || !Number.isFinite(Number(line.buyPriceSnapshot))) {
-    return { eligible: false, reason: "Hiányzik az eladáskori beszerzésiár-snapshot." };
+    return { eligible: false, reason: "Hiányzik az eladáskor rögzített vételár." };
   }
   if (numberValue(line.listPrice) <= 0) {
     return { eligible: false, reason: "Hiányzik a teljes eladási listaár." };
@@ -930,14 +930,14 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
     <div class="metaBox"><span>Scop / destinație</span><strong>${officialHtmlEscape(doc.purpose || "-")}</strong></div>
   </div>
 
-  <div class="declaration">Prin prezentul document se consemnează consumul și scoaterea din gestiune a produselor enumerate mai jos. Valorile de achiziție și de vânzare sunt preluate din instantaneele istorice salvate la momentul ieșirii inițiale din stoc, fără recalculare după prețurile curente.</div>
-  <div class="trace"><strong>Trasabilitate:</strong> documentul reîncadrează ieșiri de stoc deja înregistrate în sistem și nu dublează diminuarea cantitativă. Prețul de achiziție este snapshot-ul istoric al liniei de vânzare; prețul de vânzare este lista completă istorică, înainte de reducerea acordată clientului.${doc.note ? ` Observații: ${officialHtmlEscape(doc.note)}` : ""}</div>
+  <div class="declaration">Prin prezentul document se consemnează consumul și scoaterea din gestiune a produselor enumerate mai jos. Valorile de achiziție și de vânzare sunt cele înregistrate la momentul ieșirii inițiale din stoc, fără recalculare după prețurile curente.</div>
+  <div class="trace"><strong>Trasabilitate:</strong> documentul leagă de acest Bon de consum ieșirile de stoc deja înregistrate în sistem și nu dublează diminuarea cantitativă. Prețul de achiziție este cel înregistrat la momentul vânzării, iar prețul de vânzare este prețul de listă înregistrat la acel moment, înainte de reducerea acordată clientului.${doc.note ? ` Observații: ${officialHtmlEscape(doc.note)}` : ""}</div>
 
   <table>
     <thead>
       <tr>
         <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
-        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. RON</th><th>P.U. vânzare listă RON</th><th>P.U. efectiv RON</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. RON</th><th>P.U. vânzare listă RON</th><th>P.U. vânzare efectiv RON</th>
         <th>TVA</th><th>Val. achiz. RON</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
       </tr>
     </thead>
@@ -959,8 +959,8 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   <div class="summary">
     <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
     <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Valoare efectiv înregistrată</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Reducere istorică</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
   </div>
 
   <div class="signatures">
@@ -1301,7 +1301,7 @@ function CustomerPurchasesModal({
                 <div><p className="text-[8px] uppercase text-white/38">Kijelölve</p><p className="mt-1 text-base text-white">{integer(selectedBonTotals.lines)} sor • {integer(selectedBonTotals.qty)} db</p></div>
                 <div><p className="text-[8px] uppercase text-white/38">Beszerzési érték</p><p className="mt-1 text-base text-white">{money(selectedBonTotals.purchase)}</p></div>
                 <div><p className="text-[8px] uppercase text-white/38">Teljes eladási érték</p><p className="mt-1 text-base text-[#d7fffd]">{money(selectedBonTotals.retail)}</p></div>
-                <div><p className="text-[8px] uppercase text-white/38">Eredeti kedvezmény</p><p className="mt-1 text-base text-white">{money(selectedBonTotals.discount)}</p></div>
+                <div><p className="text-[8px] uppercase text-white/38">Eladáskori kedvezmény</p><p className="mt-1 text-base text-white">{money(selectedBonTotals.discount)}</p></div>
               </div>
             </section>
           ) : null}
@@ -1325,7 +1325,7 @@ function CustomerPurchasesModal({
                         <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/48">{doc.documentDate || "-"}</span>
                       </div>
                       <p className="mt-1 truncate text-[10px] text-white/50" title={doc.purpose}>{doc.purpose}</p>
-                      <p className="mt-1 text-[10px] text-white/42">{integer(doc.totalQty)} db • vétel: {money(doc.purchaseTotal)} • teljes eladási: {money(doc.retailTotal)}</p>
+                      <p className="mt-1 text-[10px] text-white/42">{integer(doc.totalQty)} db • beszerzési érték: {money(doc.purchaseTotal)} • teljes eladási érték: {money(doc.retailTotal)}</p>
                     </div>
                     <button
                       type="button"
@@ -1532,7 +1532,7 @@ function CustomerPurchasesModal({
                                 </span>
                                 {line.buyPriceSnapshot !== null && line.buyPriceSnapshot !== undefined ? (
                                   <span className="inline-flex items-center rounded-xl border border-white/12 bg-[#293548] px-3 py-2 text-[11px] text-white/72">
-                                    Bevételi / vételár snapshot: <strong className="ml-1 font-normal text-white">{money(line.buyPriceSnapshot)}</strong>
+                                    Eladáskori vételár: <strong className="ml-1 font-normal text-white">{money(line.buyPriceSnapshot)}</strong>
                                   </span>
                                 ) : null}
                               </div>
@@ -1629,11 +1629,11 @@ function CustomerPurchasesModal({
                   <input type="date" value={bonDocumentDate} onChange={(event) => setBonDocumentDate(event.target.value)} className={`${control} w-full`} />
                 </label>
                 <label className="grid gap-1.5 text-xs text-white/62">
-                  Primitor / átvevő
+                  Átvevő (Primitor)
                   <input value={bonRecipient} onChange={(event) => setBonRecipient(event.target.value)} className={`${control} w-full`} placeholder="Név" />
                 </label>
                 <label className="grid gap-1.5 text-xs text-white/62 sm:col-span-2">
-                  Scop / felhasználási cél
+                  Felhasználási cél (Scop)
                   <input value={bonPurpose} onChange={(event) => setBonPurpose(event.target.value)} className={`${control} w-full`} placeholder="pl. protocol, reprezentare, consum intern..." autoFocus />
                 </label>
                 <label className="grid gap-1.5 text-xs text-white/62 sm:col-span-2">
@@ -1646,16 +1646,16 @@ function CustomerPurchasesModal({
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Kijelölve</p><p className="mt-1.5 text-lg text-white">{integer(selectedBonTotals.qty)} db</p></div>
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Beszerzési érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.purchase)}</p></div>
                 <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b]/15 p-3"><p className="text-[8px] uppercase text-[#cffffd]/60">Teljes eladási érték</p><p className="mt-1.5 text-lg text-[#efffff]">{money(selectedBonTotals.retail)}</p></div>
-                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Eredeti érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.actual)}</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Eladáskor elszámolt érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.actual)}</p></div>
               </div>
 
               <div className="rounded-2xl border border-amber-200/22 bg-amber-400/8 px-3.5 py-3 text-xs leading-relaxed text-amber-50/82">
-                <strong className="font-normal text-amber-50">Fontos:</strong> a kijelölt hiteles terméksorok kikerülnek a kliens tartozásából. A készletet a rendszer nem vonja le még egyszer, mert az eredeti eladáskor már kiment; az eredeti készletmozgást Bon de consum mozgássá minősíti át. Ha vételár-snapshot, listaár vagy egyértelmű eredeti készletmozgás hiányzik, a backend leállítja a műveletet, nem talál ki adatot.
+                <strong className="font-normal text-amber-50">Fontos:</strong> a kijelölt hiteles terméksorok kikerülnek a kliens tartozásából. A készletet a rendszer nem vonja le még egyszer, mert az eredeti eladáskor már kiment; a korábban rögzített készletkivezetést ehhez a Bon de consumhoz kapcsolja. Ha hiányzik az eladáskor rögzített vételár, a listaár, vagy nem azonosítható biztosan az eredeti készletkivezetés, a rendszer nem engedi a véglegesítést.
               </div>
             </div>
 
             <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
-              <span className="text-[10px] text-white/42">Véglegesítés után BC sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
+              <span className="text-[10px] text-white/42">Véglegesítés után Bon de consum sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className={neutralButton}>Mégse</button>
                 <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
@@ -1687,7 +1687,7 @@ function CustomerPurchasesModal({
                     <p className="text-[9px] uppercase tracking-[0.17em] text-white/68">Utolsó megerősítés</p>
                     <h3 className="mt-1 text-xl text-white">Bon de consum véglegesítése</h3>
                     <p className="mt-1 text-xs leading-relaxed text-white/72">
-                      Ez már hivatalos BC sorszámot hoz létre és módosítja a kapcsolódó kliens- és eladási nyilvántartást.
+                      Ez már hivatalos Bon de consum sorszámot hoz létre és módosítja a kapcsolódó kliens- és eladási nyilvántartást.
                     </p>
                   </div>
                 </div>
@@ -1725,7 +1725,7 @@ function CustomerPurchasesModal({
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Kijelölt mennyiség</p>
                   <p className="mt-1.5 text-lg text-white">{integer(selectedBonTotals.lines)} sor • {integer(selectedBonTotals.qty)} db</p>
-                  <p className="mt-1 text-[10px] text-white/44">Primitor: {bonRecipient.trim() || customerName}</p>
+                  <p className="mt-1 text-[10px] text-white/44">Átvevő: {bonRecipient.trim() || customerName}</p>
                 </div>
                 <div className="rounded-2xl border border-[#ff9aa4]/28 bg-[#4a303a] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-rose-100/55">Teljes eladási érték</p>
@@ -1735,7 +1735,7 @@ function CustomerPurchasesModal({
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-[#293548] px-3.5 py-3">
-                <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Scop / felhasználási cél</p>
+                <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Felhasználási cél (Scop)</p>
                 <p className="mt-1.5 text-sm leading-relaxed text-white/86">{bonPurpose.trim()}</p>
                 {bonNote.trim() ? (
                   <>
@@ -1748,7 +1748,7 @@ function CustomerPurchasesModal({
 
               <div className="flex items-start gap-2 rounded-xl border border-amber-200/22 bg-amber-400/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-50/78">
                 <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                <span>A következő piros gomb az egyetlen pont, ahol a rendszer ténylegesen létrehozza a BC bizonylatot és elvégzi az adatbázis-módosításokat.</span>
+                <span>A következő piros gomb az egyetlen pont, ahol a rendszer ténylegesen létrehozza a Bon de consum bizonylatot és elvégzi a szükséges nyilvántartási módosításokat.</span>
               </div>
             </div>
 
