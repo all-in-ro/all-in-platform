@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Settings,
   ShoppingBag,
   SlidersHorizontal,
   Store,
@@ -329,8 +330,6 @@ async function apiAdminCreateBonConsum(
     purpose: string;
     recipientName?: string | null;
     note?: string | null;
-    series: string;
-    sequenceNumber: number;
     lineIds: string[];
   },
 ) {
@@ -353,6 +352,17 @@ async function apiAdminGetBonConsum(documentId: string) {
 async function apiAdminGetBonConsumSettings() {
   return adminClientJson<{ ok: true; settings: BonConsumNumberSettings }>(
     "/api/aif/bon-consum/settings",
+  );
+}
+
+async function apiAdminSaveBonConsumSettings(payload: { series: string; nextNumber: number }) {
+  return adminClientJson<{ ok: true; settings: BonConsumNumberSettings }>(
+    "/api/aif/bon-consum/settings",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
   );
 }
 
@@ -1095,9 +1105,12 @@ function CustomerPurchasesModal({
   const [bonRecipient, setBonRecipient] = useState(customerName);
   const [bonNote, setBonNote] = useState("");
   const [bonNumberSettings, setBonNumberSettings] = useState<BonConsumNumberSettings | null>(null);
-  const [bonSeries, setBonSeries] = useState("BC");
-  const [bonSequenceNumber, setBonSequenceNumber] = useState("1");
   const [bonNumberingBusy, setBonNumberingBusy] = useState(false);
+  const [bonSettingsOpen, setBonSettingsOpen] = useState(false);
+  const [bonSettingsSeries, setBonSettingsSeries] = useState("BC");
+  const [bonSettingsNextNumber, setBonSettingsNextNumber] = useState("1");
+  const [bonSettingsSaving, setBonSettingsSaving] = useState(false);
+  const [bonSettingsError, setBonSettingsError] = useState("");
   const [bonPrintBusyId, setBonPrintBusyId] = useState("");
 
   const orderedSales = useMemo(
@@ -1165,6 +1178,7 @@ function CustomerPurchasesModal({
         setSelectedBonLineIds(new Set());
         setBonFormOpen(false);
         setBonConfirmOpen(false);
+        setBonSettingsOpen(false);
         setBonError("");
       }
       return next;
@@ -1186,22 +1200,66 @@ function CustomerPurchasesModal({
     setSelectedBonLineIds(allSelected ? new Set() : new Set(all));
   }
 
-  async function openBonConsumForm() {
-    if (!selectedBonRows.length || bonBusy) return;
-    setBonError("");
-    setBonFormOpen(true);
+  async function loadBonNumberSettings() {
     setBonNumberingBusy(true);
     try {
       const response = await apiAdminGetBonConsumSettings();
       const settings = response.settings;
       setBonNumberSettings(settings);
-      setBonSeries(String(settings?.series || "BC"));
-      setBonSequenceNumber(String(Math.max(1, Number(settings?.nextNumber || 1))));
+      return settings;
+    } finally {
+      setBonNumberingBusy(false);
+    }
+  }
+
+  async function openBonConsumForm() {
+    if (!selectedBonRows.length || bonBusy) return;
+    setBonError("");
+    setBonFormOpen(true);
+    try {
+      await loadBonNumberSettings();
     } catch (caught) {
       setBonNumberSettings(null);
       setBonError(caught instanceof Error ? caught.message : "A Bon de consum számozási beállításai nem tölthetők be.");
+    }
+  }
+
+  async function openBonNumberSettings() {
+    if (bonBusy || bonSettingsSaving) return;
+    setBonSettingsError("");
+    setBonSettingsOpen(true);
+    try {
+      const settings = await loadBonNumberSettings();
+      setBonSettingsSeries(String(settings?.series || "BC"));
+      setBonSettingsNextNumber(String(Math.max(1, Number(settings?.nextNumber || 1))));
+    } catch (caught) {
+      setBonSettingsError(caught instanceof Error ? caught.message : "A számozási beállítások nem tölthetők be.");
+    }
+  }
+
+  async function saveBonNumberSettings() {
+    const series = bonSettingsSeries.trim().toUpperCase();
+    const nextNumber = Number(bonSettingsNextNumber);
+    setBonSettingsError("");
+    if (!series) {
+      setBonSettingsError("A sorozat megadása kötelező.");
+      return;
+    }
+    if (!Number.isInteger(nextNumber) || nextNumber <= 0) {
+      setBonSettingsError("A következő bizonylatszám pozitív egész szám legyen.");
+      return;
+    }
+    setBonSettingsSaving(true);
+    try {
+      const response = await apiAdminSaveBonConsumSettings({ series, nextNumber });
+      setBonNumberSettings(response.settings);
+      setBonSettingsSeries(response.settings.series);
+      setBonSettingsNextNumber(String(response.settings.nextNumber));
+      setBonSettingsOpen(false);
+    } catch (caught) {
+      setBonSettingsError(caught instanceof Error ? caught.message : "A számozási beállítások mentése nem sikerült.");
     } finally {
-      setBonNumberingBusy(false);
+      setBonSettingsSaving(false);
     }
   }
 
@@ -1233,17 +1291,8 @@ function CustomerPurchasesModal({
       setBonError("A felhasználási cél / indok kötelező.");
       return;
     }
-    if (!bonSeries.trim()) {
-      setBonError("A Bon de consum sorozat megadása kötelező.");
-      return;
-    }
-    const sequenceNumber = Number(bonSequenceNumber);
-    if (!Number.isInteger(sequenceNumber) || sequenceNumber <= 0) {
-      setBonError("A Bon de consum száma pozitív egész szám legyen.");
-      return;
-    }
     if (!bonNumberSettings) {
-      setBonError("A Bon de consum számozási beállításai még nem töltődtek be.");
+      setBonError("A Bon de consum számozási beállításai nem tölthetők be. Nyisd meg a fogaskerék ikonnal a számozás beállítását.");
       return;
     }
     setBonConfirmOpen(true);
@@ -1263,13 +1312,8 @@ function CustomerPurchasesModal({
       setBonError("A felhasználási cél / indok kötelező.");
       return;
     }
-    if (!bonSeries.trim()) {
-      setBonError("A Bon de consum sorozat megadása kötelező.");
-      return;
-    }
-    const sequenceNumber = Number(bonSequenceNumber);
-    if (!Number.isInteger(sequenceNumber) || sequenceNumber <= 0) {
-      setBonError("A Bon de consum száma pozitív egész szám legyen.");
+    if (!bonNumberSettings) {
+      setBonError("A Bon de consum számozási beállításai nem érhetők el.");
       return;
     }
 
@@ -1281,8 +1325,6 @@ function CustomerPurchasesModal({
         purpose: bonPurpose.trim(),
         recipientName: bonRecipient.trim() || customerName,
         note: bonNote.trim() || null,
-        series: bonSeries.trim().toUpperCase(),
-        sequenceNumber,
         lineIds: selectedBonRows.map((row) => row.line.id),
       });
 
@@ -1294,13 +1336,7 @@ function CustomerPurchasesModal({
       setBonPurpose("");
       setBonNote("");
       setBonDocumentDate(bucharestIsoToday());
-      setBonSequenceNumber(String(sequenceNumber + 1));
-      setBonNumberSettings((current) => current ? {
-        ...current,
-        series: bonSeries.trim().toUpperCase(),
-        nextNumber: sequenceNumber + 1,
-        sequenceYear: Number(bonDocumentDate.slice(0, 4)) || current.sequenceYear,
-      } : current);
+      setBonNumberSettings(null);
       await onReload();
     } catch (caught) {
       setBonError(caught instanceof Error ? caught.message : "A Bon de consum létrehozása nem sikerült.");
@@ -1335,6 +1371,7 @@ function CustomerPurchasesModal({
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             {canManage ? (
+              <>
               <button
                 type="button"
                 onClick={toggleBonMode}
@@ -1347,6 +1384,17 @@ function CustomerPurchasesModal({
               >
                 <FileCheck2 size={15} /> {bonMode ? "Kijelölés befejezése" : "Bon de consum"}
               </button>
+              <button
+                type="button"
+                onClick={() => void openBonNumberSettings()}
+                disabled={loading || bonBusy || bonSettingsSaving}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white/78 transition hover:border-[#9be9e5]/38 hover:bg-white/[0.08] hover:text-white disabled:opacity-45"
+                title="Bon de consum számozás"
+                aria-label="Bon de consum számozás"
+              >
+                <Settings size={16} />
+              </button>
+              </>
             ) : null}
             <button type="button" onClick={onClose} disabled={bonBusy} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1] disabled:opacity-45" aria-label="Vásárlások bezárása">
               <X size={18} />
@@ -1699,8 +1747,8 @@ function CustomerPurchasesModal({
             if (event.currentTarget === event.target && !bonBusy) setBonFormOpen(false);
           }}
         >
-          <section className="w-full max-w-[780px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_34px_100px_rgba(0,0,0,0.64)]">
-            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#233044] via-[#28545b] to-[#2a8d8b] px-4 py-4">
+          <section className="flex max-h-[calc(100vh-32px)] w-full max-w-[780px] flex-col overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_34px_100px_rgba(0,0,0,0.64)]">
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#233044] via-[#28545b] to-[#2a8d8b] px-4 py-4">
               <div className="flex items-start gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.08] text-[#d7fffd]"><FileCheck2 size={20} /></span>
                 <div>
@@ -1712,45 +1760,10 @@ function CustomerPurchasesModal({
               <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white disabled:opacity-45"><X size={17} /></button>
             </header>
 
-            <div className="space-y-3 p-4">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {bonError ? <div className="flex items-start gap-2 rounded-2xl border border-rose-200/28 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><span>{bonError}</span></div> : null}
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1.5 text-xs text-white/62">
-                  Sorozat
-                  <input
-                    value={bonSeries}
-                    disabled={bonNumberingBusy}
-                    onChange={(event) => setBonSeries(event.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20))}
-                    className={`${control} w-full font-mono`}
-                    placeholder="pl. BC"
-                  />
-                </label>
-                <label className="grid gap-1.5 text-xs text-white/62">
-                  Bizonylatszám
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={bonSequenceNumber}
-                    disabled={bonNumberingBusy}
-                    onChange={(event) => setBonSequenceNumber(event.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
-                    className={`${control} w-full font-mono`}
-                    placeholder="1"
-                  />
-                </label>
-                <div className="sm:col-span-2 rounded-2xl border border-[#9be9e5]/24 bg-[#214c52]/55 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Létrejövő Bon de consum sorszám</p>
-                      <p className="mt-1 font-mono text-lg text-white">{bonNumberingBusy ? "Betöltés…" : bonConsumNumberPreview(bonSeries, bonSequenceNumber, bonDocumentDate, bonNumberSettings)}</p>
-                    </div>
-                    <div className="text-right text-[10px] leading-relaxed text-white/48">
-                      <p>Ezt a számot most te állítod be.</p>
-                      <p>A következő automatikusan innen folytatja: <strong className="font-normal text-[#d7fffd]">{Number(bonSequenceNumber) > 0 ? Number(bonSequenceNumber) + 1 : "–"}</strong></p>
-                    </div>
-                  </div>
-                </div>
                 <label className="grid gap-1.5 text-xs text-white/62">
                   Dokumentum dátuma
                   <input type="date" value={bonDocumentDate} onChange={(event) => setBonDocumentDate(event.target.value)} className={`${control} w-full`} />
@@ -1776,20 +1789,82 @@ function CustomerPurchasesModal({
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[8px] uppercase text-white/38">Eladáskor elszámolt érték</p><p className="mt-1.5 text-lg text-white">{money(selectedBonTotals.actual)}</p></div>
               </div>
 
-              <div className="rounded-2xl border border-amber-200/22 bg-amber-400/8 px-3.5 py-3 text-xs leading-relaxed text-amber-50/82">
-                <strong className="font-normal text-amber-50">Fontos:</strong> a kijelölt hiteles terméksorok kikerülnek a kliens tartozásából. A készletet a rendszer nem vonja le még egyszer, mert az eredeti eladáskor már kiment; a korábban rögzített készletkivezetést ehhez a Bon de consumhoz kapcsolja. Ha hiányzik az eladáskor rögzített vételár, a listaár, vagy nem azonosítható biztosan az eredeti készletkivezetés, a rendszer nem engedi a véglegesítést.
-              </div>
             </div>
 
-            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
-              <span className="text-[10px] text-white/42">Véglegesítés után Bon de consum sorszám készül, a PDF azonnal nyomtatásra nyílik.</span>
+            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
               <div className="flex gap-2">
                 <button type="button" onClick={() => setBonFormOpen(false)} disabled={bonBusy} className={neutralButton}>Mégse</button>
-                <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || bonNumberingBusy || !bonNumberSettings || !selectedBonRows.length || !bonPurpose.trim() || !bonSeries.trim() || Number(bonSequenceNumber) <= 0} className={primaryButton}>
+                <button type="button" onClick={openBonFinalConfirmation} disabled={bonBusy || bonNumberingBusy || !bonNumberSettings || !selectedBonRows.length || !bonPurpose.trim()} className={primaryButton}>
                   <FileCheck2 size={16} />
                   Tovább a véglegesítéshez
                 </button>
               </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {bonSettingsOpen ? (
+        <div
+          className="fixed inset-0 z-[555] grid place-items-center bg-slate-950/86 px-3 py-4 backdrop-blur-md"
+          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+            if (event.currentTarget === event.target && !bonSettingsSaving) setBonSettingsOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[540px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_34px_100px_rgba(0,0,0,0.68)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#233044] via-[#28545b] to-[#2a8d8b] px-4 py-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.08] text-[#d7fffd]"><Settings size={20} /></span>
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-white/50">Bon de consum</p>
+                  <h3 className="mt-1 text-xl text-white">Számozás beállítása</h3>
+                </div>
+              </div>
+              <button type="button" onClick={() => setBonSettingsOpen(false)} disabled={bonSettingsSaving} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white disabled:opacity-45" aria-label="Beállítás bezárása"><X size={17} /></button>
+            </header>
+
+            <div className="space-y-3 p-4">
+              {bonSettingsError ? <div className="flex items-start gap-2 rounded-2xl border border-rose-200/28 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><span>{bonSettingsError}</span></div> : null}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1.5 text-xs text-white/62">
+                  Sorozat
+                  <input
+                    value={bonSettingsSeries}
+                    disabled={bonNumberingBusy || bonSettingsSaving}
+                    onChange={(event) => setBonSettingsSeries(event.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20))}
+                    className={`${control} w-full font-mono`}
+                    placeholder="BC"
+                    autoFocus
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/62">
+                  Következő bizonylatszám
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={bonSettingsNextNumber}
+                    disabled={bonNumberingBusy || bonSettingsSaving}
+                    onChange={(event) => setBonSettingsNextNumber(event.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                    className={`${control} w-full font-mono`}
+                    placeholder="1"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-2xl border border-[#9be9e5]/24 bg-[#214c52]/55 px-3.5 py-3">
+                <p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Következő sorszám</p>
+                <p className="mt-1 font-mono text-lg text-white">{bonNumberingBusy ? "Betöltés…" : bonConsumNumberPreview(bonSettingsSeries, bonSettingsNextNumber, bonDocumentDate, bonNumberSettings)}</p>
+              </div>
+            </div>
+
+            <footer className="flex items-center justify-end gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5">
+              <button type="button" onClick={() => setBonSettingsOpen(false)} disabled={bonSettingsSaving} className={neutralButton}>Mégse</button>
+              <button type="button" onClick={() => void saveBonNumberSettings()} disabled={bonNumberingBusy || bonSettingsSaving || !bonSettingsSeries.trim() || Number(bonSettingsNextNumber) <= 0} className={primaryButton}>
+                {bonSettingsSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                {bonSettingsSaving ? "Mentés..." : "Mentés"}
+              </button>
             </footer>
           </section>
         </div>
@@ -1847,8 +1922,8 @@ function CustomerPurchasesModal({
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Dokumentum</p>
                   <p className="mt-1.5 text-sm text-white">Bon de consum • 14-3-4A</p>
-                  <p className="mt-1 font-mono text-[13px] text-[#d7fffd]">{bonConsumNumberPreview(bonSeries, bonSequenceNumber, bonDocumentDate, bonNumberSettings)}</p>
-                  <p className="mt-1 text-[10px] text-white/44">Dátum: {bonDocumentDate} • következő szám: {Number(bonSequenceNumber) > 0 ? Number(bonSequenceNumber) + 1 : "–"}</p>
+                  <p className="mt-1 font-mono text-[13px] text-[#d7fffd]">{bonNumberSettings ? bonConsumNumberPreview(bonNumberSettings.series, bonNumberSettings.nextNumber, bonDocumentDate, bonNumberSettings) : "–"}</p>
+                  <p className="mt-1 text-[10px] text-white/44">Dátum: {bonDocumentDate}</p>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <p className="text-[8px] uppercase tracking-[0.11em] text-white/38">Kijelölt mennyiség</p>
