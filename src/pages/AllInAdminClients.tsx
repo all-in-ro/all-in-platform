@@ -1352,7 +1352,11 @@ function CustomerPurchasesModal({
                     ? "Kézdivásárhely"
                     : (sale.locationName || storeName);
                 const paymentMethods: string[] = Array.from(
-                  new Set<string>((sale.payments || []).map((payment) => String(payment?.method || "").trim()).filter(Boolean)),
+                  new Set<string>(
+                    (sale.payments || [])
+                      .map((payment) => String(payment?.method || "").trim())
+                      .filter((method) => Boolean(method) && method.toLowerCase() !== "credit"),
+                  ),
                 );
 
                 return (
@@ -1368,7 +1372,17 @@ function CustomerPurchasesModal({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[15px] text-white">{sale.saleNumber || `Vásárlás ${saleIndex + 1}`}</span>
                           <span className="rounded-full border border-[#9be9e5]/28 bg-[#2a8d8b]/16 px-2.5 py-1 text-[10px] text-[#eaffff]">{saleStatusLabel(sale.status)}</span>
-                          <span className={`rounded-full border px-2.5 py-1 text-[10px] ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/25 bg-rose-500/10 text-rose-50" : "border-[#9be9e5]/28 bg-[#2a8d8b]/16 text-[#eaffff]"}`}>{paymentStatusLabel(sale.paymentStatus)}</span>
+                          <span
+                            className={`rounded-full border px-2.5 py-1 text-[10px] ${
+                              String(sale.paymentStatus || "").toLowerCase() === "credit" && numberValue(sale.balanceDue) > 0.005
+                                ? "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.34)]"
+                                : numberValue(sale.balanceDue) > 0.005
+                                  ? "border-rose-200/30 bg-rose-500/16 text-rose-50"
+                                  : "border-[#9be9e5]/28 bg-[#2a8d8b]/16 text-[#eaffff]"
+                            }`}
+                          >
+                            {paymentStatusLabel(sale.paymentStatus)}
+                          </span>
                           {paymentMethods.map((method) => (
                             <span key={method} className="rounded-full border border-[#9be9e5]/35 bg-[#237c7a] px-2.5 py-1 text-[10px] text-white">
                               {paymentMethodLabel(method)}
