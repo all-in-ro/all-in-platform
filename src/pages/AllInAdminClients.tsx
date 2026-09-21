@@ -1476,7 +1476,17 @@ function CustomerPurchasesModal({
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="min-w-0 text-[15px] leading-snug text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
                                 {line.brandName ? <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/56">{line.brandName}</span> : null}
-                                {bonMode && !eligibility.eligible ? <span className="rounded-full border border-rose-200/22 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-50">{eligibility.reason}</span> : null}
+                                {bonMode && !eligibility.eligible ? (
+                                  <span
+                                    className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] leading-none ${
+                                      eligibility.reason.includes("fizetés kapcsolódik")
+                                        ? "border-[#ff9aa4] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.34)]"
+                                        : "border-rose-200/32 bg-rose-500/16 text-rose-50"
+                                    }`}
+                                  >
+                                    {eligibility.reason}
+                                  </span>
+                                ) : null}
                               </div>
 
                               <div className="mt-2 flex flex-wrap gap-2">
