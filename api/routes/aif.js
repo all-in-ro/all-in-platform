@@ -60,6 +60,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   let aifStockTransferDocumentsSchemaPromise = null;
   let aifPurchaseOrderSchemaPromise = null;
   let aifShopSalesSchemaPromise = null;
+  let aifConsumptionDocumentsSchemaPromise = null;
 
   function ensureAifStockTransferIdempotencySchema() {
     if (!aifStockTransferIdempotencySchemaPromise) {
@@ -691,6 +692,103 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     }
     return aifShopSalesSchemaPromise;
+  }
+
+
+  function ensureAifConsumptionDocumentsSchema() {
+    if (!aifConsumptionDocumentsSchemaPromise) {
+      aifConsumptionDocumentsSchemaPromise = (async () => {
+        await ensureAifShopSalesSchema();
+        await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_consumption_document_settings (
+          id smallint PRIMARY KEY DEFAULT 1 CHECK (id=1),
+          series text NOT NULL DEFAULT 'BC',
+          next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+          digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+          include_year boolean NOT NULL DEFAULT true,
+          yearly_reset boolean NOT NULL DEFAULT true,
+          sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          updated_by text NULL
+        )`);
+        await pool.query(`INSERT INTO aif_consumption_document_settings (id)
+          VALUES (1) ON CONFLICT (id) DO NOTHING`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_consumption_documents (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          document_number text NOT NULL UNIQUE,
+          series text NOT NULL DEFAULT 'BC',
+          sequence_number bigint NOT NULL,
+          sequence_year integer NOT NULL,
+          document_date date NOT NULL DEFAULT ((now() AT TIME ZONE 'Europe/Bucharest')::date),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          customer_id uuid NULL REFERENCES aif_shop_customers(id) ON DELETE SET NULL,
+          customer_name text NOT NULL,
+          customer_phone text NULL,
+          recipient_name text NULL,
+          purpose text NOT NULL,
+          note text NULL,
+          actor text NOT NULL,
+          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','cancelled')),
+          total_qty integer NOT NULL DEFAULT 0 CHECK (total_qty >= 0),
+          purchase_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (purchase_total >= 0),
+          retail_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (retail_total >= 0),
+          actual_sale_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (actual_sale_total >= 0),
+          discount_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (discount_total >= 0),
+          currency_code text NOT NULL DEFAULT 'RON',
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_consumption_documents_customer_idx
+          ON aif_consumption_documents (customer_id, document_date DESC, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_consumption_documents_location_idx
+          ON aif_consumption_documents (location_id, document_date DESC, created_at DESC)`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_consumption_document_lines (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          document_id uuid NOT NULL REFERENCES aif_consumption_documents(id) ON DELETE CASCADE,
+          line_no integer NOT NULL,
+          source_sale_id text NULL,
+          source_sale_line_id text NULL,
+          source_sale_number text NULL,
+          source_sold_at timestamptz NULL,
+          variant_id text NULL,
+          product_title text NULL,
+          product_code text NULL,
+          sn_cod text NULL,
+          barcode text NULL,
+          brand_name text NULL,
+          category_name text NULL,
+          subcategory_name text NULL,
+          color_name text NULL,
+          size text NULL,
+          image_url text NULL,
+          quantity integer NOT NULL CHECK (quantity > 0),
+          purchase_unit_price numeric(14,2) NOT NULL CHECK (purchase_unit_price >= 0),
+          list_unit_price numeric(14,2) NOT NULL CHECK (list_unit_price >= 0),
+          actual_unit_price numeric(14,2) NOT NULL CHECK (actual_unit_price >= 0),
+          sales_tva_rate numeric(7,3) NULL,
+          purchase_value numeric(14,2) NOT NULL CHECK (purchase_value >= 0),
+          retail_value numeric(14,2) NOT NULL CHECK (retail_value >= 0),
+          actual_sale_value numeric(14,2) NOT NULL CHECK (actual_sale_value >= 0),
+          discount_value numeric(14,2) NOT NULL CHECK (discount_value >= 0),
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (document_id, line_no)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_consumption_document_lines_document_idx
+          ON aif_consumption_document_lines (document_id, line_no)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_consumption_document_lines_source_line_idx
+          ON aif_consumption_document_lines (source_sale_line_id) WHERE source_sale_line_id IS NOT NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_consumption_document_lines_variant_idx
+          ON aif_consumption_document_lines (variant_id) WHERE variant_id IS NOT NULL`);
+        return true;
+      })().catch((error) => {
+        aifConsumptionDocumentsSchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifConsumptionDocumentsSchemaPromise;
   }
 
 
@@ -10964,7 +11062,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
                     THEN COALESCE(NULLIF(sm.raw->>'buyPriceAfter','')::numeric, v.buy_price)
                   WHEN sm.source_type='shop_sale' OR sm.raw->>'reason'='shop_sale'
-                    THEN COALESCE(sale_line.buy_price_snapshot, v.buy_price)
+                    THEN COALESCE(sale_line.buy_price_snapshot, NULLIF(sm.raw->>'buyPriceSnapshot','')::numeric, v.buy_price)
+                  WHEN sm.source_type='bon_consum' OR sm.raw->>'reason'='bon_consum'
+                    THEN COALESCE(NULLIF(sm.raw->>'buyPriceSnapshot','')::numeric, v.buy_price)
                   ELSE COALESCE(im.buy_price_ron, im.buy_price, v.buy_price)
                 END AS effective_buy_price,
                 CASE
@@ -10978,6 +11078,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                       sale_line.list_price,
                       v.sell_price
                     )
+                  WHEN sm.source_type='bon_consum' OR sm.raw->>'reason'='bon_consum'
+                    THEN COALESCE(NULLIF(sm.raw->>'listPrice','')::numeric, NULLIF(sm.raw->>'unitPrice','')::numeric, v.sell_price)
                   ELSE COALESCE(im.sell_price_ron, im.sell_price, v.sell_price)
                 END AS effective_sell_price
          FROM aif_stock_movements sm
@@ -20485,6 +20587,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         discountAmount: aifNumber(line.discountAmount ?? line.discount_amount),
         discountPercent: aifNumber(line.discountPercent ?? line.discount_percent),
         lineTotal: aifNumber(line.lineTotal ?? line.line_total),
+        buyPriceSnapshot: line.buyPriceSnapshot ?? line.buy_price_snapshot ?? null,
+        snCod: line.snCod || line.sn_cod || null,
       })),
     };
   }
@@ -20512,6 +20616,117 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         balanceBefore: aifNumber(allocation.balanceBefore ?? allocation.balance_before),
         balanceAfter: aifNumber(allocation.balanceAfter ?? allocation.balance_after),
       })),
+    };
+  }
+
+
+  function aifBonConsumSummaryResponse(row = {}) {
+    return {
+      id: String(row.id || ""),
+      documentNumber: row.document_number || "",
+      documentDate: row.document_date ? String(row.document_date).slice(0, 10) : null,
+      locationId: row.location_id ? String(row.location_id) : null,
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
+      customerId: row.customer_id ? String(row.customer_id) : null,
+      customerName: row.customer_name || "",
+      customerPhone: row.customer_phone || null,
+      recipientName: row.recipient_name || null,
+      purpose: row.purpose || "",
+      note: row.note || null,
+      actor: row.actor || null,
+      status: row.status || "issued",
+      totalQty: aifNumber(row.total_qty),
+      purchaseTotal: aifNumber(row.purchase_total),
+      retailTotal: aifNumber(row.retail_total),
+      actualSaleTotal: aifNumber(row.actual_sale_total),
+      discountTotal: aifNumber(row.discount_total),
+      currencyCode: row.currency_code || "RON",
+      lineCount: aifNumber(row.line_count),
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+    };
+  }
+
+  function aifBonConsumLineResponse(row = {}) {
+    return {
+      id: String(row.id || ""),
+      lineNo: aifNumber(row.line_no),
+      sourceSaleId: row.source_sale_id || null,
+      sourceSaleLineId: row.source_sale_line_id || null,
+      sourceSaleNumber: row.source_sale_number || null,
+      sourceSoldAt: row.source_sold_at ? new Date(row.source_sold_at).toISOString() : null,
+      variantId: row.variant_id || null,
+      productTitle: row.product_title || null,
+      productCode: row.product_code || null,
+      snCod: row.sn_cod || null,
+      barcode: row.barcode || null,
+      brandName: row.brand_name || null,
+      categoryName: row.category_name || null,
+      subcategoryName: row.subcategory_name || null,
+      colorName: row.color_name || null,
+      size: row.size || null,
+      imageUrl: row.image_url || null,
+      quantity: aifNumber(row.quantity),
+      purchaseUnitPrice: aifNumber(row.purchase_unit_price),
+      listUnitPrice: aifNumber(row.list_unit_price),
+      actualUnitPrice: aifNumber(row.actual_unit_price),
+      salesTvaRate: row.sales_tva_rate === null || row.sales_tva_rate === undefined ? null : aifNumber(row.sales_tva_rate),
+      purchaseValue: aifNumber(row.purchase_value),
+      retailValue: aifNumber(row.retail_value),
+      actualSaleValue: aifNumber(row.actual_sale_value),
+      discountValue: aifNumber(row.discount_value),
+    };
+  }
+
+  async function allocateAifBonConsumDocumentNumber(client) {
+    await ensureAifConsumptionDocumentsSchema();
+    const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+    const locked = await client.query(`SELECT * FROM aif_consumption_document_settings WHERE id=1 FOR UPDATE`);
+    const row = locked.rows[0] || {};
+    let nextNumber = Math.max(1, Number(row.next_number || 1));
+    let sequenceYear = Number(row.sequence_year || currentYear);
+    if (row.yearly_reset !== false && sequenceYear !== currentYear) {
+      nextNumber = 1;
+      sequenceYear = currentYear;
+    }
+    const series = cleanAifTransferDocumentSeries(row.series || "BC") || "BC";
+    const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
+    const sequence = String(nextNumber).padStart(digits, "0");
+    const documentNumber = row.include_year === false
+      ? `${series}/${sequence}`
+      : `${series}/${sequenceYear}/${sequence}`;
+    await client.query(
+      `UPDATE aif_consumption_document_settings
+       SET next_number=$1, sequence_year=$2, updated_at=now()
+       WHERE id=1`,
+      [nextNumber + 1, sequenceYear]
+    );
+    return { documentNumber, series, sequenceNumber: nextNumber, sequenceYear };
+  }
+
+  async function loadAifBonConsumDocument(client, id) {
+    const header = await client.query(
+      `SELECT d.*, l.code AS location_code, l.name AS location_name,
+              count(dl.id)::int AS line_count
+       FROM aif_consumption_documents d
+       JOIN aif_locations l ON l.id=d.location_id
+       LEFT JOIN aif_consumption_document_lines dl ON dl.document_id=d.id
+       WHERE d.id::text=$1 OR d.document_number=$1
+       GROUP BY d.id, l.id, l.code, l.name
+       LIMIT 1`,
+      [text(id)]
+    );
+    if (!header.rowCount) return null;
+    const lines = await client.query(
+      `SELECT * FROM aif_consumption_document_lines
+       WHERE document_id=$1
+       ORDER BY line_no ASC, id ASC`,
+      [header.rows[0].id]
+    );
+    return {
+      document: aifBonConsumSummaryResponse(header.rows[0]),
+      lines: lines.rows.map(aifBonConsumLineResponse),
     };
   }
 
@@ -21234,6 +21449,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-customers/:id", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifConsumptionDocumentsSchema();
       const customerId = text(req.params.id);
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
@@ -21357,7 +21573,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  'unitPrice', sl.unit_price,
                  'discountAmount', sl.discount_amount,
                  'discountPercent', sl.discount_percent,
-                 'lineTotal', sl.line_total
+                 'lineTotal', sl.line_total,
+                 'buyPriceSnapshot', sl.buy_price_snapshot,
+                 'snCod', v.sn_cod
                ) ORDER BY sl.line_no ASC, sl.id ASC
              ) FILTER (WHERE sl.id IS NOT NULL),
              '[]'::jsonb
@@ -21377,6 +21595,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE s.customer_id=$1
            AND s.location_id=$2
            AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
+           AND NOT (s.status='cancelled' AND COALESCE(s.raw->>'bonConsumFullyReclassified','false')='true')
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
          LIMIT $4`,
@@ -21413,6 +21632,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [customer.id, location.id, paymentsLimit]
       );
 
+      const consumptionDocumentsResult = await pool.query(
+        `SELECT d.*, l.code AS location_code, l.name AS location_name,
+                count(dl.id)::int AS line_count
+         FROM aif_consumption_documents d
+         JOIN aif_locations l ON l.id=d.location_id
+         LEFT JOIN aif_consumption_document_lines dl ON dl.document_id=d.id
+         WHERE d.customer_id=$1
+           AND d.location_id=$2
+           AND EXTRACT(YEAR FROM d.document_date)=$3::int
+         GROUP BY d.id, l.id, l.code, l.name
+         ORDER BY d.document_date DESC, d.created_at DESC, d.id DESC
+         LIMIT 500`,
+        [customer.id, location.id, year]
+      );
+
       const item = aifShopCustomerResponse(customer);
       res.json({
         ok: true,
@@ -21430,6 +21664,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         },
         sales: salesResult.rows.map(aifShopCustomerSaleHistoryResponse),
         payments: paymentsResult.rows.map(aifShopCustomerPaymentResponse),
+        consumptionDocuments: consumptionDocumentsResult.rows.map(aifBonConsumSummaryResponse),
       });
     } catch (error) {
       console.error("AIF shop customer detail failed", error);
@@ -21438,6 +21673,404 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error: error?.message || "A kliens adatlapja nem tölthető be.",
         code: error?.code || null,
       });
+    }
+  });
+
+
+  function requireAifAdminOnly(req, res, next) {
+    if (normCode(req.session?.role) !== "admin") {
+      return res.status(403).json({
+        error: "A Bon de consum készítése kizárólag Admin jogosultsággal érhető el.",
+        code: "admin_only",
+      });
+    }
+    next();
+  }
+
+  router.get("/bon-consum/:id", requireAuthed, requireAifAdminOnly, async (req, res) => {
+    try {
+      await ensureAifConsumptionDocumentsSchema();
+      const detail = await loadAifBonConsumDocument(pool, req.params.id);
+      if (!detail) return res.status(404).json({ error: "A Bon de consum nem található." });
+      res.json({ ok: true, ...detail });
+    } catch (error) {
+      console.error("AIF bon consum detail failed", error);
+      res.status(500).json({ error: error?.message || "A Bon de consum nem tölthető be.", code: error?.code || null });
+    }
+  });
+
+  router.post("/shop-customers/:id/bon-consum", requireAuthed, requireAifAdminOnly, async (req, res) => {
+    const customerId = text(req.params.id);
+    const body = req.body || {};
+    const locationInput = text(body.location || body.locationCode || body.location_code || body.locationId || body.location_id);
+    const documentDate = cleanAifDocumentDate(body.documentDate || body.document_date) || aifBucharestIsoDate();
+    const purpose = text(body.purpose || body.reason || body.scop);
+    const recipientName = emptyToNull(body.recipientName || body.recipient_name || body.primitor);
+    const note = emptyToNull(body.note || body.notes);
+    const rawItems = Array.isArray(body.items)
+      ? body.items
+      : Array.isArray(body.lineIds)
+        ? body.lineIds.map((lineId) => ({ lineId }))
+        : Array.isArray(body.line_ids)
+          ? body.line_ids.map((lineId) => ({ lineId }))
+          : [];
+    const lineIds = Array.from(new Set(rawItems.map((item) => text(item?.lineId || item?.line_id || item?.id || item)).filter(Boolean)));
+
+    if (!isUuidText(customerId)) return res.status(400).json({ error: "Érvénytelen kliensazonosító." });
+    if (!locationInput) return res.status(400).json({ error: "A készlethely kötelező." });
+    if (!purpose) return res.status(400).json({ error: "A Bon de consum felhasználási célja kötelező." });
+    if (!lineIds.length) return res.status(400).json({ error: "Legalább egy terméksort válassz ki a Bon de consumhoz." });
+    if (lineIds.length > 250) return res.status(400).json({ error: "Egy Bon de consum legfeljebb 250 terméksort tartalmazhat." });
+    if (lineIds.some((id) => !isUuidText(id))) return res.status(400).json({ error: "A kijelölt terméksorok között érvénytelen azonosító van." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifConsumptionDocumentsSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, locationInput);
+      const customerResult = await client.query(
+        `SELECT * FROM aif_shop_customers
+         WHERE id::text=$1 AND location_id=$2 AND is_active=true
+         FOR UPDATE`,
+        [customerId, location.id]
+      );
+      if (!customerResult.rowCount) throw Object.assign(new Error("A kliens nem található ebben az üzletben."), { statusCode: 404 });
+      const customer = customerResult.rows[0];
+
+      const linesResult = await client.query(
+        `SELECT
+           sl.*,
+           s.sale_number,
+           s.sold_at,
+           s.status AS sale_status,
+           s.sale_type,
+           s.payment_status,
+           s.paid_total,
+           s.balance_due,
+           s.raw AS sale_raw,
+           v.sn_cod,
+           v.color_hex
+         FROM aif_shop_sale_lines sl
+         JOIN aif_shop_sales s ON s.id=sl.sale_id
+         LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+         WHERE sl.id::text = ANY($1::text[])
+           AND s.customer_id=$2
+           AND s.location_id=$3
+         ORDER BY s.sold_at ASC, s.sale_number ASC, sl.line_no ASC
+         FOR UPDATE OF sl, s`,
+        [lineIds, customer.id, location.id]
+      );
+      if (linesResult.rows.length !== lineIds.length) {
+        throw Object.assign(new Error("A kijelölt terméksorok egy része nem található ennél a kliensnél vagy üzletnél."), { statusCode: 409, code: "bon_consum_line_scope_mismatch" });
+      }
+
+      const saleIds = Array.from(new Set(linesResult.rows.map((row) => String(row.sale_id))));
+      const paymentUsage = saleIds.length ? await client.query(
+        `SELECT DISTINCT sale_id::text AS sale_id
+         FROM aif_shop_sale_payments
+         WHERE sale_id::text = ANY($1::text[])
+           AND amount > 0
+         UNION
+         SELECT DISTINCT a.sale_id::text AS sale_id
+         FROM aif_shop_customer_payment_allocations a
+         WHERE a.sale_id::text = ANY($1::text[])
+           AND a.amount > 0`,
+        [saleIds]
+      ) : { rows: [] };
+      const paidSaleIds = new Set((paymentUsage.rows || []).map((row) => String(row.sale_id)));
+
+      const exchangeUsage = await client.query(
+        `SELECT DISTINCT source_sale_line_id::text AS line_id
+         FROM aif_shop_exchanges
+         WHERE source_sale_line_id::text = ANY($1::text[])`,
+        [lineIds]
+      );
+      const exchangeLineIds = new Set((exchangeUsage.rows || []).map((row) => String(row.line_id)));
+
+      const returnAuthorizationUsage = await client.query(
+        `SELECT DISTINCT sale_line_id::text AS line_id
+         FROM aif_shop_return_authorizations
+         WHERE sale_line_id::text = ANY($1::text[])`,
+        [lineIds]
+      );
+      const returnAuthorizationLineIds = new Set((returnAuthorizationUsage.rows || []).map((row) => String(row.line_id)));
+
+      const prepared = [];
+      for (const row of linesResult.rows) {
+        if (row.sale_status !== "completed") {
+          throw Object.assign(new Error(`${row.sale_number}: csak lezárt, aktív hiteles eladás vezethető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_sale_not_completed" });
+        }
+        if (paidSaleIds.has(String(row.sale_id)) || Number(row.paid_total || 0) > 0.005 || !["credit", "unpaid"].includes(String(row.payment_status || ""))) {
+          throw Object.assign(new Error(`${row.sale_number}: ehhez a vásárláshoz már pénzügyi rendezés kapcsolódik, ezért automatikusan nem minősíthető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_sale_has_payment" });
+        }
+        if (exchangeLineIds.has(String(row.id))) {
+          throw Object.assign(new Error(`${row.sale_number}: a kijelölt terméksorhoz visszáru vagy csere kapcsolódik, ezért nem vezethető át Bon de consumra.`), { statusCode: 409, code: "bon_consum_line_has_exchange" });
+        }
+        if (returnAuthorizationLineIds.has(String(row.id))) {
+          throw Object.assign(new Error(`${row.sale_number}: a kijelölt terméksorhoz visszáru-engedélyezési előzmény kapcsolódik, ezért nem vezethető át automatikusan Bon de consumra.`), { statusCode: 409, code: "bon_consum_line_has_return_authorization" });
+        }
+        const qty = Number(row.quantity || 0);
+        const purchaseUnitPrice = toMoney(row.buy_price_snapshot);
+        const listUnitPrice = toMoney(row.list_price);
+        const actualUnitPrice = toMoney(row.unit_price);
+        if (!Number.isInteger(qty) || qty <= 0) throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: érvénytelen eladott mennyiség.`), { statusCode: 409 });
+        if (purchaseUnitPrice === null) {
+          throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: nincs eladáskori beszerzésiár-snapshot. Hivatalos Bon de consumhoz nem találunk ki vételárat.`), { statusCode: 409, code: "bon_consum_missing_purchase_price" });
+        }
+        if (listUnitPrice === null || listUnitPrice <= 0) {
+          throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: nincs érvényes teljes eladási listaár. Hivatalos Bon de consumhoz ezt előbb rendezni kell.`), { statusCode: 409, code: "bon_consum_missing_list_price" });
+        }
+        if (actualUnitPrice === null) {
+          throw Object.assign(new Error(`${row.product_title || row.product_code || "Termék"}: hiányzik az eladáskori egységár.`), { statusCode: 409, code: "bon_consum_missing_sale_price" });
+        }
+
+        const movementResult = await client.query(
+          `SELECT id, movement_type, source_type, source_id, qty_delta, qty_before, qty_after, raw
+           FROM aif_stock_movements
+           WHERE location_id=$1
+             AND variant_id=$2
+             AND (
+               source_id=$3
+               OR raw->>'saleId'=$3
+             )
+             AND (
+               source_type='shop_sale'
+               OR raw->>'reason'='shop_sale'
+             )
+           ORDER BY created_at ASC, id ASC
+           FOR UPDATE`,
+          [location.id, row.variant_id, String(row.sale_id)]
+        );
+        if (movementResult.rows.length !== 1) {
+          throw Object.assign(new Error(`${row.sale_number}: a készletkivezetés eredeti mozgása nem azonosítható egyértelműen. Bon de consumot nem gyártunk bizonytalan készlettörténetből.`), { statusCode: 409, code: "bon_consum_stock_movement_ambiguous" });
+        }
+        const movement = movementResult.rows[0];
+        if (Number(movement.qty_delta || 0) !== -qty) {
+          throw Object.assign(new Error(`${row.sale_number}: az eredeti készletmozgás mennyisége nem egyezik a terméksorral. Előbb ezt az eltérést kell kivizsgálni.`), { statusCode: 409, code: "bon_consum_stock_movement_qty_mismatch" });
+        }
+
+        const saleRaw = row.sale_raw && typeof row.sale_raw === "object" ? row.sale_raw : {};
+        const salesTvaRate = toMoney(saleRaw.salesTvaRate ?? saleRaw.saleTvaRate);
+        const purchaseValue = aifRoundMoney(qty * purchaseUnitPrice);
+        const retailValue = aifRoundMoney(qty * listUnitPrice);
+        const actualSaleValue = aifRoundMoney(row.line_total);
+        const discountValue = aifRoundMoney(row.discount_amount);
+        prepared.push({
+          row,
+          movement,
+          qty,
+          purchaseUnitPrice,
+          listUnitPrice,
+          actualUnitPrice,
+          salesTvaRate,
+          purchaseValue,
+          retailValue,
+          actualSaleValue,
+          discountValue,
+        });
+      }
+
+      const number = await allocateAifBonConsumDocumentNumber(client);
+      const actor = actorFrom(req);
+      const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
+      const purchaseTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.purchaseValue, 0));
+      const retailTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.retailValue, 0));
+      const actualSaleTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.actualSaleValue, 0));
+      const discountTotal = aifRoundMoney(prepared.reduce((sum, item) => sum + item.discountValue, 0));
+
+      const documentInsert = await client.query(
+        `INSERT INTO aif_consumption_documents (
+           document_number, series, sequence_number, sequence_year, document_date,
+           location_id, customer_id, customer_name, customer_phone, recipient_name,
+           purpose, note, actor, status, total_qty, purchase_total, retail_total,
+           actual_sale_total, discount_total, currency_code, raw
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'issued',$14,$15,$16,$17,$18,'RON',$19::jsonb
+         ) RETURNING *`,
+        [
+          number.documentNumber,
+          number.series,
+          number.sequenceNumber,
+          number.sequenceYear,
+          documentDate,
+          location.id,
+          customer.id,
+          customer.full_name,
+          customer.phone || null,
+          recipientName || customer.full_name,
+          purpose,
+          note,
+          actor,
+          totalQty,
+          purchaseTotal,
+          retailTotal,
+          actualSaleTotal,
+          discountTotal,
+          JSON.stringify({
+            source: "admin_customer_purchase_history",
+            valuation: {
+              purchase: "sale_line_buy_price_snapshot",
+              retail: "sale_line_list_price_full_value",
+              actualSale: "sale_line_actual_value",
+            },
+            stockEffect: "reclassified_existing_sale_movement_no_second_stock_decrease",
+          }),
+        ]
+      );
+      const document = documentInsert.rows[0];
+
+      let lineNo = 1;
+      for (const item of prepared) {
+        const row = item.row;
+        await client.query(
+          `INSERT INTO aif_consumption_document_lines (
+             document_id, line_no, source_sale_id, source_sale_line_id, source_sale_number, source_sold_at,
+             variant_id, product_title, product_code, sn_cod, barcode, brand_name, category_name, subcategory_name,
+             color_name, size, image_url, quantity, purchase_unit_price, list_unit_price, actual_unit_price,
+             sales_tva_rate, purchase_value, retail_value, actual_sale_value, discount_value, raw
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::jsonb
+           )`,
+          [
+            document.id,
+            lineNo++,
+            String(row.sale_id),
+            String(row.id),
+            row.sale_number,
+            row.sold_at,
+            row.variant_id ? String(row.variant_id) : null,
+            row.product_title || null,
+            row.product_code || null,
+            row.sn_cod || null,
+            row.barcode || null,
+            row.brand_name || null,
+            row.category_name || null,
+            row.subcategory_name || null,
+            row.color_name || null,
+            row.size || null,
+            row.image_url || null,
+            item.qty,
+            item.purchaseUnitPrice,
+            item.listUnitPrice,
+            item.actualUnitPrice,
+            item.salesTvaRate,
+            item.purchaseValue,
+            item.retailValue,
+            item.actualSaleValue,
+            item.discountValue,
+            JSON.stringify({
+              sourceSaleId: String(row.sale_id),
+              sourceSaleLineId: String(row.id),
+              sourceSaleNumber: row.sale_number,
+              purchasePriceSource: "sale_line_buy_price_snapshot",
+              retailPriceSource: "sale_line_list_price",
+              originalPaymentStatus: row.payment_status,
+              originalSaleType: row.sale_type,
+            }),
+          ]
+        );
+
+        await client.query(
+          `UPDATE aif_stock_movements
+           SET source_type='bon_consum',
+               source_id=$2,
+               actor=$3,
+               raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb
+           WHERE id=$1`,
+          [
+            item.movement.id,
+            String(document.id),
+            actor,
+            JSON.stringify({
+              reason: "bon_consum",
+              documentId: String(document.id),
+              documentNumber: number.documentNumber,
+              sourceSaleId: String(row.sale_id),
+              sourceSaleLineId: String(row.id),
+              sourceSaleNumber: row.sale_number,
+              buyPriceSnapshot: item.purchaseUnitPrice,
+              listPrice: item.listUnitPrice,
+              unitPrice: item.actualUnitPrice,
+              purchaseValue: item.purchaseValue,
+              retailValue: item.retailValue,
+              stockEffect: "reclassified_existing_sale_movement",
+            }),
+          ]
+        );
+
+        await client.query(`DELETE FROM aif_shop_sale_lines WHERE id=$1`, [row.id]);
+      }
+
+      for (const saleId of saleIds) {
+        const totals = await client.query(
+          `SELECT count(*)::int AS line_count,
+                  COALESCE(sum(quantity),0)::int AS item_count,
+                  COALESCE(sum(quantity * list_price),0)::numeric AS subtotal,
+                  COALESCE(sum(discount_amount),0)::numeric AS discount_total,
+                  COALESCE(sum(line_total),0)::numeric AS total
+           FROM aif_shop_sale_lines
+           WHERE sale_id=$1`,
+          [saleId]
+        );
+        const saleTotals = totals.rows[0] || {};
+        const lineCount = Number(saleTotals.line_count || 0);
+        const remainingTotal = aifRoundMoney(saleTotals.total || 0);
+        await client.query(
+          `UPDATE aif_shop_sales
+           SET status=$2,
+               payment_status=$3,
+               subtotal=$4,
+               discount_total=$5,
+               total=$6,
+               paid_total=0,
+               balance_due=$6,
+               raw=COALESCE(raw,'{}'::jsonb) || $7::jsonb,
+               updated_at=now()
+           WHERE id=$1`,
+          [
+            saleId,
+            lineCount > 0 ? "completed" : "cancelled",
+            lineCount > 0 ? "credit" : "unpaid",
+            aifRoundMoney(saleTotals.subtotal || 0),
+            aifRoundMoney(saleTotals.discount_total || 0),
+            remainingTotal,
+            JSON.stringify({
+              bonConsumReclassified: true,
+              bonConsumFullyReclassified: lineCount === 0,
+              lastBonConsumDocumentId: String(document.id),
+              lastBonConsumDocumentNumber: number.documentNumber,
+            }),
+          ]
+        );
+        await client.query(
+          `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
+           VALUES ($1,'bon_consum_reclassified',$2,$3,$4::jsonb)`,
+          [
+            saleId,
+            actor,
+            `Bon de consum: ${number.documentNumber}`,
+            JSON.stringify({
+              documentId: String(document.id),
+              documentNumber: number.documentNumber,
+              remainingTotal,
+            }),
+          ]
+        );
+      }
+
+      await client.query("COMMIT");
+      const detail = await loadAifBonConsumDocument(pool, document.id);
+      res.json({ ok: true, ...detail });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create bon consum failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A Bon de consum létrehozása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
     }
   });
 
