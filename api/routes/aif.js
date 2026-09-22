@@ -20698,9 +20698,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   function aifShopCustomerPaymentResponse(row = {}) {
     const rawAllocations = Array.isArray(row.allocations) ? row.allocations : [];
     const rawLineAllocations = Array.isArray(row.line_allocations) ? row.line_allocations : [];
+    const paymentRaw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
     return {
       id: String(row.id),
       amount: aifNumber(row.amount),
+      tenderedAmount: aifNumber(paymentRaw.tenderedAmount ?? paymentRaw.tendered_amount ?? row.amount),
+      changeAmount: aifNumber(paymentRaw.changeAmount ?? paymentRaw.change_amount),
       method: row.method || "other",
       paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : new Date().toISOString(),
       actor: row.actor || null,
@@ -22834,6 +22837,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const customerId = text(req.params.id);
     const body = req.body || {};
     const requestedAmount = aifRoundMoney(toMoney(body.amount) || 0);
+    const tenderedAmount = aifRoundMoney(
+      toMoney(body.tenderedAmount ?? body.tendered_amount ?? body.cashReceived ?? body.cash_received ?? body.amount) || 0
+    );
     const method = normCode(body.method || body.paymentMethod || body.payment_method);
     const allowedMethods = new Set(["cash", "card", "bank_transfer"]);
     const reference = emptyToNull(body.reference);
@@ -22858,6 +22864,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
     if (!selectedMode && requestedAmount <= 0) {
       return res.status(400).json({ error: "A befizetés összege legyen nagyobb nullánál." });
+    }
+    if (tenderedAmount + 0.005 < requestedAmount) {
+      return res.status(400).json({ error: "Az átvett összeg nem lehet kisebb a könyvelt befizetésnél." });
+    }
+    if (method !== "cash" && tenderedAmount > requestedAmount + 0.005) {
+      return res.status(400).json({ error: "Bankkártyánál és átutalásnál nem lehet visszajáró." });
     }
     if (selectedLineIds.length > 250) {
       return res.status(400).json({ error: "Egy befizetésben legfeljebb 250 terméksor jelölhető ki." });
@@ -23030,6 +23042,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             lineDue,
             salePaidTotal,
             saleLineAllocatedPaidTotal,
+            allocationAmount: lineDue,
+            lineDueBefore: lineDue,
+            lineDueAfter: 0,
+            allocationSource: "selected",
           };
         });
 
@@ -23050,7 +23066,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           }
           const group = grouped.get(saleId);
           group.lines.push(row);
-          group.amount = aifRoundMoney(group.amount + row.lineDue);
+          group.amount = aifRoundMoney(group.amount + row.allocationAmount);
         }
         selectedSaleGroups = Array.from(grouped.values());
 
@@ -23063,52 +23079,210 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           }
         }
 
-        amount = aifRoundMoney(
+        const selectedRequiredAmount = aifRoundMoney(
           selectedSaleGroups.reduce((sum, group) => sum + group.amount, 0)
         );
-        if (amount <= 0.005) {
+        if (selectedRequiredAmount <= 0.005) {
           const error = new Error("A kijelölt termékek között nincs kifizetendő tétel.");
           error.statusCode = 400;
           error.code = "customer_payment_no_selected_due";
           throw error;
         }
+        amount = requestedAmount > 0 ? requestedAmount : selectedRequiredAmount;
+        if (amount + 0.005 < selectedRequiredAmount) {
+          const error = new Error(
+            `A fizetett összeg nem lehet kisebb a kijelölt termékek összegénél: ${selectedRequiredAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON.`
+          );
+          error.statusCode = 400;
+          error.code = "customer_payment_below_selected_total";
+          throw error;
+        }
       }
 
-      const openSales = selectedMode
-        ? null
-        : await client.query(
-            `SELECT id, sale_number, sold_at, total, paid_total, balance_due
-             FROM aif_shop_sales
-             WHERE customer_id=$1
-               AND location_id=$2
-               AND status='completed'
-               AND balance_due > 0
-             ORDER BY sold_at ASC, id ASC
-             FOR UPDATE`,
-            [customerLock.rows[0].id, location.id]
-          );
+      const openSales = await client.query(
+        `SELECT id, sale_number, sold_at, total, paid_total, balance_due
+         FROM aif_shop_sales
+         WHERE customer_id=$1
+           AND location_id=$2
+           AND status='completed'
+           AND balance_due > 0
+         ORDER BY sold_at ASC, id ASC
+         FOR UPDATE`,
+        [customerLock.rows[0].id, location.id]
+      );
 
-      const openBalance = selectedMode
-        ? aifRoundMoney(
-            selectedSaleGroups.reduce((sum, group) => sum + group.balanceDue, 0)
-          )
-        : aifRoundMoney(
-            openSales.rows.reduce((sum, sale) => sum + aifNumber(sale.balance_due), 0)
-          );
+      const openBalance = aifRoundMoney(
+        openSales.rows.reduce((sum, sale) => sum + aifNumber(sale.balance_due), 0)
+      );
 
-      if (!selectedMode && openBalance <= 0) {
+      if (openBalance <= 0) {
         const error = new Error("Ennél a kliensnél nincs nyitott tartozás.");
         error.statusCode = 400;
         error.code = "customer_has_no_open_balance";
         throw error;
       }
-      if (!selectedMode && amount > openBalance + 0.005) {
-        const error = new Error(`A befizetés nem lehet nagyobb a nyitott tartozásnál: ${openBalance.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON.`);
+      if (amount > openBalance + 0.005) {
+        const error = new Error(`A könyvelt befizetés nem lehet nagyobb a nyitott tartozásnál: ${openBalance.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON.`);
         error.statusCode = 400;
         error.code = "customer_payment_exceeds_open_balance";
         error.openBalance = openBalance;
         throw error;
       }
+
+      let selectedRequiredAmount = 0;
+      let extraAllocatedAmount = 0;
+
+      if (selectedMode) {
+        selectedRequiredAmount = aifRoundMoney(
+          selectedSaleGroups.reduce((sum, group) => sum + group.amount, 0)
+        );
+        let extraRemaining = aifRoundMoney(Math.max(0, amount - selectedRequiredAmount));
+
+        if (extraRemaining > 0.005) {
+          const extraCandidatesResult = await client.query(
+            `SELECT
+               sl.id,
+               sl.sale_id,
+               sl.line_no,
+               sl.quantity,
+               sl.line_total,
+               sl.product_title,
+               sl.product_code,
+               sl.barcode,
+               s.sale_number,
+               s.sold_at,
+               s.total,
+               s.paid_total,
+               s.balance_due,
+               GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::int AS active_qty,
+               CASE
+                 WHEN sl.quantity > 0
+                 THEN round(
+                   COALESCE(sl.line_total,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+                 ELSE 0::numeric
+               END AS active_line_total,
+               COALESCE((
+                 SELECT sum(pla.amount)
+                 FROM aif_shop_customer_payment_line_allocations pla
+                 WHERE pla.sale_line_id=sl.id
+               ),0)::numeric AS line_paid_amount,
+               COALESCE((
+                 SELECT sum(pla2.amount)
+                 FROM aif_shop_customer_payment_line_allocations pla2
+                 WHERE pla2.sale_id=s.id
+               ),0)::numeric AS sale_line_allocated_paid_total
+             FROM aif_shop_sale_lines sl
+             JOIN aif_shop_sales s ON s.id=sl.sale_id
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+               FROM aif_shop_exchanges ex
+               WHERE ex.source_sale_line_id=sl.id
+                 AND ex.status='completed'
+             ) ret ON true
+             WHERE s.customer_id=$1
+               AND s.location_id=$2
+               AND s.status='completed'
+               AND s.balance_due > 0
+               AND NOT (sl.id = ANY($3::uuid[]))
+             ORDER BY s.sold_at ASC, s.id ASC, sl.line_no ASC, sl.id ASC
+             FOR UPDATE OF sl`,
+            [customerLock.rows[0].id, location.id, selectedLineIds]
+          );
+
+          const groupMap = new Map(selectedSaleGroups.map((group) => [String(group.saleId), group]));
+          const saleRemaining = new Map(
+            openSales.rows.map((sale) => [String(sale.id), aifRoundMoney(sale.balance_due)])
+          );
+
+          for (const group of selectedSaleGroups) {
+            const saleId = String(group.saleId);
+            saleRemaining.set(
+              saleId,
+              aifRoundMoney(Math.max(0, aifNumber(saleRemaining.get(saleId)) - group.amount))
+            );
+          }
+
+          for (const row of extraCandidatesResult.rows) {
+            if (extraRemaining <= 0.005) break;
+
+            const activeQty = Math.max(0, Math.floor(aifNumber(row.active_qty)));
+            const activeLineTotal = aifRoundMoney(Math.max(0, aifNumber(row.active_line_total)));
+            const linePaidAmount = aifRoundMoney(Math.max(0, aifNumber(row.line_paid_amount)));
+            const lineDue = aifRoundMoney(Math.max(0, activeLineTotal - Math.min(activeLineTotal, linePaidAmount)));
+            const salePaidTotal = aifRoundMoney(Math.max(0, aifNumber(row.paid_total)));
+            const saleLineAllocatedPaidTotal = aifRoundMoney(Math.max(0, aifNumber(row.sale_line_allocated_paid_total)));
+            const unassignedPaidTotal = aifRoundMoney(Math.max(0, salePaidTotal - saleLineAllocatedPaidTotal));
+            const saleId = String(row.sale_id);
+            const saleDueRemaining = aifRoundMoney(Math.max(0, aifNumber(saleRemaining.get(saleId))));
+
+            if (saleDueRemaining <= 0.005 || activeQty <= 0 || lineDue <= 0.005) continue;
+
+            if (unassignedPaidTotal > 0.005) {
+              const error = new Error(
+                `${row.sale_number}: a plusz befizetés automatikus felosztása nem biztonságos, mert ezen a régi bizonylaton ${unassignedPaidTotal.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON korábbi részfizetés termékszintű bontása nem ismert.`
+              );
+              error.statusCode = 409;
+              error.code = "customer_payment_extra_allocation_ambiguous";
+              throw error;
+            }
+
+            const allocationAmount = aifRoundMoney(
+              Math.min(extraRemaining, lineDue, saleDueRemaining)
+            );
+            if (allocationAmount <= 0.005) continue;
+
+            let group = groupMap.get(saleId);
+            if (!group) {
+              group = {
+                saleId,
+                saleNumber: row.sale_number,
+                soldAt: row.sold_at,
+                total: aifRoundMoney(row.total),
+                paidTotal: aifRoundMoney(row.paid_total),
+                balanceDue: aifRoundMoney(row.balance_due),
+                lines: [],
+                amount: 0,
+              };
+              groupMap.set(saleId, group);
+              selectedSaleGroups.push(group);
+            }
+
+            group.lines.push({
+              ...row,
+              activeQty,
+              activeLineTotal,
+              linePaidAmount,
+              lineDue,
+              salePaidTotal,
+              saleLineAllocatedPaidTotal,
+              allocationAmount,
+              lineDueBefore: lineDue,
+              lineDueAfter: aifRoundMoney(Math.max(0, lineDue - allocationAmount)),
+              allocationSource: "extra_fifo",
+            });
+            group.amount = aifRoundMoney(group.amount + allocationAmount);
+
+            extraRemaining = aifRoundMoney(extraRemaining - allocationAmount);
+            extraAllocatedAmount = aifRoundMoney(extraAllocatedAmount + allocationAmount);
+            saleRemaining.set(saleId, aifRoundMoney(Math.max(0, saleDueRemaining - allocationAmount)));
+          }
+
+          if (extraRemaining > 0.005) {
+            const error = new Error(
+              `A plusz ${extraRemaining.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON nem osztható ki biztonságosan termékszinten a fennmaradó tartozásra.`
+            );
+            error.statusCode = 409;
+            error.code = "customer_payment_extra_allocation_incomplete";
+            throw error;
+          }
+        }
+      }
+
+      const changeAmount = aifRoundMoney(Math.max(0, tenderedAmount - amount));
 
       const paymentInsert = await client.query(
         `INSERT INTO aif_shop_customer_payments (
@@ -23127,8 +23301,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           idempotencyKey,
           JSON.stringify({
             source: "shop_customer_payment",
-            allocation: selectedMode ? "selected_sale_lines" : "fifo_oldest_sale_first",
+            allocation: selectedMode
+              ? (extraAllocatedAmount > 0.005 ? "selected_sale_lines_then_fifo" : "selected_sale_lines")
+              : "fifo_oldest_sale_first",
             selectedLineIds: selectedMode ? selectedLineIds : [],
+            selectedAmount: selectedMode ? selectedRequiredAmount : 0,
+            extraAllocatedAmount: selectedMode ? extraAllocatedAmount : 0,
+            tenderedAmount,
+            changeAmount,
           }),
         ]
       );
@@ -23172,12 +23352,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               note,
               JSON.stringify({
                 source: "shop_customer_payment",
-                allocation: "selected_sale_lines",
+                allocation: group.lines.some((line) => line.allocationSource === "extra_fifo")
+                  ? "selected_sale_lines_then_fifo"
+                  : "selected_sale_lines",
                 customerId: String(customerLock.rows[0].id),
                 paymentId: String(paymentId),
                 balanceBefore,
                 balanceAfter,
                 lineIds: group.lines.map((line) => String(line.id)),
+                selectedLineIds: group.lines.filter((line) => line.allocationSource === "selected").map((line) => String(line.id)),
+                extraLineIds: group.lines.filter((line) => line.allocationSource === "extra_fifo").map((line) => String(line.id)),
               }),
               paymentId,
             ]
@@ -23188,14 +23372,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               `INSERT INTO aif_shop_customer_payment_line_allocations (
                  customer_payment_id, sale_id, sale_line_id, quantity,
                  amount, line_due_before, line_due_after
-               ) VALUES ($1,$2,$3,$4,$5,$6,0)`,
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
               [
                 paymentId,
                 group.saleId,
                 line.id,
                 line.activeQty,
-                line.lineDue,
-                line.lineDue,
+                line.allocationAmount,
+                line.lineDueBefore,
+                line.lineDueAfter,
               ]
             );
           }
@@ -23214,12 +23399,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 reference,
                 balanceBefore,
                 balanceAfter,
-                allocation: "selected_sale_lines",
+                allocation: group.lines.some((line) => line.allocationSource === "extra_fifo")
+                  ? "selected_sale_lines_then_fifo"
+                  : "selected_sale_lines",
                 lines: group.lines.map((line) => ({
                   saleLineId: String(line.id),
                   productTitle: line.product_title || null,
                   quantity: line.activeQty,
-                  amount: line.lineDue,
+                  amount: line.allocationAmount,
+                  lineDueBefore: line.lineDueBefore,
+                  lineDueAfter: line.lineDueAfter,
+                  source: line.allocationSource,
                 })),
               }),
             ]
@@ -23321,6 +23511,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         payment,
         item: aifShopCustomerResponse(customer || {}),
         openBalance: aifNumber(customer?.open_balance),
+        tenderedAmount,
+        changeAmount,
       });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
