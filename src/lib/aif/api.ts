@@ -2639,6 +2639,15 @@ export type AifShopCustomerSaleLineItem = {
   discountAmount: number;
   discountPercent: number;
   lineTotal: number;
+  paidAmount?: number;
+  dueAmount?: number;
+  paymentSelectable?: boolean;
+  paymentBlockReason?: string | null;
+  payments?: Array<{
+    method: string;
+    amount: number;
+    paidAt?: string | null;
+  }>;
 };
 
 export type AifShopCustomerSaleHistoryItem = {
@@ -2659,6 +2668,12 @@ export type AifShopCustomerSaleHistoryItem = {
   balanceDue: number;
   lineCount: number;
   itemCount: number;
+  saleYear?: number | null;
+  hadReturns?: boolean;
+  lineAllocatedPaidTotal?: number;
+  unassignedPaidTotal?: number;
+  linePaymentSelectable?: boolean;
+  linePaymentBlockReason?: string | null;
   payments?: Array<{
     method: string;
     amount: number;
@@ -2678,6 +2693,19 @@ export type AifShopCustomerPaymentAllocation = {
 
 export type AifShopCustomerPaymentMethod = "cash" | "card" | "bank_transfer";
 
+export type AifShopCustomerPaymentLineAllocation = {
+  saleId: string;
+  saleLineId: string;
+  saleNumber: string;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  quantity: number;
+  amount: number;
+  lineDueBefore: number;
+  lineDueAfter: number;
+};
+
 export type AifShopCustomerPaymentHistoryItem = {
   id: string;
   amount: number;
@@ -2690,6 +2718,7 @@ export type AifShopCustomerPaymentHistoryItem = {
   locationCode?: string | null;
   locationName?: string | null;
   allocations: AifShopCustomerPaymentAllocation[];
+  lineAllocations?: AifShopCustomerPaymentLineAllocation[];
 };
 
 export type AifShopCustomerDetail = {
@@ -2706,6 +2735,7 @@ export type AifShopCustomerDetail = {
     lastSaleAt?: string | null;
   };
   sales: AifShopCustomerSaleHistoryItem[];
+  paymentCandidates?: AifShopCustomerSaleHistoryItem[];
   payments: AifShopCustomerPaymentHistoryItem[];
 };
 
@@ -2803,9 +2833,10 @@ export function apiAifDeleteShopCustomer(id: string, options?: { location?: stri
 export function apiAifRecordShopCustomerPayment(
   id: string,
   input: {
-    amount: number;
+    amount?: number;
     method: AifShopCustomerPaymentMethod;
     location: string;
+    items?: Array<{ saleId?: string; lineId: string }>;
     reference?: string | null;
     note?: string | null;
     idempotencyKey: string;
