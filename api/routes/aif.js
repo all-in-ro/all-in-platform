@@ -357,6 +357,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_customer_payment_allocations (customer_payment_id, created_at ASC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customer_payment_allocations_sale_idx
           ON aif_shop_customer_payment_allocations (sale_id, created_at ASC)`);
+
+        // Termékszintű tartozásrendezés. A sale-szintű allokáció továbbra is megmarad,
+        // ez a tábla azt rögzíti, hogy a kliens konkrétan mely terméksorokat fizette ki.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_customer_payment_line_allocations (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          customer_payment_id uuid NOT NULL REFERENCES aif_shop_customer_payments(id) ON DELETE CASCADE,
+          sale_id uuid NOT NULL REFERENCES aif_shop_sales(id) ON DELETE CASCADE,
+          sale_line_id uuid NOT NULL REFERENCES aif_shop_sale_lines(id) ON DELETE CASCADE,
+          quantity integer NOT NULL DEFAULT 1 CHECK (quantity > 0),
+          amount numeric(14,2) NOT NULL CHECK (amount > 0),
+          line_due_before numeric(14,2) NOT NULL DEFAULT 0 CHECK (line_due_before >= 0),
+          line_due_after numeric(14,2) NOT NULL DEFAULT 0 CHECK (line_due_after >= 0),
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (customer_payment_id, sale_line_id)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customer_payment_line_allocations_payment_idx
+          ON aif_shop_customer_payment_line_allocations (customer_payment_id, created_at ASC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customer_payment_line_allocations_sale_idx
+          ON aif_shop_customer_payment_line_allocations (sale_id, created_at ASC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customer_payment_line_allocations_line_idx
+          ON aif_shop_customer_payment_line_allocations (sale_line_id, created_at ASC)`);
+
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_payments
           ADD COLUMN IF NOT EXISTS customer_payment_id uuid NULL REFERENCES aif_shop_customer_payments(id) ON DELETE SET NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_payments_customer_payment_idx
@@ -20543,6 +20565,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           }]
         : [];
 
+    const rowPaidTotal = Math.max(0, aifNumber(row.paid_total));
+    const lineAllocatedPaidTotal = Math.max(0, aifNumber(row.line_allocated_paid_total));
+    const unassignedPaidTotal = aifRoundMoney(Math.max(0, rowPaidTotal - lineAllocatedPaidTotal));
+    const linePaymentSelectable = unassignedPaidTotal <= 0.005;
+    const linePaymentBlockReason = linePaymentSelectable
+      ? null
+      : `Ehhez a vásárláshoz ${unassignedPaidTotal.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON korábbi részfizetés tartozik, amelynek termékszintű bontása nem ismert.`;
+
     // A vásárlási előzményben csak az marad "megvett" termék,
     // ami a lezárt visszáruk után ténylegesen a kliensnél maradt.
     // Az eredeti sale line NEM törlődik az adatbázisból, így az audit megmarad.
@@ -20555,6 +20585,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         );
         const quantity = Math.max(0, originalQuantity - returnedQty);
         const keepRatio = originalQuantity > 0 ? quantity / originalQuantity : 0;
+        const lineTotal = aifRoundMoney(
+          aifNumber(line.lineTotal ?? line.line_total) * keepRatio,
+        );
+        const paidAmount = Math.min(
+          lineTotal,
+          Math.max(0, aifNumber(line.paidAmount ?? line.paid_amount)),
+        );
+        const dueAmount = aifRoundMoney(Math.max(0, lineTotal - paidAmount));
+        const paymentSelectable = linePaymentSelectable && dueAmount > 0.005;
+        const linePayments = Array.isArray(line.payments) ? line.payments : [];
 
         return {
           id: String(line.id || ""),
@@ -20579,9 +20619,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             aifNumber(line.discountAmount ?? line.discount_amount) * keepRatio,
           ),
           discountPercent: aifNumber(line.discountPercent ?? line.discount_percent),
-          lineTotal: aifRoundMoney(
-            aifNumber(line.lineTotal ?? line.line_total) * keepRatio,
-          ),
+          lineTotal,
+          paidAmount,
+          dueAmount,
+          paymentSelectable,
+          paymentBlockReason: paymentSelectable || dueAmount <= 0.005 ? null : linePaymentBlockReason,
+          payments: linePayments.map((payment) => ({
+            method: payment?.method || "other",
+            amount: aifNumber(payment?.amount),
+            paidAt: payment?.paidAt || payment?.paid_at
+              ? new Date(payment.paidAt || payment.paid_at).toISOString()
+              : null,
+          })),
           buyPriceSnapshot: line.buyPriceSnapshot ?? line.buy_price_snapshot ?? null,
           snCod: line.snCod || line.sn_cod || null,
         };
@@ -20605,7 +20654,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       0,
     );
     const historyPaidTotal = Math.min(
-      Math.max(0, aifNumber(row.paid_total)),
+      rowPaidTotal,
       Math.max(0, historyTotal),
     );
 
@@ -20617,6 +20666,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locationName: row.location_name || null,
       actor: row.actor || null,
       soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : new Date().toISOString(),
+      saleYear: Number(row.sale_year || 0) || null,
       status: row.status || "",
       paymentStatus: row.payment_status || "",
       saleType: row.sale_type || "",
@@ -20630,6 +20680,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       hadReturns: rawLines.some(
         (line) => aifNumber(line.returnedQty ?? line.returned_qty) > 0.0001,
       ),
+      lineAllocatedPaidTotal: aifRoundMoney(lineAllocatedPaidTotal),
+      unassignedPaidTotal,
+      linePaymentSelectable,
+      linePaymentBlockReason,
       payments: salePayments.map((payment) => ({
         method: payment?.method || "other",
         amount: aifNumber(payment?.amount),
@@ -20643,6 +20697,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function aifShopCustomerPaymentResponse(row = {}) {
     const rawAllocations = Array.isArray(row.allocations) ? row.allocations : [];
+    const rawLineAllocations = Array.isArray(row.line_allocations) ? row.line_allocations : [];
     return {
       id: String(row.id),
       amount: aifNumber(row.amount),
@@ -20663,6 +20718,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         amount: aifNumber(allocation.amount),
         balanceBefore: aifNumber(allocation.balanceBefore ?? allocation.balance_before),
         balanceAfter: aifNumber(allocation.balanceAfter ?? allocation.balance_after),
+      })),
+      lineAllocations: rawLineAllocations.map((allocation) => ({
+        saleId: String(allocation.saleId || allocation.sale_id || ""),
+        saleLineId: String(allocation.saleLineId || allocation.sale_line_id || ""),
+        saleNumber: allocation.saleNumber || allocation.sale_number || "",
+        productTitle: allocation.productTitle || allocation.product_title || null,
+        productCode: allocation.productCode || allocation.product_code || null,
+        barcode: allocation.barcode || null,
+        quantity: aifNumber(allocation.quantity),
+        amount: aifNumber(allocation.amount),
+        lineDueBefore: aifNumber(allocation.lineDueBefore ?? allocation.line_due_before),
+        lineDueAfter: aifNumber(allocation.lineDueAfter ?? allocation.line_due_after),
       })),
     };
   }
@@ -20903,7 +20970,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              ) ORDER BY a.created_at ASC, a.id ASC
            ) FILTER (WHERE a.id IS NOT NULL),
            '[]'::jsonb
-         ) AS allocations
+         ) AS allocations,
+         COALESCE(
+           (
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'saleId', la.sale_id::text,
+                 'saleLineId', la.sale_line_id::text,
+                 'saleNumber', ls.sale_number,
+                 'productTitle', lsl.product_title,
+                 'productCode', lsl.product_code,
+                 'barcode', lsl.barcode,
+                 'quantity', la.quantity,
+                 'amount', la.amount,
+                 'lineDueBefore', la.line_due_before,
+                 'lineDueAfter', la.line_due_after
+               )
+               ORDER BY la.created_at ASC, la.id ASC
+             )
+             FROM aif_shop_customer_payment_line_allocations la
+             JOIN aif_shop_sales ls ON ls.id=la.sale_id
+             JOIN aif_shop_sale_lines lsl ON lsl.id=la.sale_line_id
+             WHERE la.customer_payment_id=p.id
+           ),
+           '[]'::jsonb
+         ) AS line_allocations
        FROM aif_shop_customer_payments p
        LEFT JOIN aif_locations l ON l.id=p.location_id
        LEFT JOIN aif_shop_customer_payment_allocations a ON a.customer_payment_id=p.id
@@ -21594,6 +21685,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            l.name AS location_name,
            count(sl.id)::int AS line_count,
            COALESCE(sum(sl.quantity),0)::int AS item_count,
+           EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))::int AS sale_year,
+           COALESCE((
+             SELECT sum(pla.amount)
+             FROM aif_shop_customer_payment_line_allocations pla
+             WHERE pla.sale_id=s.id
+           ),0)::numeric AS line_allocated_paid_total,
            COALESCE(
              (
                SELECT jsonb_agg(
@@ -21699,6 +21796,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                    WHERE ex.source_sale_line_id=sl.id
                      AND ex.status='completed'
                  ),0),
+                 'paidAmount', COALESCE((
+                   SELECT sum(pla.amount)
+                   FROM aif_shop_customer_payment_line_allocations pla
+                   WHERE pla.sale_line_id=sl.id
+                 ),0),
+                 'payments', COALESCE((
+                   SELECT jsonb_agg(
+                     jsonb_build_object(
+                       'method', cp.method,
+                       'amount', pla.amount,
+                       'paidAt', cp.paid_at
+                     )
+                     ORDER BY cp.paid_at ASC, pla.created_at ASC, pla.id ASC
+                   )
+                   FROM aif_shop_customer_payment_line_allocations pla
+                   JOIN aif_shop_customer_payments cp ON cp.id=pla.customer_payment_id
+                   WHERE pla.sale_line_id=sl.id
+                 ), '[]'::jsonb),
                  'listPrice', sl.list_price,
                  'unitPrice', sl.unit_price,
                  'discountAmount', sl.discount_amount,
@@ -21724,12 +21839,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           AND sale_ct.is_active=true
          WHERE s.customer_id=$1
            AND s.location_id=$2
-           AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
+           AND (
+             EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
+             OR (s.status='completed' AND s.balance_due > 0)
+           )
            AND NOT (s.status='cancelled' AND COALESCE(s.raw->>'bonConsumFullyReclassified','false')='true')
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
-         LIMIT $4`,
-        [customer.id, location.id, year, salesLimit]
+         LIMIT 500`,
+        [customer.id, location.id, year]
       );
 
       const paymentsResult = await pool.query(
@@ -21749,7 +21867,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                ) ORDER BY a.created_at ASC, a.id ASC
              ) FILTER (WHERE a.id IS NOT NULL),
              '[]'::jsonb
-           ) AS allocations
+           ) AS allocations,
+           COALESCE(
+             (
+               SELECT jsonb_agg(
+                 jsonb_build_object(
+                   'saleId', la.sale_id::text,
+                   'saleLineId', la.sale_line_id::text,
+                   'saleNumber', ls.sale_number,
+                   'productTitle', lsl.product_title,
+                   'productCode', lsl.product_code,
+                   'barcode', lsl.barcode,
+                   'quantity', la.quantity,
+                   'amount', la.amount,
+                   'lineDueBefore', la.line_due_before,
+                   'lineDueAfter', la.line_due_after
+                 )
+                 ORDER BY la.created_at ASC, la.id ASC
+               )
+               FROM aif_shop_customer_payment_line_allocations la
+               JOIN aif_shop_sales ls ON ls.id=la.sale_id
+               JOIN aif_shop_sale_lines lsl ON lsl.id=la.sale_line_id
+               WHERE la.customer_payment_id=p.id
+             ),
+             '[]'::jsonb
+           ) AS line_allocations
          FROM aif_shop_customer_payments p
          LEFT JOIN aif_locations l ON l.id=p.location_id
          LEFT JOIN aif_shop_customer_payment_allocations a ON a.customer_payment_id=p.id
@@ -21777,6 +21919,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [customer.id, location.id, year]
       );
 
+      const mappedSales = salesResult.rows
+        .map(aifShopCustomerSaleHistoryResponse)
+        .filter((sale) => sale.status !== "completed" || sale.lines.length > 0);
+      const yearSales = mappedSales
+        .filter((sale) => Number(sale.saleYear || year) === year)
+        .slice(0, salesLimit);
+      const paymentCandidates = mappedSales
+        .filter((sale) => sale.status === "completed" && aifNumber(sale.balanceDue) > 0.005)
+        .sort((a, b) => new Date(a.soldAt || 0).getTime() - new Date(b.soldAt || 0).getTime());
+
       const item = aifShopCustomerResponse(customer);
       res.json({
         ok: true,
@@ -21792,9 +21944,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           saleCount: item.saleCount,
           lastSaleAt: item.lastSaleAt,
         },
-        sales: salesResult.rows
-          .map(aifShopCustomerSaleHistoryResponse)
-          .filter((sale) => sale.status !== "completed" || sale.lines.length > 0),
+        sales: yearSales,
+        paymentCandidates,
         payments: paymentsResult.rows.map(aifShopCustomerPaymentResponse),
         consumptionDocuments: consumptionDocumentsResult.rows.map(aifBonConsumSummaryResponse),
       });
@@ -22340,6 +22491,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw error;
       }
       const line = lineResult.rows[0];
+
+      const linePaymentResult = await client.query(
+        `SELECT COALESCE(sum(amount),0)::numeric AS paid_amount
+         FROM aif_shop_customer_payment_line_allocations
+         WHERE sale_line_id=$1`,
+        [line.id],
+      );
+      const linePaidAmount = aifRoundMoney(linePaymentResult.rows[0]?.paid_amount || 0);
+      if (linePaidAmount > 0.005) {
+        const error = new Error("Ehhez a termékhez már tartozik termékszintű befizetés, ezért az utólagos kedvezmény nem módosítható.");
+        error.statusCode = 409;
+        error.code = "late_discount_paid_line_locked";
+        throw error;
+      }
+
       const currentPercent = aifNumber(line.discount_percent);
       const nextPercent = Math.max(0, Math.min(100, Number(requestedPercent)));
 
@@ -22667,15 +22833,38 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/shop-customers/:id/payments", requireAuthed, async (req, res) => {
     const customerId = text(req.params.id);
     const body = req.body || {};
-    const amount = aifRoundMoney(toMoney(body.amount) || 0);
+    const requestedAmount = aifRoundMoney(toMoney(body.amount) || 0);
     const method = normCode(body.method || body.paymentMethod || body.payment_method);
     const allowedMethods = new Set(["cash", "card", "bank_transfer"]);
     const reference = emptyToNull(body.reference);
     const note = emptyToNull(body.note);
     const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+    const rawItems = Array.isArray(body.items)
+      ? body.items
+      : Array.isArray(body.lines)
+        ? body.lines
+        : Array.isArray(body.lineIds)
+          ? body.lineIds.map((lineId) => ({ lineId }))
+          : Array.isArray(body.line_ids)
+            ? body.line_ids.map((lineId) => ({ lineId }))
+            : [];
+    const selectedLineIds = Array.from(new Set(
+      rawItems
+        .map((item) => text(item?.lineId || item?.line_id || item?.saleLineId || item?.sale_line_id || item?.id || item))
+        .filter(Boolean)
+    ));
+    const selectedMode = selectedLineIds.length > 0;
 
     if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
-    if (amount <= 0) return res.status(400).json({ error: "A befizetés összege legyen nagyobb nullánál." });
+    if (!selectedMode && requestedAmount <= 0) {
+      return res.status(400).json({ error: "A befizetés összege legyen nagyobb nullánál." });
+    }
+    if (selectedLineIds.length > 250) {
+      return res.status(400).json({ error: "Egy befizetésben legfeljebb 250 terméksor jelölhető ki." });
+    }
+    if (selectedLineIds.some((id) => !isUuidText(id))) {
+      return res.status(400).json({ error: "A kijelölt terméksorok között érvénytelen azonosító van." });
+    }
     if (!allowedMethods.has(method)) return res.status(400).json({ error: "Érvénytelen befizetési mód." });
     if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik a befizetés biztonsági azonosítója." });
 
@@ -22732,27 +22921,188 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw error;
       }
 
-      const openSales = await client.query(
-        `SELECT id, sale_number, sold_at, total, paid_total, balance_due
-         FROM aif_shop_sales
-         WHERE customer_id=$1
-           AND location_id=$2
-           AND status='completed'
-           AND balance_due > 0
-         ORDER BY sold_at ASC, id ASC
-         FOR UPDATE`,
-        [customerLock.rows[0].id, location.id]
-      );
-      const openBalance = aifRoundMoney(
-        openSales.rows.reduce((sum, sale) => sum + aifNumber(sale.balance_due), 0)
-      );
-      if (openBalance <= 0) {
+      let amount = requestedAmount;
+      let selectedRows = [];
+      let selectedSaleGroups = [];
+
+      if (selectedMode) {
+        const selectedResult = await client.query(
+          `SELECT
+             sl.id,
+             sl.sale_id,
+             sl.line_no,
+             sl.quantity,
+             sl.line_total,
+             sl.product_title,
+             sl.product_code,
+             sl.barcode,
+             s.sale_number,
+             s.sold_at,
+             s.total,
+             s.paid_total,
+             s.balance_due,
+             GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::int AS active_qty,
+             CASE
+               WHEN sl.quantity > 0
+               THEN round(
+                 COALESCE(sl.line_total,0)::numeric
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                 / sl.quantity::numeric,
+                 2
+               )
+               ELSE 0::numeric
+             END AS active_line_total,
+             COALESCE((
+               SELECT sum(pla.amount)
+               FROM aif_shop_customer_payment_line_allocations pla
+               WHERE pla.sale_line_id=sl.id
+             ),0)::numeric AS line_paid_amount,
+             COALESCE((
+               SELECT sum(pla2.amount)
+               FROM aif_shop_customer_payment_line_allocations pla2
+               WHERE pla2.sale_id=s.id
+             ),0)::numeric AS sale_line_allocated_paid_total
+           FROM aif_shop_sale_lines sl
+           JOIN aif_shop_sales s ON s.id=sl.sale_id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+             FROM aif_shop_exchanges ex
+             WHERE ex.source_sale_line_id=sl.id
+               AND ex.status='completed'
+           ) ret ON true
+           WHERE sl.id = ANY($3::uuid[])
+             AND s.customer_id=$1
+             AND s.location_id=$2
+             AND s.status='completed'
+           ORDER BY s.sold_at ASC, s.id ASC, sl.line_no ASC, sl.id ASC
+           FOR UPDATE OF s, sl`,
+          [customerLock.rows[0].id, location.id, selectedLineIds]
+        );
+
+        if (selectedResult.rowCount !== selectedLineIds.length) {
+          const error = new Error("Egy vagy több kijelölt termék már nem tartozik ehhez a klienshez vagy ehhez az üzlethez.");
+          error.statusCode = 409;
+          error.code = "customer_payment_selected_line_changed";
+          throw error;
+        }
+
+        selectedRows = selectedResult.rows.map((row) => {
+          const activeQty = Math.max(0, Math.floor(aifNumber(row.active_qty)));
+          const activeLineTotal = aifRoundMoney(Math.max(0, aifNumber(row.active_line_total)));
+          const linePaidAmount = aifRoundMoney(Math.max(0, aifNumber(row.line_paid_amount)));
+          const lineDue = aifRoundMoney(Math.max(0, activeLineTotal - Math.min(activeLineTotal, linePaidAmount)));
+          const salePaidTotal = aifRoundMoney(Math.max(0, aifNumber(row.paid_total)));
+          const saleLineAllocatedPaidTotal = aifRoundMoney(Math.max(0, aifNumber(row.sale_line_allocated_paid_total)));
+          const unassignedPaidTotal = aifRoundMoney(Math.max(0, salePaidTotal - saleLineAllocatedPaidTotal));
+
+          if (unassignedPaidTotal > 0.005) {
+            const error = new Error(
+              `${row.sale_number}: korábbi ${unassignedPaidTotal.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON részfizetés termékszintű bontása nem ismert. Ezt a régi bizonylatot előbb külön kell rendezni.`
+            );
+            error.statusCode = 409;
+            error.code = "customer_payment_line_allocation_ambiguous";
+            throw error;
+          }
+          if (activeQty <= 0) {
+            const error = new Error(`${row.product_title || "A kijelölt termék"} már vissza lett hozva, ezért nem fizethető ki.`);
+            error.statusCode = 409;
+            error.code = "customer_payment_line_returned";
+            throw error;
+          }
+          if (lineDue <= 0.005) {
+            const error = new Error(`${row.product_title || "A kijelölt termék"} már ki van fizetve.`);
+            error.statusCode = 409;
+            error.code = "customer_payment_line_already_paid";
+            throw error;
+          }
+          if (aifNumber(row.balance_due) <= 0.005) {
+            const error = new Error(`${row.sale_number}: a vásárlás tartozása már rendezve van.`);
+            error.statusCode = 409;
+            error.code = "customer_payment_sale_already_paid";
+            throw error;
+          }
+
+          return {
+            ...row,
+            activeQty,
+            activeLineTotal,
+            linePaidAmount,
+            lineDue,
+            salePaidTotal,
+            saleLineAllocatedPaidTotal,
+          };
+        });
+
+        const grouped = new Map();
+        for (const row of selectedRows) {
+          const saleId = String(row.sale_id);
+          if (!grouped.has(saleId)) {
+            grouped.set(saleId, {
+              saleId,
+              saleNumber: row.sale_number,
+              soldAt: row.sold_at,
+              total: aifRoundMoney(row.total),
+              paidTotal: aifRoundMoney(row.paid_total),
+              balanceDue: aifRoundMoney(row.balance_due),
+              lines: [],
+              amount: 0,
+            });
+          }
+          const group = grouped.get(saleId);
+          group.lines.push(row);
+          group.amount = aifRoundMoney(group.amount + row.lineDue);
+        }
+        selectedSaleGroups = Array.from(grouped.values());
+
+        for (const group of selectedSaleGroups) {
+          if (group.amount > group.balanceDue + 0.005) {
+            const error = new Error(`${group.saleNumber}: a kijelölt termékek összege nagyobb a fennmaradó tartozásnál.`);
+            error.statusCode = 409;
+            error.code = "customer_payment_selected_lines_exceed_sale_balance";
+            throw error;
+          }
+        }
+
+        amount = aifRoundMoney(
+          selectedSaleGroups.reduce((sum, group) => sum + group.amount, 0)
+        );
+        if (amount <= 0.005) {
+          const error = new Error("A kijelölt termékek között nincs kifizetendő tétel.");
+          error.statusCode = 400;
+          error.code = "customer_payment_no_selected_due";
+          throw error;
+        }
+      }
+
+      const openSales = selectedMode
+        ? null
+        : await client.query(
+            `SELECT id, sale_number, sold_at, total, paid_total, balance_due
+             FROM aif_shop_sales
+             WHERE customer_id=$1
+               AND location_id=$2
+               AND status='completed'
+               AND balance_due > 0
+             ORDER BY sold_at ASC, id ASC
+             FOR UPDATE`,
+            [customerLock.rows[0].id, location.id]
+          );
+
+      const openBalance = selectedMode
+        ? aifRoundMoney(
+            selectedSaleGroups.reduce((sum, group) => sum + group.balanceDue, 0)
+          )
+        : aifRoundMoney(
+            openSales.rows.reduce((sum, sale) => sum + aifNumber(sale.balance_due), 0)
+          );
+
+      if (!selectedMode && openBalance <= 0) {
         const error = new Error("Ennél a kliensnél nincs nyitott tartozás.");
         error.statusCode = 400;
         error.code = "customer_has_no_open_balance";
         throw error;
       }
-      if (amount > openBalance + 0.005) {
+      if (!selectedMode && amount > openBalance + 0.005) {
         const error = new Error(`A befizetés nem lehet nagyobb a nyitott tartozásnál: ${openBalance.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON.`);
         error.statusCode = 400;
         error.code = "customer_payment_exceeds_open_balance";
@@ -22775,85 +23125,183 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           reference,
           note,
           idempotencyKey,
-          JSON.stringify({ source: "shop_customer_payment", allocation: "fifo_oldest_sale_first" }),
+          JSON.stringify({
+            source: "shop_customer_payment",
+            allocation: selectedMode ? "selected_sale_lines" : "fifo_oldest_sale_first",
+            selectedLineIds: selectedMode ? selectedLineIds : [],
+          }),
         ]
       );
       const paymentId = paymentInsert.rows[0].id;
-      let remaining = amount;
 
-      for (const sale of openSales.rows) {
-        if (remaining <= 0.005) break;
-        const balanceBefore = aifRoundMoney(sale.balance_due);
-        const allocation = aifRoundMoney(Math.min(remaining, balanceBefore));
-        if (allocation <= 0) continue;
-        const balanceAfter = aifRoundMoney(Math.max(0, balanceBefore - allocation));
-        const paidAfter = aifRoundMoney(Math.min(aifNumber(sale.total), aifNumber(sale.paid_total) + allocation));
-        const paymentStatus = balanceAfter <= 0.005 ? "paid" : "partial";
+      if (selectedMode) {
+        for (const group of selectedSaleGroups) {
+          const balanceBefore = aifRoundMoney(group.balanceDue);
+          const allocation = aifRoundMoney(group.amount);
+          const balanceAfter = aifRoundMoney(Math.max(0, balanceBefore - allocation));
+          const paidAfter = aifRoundMoney(Math.min(group.total, group.paidTotal + allocation));
+          const paymentStatus = balanceAfter <= 0.005 ? "paid" : "partial";
 
-        await client.query(
-          `UPDATE aif_shop_sales
-           SET paid_total=$2,
-               balance_due=$3,
-               payment_status=$4,
-               updated_at=now()
-           WHERE id=$1`,
-          [sale.id, paidAfter, balanceAfter, paymentStatus]
-        );
+          await client.query(
+            `UPDATE aif_shop_sales
+             SET paid_total=$2,
+                 balance_due=$3,
+                 payment_status=$4,
+                 updated_at=now()
+             WHERE id=$1`,
+            [group.saleId, paidAfter, balanceAfter, paymentStatus]
+          );
 
-        await client.query(
-          `INSERT INTO aif_shop_customer_payment_allocations (
-             customer_payment_id, sale_id, amount, balance_before, balance_after
-           ) VALUES ($1,$2,$3,$4,$5)`,
-          [paymentId, sale.id, allocation, balanceBefore, balanceAfter]
-        );
+          await client.query(
+            `INSERT INTO aif_shop_customer_payment_allocations (
+               customer_payment_id, sale_id, amount, balance_before, balance_after
+             ) VALUES ($1,$2,$3,$4,$5)`,
+            [paymentId, group.saleId, allocation, balanceBefore, balanceAfter]
+          );
 
-        await client.query(
-          `INSERT INTO aif_shop_sale_payments (
-             sale_id, method, amount, paid_at, actor, reference, note, raw, customer_payment_id
-           ) VALUES ($1,$2,$3,now(),$4,$5,$6,$7::jsonb,$8)`,
-          [
-            sale.id,
-            method,
-            allocation,
-            actorFrom(req),
-            reference,
-            note,
-            JSON.stringify({
-              source: "shop_customer_payment",
-              customerId: String(customerLock.rows[0].id),
-              paymentId: String(paymentId),
-              balanceBefore,
-              balanceAfter,
-            }),
-            paymentId,
-          ]
-        );
-
-        await client.query(
-          `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
-           VALUES ($1,'customer_payment',$2,$3,$4::jsonb)`,
-          [
-            sale.id,
-            actorFrom(req),
-            note,
-            JSON.stringify({
-              customerPaymentId: String(paymentId),
-              amount: allocation,
+          await client.query(
+            `INSERT INTO aif_shop_sale_payments (
+               sale_id, method, amount, paid_at, actor, reference, note, raw, customer_payment_id
+             ) VALUES ($1,$2,$3,now(),$4,$5,$6,$7::jsonb,$8)`,
+            [
+              group.saleId,
               method,
+              allocation,
+              actorFrom(req),
               reference,
-              balanceBefore,
-              balanceAfter,
-            }),
-          ]
-        );
-        remaining = aifRoundMoney(remaining - allocation);
-      }
+              note,
+              JSON.stringify({
+                source: "shop_customer_payment",
+                allocation: "selected_sale_lines",
+                customerId: String(customerLock.rows[0].id),
+                paymentId: String(paymentId),
+                balanceBefore,
+                balanceAfter,
+                lineIds: group.lines.map((line) => String(line.id)),
+              }),
+              paymentId,
+            ]
+          );
 
-      if (remaining > 0.005) {
-        const error = new Error("A befizetés teljes összege nem volt hozzárendelhető a nyitott tartozásokhoz.");
-        error.statusCode = 409;
-        error.code = "customer_payment_allocation_incomplete";
-        throw error;
+          for (const line of group.lines) {
+            await client.query(
+              `INSERT INTO aif_shop_customer_payment_line_allocations (
+                 customer_payment_id, sale_id, sale_line_id, quantity,
+                 amount, line_due_before, line_due_after
+               ) VALUES ($1,$2,$3,$4,$5,$6,0)`,
+              [
+                paymentId,
+                group.saleId,
+                line.id,
+                line.activeQty,
+                line.lineDue,
+                line.lineDue,
+              ]
+            );
+          }
+
+          await client.query(
+            `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+             VALUES ($1,'customer_payment',$2,$3,$4::jsonb)`,
+            [
+              group.saleId,
+              actorFrom(req),
+              note,
+              JSON.stringify({
+                customerPaymentId: String(paymentId),
+                amount: allocation,
+                method,
+                reference,
+                balanceBefore,
+                balanceAfter,
+                allocation: "selected_sale_lines",
+                lines: group.lines.map((line) => ({
+                  saleLineId: String(line.id),
+                  productTitle: line.product_title || null,
+                  quantity: line.activeQty,
+                  amount: line.lineDue,
+                })),
+              }),
+            ]
+          );
+        }
+      } else {
+        let remaining = amount;
+
+        for (const sale of openSales.rows) {
+          if (remaining <= 0.005) break;
+          const balanceBefore = aifRoundMoney(sale.balance_due);
+          const allocation = aifRoundMoney(Math.min(remaining, balanceBefore));
+          if (allocation <= 0) continue;
+          const balanceAfter = aifRoundMoney(Math.max(0, balanceBefore - allocation));
+          const paidAfter = aifRoundMoney(Math.min(aifNumber(sale.total), aifNumber(sale.paid_total) + allocation));
+          const paymentStatus = balanceAfter <= 0.005 ? "paid" : "partial";
+
+          await client.query(
+            `UPDATE aif_shop_sales
+             SET paid_total=$2,
+                 balance_due=$3,
+                 payment_status=$4,
+                 updated_at=now()
+             WHERE id=$1`,
+            [sale.id, paidAfter, balanceAfter, paymentStatus]
+          );
+
+          await client.query(
+            `INSERT INTO aif_shop_customer_payment_allocations (
+               customer_payment_id, sale_id, amount, balance_before, balance_after
+             ) VALUES ($1,$2,$3,$4,$5)`,
+            [paymentId, sale.id, allocation, balanceBefore, balanceAfter]
+          );
+
+          await client.query(
+            `INSERT INTO aif_shop_sale_payments (
+               sale_id, method, amount, paid_at, actor, reference, note, raw, customer_payment_id
+             ) VALUES ($1,$2,$3,now(),$4,$5,$6,$7::jsonb,$8)`,
+            [
+              sale.id,
+              method,
+              allocation,
+              actorFrom(req),
+              reference,
+              note,
+              JSON.stringify({
+                source: "shop_customer_payment",
+                customerId: String(customerLock.rows[0].id),
+                paymentId: String(paymentId),
+                balanceBefore,
+                balanceAfter,
+              }),
+              paymentId,
+            ]
+          );
+
+          await client.query(
+            `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+             VALUES ($1,'customer_payment',$2,$3,$4::jsonb)`,
+            [
+              sale.id,
+              actorFrom(req),
+              note,
+              JSON.stringify({
+                customerPaymentId: String(paymentId),
+                amount: allocation,
+                method,
+                reference,
+                balanceBefore,
+                balanceAfter,
+              }),
+            ]
+          );
+          remaining = aifRoundMoney(remaining - allocation);
+        }
+
+        if (remaining > 0.005) {
+          const error = new Error("A befizetés teljes összege nem volt hozzárendelhető a nyitott tartozásokhoz.");
+          error.statusCode = 409;
+          error.code = "customer_payment_allocation_incomplete";
+          throw error;
+        }
       }
 
       await client.query(
@@ -25435,7 +25883,40 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           baseArgs
         ),
         pool.query(
-          `WITH payment_events AS (
+          `WITH exact_line_events AS (
+             SELECT
+               la.sale_id AS payment_sale_id,
+               cp.paid_at,
+               la.amount::numeric AS paid_amount,
+               CASE
+                 WHEN cp.method='cash' THEN 'Készpénz'
+                 WHEN cp.method='card' THEN 'Bankkártya'
+                 WHEN cp.method='bank_transfer' THEN 'Átutalás'
+                 ELSE cp.method
+               END AS payment_label,
+               sl.id AS sale_line_id,
+               sl.line_no,
+               sl.variant_id,
+               la.quantity::numeric AS active_qty,
+               sl.product_title,
+               sl.product_code,
+               sl.brand_name,
+               sl.subcategory_name,
+               sl.color_name,
+               sl.size,
+               sl.image_url
+             FROM aif_shop_customer_payment_line_allocations la
+             JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
+             JOIN aif_shop_sales ps ON ps.id=la.sale_id
+             JOIN aif_shop_sale_lines sl ON sl.id=la.sale_line_id
+             WHERE ps.location_id=$1
+               AND ps.status='completed'
+               AND cp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND cp.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+           ), payment_events AS (
              SELECT
                p.sale_id AS payment_sale_id,
                max(p.paid_at) AS paid_at,
@@ -25465,6 +25946,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g'))
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM aif_shop_customer_payment_line_allocations la
+                 WHERE la.customer_payment_id=p.customer_payment_id
+               )
              GROUP BY p.sale_id
            ), active_lines AS (
              SELECT
@@ -25512,47 +25998,84 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                )::numeric AS active_sale_value
              FROM active_lines al
              WHERE al.active_qty > 0
+           ), settlement_rows AS (
+             SELECT
+               ('payment_settlement:' || el.payment_sale_id::text || ':' || el.sale_line_id::text) AS key,
+               ('payment_settlement:' || el.payment_sale_id::text || ':' || el.sale_line_id::text) AS line_id,
+               s.id::text AS sale_id,
+               s.sale_number,
+               el.paid_at AS sold_at,
+               s.sold_at AS original_sold_at,
+               s.customer_id::text AS customer_id,
+               s.customer_name,
+               s.customer_phone,
+               'paid'::text AS payment_status,
+               0::numeric AS balance_due,
+               s.sale_type,
+               'payment_settlement'::text AS record_type,
+               COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS title,
+               el.product_code,
+               el.brand_name,
+               el.subcategory_name,
+               el.color_name,
+               el.size,
+               COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+               el.active_qty AS qty,
+               el.paid_amount AS revenue,
+               0::numeric AS discount_total,
+               0::int AS transactions,
+               el.payment_label,
+               el.paid_amount AS settlement_amount,
+               0::numeric AS stock_effect
+             FROM exact_line_events el
+             JOIN aif_shop_sales s ON s.id=el.payment_sale_id
+             LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+
+             UNION ALL
+
+             SELECT
+               ('payment_settlement:' || vl.payment_sale_id::text || ':' || vl.sale_line_id::text) AS key,
+               ('payment_settlement:' || vl.payment_sale_id::text || ':' || vl.sale_line_id::text) AS line_id,
+               s.id::text AS sale_id,
+               s.sale_number,
+               vl.paid_at AS sold_at,
+               s.sold_at AS original_sold_at,
+               s.customer_id::text AS customer_id,
+               s.customer_name,
+               s.customer_phone,
+               'paid'::text AS payment_status,
+               0::numeric AS balance_due,
+               s.sale_type,
+               'payment_settlement'::text AS record_type,
+               COALESCE(NULLIF(vl.product_title,''), NULLIF(vl.product_code,''), 'Ismeretlen termék') AS title,
+               vl.product_code,
+               vl.brand_name,
+               vl.subcategory_name,
+               vl.color_name,
+               vl.size,
+               COALESCE(NULLIF(vl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+               vl.active_qty AS qty,
+               CASE
+                 WHEN vl.active_sale_value > 0
+                 THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
+                 ELSE 0::numeric
+               END AS revenue,
+               0::numeric AS discount_total,
+               0::int AS transactions,
+               vl.payment_label,
+               CASE
+                 WHEN vl.active_sale_value > 0
+                 THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
+                 ELSE 0::numeric
+               END AS settlement_amount,
+               0::numeric AS stock_effect
+             FROM valued_lines vl
+             JOIN aif_shop_sales s ON s.id=vl.payment_sale_id
+             LEFT JOIN aif_product_variants v ON v.id=vl.variant_id
            )
-           SELECT
-             ('payment_settlement:' || vl.payment_sale_id::text || ':' || vl.sale_line_id::text) AS key,
-             ('payment_settlement:' || vl.payment_sale_id::text || ':' || vl.sale_line_id::text) AS line_id,
-             s.id::text AS sale_id,
-             s.sale_number,
-             vl.paid_at AS sold_at,
-             s.sold_at AS original_sold_at,
-             s.customer_id::text AS customer_id,
-             s.customer_name,
-             s.customer_phone,
-             'paid'::text AS payment_status,
-             0::numeric AS balance_due,
-             s.sale_type,
-             'payment_settlement'::text AS record_type,
-             COALESCE(NULLIF(vl.product_title,''), NULLIF(vl.product_code,''), 'Ismeretlen termék') AS title,
-             vl.product_code,
-             vl.brand_name,
-             vl.subcategory_name,
-             vl.color_name,
-             vl.size,
-             COALESCE(NULLIF(vl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
-             vl.active_qty AS qty,
-             CASE
-               WHEN vl.active_sale_value > 0
-               THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
-               ELSE 0::numeric
-             END AS revenue,
-             0::numeric AS discount_total,
-             0::int AS transactions,
-             vl.payment_label,
-             CASE
-               WHEN vl.active_sale_value > 0
-               THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
-               ELSE 0::numeric
-             END AS settlement_amount,
-             0::numeric AS stock_effect
-           FROM valued_lines vl
-           JOIN aif_shop_sales s ON s.id=vl.payment_sale_id
-           LEFT JOIN aif_product_variants v ON v.id=vl.variant_id
-           ORDER BY vl.paid_at DESC, s.sale_number DESC, vl.line_no ASC`,
+           SELECT *
+           FROM settlement_rows
+           ORDER BY sold_at DESC, sale_number DESC, line_id ASC`,
           baseArgs
         ),
         pool.query(
