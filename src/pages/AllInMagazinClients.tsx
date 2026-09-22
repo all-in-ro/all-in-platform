@@ -219,6 +219,7 @@ function paymentMethodPresentation(method: string) {
   if (key === "card") return { label: "Kártya", icon: CreditCard, tone: "text-[#a9c8ff]" };
   if (key === "bank_transfer") return { label: "Átutalás", icon: Landmark, tone: "text-[#cbbcff]" };
   if (key === "credit") return { label: "Utólag", icon: WalletCards, tone: "text-amber-100" };
+  if (key === "partial_unknown") return { label: "Korábbi részfizetés", icon: WalletCards, tone: "text-amber-100" };
   return { label: paymentMethodLabel(key || "other"), icon: WalletCards, tone: "text-white/48" };
 }
 
@@ -245,6 +246,10 @@ export default function AllInMagazinClients({
   const [paymentDraft, setPaymentDraft] = useState<PaymentDraft>(EMPTY_PAYMENT);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [paymentSelectedLineIds, setPaymentSelectedLineIds] = useState<string[]>([]);
+  const [paymentExpandedSaleIds, setPaymentExpandedSaleIds] = useState<string[]>([]);
+  const [paymentMethodChosen, setPaymentMethodChosen] = useState(false);
+  const [expandedSaleIds, setExpandedSaleIds] = useState<string[]>([]);
   const [returnTarget, setReturnTarget] = useState<CustomerReturnTarget | null>(null);
   const [discountTarget, setDiscountTarget] = useState<CustomerDiscountTarget | null>(null);
   const [discountPercentDraft, setDiscountPercentDraft] = useState("");
@@ -284,6 +289,32 @@ export default function AllInMagazinClients({
   );
   const customerHasOpenBalance = numberValue(detail?.summary.openBalance) > 0.005;
   const canManageCustomerData = role === "admin";
+
+  const paymentCandidateSales = useMemo(
+    () => (detail?.paymentCandidates || detail?.sales || [])
+      .filter((sale) => numberValue(sale.balanceDue) > 0.005),
+    [detail],
+  );
+  const selectedPaymentLines = useMemo(() => {
+    const selected = new Set(paymentSelectedLineIds);
+    return paymentCandidateSales.flatMap((sale) =>
+      (sale.lines || [])
+        .filter((line) => selected.has(line.id))
+        .map((line) => ({ sale, line })),
+    );
+  }, [paymentCandidateSales, paymentSelectedLineIds]);
+  const selectedPaymentTotal = useMemo(
+    () => roundMoney(selectedPaymentLines.reduce((sum, item) => sum + numberValue(item.line.dueAmount), 0)),
+    [selectedPaymentLines],
+  );
+  const selectablePaymentLineIds = useMemo(
+    () => paymentCandidateSales.flatMap((sale) =>
+      (sale.lines || [])
+        .filter((line) => line.paymentSelectable !== false && numberValue(line.dueAmount) > 0.005)
+        .map((line) => line.id),
+    ),
+    [paymentCandidateSales],
+  );
 
   const discountPreview = useMemo(() => {
     if (!discountTarget) return null;
@@ -372,6 +403,10 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setPaymentSelectedLineIds([]);
+    setPaymentExpandedSaleIds([]);
+    setPaymentMethodChosen(false);
+    setExpandedSaleIds([]);
     setDiscountTarget(null);
     setDiscountPercentDraft("");
     setDiscountNote("");
@@ -430,6 +465,10 @@ export default function AllInMagazinClients({
         if (!paymentSaving) {
           setPaymentOpen(false);
           setPaymentError("");
+          setPaymentDraft(EMPTY_PAYMENT);
+          setPaymentSelectedLineIds([]);
+          setPaymentExpandedSaleIds([]);
+          setPaymentMethodChosen(false);
           paymentRequestKeyRef.current = "";
         }
         return;
@@ -512,6 +551,10 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setPaymentSelectedLineIds([]);
+    setPaymentExpandedSaleIds([]);
+    setPaymentMethodChosen(false);
+    setExpandedSaleIds([]);
     setDiscountTarget(null);
     setDiscountPercentDraft("");
     setDiscountNote("");
@@ -551,6 +594,10 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setPaymentOpen(false);
     setPaymentError("");
+    setPaymentSelectedLineIds([]);
+    setPaymentExpandedSaleIds([]);
+    setPaymentMethodChosen(false);
+    setExpandedSaleIds([]);
     setDiscountTarget(null);
     setDiscountPercentDraft("");
     setDiscountNote("");
@@ -708,6 +755,9 @@ export default function AllInMagazinClients({
   function openPaymentModal() {
     if (!detail || numberValue(detail.summary.openBalance) <= 0.005) return;
     setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentSelectedLineIds([]);
+    setPaymentExpandedSaleIds([]);
+    setPaymentMethodChosen(false);
     setPaymentError("");
     paymentRequestKeyRef.current = "";
     setPaymentOpen(true);
@@ -718,19 +768,52 @@ export default function AllInMagazinClients({
     setPaymentOpen(false);
     setPaymentError("");
     setPaymentDraft(EMPTY_PAYMENT);
+    setPaymentSelectedLineIds([]);
+    setPaymentExpandedSaleIds([]);
+    setPaymentMethodChosen(false);
     paymentRequestKeyRef.current = "";
+  }
+
+  function togglePaymentSale(saleId: string) {
+    setPaymentExpandedSaleIds((current) =>
+      current.includes(saleId)
+        ? current.filter((id) => id !== saleId)
+        : [...current, saleId],
+    );
+  }
+
+  function togglePaymentLine(lineId: string) {
+    paymentRequestKeyRef.current = "";
+    setPaymentError("");
+    setPaymentSelectedLineIds((current) =>
+      current.includes(lineId)
+        ? current.filter((id) => id !== lineId)
+        : [...current, lineId],
+    );
+  }
+
+  function toggleAllPaymentLines() {
+    paymentRequestKeyRef.current = "";
+    setPaymentError("");
+    const allSelected = selectablePaymentLineIds.length > 0
+      && selectablePaymentLineIds.every((id) => paymentSelectedLineIds.includes(id));
+    setPaymentSelectedLineIds(allSelected ? [] : selectablePaymentLineIds);
   }
 
   async function recordPayment() {
     if (!selected || !detail) return;
-    const amount = parseMoneyInput(paymentDraft.amount);
+    const amount = selectedPaymentTotal;
     const openBalance = numberValue(detail.summary.openBalance);
-    if (amount <= 0) {
-      setPaymentError("A befizetés összege legyen nagyobb nullánál.");
+    if (!selectedPaymentLines.length || amount <= 0.005) {
+      setPaymentError("Jelöld ki, melyik terméket vagy termékeket fizeti ki a kliens.");
       return;
     }
     if (amount > openBalance + 0.005) {
-      setPaymentError(`A befizetés nem lehet nagyobb a nyitott tartozásnál: ${formatMoney(openBalance)}.`);
+      setPaymentError(`A kijelölt termékek összege nagyobb a nyitott tartozásnál: ${formatMoney(openBalance)}.`);
+      return;
+    }
+    if (!paymentMethodChosen) {
+      setPaymentError("Válaszd ki a fizetési módot.");
       return;
     }
 
@@ -744,14 +827,22 @@ export default function AllInMagazinClients({
         amount,
         method: paymentDraft.method,
         location: locationCode,
+        items: selectedPaymentLines.map(({ sale, line }) => ({
+          saleId: sale.id,
+          lineId: line.id,
+        })),
         reference: paymentDraft.reference.trim() || null,
         note: paymentDraft.note.trim() || null,
         idempotencyKey: paymentRequestKeyRef.current,
       });
+      const paidProducts = selectedPaymentLines.length;
       setSuccess(
-        `${formatMoney(response.payment.amount)} befizetés rögzítve. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
+        `${paidProducts} terméksor • ${formatMoney(response.payment.amount)} befizetés rögzítve. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`,
       );
       setPaymentDraft(EMPTY_PAYMENT);
+      setPaymentSelectedLineIds([]);
+      setPaymentExpandedSaleIds([]);
+      setPaymentMethodChosen(false);
       paymentRequestKeyRef.current = "";
       setPaymentOpen(false);
       await Promise.all([
@@ -764,6 +855,7 @@ export default function AllInMagazinClients({
       setPaymentSaving(false);
     }
   }
+
 
   function openDiscountModal(
     sale: AifShopCustomerSaleHistoryItem,
@@ -1387,6 +1479,7 @@ export default function AllInMagazinClients({
                             paidAt: null,
                           });
                         }
+                        const saleExpanded = expandedSaleIds.includes(sale.id);
 
                         return (
                         <article key={sale.id} className="overflow-hidden rounded-[20px] bg-[#293548] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
@@ -1404,7 +1497,23 @@ export default function AllInMagazinClients({
                               <div className="text-right">
                                 <p className="text-[9px] uppercase tracking-[0.11em] text-white/36">Vásárlás összege</p>
                                 <p className="mt-1 text-[24px] leading-none tracking-tight text-white tabular-nums">{formatMoney(sale.total)}</p>
+                                <p className={`mt-1 text-[10px] ${numberValue(sale.balanceDue) > 0.005 ? "text-red-200" : "text-[#9be9e5]"}`}>
+                                  {numberValue(sale.balanceDue) > 0.005 ? `Tartozás: ${formatMoney(sale.balanceDue)}` : "Rendezve"}
+                                </p>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => setExpandedSaleIds((current) =>
+                                  current.includes(sale.id)
+                                    ? current.filter((id) => id !== sale.id)
+                                    : [...current, sale.id],
+                                )}
+                                className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 text-[11px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/22"
+                                aria-expanded={saleExpanded}
+                              >
+                                {saleExpanded ? "Összecsukás" : `Termékek (${sale.lines?.length || 0})`}
+                                <ChevronDown size={15} className={`transition-transform ${saleExpanded ? "rotate-180" : ""}`} />
+                              </button>
                               {canManageCustomerData ? (
                                 <button
                                   type="button"
@@ -1418,6 +1527,8 @@ export default function AllInMagazinClients({
                             </div>
                           </div>
 
+                          {saleExpanded ? (
+                            <>
                           <div className="p-3">
                             <div className="mb-1 hidden grid-cols-[66px_minmax(220px,1fr)_52px_108px_104px_118px_100px_104px] items-center gap-2.5 px-3 pb-2 text-[8px] uppercase tracking-[0.10em] text-white/30 lg:grid">
                               <span />
@@ -1436,9 +1547,12 @@ export default function AllInMagazinClients({
                               const remainingQty = Math.max(0, Math.floor(numberValue(line.quantity)));
                               const maxByDebt = unitPrice > 0 ? Math.floor((saleBalance + 0.005) / unitPrice) : 0;
                               const maxReturnQty = Math.max(0, Math.min(remainingQty, maxByDebt));
+                              const lineDueForCreditReturn = numberValue(line.dueAmount ?? line.lineTotal);
+                              const canAdjustLateDiscount = saleBalance > 0.005 && numberValue(line.paidAmount) <= 0.005;
                               const canQuickReturn = Boolean(
                                 line.variantId
                                 && saleBalance > 0.005
+                                && lineDueForCreditReturn > 0.005
                                 && maxReturnQty > 0
                               );
                               const originalUnitPrice = numberValue(line.listPrice);
@@ -1448,6 +1562,14 @@ export default function AllInMagazinClients({
                               const discountAmount = Math.max(numberValue(line.discountAmount), calculatedDiscount);
                               const discountPercent = numberValue(line.discountPercent);
                               const hasDiscount = discountAmount > 0.005 || discountPercent > 0.005 || originalUnitPrice > finalUnitPrice + 0.005;
+                              const exactLinePaymentRows = Array.isArray(line.payments) ? line.payments : [];
+                              const linePaymentRows: CustomerSalePaymentView[] = exactLinePaymentRows.length
+                                ? exactLinePaymentRows
+                                : saleBalance <= 0.005
+                                  ? salePaymentRows
+                                  : numberValue(sale.unassignedPaidTotal) > 0.005
+                                    ? [{ method: "partial_unknown", amount: numberValue(sale.unassignedPaidTotal), paidAt: null }]
+                                    : [{ method: "credit", amount: numberValue(line.dueAmount ?? line.lineTotal), paidAt: null }];
 
                               return (
                                 <div
@@ -1506,7 +1628,7 @@ export default function AllInMagazinClients({
                                   </div>
 
                                   <div className="hidden min-h-[38px] items-center justify-end lg:flex">
-                                    {saleBalance > 0.005 ? (
+                                    {canAdjustLateDiscount ? (
                                       <button
                                         type="button"
                                         onClick={() => openDiscountModal(sale, line)}
@@ -1544,7 +1666,7 @@ export default function AllInMagazinClients({
                                   </div>
 
                                   <div className="hidden min-w-0 flex-col items-center justify-center gap-1 lg:flex">
-                                    {salePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
+                                    {linePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
                                       const visual = paymentMethodPresentation(String(payment.method || ""));
                                       const PaymentIcon = visual.icon;
                                       return (
@@ -1558,8 +1680,8 @@ export default function AllInMagazinClients({
                                         </span>
                                       );
                                     })}
-                                    {salePaymentRows.length > 2 ? (
-                                      <span className="text-[9px] text-white/30">+{salePaymentRows.length - 2}</span>
+                                    {linePaymentRows.length > 2 ? (
+                                      <span className="text-[9px] text-white/30">+{linePaymentRows.length - 2}</span>
                                     ) : null}
                                   </div>
 
@@ -1599,7 +1721,7 @@ export default function AllInMagazinClients({
                                             −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • −{formatMoney(discountAmount)}
                                           </button>
                                         </>
-                                      ) : saleBalance > 0.005 ? (
+                                      ) : canAdjustLateDiscount ? (
                                         <>
                                           <p className="mt-1 text-[14px] text-white">{formatMoney(finalUnitPrice)}</p>
                                           <button
@@ -1618,7 +1740,7 @@ export default function AllInMagazinClients({
                                       <p className="text-[9px] uppercase tracking-[0.08em] text-white/30">Fizetendő</p>
                                       <p className="mt-1 text-[17px] text-white">{formatMoney(line.lineTotal)}</p>
                                       <div className="mt-1 flex flex-wrap justify-end gap-2">
-                                        {salePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
+                                        {linePaymentRows.slice(0, 2).map((payment, paymentIndex) => {
                                           const visual = paymentMethodPresentation(String(payment.method || ""));
                                           const PaymentIcon = visual.icon;
                                           return (
@@ -1684,6 +1806,8 @@ export default function AllInMagazinClients({
                               </p>
                             </div>
                           </div>
+                            </>
+                          ) : null}
                         </article>
                         );
                       }) : (
@@ -1728,6 +1852,20 @@ export default function AllInMagazinClients({
                                 <div key={`${payment.id}-${allocation.saleId}`} className="flex items-center justify-between gap-3 text-[11px] text-white/52">
                                   <span className="truncate">{allocation.saleNumber}</span>
                                   <span className="shrink-0">{formatMoney(allocation.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {payment.lineAllocations?.length ? (
+                            <div className="mt-2 space-y-1.5 rounded-xl bg-[#242f41] px-3 py-2.5">
+                              <p className="text-[9px] uppercase tracking-[0.09em] text-[#9be9e5]/55">Kifizetett termékek</p>
+                              {payment.lineAllocations.map((allocation) => (
+                                <div key={`${payment.id}-${allocation.saleLineId}`} className="flex items-center justify-between gap-3 text-[10px] text-white/58">
+                                  <span className="min-w-0 truncate">
+                                    {allocation.productTitle || allocation.productCode || allocation.saleNumber}
+                                    {allocation.quantity > 1 ? ` • ${allocation.quantity} db` : ""}
+                                  </span>
+                                  <span className="shrink-0 text-[#d7fffd]">{formatMoney(allocation.amount)}</span>
                                 </div>
                               ))}
                             </div>
@@ -1867,7 +2005,7 @@ export default function AllInMagazinClients({
             if (event.currentTarget === event.target && !paymentSaving) closePaymentModal();
           }}
         >
-          <section className="w-full max-w-[760px] overflow-hidden rounded-[28px] border border-[#9be9e5]/36 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.66)]">
+          <section className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/36 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.66)]">
             <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-5 py-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/25 bg-white/10">
@@ -1875,7 +2013,7 @@ export default function AllInMagazinClients({
                 </span>
                 <div>
                   <p className="text-[9px] uppercase tracking-[0.15em] text-white/58">Tartozás rendezése</p>
-                  <h3 className="mt-1 text-xl">Befizetés • {selected.fullName}</h3>
+                  <h3 className="mt-1 text-xl">Termékek kifizetése • {selected.fullName}</h3>
                 </div>
               </div>
               <button
@@ -1888,102 +2026,228 @@ export default function AllInMagazinClients({
               </button>
             </header>
 
-            <div className="p-5">
-              <div className="flex flex-wrap items-end justify-between gap-4">
-                <div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.55fr)]">
+                <div className="rounded-2xl bg-[#273243] p-4">
                   <p className="text-[10px] uppercase tracking-[0.12em] text-white/38">Jelenlegi tartozás</p>
-                  <p className="mt-1 text-[34px] tracking-tight text-red-100 tabular-nums">{formatMoney(detail.summary.openBalance)}</p>
+                  <p className="mt-1 text-[32px] tracking-tight text-red-100 tabular-nums">{formatMoney(detail.summary.openBalance)}</p>
+                  <p className="mt-2 text-[11px] text-white/42">Nyisd ki a vásárlást, és jelöld ki a most kifizetett termékeket.</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    paymentRequestKeyRef.current = "";
-                    setPaymentDraft((current) => ({ ...current, amount: String(numberValue(detail.summary.openBalance).toFixed(2)) }));
-                  }}
-                  className="h-9 rounded-xl border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 text-[11px] text-[#d7fffd] hover:bg-[#2a8d8b]/24"
-                >
-                  Teljes tartozás
-                </button>
+                <div className={`rounded-2xl p-4 ${
+                  selectedPaymentTotal > 0.005
+                    ? "bg-[#2a8d8b] text-white"
+                    : "bg-[#273243] text-white"
+                }`}>
+                  <p className="text-[10px] uppercase tracking-[0.12em] opacity-62">Kijelölve</p>
+                  <p className="mt-1 text-[32px] tracking-tight tabular-nums">{formatMoney(selectedPaymentTotal)}</p>
+                  <p className="mt-2 text-[11px] opacity-70">{selectedPaymentLines.length} terméksor</p>
+                </div>
               </div>
 
               {paymentError ? (
                 <div className="mt-4 rounded-xl bg-[#E21C2A] px-3 py-2.5 text-[12px] text-white">{paymentError}</div>
               ) : null}
 
-              <label className="mt-4 block">
-                <span className="text-[10px] uppercase tracking-[0.12em] text-white/45">Befizetni kívánt összeg</span>
-                <div className="mt-2 grid grid-cols-[1fr_auto] overflow-hidden rounded-2xl bg-[#232e3f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.10)] focus-within:shadow-[inset_0_0_0_1px_rgba(114,216,212,0.75)]">
-                  <input
-                    autoFocus
-                    inputMode="decimal"
-                    value={paymentDraft.amount}
-                    onChange={(event) => {
-                      paymentRequestKeyRef.current = "";
-                      setPaymentError("");
-                      setPaymentDraft((current) => ({ ...current, amount: event.target.value.replace(/[^0-9.,]/g, "") }));
-                    }}
-                    className="h-20 min-w-0 bg-transparent px-5 text-right text-[34px] tracking-tight text-white outline-none"
-                    placeholder="0,00"
-                  />
-                  <span className="inline-flex h-20 items-center border-l border-white/10 px-5 text-lg text-white/48">RON</span>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Nyitott vásárlások</p>
+                  <p className="mt-1 text-sm text-white/72">{paymentCandidateSales.length} vásárlásból lehet választani</p>
                 </div>
-              </label>
+                {selectablePaymentLineIds.length ? (
+                  <button
+                    type="button"
+                    onClick={toggleAllPaymentLines}
+                    className="inline-flex h-9 items-center rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/14 px-3 text-[11px] text-[#d7fffd] hover:bg-[#2a8d8b]/24"
+                  >
+                    {selectablePaymentLineIds.every((id) => paymentSelectedLineIds.includes(id))
+                      ? "Kijelölés törlése"
+                      : "Minden fizethető termék"}
+                  </button>
+                ) : null}
+              </div>
 
-              <div className="mt-4">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Fizetési mód</p>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  {PAYMENT_METHODS.map((option) => {
-                    const Icon = option.icon;
-                    const active = paymentDraft.method === option.value;
-                    return (
+              <div className="mt-3 space-y-2.5">
+                {paymentCandidateSales.length ? paymentCandidateSales.map((sale) => {
+                  const saleOpen = paymentExpandedSaleIds.includes(sale.id);
+                  const saleSelectableLines = (sale.lines || []).filter(
+                    (line) => line.paymentSelectable !== false && numberValue(line.dueAmount) > 0.005,
+                  );
+                  const selectedInSale = saleSelectableLines.filter((line) => paymentSelectedLineIds.includes(line.id)).length;
+                  return (
+                    <article key={`pay-${sale.id}`} className="overflow-hidden rounded-2xl border border-white/10 bg-[#293548]">
                       <button
-                        key={option.value}
                         type="button"
-                        onClick={() => {
-                          paymentRequestKeyRef.current = "";
-                          setPaymentDraft((current) => ({ ...current, method: option.value }));
-                        }}
-                        className={`flex h-12 items-center justify-center gap-2 rounded-xl px-3 text-[12px] transition ${
-                          active
-                            ? "bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.22)]"
-                            : "bg-[#273243] text-white/62 hover:bg-[#344055]"
-                        }`}
+                        onClick={() => togglePaymentSale(sale.id)}
+                        className="flex w-full items-center justify-between gap-4 bg-[#303b4e] px-4 py-3.5 text-left transition hover:bg-[#354257]"
+                        aria-expanded={saleOpen}
                       >
-                        <Icon size={16} /> {option.label}
+                        <div className="min-w-0">
+                          <p className="flex flex-wrap items-center gap-2 text-sm text-white">
+                            <CalendarDays size={14} className="text-[#8ee6e2]" />
+                            <span>{formatDateTime(sale.soldAt)}</span>
+                            <span className="text-white/46">•</span>
+                            <span className="truncate">{sale.saleNumber}</span>
+                          </p>
+                          <p className="mt-1 text-[10px] text-white/42">
+                            {sale.lines?.length || 0} terméksor • Fennmaradó tartozás: {formatMoney(sale.balanceDue)}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-3">
+                          {selectedInSale > 0 ? (
+                            <span className="rounded-lg bg-[#2a8d8b] px-2 py-1 text-[10px] text-white">
+                              {selectedInSale} kijelölve
+                            </span>
+                          ) : null}
+                          <ChevronDown size={17} className={`text-white/62 transition-transform ${saleOpen ? "rotate-180" : ""}`} />
+                        </div>
                       </button>
-                    );
-                  })}
+
+                      {saleOpen ? (
+                        <div className="border-t border-white/8 p-3">
+                          {sale.linePaymentSelectable === false ? (
+                            <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200/20 bg-amber-400/10 px-3 py-2.5 text-[11px] leading-relaxed text-amber-50">
+                              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                              <span>{sale.linePaymentBlockReason || "Ehhez a régi részfizetéshez nincs termékszintű bontás."}</span>
+                            </div>
+                          ) : null}
+
+                          <div className="space-y-2">
+                            {(sale.lines || []).map((line) => {
+                              const due = numberValue(line.dueAmount);
+                              const selectable = line.paymentSelectable !== false && due > 0.005;
+                              const checked = paymentSelectedLineIds.includes(line.id);
+                              return (
+                                <label
+                                  key={`pay-line-${line.id}`}
+                                  className={`grid grid-cols-[auto_54px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                                    checked
+                                      ? "border-[#9be9e5]/52 bg-[#2a8d8b]/18"
+                                      : selectable
+                                        ? "border-white/10 bg-[#263245] hover:border-[#72d8d4]/30 hover:bg-[#2b384b]"
+                                        : "cursor-not-allowed border-white/[0.06] bg-[#242e3e] opacity-55"
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={!selectable || paymentSaving}
+                                    onChange={() => togglePaymentLine(line.id)}
+                                    className="h-5 w-5 accent-[#2a8d8b]"
+                                  />
+                                  <span className="flex h-[54px] w-[54px] items-center justify-center overflow-hidden rounded-lg bg-white/95">
+                                    {line.imageUrl ? (
+                                      <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
+                                    ) : (
+                                      <ShoppingBag size={20} className="text-[#526173]" />
+                                    )}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[13px] text-white">{line.productTitle || "Névtelen termék"}</p>
+                                    <p className="mt-0.5 truncate text-[10px] text-white/48">
+                                      {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
+                                    </p>
+                                    <p className="mt-1 text-[9px] text-white/30">
+                                      {line.quantity} db
+                                      {numberValue(line.paidAmount) > 0.005 ? ` • Már fizetve: ${formatMoney(line.paidAmount)}` : ""}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">
+                                      {due > 0.005 ? "Fizetendő" : "Rendezve"}
+                                    </p>
+                                    <p className={`mt-1 text-[17px] tabular-nums ${due > 0.005 ? "text-[#d7fffd]" : "text-white/35"}`}>
+                                      {formatMoney(due)}
+                                    </p>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                }) : (
+                  <div className="rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/42">
+                    Nincs kijelölhető nyitott tartozás.
+                  </div>
+                )}
+              </div>
+
+              {selectedPaymentTotal > 0.005 ? (
+                <div className="mt-5 rounded-2xl border border-[#9be9e5]/18 bg-[#263245] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Fizetési mód</p>
+                      <p className="mt-1 text-[11px] text-white/42">A kijelölt termékek összege: {formatMoney(selectedPaymentTotal)}</p>
+                    </div>
+                    {!paymentMethodChosen ? (
+                      <span className="rounded-lg border border-amber-200/18 bg-amber-400/8 px-2 py-1 text-[10px] text-amber-50">Válassz fizetési módot</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {PAYMENT_METHODS.map((option) => {
+                      const Icon = option.icon;
+                      const active = paymentMethodChosen && paymentDraft.method === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            paymentRequestKeyRef.current = "";
+                            setPaymentError("");
+                            setPaymentMethodChosen(true);
+                            setPaymentDraft((current) => ({ ...current, method: option.value }));
+                          }}
+                          className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-3 text-[12px] transition ${
+                            active
+                              ? "border-[#b9f5f2]/45 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.22)]"
+                              : "border-white/12 bg-[#273243] text-white/62 hover:bg-[#344055]"
+                          }`}
+                        >
+                          <Icon size={16} /> {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
+                      Hivatkozás
+                      <input
+                        value={paymentDraft.reference}
+                        onChange={(event) => {
+                          paymentRequestKeyRef.current = "";
+                          setPaymentDraft((current) => ({ ...current, reference: event.target.value }));
+                        }}
+                        placeholder="Nyugtaszám, átutalási azonosító…"
+                        className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
+                      />
+                    </label>
+                    <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
+                      Megjegyzés
+                      <input
+                        value={paymentDraft.note}
+                        onChange={(event) => {
+                          paymentRequestKeyRef.current = "";
+                          setPaymentDraft((current) => ({ ...current, note: event.target.value }));
+                        }}
+                        placeholder="Opcionális"
+                        className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
+                      />
+                    </label>
+                  </div>
                 </div>
-              </div>
+              ) : null}
+            </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
-                  Hivatkozás
-                  <input
-                    value={paymentDraft.reference}
-                    onChange={(event) => {
-                      paymentRequestKeyRef.current = "";
-                      setPaymentDraft((current) => ({ ...current, reference: event.target.value }));
-                    }}
-                    placeholder="Nyugtaszám, átutalási azonosító…"
-                    className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
-                  />
-                </label>
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/45">
-                  Megjegyzés
-                  <input
-                    value={paymentDraft.note}
-                    onChange={(event) => {
-                      paymentRequestKeyRef.current = "";
-                      setPaymentDraft((current) => ({ ...current, note: event.target.value }));
-                    }}
-                    placeholder="Opcionális"
-                    className="h-11 rounded-xl bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-1 focus:ring-[#72d8d4]"
-                  />
-                </label>
+            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] bg-[#293548] px-5 py-4">
+              <div className="text-sm text-white/60">
+                Kijelölve: <span className="text-white">{selectedPaymentLines.length} terméksor</span>
+                <span className="mx-2 text-white/22">•</span>
+                <span className="text-[#d7fffd]">{formatMoney(selectedPaymentTotal)}</span>
               </div>
-
-              <div className="mt-5 flex justify-end gap-2 border-t border-white/[0.08] pt-4">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   disabled={paymentSaving}
@@ -1994,15 +2258,15 @@ export default function AllInMagazinClients({
                 </button>
                 <button
                   type="button"
-                  disabled={paymentSaving}
+                  disabled={paymentSaving || selectedPaymentTotal <= 0.005 || !paymentMethodChosen}
                   onClick={() => void recordPayment()}
-                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-55"
+                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {paymentSaving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />}
-                  Befizetés rögzítése
+                  {selectedPaymentTotal > 0.005 ? `${formatMoney(selectedPaymentTotal)} kifizetése` : "Termékek kijelölése"}
                 </button>
               </div>
-            </div>
+            </footer>
           </section>
         </div>
       ) : null}
