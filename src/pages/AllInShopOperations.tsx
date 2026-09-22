@@ -2047,11 +2047,11 @@ export default function AllInShopOperations({
                 <section className="rounded-[22px] bg-[#344055]/72 p-3 shadow-[0_10px_30px_rgba(15,23,42,0.16)]">
                   <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/8 px-1 pb-2.5">
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.14em] text-[#9be9e5]/62">Mit adtam el?</p>
-                      <h3 className="mt-1 text-[19px] text-white">Eladott termékek</h3>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-[#9be9e5]/62">Mit adtam el / mit fizettek ki?</p>
+                      <h3 className="mt-1 text-[19px] text-white">Termékek és későbbi kifizetések</h3>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-[10px] text-white/42">{dailyProductLines.length} terméksor</span>
+                      <span className="text-[10px] text-white/42">{dailyProductLines.length} eseménysor</span>
                       {daySummary.unpaidSales > 0 ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
                           <TriangleAlert size={11} /> {daySummary.unpaidSales} nyitott fizetés
@@ -2061,15 +2061,22 @@ export default function AllInShopOperations({
                   </div>
                   <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.14]">
                     {dailyProductLines.map((item) => {
+                      const settlement = String(item.recordType || "") === "payment_settlement";
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
-                      const unpaid = numberValue(item.balanceDue) > 0.005 || ["unpaid", "partial", "credit"].includes(paymentStatus);
-
-                      const linkedSale = (summaryData?.sales || []).find(
-                        (sale) =>
-                          String(sale.id || "") === String(item.saleId || "") &&
-                          String(sale.recordType || "sale") === String(item.recordType || "sale"),
+                      const unpaid = !settlement && (
+                        numberValue(item.balanceDue) > 0.005 ||
+                        ["unpaid", "partial", "credit"].includes(paymentStatus)
                       );
+
+                      const linkedSale = settlement
+                        ? null
+                        : (summaryData?.sales || []).find(
+                            (sale) =>
+                              String(sale.id || "") === String(item.saleId || "") &&
+                              String(sale.recordType || "sale") === String(item.recordType || "sale"),
+                          );
                       const paymentLabel = String(
+                        item.paymentLabel ||
                         linkedSale?.paymentLabel ||
                         (unpaid ? "Utólag fizet" : "Nincs adat"),
                       );
@@ -2086,9 +2093,11 @@ export default function AllInShopOperations({
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
                           className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
-                            unpaid
-                              ? "bg-[#2c3546] hover:bg-[#303a4b]"
-                              : "bg-[#293548] hover:bg-[#2d3b4f]"
+                            settlement
+                              ? "bg-[#2b4058] hover:bg-[#304963]"
+                              : unpaid
+                                ? "bg-[#2c3546] hover:bg-[#303a4b]"
+                                : "bg-[#293548] hover:bg-[#2d3b4f]"
                           }`}
                         >
                           {unpaid ? (
@@ -2105,6 +2114,11 @@ export default function AllInShopOperations({
                               {item.recordType === "exchange" ? (
                                 <span className="shrink-0 rounded-md bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#cffffd]">Csere</span>
                               ) : null}
+                              {settlement ? (
+                                <span className="shrink-0 rounded-md border border-[#9bc8ff]/32 bg-[#3978b9]/18 px-2 py-0.5 text-[10px] text-[#d9ecff]">
+                                  Korábbi vásárlás rendezve
+                                </span>
+                              ) : null}
                             </div>
 
                             <p
@@ -2113,6 +2127,11 @@ export default function AllInShopOperations({
                             >
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
+                            {settlement && item.originalSoldAt ? (
+                              <p className="mt-1 text-[10px] text-[#cfe5ff]/68">
+                                Eredeti eladás: {formatExactDateTime(item.originalSoldAt)}
+                              </p>
+                            ) : null}
 
                             <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-white/[0.08] pt-2.5">
                               {item.customerName ? (
@@ -2169,7 +2188,7 @@ export default function AllInShopOperations({
                                   <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
                                   <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] tabular-nums text-white/42">
                                     <Clock3 size={13} className="text-white/32" />
-                                    {formatTime(item.soldAt)}
+                                    {settlement ? "Fizetve " : ""}{formatTime(item.soldAt)}
                                   </span>
                                 </>
                               ) : null}
@@ -2191,20 +2210,34 @@ export default function AllInShopOperations({
                               <p className="text-[11px] uppercase tracking-[0.08em] text-white/34">
                                 {item.qty} db
                               </p>
-                              <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-white">
-                                {formatMoney(item.revenue)}
-                              </p>
-                              {item.discountTotal > 0 ? (
-                                <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100/76">
-                                  Kedvezmény −{formatMoney(item.discountTotal)}
-                                </p>
-                              ) : null}
+                              {settlement ? (
+                                <>
+                                  <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/60">Kifizetve ezen a napon</p>
+                                  <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-[#d9ecff]">
+                                    {formatMoney(item.settlementAmount ?? item.revenue)}
+                                  </p>
+                                  <p className="mt-1 whitespace-nowrap text-[10px] text-white/38">
+                                    Készletmozgás: 0 db
+                                  </p>
+                                </>
+                              ) : (
+                                <>
+                                  <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-white">
+                                    {formatMoney(item.revenue)}
+                                  </p>
+                                  {item.discountTotal > 0 ? (
+                                    <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100/76">
+                                      Kedvezmény −{formatMoney(item.discountTotal)}
+                                    </p>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
                       );
                     })}
-                    {!summaryLoading && !dailyProductLines.length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladott termék.</p></div> : null}
+                    {!summaryLoading && !dailyProductLines.length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladási vagy későbbi kifizetési termékesemény.</p></div> : null}
                   </div>
                 </section>
 
