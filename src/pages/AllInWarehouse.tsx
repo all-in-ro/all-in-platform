@@ -7970,39 +7970,116 @@ export default function AllInWarehouse() {
       }));
     const tooltipRows = [...knownRows, ...extraRows].filter((row) => row.name.trim());
     const activePlaceCount = tooltipRows.filter((row) => row.qty > 0).length;
-    const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
+
+    const buttonRef = useRef<HTMLButtonElement | null>(null);
+    const [tooltipOpen, setTooltipOpen] = useState(false);
+    const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
+
+    const updateTooltipPosition = useCallback(() => {
+      if (typeof window === "undefined") return;
+      const button = buttonRef.current;
+      if (!button) return;
+
+      const rect = button.getBoundingClientRect();
+      const viewportPadding = 10;
+      const gap = 8;
+      const width = Math.min(288, Math.max(250, window.innerWidth - viewportPadding * 2));
+      const estimatedHeight = Math.min(
+        300,
+        58 + Math.max(1, tooltipRows.length) * 34,
+      );
+
+      let left = rect.left + rect.width / 2 - width / 2;
+      left = Math.min(
+        Math.max(viewportPadding, left),
+        Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+      );
+
+      const roomBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+      const roomAbove = Math.max(0, rect.top - viewportPadding);
+      const shouldOpenUp = openUp || (roomBelow < estimatedHeight && roomAbove > roomBelow);
+
+      let top = shouldOpenUp
+        ? Math.max(viewportPadding, rect.top - gap)
+        : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap);
+
+      setTooltipStyle({
+        position: "fixed",
+        left,
+        top,
+        width,
+        transform: shouldOpenUp ? "translateY(-100%)" : "none",
+        zIndex: 2147483200,
+      });
+    }, [openUp, tooltipRows.length]);
+
+    useEffect(() => {
+      if (!tooltipOpen) return;
+      updateTooltipPosition();
+      const frame = window.requestAnimationFrame(updateTooltipPosition);
+      const reposition = () => updateTooltipPosition();
+      window.addEventListener("scroll", reposition, true);
+      window.addEventListener("resize", reposition);
+      return () => {
+        window.cancelAnimationFrame(frame);
+        window.removeEventListener("scroll", reposition, true);
+        window.removeEventListener("resize", reposition);
+      };
+    }, [tooltipOpen, updateTooltipPosition]);
+
+    const tooltip = tooltipOpen && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="pointer-events-none rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-[0_24px_60px_rgba(0,0,0,.55)]"
+            style={tooltipStyle}
+            role="tooltip"
+          >
+            <div className="text-[#cffffd]">Készlet üzletenként</div>
+            <div className="mt-2 space-y-1">
+              {tooltipRows.length ? tooltipRows.map((row) => (
+                <div key={row.key} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1.5">
+                  <span className="min-w-0 truncate text-white/78">{row.name}</span>
+                  <span className="shrink-0 text-right tabular-nums text-white">
+                    {row.qty} db
+                    {row.reservedQty > 0 ? <span className="ml-1 text-white/48">/ foglalt {row.reservedQty}</span> : null}
+                  </span>
+                </div>
+              )) : (
+                <div className="rounded-lg bg-white/[0.06] px-2 py-1.5 text-white/68">Nincs készletadat üzletenként.</div>
+              )}
+            </div>
+            <div className="mt-2 border-t border-white/10 pt-1 text-[10px] text-white/45">Kattintás: készlet szerkesztése</div>
+          </div>,
+          document.body,
+        )
+      : null;
 
     return (
-      <span className="group relative inline-flex shrink-0 justify-center align-middle whitespace-nowrap">
+      <>
         <button
+          ref={buttonRef}
           className="inline-flex h-8 min-w-[86px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-[#5bd0cc]/45 bg-gradient-to-r from-[#173f49] to-[#246965] px-2 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.14),0_8px_18px_rgba(15,23,42,0.18)] transition hover:border-[#9cf4f0]/70 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
           onClick={() => openStockEditor(item)}
+          onMouseEnter={() => {
+            updateTooltipPosition();
+            setTooltipOpen(true);
+          }}
+          onMouseLeave={() => setTooltipOpen(false)}
+          onFocus={() => {
+            updateTooltipPosition();
+            setTooltipOpen(true);
+          }}
+          onBlur={() => setTooltipOpen(false)}
           aria-label={`Készlet üzletenként. Összesen: ${n(item.total_qty)}. Kattints a módosításhoz.`}
           type="button"
         >
           <span className="text-sm font-semibold tabular-nums leading-none">{n(item.total_qty)}</span>
-          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#2a8d8b]/30 px-1.5 py-0.5 text-[10px] leading-none text-[#cffffd] group-hover:bg-[#2a8d8b]/45">
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#2a8d8b]/30 px-1.5 py-0.5 text-[10px] leading-none text-[#cffffd]">
             {activePlaceCount || "0"} hely
           </span>
         </button>
-        <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden w-72 -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
-          <span className="block text-[#cffffd]">Készlet üzletenként</span>
-          <span className="mt-2 block space-y-1">
-            {tooltipRows.length ? tooltipRows.map((row) => (
-              <span key={row.key} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-                <span className="min-w-0 truncate text-white/78">{row.name}</span>
-                <span className="shrink-0 text-right tabular-nums text-white">
-                  {row.qty} db
-                  {row.reservedQty > 0 ? <span className="ml-1 text-white/48">/ foglalt {row.reservedQty}</span> : null}
-                </span>
-              </span>
-            )) : (
-              <span className="block rounded-lg bg-white/[0.06] px-2 py-1 text-white/68">Nincs készletadat üzletenként.</span>
-            )}
-          </span>
-          <span className="mt-2 block border-t border-white/10 pt-1 text-[10px] text-white/45">Kattintás: készlet szerkesztése</span>
-        </span>
-      </span>
+        {tooltip}
+      </>
     );
   }
 
