@@ -2709,6 +2709,8 @@ export type AifShopCustomerPaymentLineAllocation = {
 export type AifShopCustomerPaymentHistoryItem = {
   id: string;
   amount: number;
+  tenderedAmount?: number;
+  changeAmount?: number;
   method: AifShopCustomerPaymentMethod | string;
   paidAt: string;
   actor?: string | null;
@@ -2745,6 +2747,8 @@ export type AifShopCustomerPaymentResult = {
   payment: AifShopCustomerPaymentHistoryItem;
   item: AifShopCustomer;
   openBalance: number;
+  tenderedAmount?: number;
+  changeAmount?: number;
 };
 
 export function apiAifListShopCustomers(options?: { location?: string; search?: string; limit?: number }) {
@@ -2834,6 +2838,7 @@ export function apiAifRecordShopCustomerPayment(
   id: string,
   input: {
     amount?: number;
+    tenderedAmount?: number;
     method: AifShopCustomerPaymentMethod;
     location: string;
     items?: Array<{ saleId?: string; lineId: string }>;
