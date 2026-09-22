@@ -14372,7 +14372,7 @@ export default function AllInWarehouse() {
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">
                           <div className="flex flex-col items-center justify-center gap-1">
-                            <StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
+                            <StockQtyButton item={it} openUp={productPageItems.length > 3 && index >= productPageItems.length - 3} />
                             {openOrderInfo ? (
                               <OpenPurchaseOrderBadge
                                 info={openOrderInfo}
