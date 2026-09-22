@@ -101,6 +101,12 @@ type MobileSale = AifAdminShopRecentSale & {
   storeKey: StoreKey;
   storeName: string;
   locationName: string;
+  originalSoldAt?: string | null;
+  settlementAmount?: number | null;
+  settlementPaymentId?: string | null;
+  customerPaymentId?: string | null;
+  settlementLineCount?: number | null;
+  stockEffect?: number | null;
 };
 
 type DeleteTarget = {
@@ -293,6 +299,10 @@ function saleTypeBadge(value: string, balanceDue?: unknown) {
     return "border-emerald-200/35 bg-emerald-400/14 text-emerald-50";
   }
   return "border-white/12 bg-white/[0.05] text-white/62";
+}
+
+function isPaymentSettlement(sale: AifAdminShopRecentSale) {
+  return String((sale as any)?.recordType || "") === "payment_settlement";
 }
 
 function PaymentMethodIcon({
@@ -1782,14 +1792,23 @@ export default function AllInAdminMagazinDashboardMobile({
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3.5">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Eladási napló</p>
-                <h2 className="mt-0.5 text-base text-white">Egyenként minden eladott termék</h2>
+                <h2 className="mt-0.5 text-base text-white">Eladott termékek és fizetési események</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/52">{recentSales.length} sor</span>
             </div>
 
             <div className="space-y-2 p-2.5">
-              {visibleSales.map((sale) => (
-                <article key={`${sale.storeKey}-${sale.lineId}`} className="rounded-[20px] border border-white/11 bg-[#2a3648] p-3 shadow-[0_8px_22px_rgba(15,23,42,0.14)]">
+              {visibleSales.map((sale) => {
+                const settlement = isPaymentSettlement(sale);
+                return (
+                <article
+                  key={`${sale.storeKey}-${sale.lineId}`}
+                  className={`rounded-[20px] border p-3 shadow-[0_8px_22px_rgba(15,23,42,0.14)] ${
+                    settlement
+                      ? "border-[#9bc8ff]/28 bg-[#2d455d]"
+                      : "border-white/11 bg-[#2a3648]"
+                  }`}
+                >
                   <div className="flex items-center justify-between gap-3 text-[10px] text-white/44">
                     <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
                       <Store size={12} className="shrink-0 text-[#8ee6e2]" />
@@ -1797,6 +1816,12 @@ export default function AllInAdminMagazinDashboardMobile({
                     </span>
                     <span className="shrink-0">{dateTime(sale.soldAt)}</span>
                   </div>
+                  {settlement && sale.originalSoldAt ? (
+                    <div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#cfe5ff]/64">
+                      <span>Korábbi vásárlás fizetése</span>
+                      <span className="shrink-0">Eladás: {dateTime(sale.originalSoldAt)}</span>
+                    </div>
+                  ) : null}
 
                   <div className="mt-2.5 flex items-start gap-3">
                     <SaleImage
@@ -1817,7 +1842,10 @@ export default function AllInAdminMagazinDashboardMobile({
                     </div>
                     <div className="shrink-0 text-right">
                       <span className="inline-flex min-w-10 justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1.5 text-sm text-[#d5fffd]">{integer(sale.quantity)} db</span>
-                      <p className="mt-2 text-sm text-white">{money(sale.lineTotal)}</p>
+                      <p className={`mt-2 text-sm ${settlement ? "text-[#d9ecff]" : "text-white"}`}>
+                        {money(settlement ? sale.settlementAmount : sale.lineTotal)}
+                      </p>
+                      {settlement ? <p className="mt-1 text-[9px] text-white/38">fizetési esemény</p> : null}
                     </div>
                   </div>
 
@@ -1839,8 +1867,12 @@ export default function AllInAdminMagazinDashboardMobile({
                     <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2">
                       <span className="shrink-0 text-white/34">Eladás típusa</span>
                       <span className={`min-w-0 flex-1 text-right ${sale.saleType === "credit" ? "" : "truncate"}`}>
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${saleTypeBadge(sale.saleType, sale.balanceDue)}`}>
-                          {saleTypeDisplayLabel(sale.saleType, sale.balanceDue)}
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${
+                          settlement
+                            ? "border-[#9bc8ff]/42 bg-[#3978b9]/18 text-[#d9ecff]"
+                            : saleTypeBadge(sale.saleType, sale.balanceDue)
+                        }`}>
+                          {settlement ? "Korábbi vásárlás fizetése" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue)}
                         </span>
                       </span>
                     </div>
@@ -1859,7 +1891,13 @@ export default function AllInAdminMagazinDashboardMobile({
 
                   <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
                     <div className="flex min-w-0 flex-wrap gap-1.5">
-                      <span className={`rounded-full border px-2 py-1 text-[9px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
+                      {settlement ? (
+                        <span className="rounded-full border border-[#9bc8ff]/40 bg-[#3978b9]/16 px-2 py-1 text-[9px] text-[#d9ecff]">
+                          Fizetési esemény
+                        </span>
+                      ) : (
+                        <span className={`rounded-full border px-2 py-1 text-[9px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
+                      )}
                       {(() => {
                         const method = String(
                           (sale as MobileSale & { paymentMethod?: string | null }).paymentMethod
@@ -1878,7 +1916,11 @@ export default function AllInAdminMagazinDashboardMobile({
                         );
                       })()}
                     </div>
-                    {sale.deletable !== false && sale.recordType !== "exchange" ? (
+                    {settlement ? (
+                      <span className="inline-flex min-h-9 shrink-0 items-center rounded-xl border border-[#9bc8ff]/30 bg-[#3978b9]/14 px-3 text-[10px] text-[#d9ecff]">
+                        Készletmozgás: 0 db
+                      </span>
+                    ) : sale.deletable !== false && sale.recordType !== "exchange" ? (
                       <button
                         type="button"
                         onClick={() => setDeleteTarget({ sale })}
@@ -1893,13 +1935,14 @@ export default function AllInAdminMagazinDashboardMobile({
                     )}
                   </div>
                 </article>
-              ))}
+                );
+              })}
 
               {!recentSales.length ? (
                 <div className="px-3 py-10 text-center">
                   <ReceiptText className="mx-auto text-[#7bd7d4]/52" size={28} />
-                  <p className="mt-2 text-sm text-white">Nincs eladás ebben az időszakban.</p>
-                  <p className="mt-1 text-xs text-white/40">A kiválasztott üzlet és szűrés alapján nincs megjeleníthető terméksor.</p>
+                  <p className="mt-2 text-sm text-white">Nincs eladási vagy fizetési esemény ebben az időszakban.</p>
+                  <p className="mt-1 text-xs text-white/40">A kiválasztott üzlet és szűrés alapján nincs megjeleníthető termék- vagy fizetési esemény.</p>
                 </div>
               ) : null}
             </div>
