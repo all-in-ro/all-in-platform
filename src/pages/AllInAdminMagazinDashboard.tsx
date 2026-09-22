@@ -219,6 +219,27 @@ function saleTypeBadge(value: string, balanceDue?: unknown) {
 }
 
 
+type AdminRecentSaleExtended = AifAdminShopRecentSale & {
+  originalSoldAt?: string | null;
+  settlementAmount?: number | null;
+  settlementPaymentId?: string | null;
+  customerPaymentId?: string | null;
+  settlementLineCount?: number | null;
+  stockEffect?: number | null;
+};
+
+function settlementInfo(sale: AifAdminShopRecentSale) {
+  return sale as AdminRecentSaleExtended;
+}
+
+function isPaymentSettlement(sale: AifAdminShopRecentSale) {
+  return String((sale as any)?.recordType || "") === "payment_settlement";
+}
+
+function settlementTypeLabel(sale: AifAdminShopRecentSale) {
+  return isPaymentSettlement(sale) ? "Korábbi vásárlás fizetése" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue);
+}
+
 function PaymentMethodIcon({
   method,
   compact = false,
@@ -760,7 +781,8 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
   } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const canDelete = sale.deletable !== false && sale.recordType !== "exchange";
+  const settlement = isPaymentSettlement(sale);
+  const canDelete = sale.deletable !== false && sale.recordType !== "exchange" && !settlement;
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
@@ -824,6 +846,18 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
       window.removeEventListener("scroll", reposition, true);
     };
   }, [open, updatePosition]);
+
+  if (settlement) {
+    return (
+      <span
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#9bc8ff]/38 bg-[#3978b9]/18 text-[#cfe5ff]"
+        title="Korábbi vásárlás fizetési eseménye • nincs új készletmozgás"
+        aria-label="Fizetési esemény"
+      >
+        <WalletCards size={15} />
+      </span>
+    );
+  }
 
   return (
     <>
@@ -1999,7 +2033,7 @@ export default function AllInAdminMagazinDashboard({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Eseménynapló</p>
-                <h2 className="mt-1 text-base">Eladott termékek és nyitott fizetések</h2>
+                <h2 className="mt-1 text-base">Eladott termékek és fizetési események</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-[10px] text-white/50">
                 {data?.recentSales.length || 0} sor
@@ -2024,8 +2058,18 @@ export default function AllInAdminMagazinDashboard({
                   </tr>
                 </thead>
                 <tbody>
-                  {(data?.recentSales || []).map((sale) => (
-                    <tr key={sale.lineId} className="group border-t border-white/8 align-top hover:bg-white/[0.035]">
+                  {(data?.recentSales || []).map((sale) => {
+                    const settlement = isPaymentSettlement(sale);
+                    const settlementMeta = settlementInfo(sale);
+                    return (
+                    <tr
+                      key={sale.lineId}
+                      className={`group border-t align-top ${
+                        settlement
+                          ? "border-[#9bc8ff]/18 bg-[#31506a]/24 hover:bg-[#365974]/32"
+                          : "border-white/8 hover:bg-white/[0.035]"
+                      }`}
+                    >
                       <td className="min-w-[300px] px-3 py-3">
                         <div className="flex items-start gap-3">
                           <ProductThumb
@@ -2042,22 +2086,53 @@ export default function AllInAdminMagazinDashboard({
                             <p className="mt-1 max-w-[275px] truncate text-[10px] text-[#9be9e5]/70" title={[sale.productCode, sale.barcode].filter(Boolean).join(" • ")}>
                               {[sale.productCode ? `Kód: ${sale.productCode}` : "", sale.barcode ? `Vonalkód: ${sale.barcode}` : ""].filter(Boolean).join(" • ") || ""}
                             </p>
+                            {settlement ? (
+                              <p className="mt-1 max-w-[275px] truncate text-[10px] text-[#cfe5ff]/80">
+                                Korábbi vásárlás • készletmozgás nélkül
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-white/62">
+                        <p>{dateTime(sale.soldAt)}</p>
+                        {settlementMeta.originalSoldAt ? (
+                          <p className="mt-1 text-[10px] text-[#cfe5ff]/62">Eladás: {dateTime(settlementMeta.originalSoldAt)}</p>
+                        ) : null}
+                      </td>
                       <td className="min-w-[145px] px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
-                      <td className="px-3 py-3 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${saleTypeBadge(sale.saleType, sale.balanceDue)}`}>{saleTypeDisplayLabel(sale.saleType, sale.balanceDue)}</span></td>
+                      <td className="px-3 py-3 text-center">
+                        <span className={`rounded-full border px-2 py-1 text-[10px] ${
+                          settlement
+                            ? "border-[#9bc8ff]/42 bg-[#3978b9]/18 text-[#d9ecff]"
+                            : saleTypeBadge(sale.saleType, sale.balanceDue)
+                        }`}>
+                          {settlementTypeLabel(sale)}
+                        </span>
+                      </td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="px-3 py-3 text-right text-amber-50">
                         <p>{money(sale.lineDiscountAmount)}</p>
                         {numberValue(sale.lineDiscountPercent) > 0 ? <p className="mt-1 text-[10px] text-amber-100/65">{numberValue(sale.lineDiscountPercent).toFixed(1)}%</p> : null}
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right">{money(sale.lineTotal)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right">
+                        {settlement ? (
+                          <>
+                            <p className="text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</p>
+                            <p className="mt-1 text-[10px] text-white/38">fizetési esemény</p>
+                          </>
+                        ) : money(sale.lineTotal)}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
                       <td className="min-w-[132px] px-2 py-3">
                         <div className="flex items-center justify-center gap-1.5">
-                          <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
+                          {settlement ? (
+                            <span className="rounded-full border border-[#9bc8ff]/40 bg-[#3978b9]/16 px-2 py-1 text-[10px] text-[#d9ecff]">
+                              Fizetési esemény
+                            </span>
+                          ) : (
+                            <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
+                          )}
                           {(() => {
                             const method = String(
                               (sale as AifAdminShopRecentSale & { paymentMethod?: string | null }).paymentMethod
@@ -2088,14 +2163,15 @@ export default function AllInAdminMagazinDashboard({
                         />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               {!data?.recentSales.length ? (
                 <div className="px-4 py-12 text-center">
                   <ReceiptText className="mx-auto text-[#7bd7d4]/70" size={28} />
-                  <p className="mt-2 text-sm text-white">Még nincs üzleti eladás rögzítve.</p>
-                  <p className="mt-1 text-xs text-white/42">Az új eladási modul minden tranzakciót, kedvezményt és nyitott fizetést ide fog naplózni.</p>
+                  <p className="mt-2 text-sm text-white">Nincs eladási vagy fizetési esemény ebben az időszakban.</p>
+                  <p className="mt-1 text-xs text-white/42">A lista az eladásokat, cseréket és a korábbi vásárlások későbbi rendezéseit is mutatja.</p>
                 </div>
               ) : null}
             </div>
