@@ -569,6 +569,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const currentFilters = buildFilters(from, to);
       const previousFilters = buildFilters(previousFrom, previousTo);
       const currentPaymentFilters = buildPaymentFilters(from, to);
+      const previousPaymentFilters = buildPaymentFilters(previousFrom, previousTo);
       const currentExchangeFilters = buildExchangeFilters(from, to);
       const previousExchangeFilters = buildExchangeFilters(previousFrom, previousTo);
       const currentSummaryQuery = summaryQuery(currentFilters);
@@ -653,6 +654,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         categoryResult,
         productResult,
         paymentResult,
+        previousPaymentResult,
         employeeResult,
         recentResult,
         employeesOptionResult,
@@ -803,6 +805,18 @@ export default function createAifAdminShopOverviewRouter(deps) {
            GROUP BY p.method
            ORDER BY amount DESC`,
           currentPaymentFilters.args
+        ),
+        pool.query(
+          `SELECT
+             p.method,
+             COALESCE(sum(p.amount),0)::numeric AS amount,
+             count(DISTINCT COALESCE(p.customer_payment_id::text, p.id::text))::int AS transactions
+           FROM aif_shop_sale_payments p
+           JOIN aif_shop_sales s ON s.id=p.sale_id
+           WHERE ${previousPaymentFilters.where}
+           GROUP BY p.method
+           ORDER BY amount DESC`,
+          previousPaymentFilters.args
         ),
         pool.query(
           `WITH filtered_sales AS (
@@ -1204,9 +1218,20 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const currentCombinedRow = combineSummaryRows(summaryResult.rows[0] || {}, exchangeSummaryResult.rows[0] || {});
       currentCombinedRow.exchange_revenue = aifNumber(exchangeSummaryResult.rows[0]?.revenue);
       currentCombinedRow.exchange_transactions = aifNumber(exchangeSummaryResult.rows[0]?.transactions);
+      // A "Fizetve" érték pénzmozgás, ezért nem az adott napon eladott tételek
+      // s.paid_total snapshotjából számoljuk. A tényleges, kiválasztott időszakban
+      // beérkezett sale-payment összegeket használjuk p.paid_at szerint. Így például
+      // egy 17-i hiteles eladás 19-i rendezése a 19-i "Fizetve" összegbe kerül.
+      currentCombinedRow.paid_total =
+        paymentResult.rows.reduce((sum, row) => sum + aifNumber(row.amount), 0)
+        + aifNumber(exchangeSummaryResult.rows[0]?.paid_total);
+
       const previousCombinedRow = combineSummaryRows(previousSummaryResult.rows[0] || {}, previousExchangeSummaryResult.rows[0] || {});
       previousCombinedRow.exchange_revenue = aifNumber(previousExchangeSummaryResult.rows[0]?.revenue);
       previousCombinedRow.exchange_transactions = aifNumber(previousExchangeSummaryResult.rows[0]?.transactions);
+      previousCombinedRow.paid_total =
+        previousPaymentResult.rows.reduce((sum, row) => sum + aifNumber(row.amount), 0)
+        + aifNumber(previousExchangeSummaryResult.rows[0]?.paid_total);
 
       const summary = mapSummary(currentCombinedRow);
       const previousSummary = mapSummary(previousCombinedRow);
