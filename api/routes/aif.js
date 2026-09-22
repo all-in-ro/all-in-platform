@@ -20542,6 +20542,73 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             paidAt: row.sold_at || null,
           }]
         : [];
+
+    // A vásárlási előzményben csak az marad "megvett" termék,
+    // ami a lezárt visszáruk után ténylegesen a kliensnél maradt.
+    // Az eredeti sale line NEM törlődik az adatbázisból, így az audit megmarad.
+    const lines = rawLines
+      .map((line) => {
+        const originalQuantity = Math.max(0, aifNumber(line.quantity));
+        const returnedQty = Math.min(
+          originalQuantity,
+          Math.max(0, aifNumber(line.returnedQty ?? line.returned_qty)),
+        );
+        const quantity = Math.max(0, originalQuantity - returnedQty);
+        const keepRatio = originalQuantity > 0 ? quantity / originalQuantity : 0;
+
+        return {
+          id: String(line.id || ""),
+          lineNo: aifNumber(line.lineNo ?? line.line_no),
+          variantId: line.variantId || line.variant_id ? String(line.variantId || line.variant_id) : null,
+          productTitle: line.productTitle || line.product_title || null,
+          productCode: line.productCode || line.product_code || null,
+          barcode: line.barcode || null,
+          brandName: line.brandName || line.brand_name || null,
+          categoryName: line.categoryName || line.category_name || null,
+          subcategoryName: line.subcategoryName || line.subcategory_name || null,
+          colorName: line.colorName || line.color_name || null,
+          colorHex: line.colorHex || line.color_hex || null,
+          size: line.size || null,
+          imageUrl: line.imageUrl || line.image_url || null,
+          quantity,
+          originalQuantity,
+          returnedQty,
+          listPrice: aifNumber(line.listPrice ?? line.list_price),
+          unitPrice: aifNumber(line.unitPrice ?? line.unit_price),
+          discountAmount: aifRoundMoney(
+            aifNumber(line.discountAmount ?? line.discount_amount) * keepRatio,
+          ),
+          discountPercent: aifNumber(line.discountPercent ?? line.discount_percent),
+          lineTotal: aifRoundMoney(
+            aifNumber(line.lineTotal ?? line.line_total) * keepRatio,
+          ),
+          buyPriceSnapshot: line.buyPriceSnapshot ?? line.buy_price_snapshot ?? null,
+          snCod: line.snCod || line.sn_cod || null,
+        };
+      })
+      .filter((line) => line.quantity > 0.0001);
+
+    const historySubtotal = aifRoundMoney(
+      lines.reduce(
+        (sum, line) => sum + aifNumber(line.lineTotal) + aifNumber(line.discountAmount),
+        0,
+      ),
+    );
+    const historyDiscountTotal = aifRoundMoney(
+      lines.reduce((sum, line) => sum + aifNumber(line.discountAmount), 0),
+    );
+    const historyTotal = aifRoundMoney(
+      lines.reduce((sum, line) => sum + aifNumber(line.lineTotal), 0),
+    );
+    const historyItemCount = lines.reduce(
+      (sum, line) => sum + aifNumber(line.quantity),
+      0,
+    );
+    const historyPaidTotal = Math.min(
+      Math.max(0, aifNumber(row.paid_total)),
+      Math.max(0, historyTotal),
+    );
+
     return {
       id: String(row.id),
       saleNumber: row.sale_number || "",
@@ -20553,13 +20620,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       status: row.status || "",
       paymentStatus: row.payment_status || "",
       saleType: row.sale_type || "",
-      subtotal: aifNumber(row.subtotal),
-      discountTotal: aifNumber(row.discount_total),
-      total: aifNumber(row.total),
-      paidTotal: aifNumber(row.paid_total),
+      subtotal: historySubtotal,
+      discountTotal: historyDiscountTotal,
+      total: historyTotal,
+      paidTotal: historyPaidTotal,
       balanceDue: aifNumber(row.balance_due),
-      lineCount: aifNumber(row.line_count),
-      itemCount: aifNumber(row.item_count),
+      lineCount: lines.length,
+      itemCount: historyItemCount,
+      hadReturns: rawLines.some(
+        (line) => aifNumber(line.returnedQty ?? line.returned_qty) > 0.0001,
+      ),
       payments: salePayments.map((payment) => ({
         method: payment?.method || "other",
         amount: aifNumber(payment?.amount),
@@ -20567,29 +20637,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ? new Date(payment.paidAt || payment.paid_at).toISOString()
           : null,
       })),
-      lines: rawLines.map((line) => ({
-        id: String(line.id || ""),
-        lineNo: aifNumber(line.lineNo ?? line.line_no),
-        variantId: line.variantId || line.variant_id ? String(line.variantId || line.variant_id) : null,
-        productTitle: line.productTitle || line.product_title || null,
-        productCode: line.productCode || line.product_code || null,
-        barcode: line.barcode || null,
-        brandName: line.brandName || line.brand_name || null,
-        categoryName: line.categoryName || line.category_name || null,
-        subcategoryName: line.subcategoryName || line.subcategory_name || null,
-        colorName: line.colorName || line.color_name || null,
-        colorHex: line.colorHex || line.color_hex || null,
-        size: line.size || null,
-        imageUrl: line.imageUrl || line.image_url || null,
-        quantity: aifNumber(line.quantity),
-        listPrice: aifNumber(line.listPrice ?? line.list_price),
-        unitPrice: aifNumber(line.unitPrice ?? line.unit_price),
-        discountAmount: aifNumber(line.discountAmount ?? line.discount_amount),
-        discountPercent: aifNumber(line.discountPercent ?? line.discount_percent),
-        lineTotal: aifNumber(line.lineTotal ?? line.line_total),
-        buyPriceSnapshot: line.buyPriceSnapshot ?? line.buy_price_snapshot ?? null,
-        snCod: line.snCod || line.sn_cod || null,
-      })),
+      lines,
     };
   }
 
@@ -21645,6 +21693,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                    )
                  ),
                  'quantity', sl.quantity,
+                 'returnedQty', COALESCE((
+                   SELECT sum(ex.returned_qty)
+                   FROM aif_shop_exchanges ex
+                   WHERE ex.source_sale_line_id=sl.id
+                     AND ex.status='completed'
+                 ),0),
                  'listPrice', sl.list_price,
                  'unitPrice', sl.unit_price,
                  'discountAmount', sl.discount_amount,
@@ -21738,7 +21792,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           saleCount: item.saleCount,
           lastSaleAt: item.lastSaleAt,
         },
-        sales: salesResult.rows.map(aifShopCustomerSaleHistoryResponse),
+        sales: salesResult.rows
+          .map(aifShopCustomerSaleHistoryResponse)
+          .filter((sale) => sale.status !== "completed" || sale.lines.length > 0),
         payments: paymentsResult.rows.map(aifShopCustomerPaymentResponse),
         consumptionDocuments: consumptionDocumentsResult.rows.map(aifBonConsumSummaryResponse),
       });
