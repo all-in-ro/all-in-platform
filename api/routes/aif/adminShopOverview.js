@@ -195,6 +195,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
             SELECT 1 FROM aif_shop_sale_lines slf
             WHERE slf.sale_id=s.id
               AND lower(COALESCE(slf.brand_name,''))=lower(${pBrand})
+              AND slf.quantity > COALESCE((
+                SELECT sum(exf.returned_qty)
+                FROM aif_shop_exchanges exf
+                WHERE exf.source_sale_line_id=slf.id
+                  AND exf.status='completed'
+              ),0)
           )`);
         }
         if (category) {
@@ -212,6 +218,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
                 NULLIF(subcf.name_ro,''),
                 'Nincs alkategória'
               ))=lower(${pCategory})
+              AND slf.quantity > COALESCE((
+                SELECT sum(exf.returned_qty)
+                FROM aif_shop_exchanges exf
+                WHERE exf.source_sale_line_id=slf.id
+                  AND exf.status='completed'
+              ),0)
           )`);
         }
         if (snCod) {
@@ -222,6 +234,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
             LEFT JOIN aif_product_variants vf ON vf.id=slf.variant_id
             WHERE slf.sale_id=s.id
               AND COALESCE(vf.sn_cod,'') ILIKE ${pSnCod}
+              AND slf.quantity > COALESCE((
+                SELECT sum(exf.returned_qty)
+                FROM aif_shop_exchanges exf
+                WHERE exf.source_sale_line_id=slf.id
+                  AND exf.status='completed'
+              ),0)
           )`);
         }
         if (search) {
@@ -240,6 +258,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
                   OR COALESCE(slf.product_code,'') ILIKE ${pSearch}
                   OR COALESCE(slf.barcode,'') ILIKE ${pSearch}
                 )
+                AND slf.quantity > COALESCE((
+                  SELECT sum(exf.returned_qty)
+                  FROM aif_shop_exchanges exf
+                  WHERE exf.source_sale_line_id=slf.id
+                    AND exf.status='completed'
+                ),0)
             )
           )`);
         }
@@ -644,6 +668,76 @@ export default function createAifAdminShopOverviewRouter(deps) {
       };
       const recentLineFilters = buildRecentLineFilters(from, to);
 
+      // Korábbi vásárlás későbbi kliensbefizetése:
+      // csak megjelenítési eseményt készítünk az admin naplóhoz.
+      // Nincs INSERT/UPDATE, nincs készletmozgás, és nem számít új eladásnak.
+      const buildSettlementLineFilters = (rangeFrom, rangeTo) => {
+        const args = [location.id, rangeFrom, rangeTo];
+        const where = [
+          `s.location_id=$1`,
+          `s.status='completed'`,
+          `p.customer_payment_id IS NOT NULL`,
+          `abs(COALESCE(p.amount,0)) > 0`,
+          `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
+          `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date <> (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date`,
+          `GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0`,
+        ];
+        const push = (value) => {
+          args.push(value);
+          return `$${args.length}`;
+        };
+        if (employee) {
+          const pEmployee = push(employee);
+          where.push(`COALESCE(NULLIF(p.actor,''), s.actor)=${pEmployee}`);
+        }
+        if (paymentStatus) {
+          const pStatus = push(paymentStatus);
+          where.push(`s.payment_status=${pStatus}`);
+        }
+        if (paymentMethod) {
+          const pMethod = push(paymentMethod);
+          where.push(`p.method=${pMethod}`);
+        }
+        if (saleType) {
+          const pSaleType = push(saleType);
+          where.push(`s.sale_type=${pSaleType}`);
+        }
+        if (brand) {
+          const pBrand = push(brand);
+          where.push(`lower(COALESCE(sl.brand_name,''))=lower(${pBrand})`);
+        }
+        if (category) {
+          const pCategory = push(category);
+          where.push(`lower(COALESCE(
+            NULLIF(sl.subcategory_name,''),
+            NULLIF(subc.name_hu,''),
+            NULLIF(subc.name_ro,''),
+            'Nincs alkategória'
+          ))=lower(${pCategory})`);
+        }
+        if (snCod) {
+          const pSnCod = push(`%${snCod}%`);
+          where.push(`COALESCE(v.sn_cod,'') ILIKE ${pSnCod}`);
+        }
+        if (search) {
+          const pSearch = push(`%${search}%`);
+          where.push(`(
+            s.sale_number ILIKE ${pSearch}
+            OR COALESCE(s.actor,'') ILIKE ${pSearch}
+            OR COALESCE(p.actor,'') ILIKE ${pSearch}
+            OR COALESCE(s.customer_name,'') ILIKE ${pSearch}
+            OR COALESCE(s.customer_phone,'') ILIKE ${pSearch}
+            OR COALESCE(sl.product_title,'') ILIKE ${pSearch}
+            OR COALESCE(sl.product_code,'') ILIKE ${pSearch}
+            OR COALESCE(sl.barcode,'') ILIKE ${pSearch}
+            OR COALESCE(sl.color_name,'') ILIKE ${pSearch}
+            OR COALESCE(sl.size,'') ILIKE ${pSearch}
+          )`);
+        }
+        return { args, where: where.join(" AND ") };
+      };
+      const settlementLineFilters = buildSettlementLineFilters(from, to);
+
       const [
         stockResult,
         movementResult,
@@ -657,6 +751,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         previousPaymentResult,
         employeeResult,
         recentResult,
+        settlementRecentResult,
         employeesOptionResult,
         brandsOptionResult,
         categoriesOptionResult,
@@ -894,6 +989,110 @@ export default function createAifAdminShopOverviewRouter(deps) {
            ORDER BY s.sold_at DESC, s.created_at DESC, sl.line_no ASC, sl.id ASC
            LIMIT 500`,
           recentLineFilters.args
+        ),
+        pool.query(
+          `SELECT
+             ('payment:' || p.id::text || ':' || sl.id::text) AS line_id,
+             s.id AS sale_id,
+             sl.line_no,
+             sl.variant_id,
+             s.sale_number,
+             p.paid_at AS sold_at,
+             s.sold_at AS original_sold_at,
+             COALESCE(NULLIF(p.actor,''), s.actor) AS actor,
+             s.customer_name,
+             s.customer_phone,
+             'completed'::text AS status,
+             'paid'::text AS payment_status,
+             p.method AS payment_method,
+             s.sale_type,
+             s.subtotal,
+             s.discount_total,
+             s.total,
+             p.amount AS paid_total,
+             s.balance_due,
+             active_totals.item_count,
+             active_totals.line_count,
+             COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS product_title,
+             sl.product_code,
+             sl.barcode,
+             sl.brand_name,
+             sl.category_name,
+             COALESCE(NULLIF(sl.subcategory_name,''), NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+             sl.color_name,
+             sl.size,
+             COALESCE(
+               NULLIF(sl.image_url,''),
+               NULLIF(v.image_url,''),
+               NULLIF(sl.raw->>'imageUrl',''),
+               NULLIF(sl.raw->>'image_url','')
+             ) AS image_url,
+             GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS quantity,
+             sl.list_price,
+             sl.unit_price,
+             CASE
+               WHEN sl.quantity > 0
+               THEN round(
+                 COALESCE(sl.discount_amount,0)
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                 / sl.quantity::numeric,
+                 2
+               )
+               ELSE 0
+             END AS line_discount_amount,
+             sl.discount_percent AS line_discount_percent,
+             CASE
+               WHEN sl.quantity > 0
+               THEN round(
+                 COALESCE(sl.line_total,0)
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                 / sl.quantity::numeric,
+                 2
+               )
+               ELSE 0
+             END AS line_total,
+             'payment_settlement'::text AS record_type,
+             false AS deletable,
+             p.amount AS settlement_amount,
+             p.id AS settlement_payment_id,
+             p.customer_payment_id,
+             active_totals.line_count AS settlement_line_count,
+             0::numeric AS stock_effect
+           FROM aif_shop_sale_payments p
+           JOIN aif_shop_sales s ON s.id=p.sale_id
+           JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+             FROM aif_shop_exchanges ex
+             WHERE ex.source_sale_line_id=sl.id
+               AND ex.status='completed'
+           ) ret ON true
+           LEFT JOIN LATERAL (
+             SELECT
+               count(*) FILTER (
+                 WHERE GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0) > 0
+               )::int AS line_count,
+               COALESCE(sum(
+                 GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0)
+               ) FILTER (
+                 WHERE GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0) > 0
+               ),0)::numeric AS item_count
+             FROM aif_shop_sale_lines x
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(ex2.returned_qty),0)::numeric AS returned_qty
+               FROM aif_shop_exchanges ex2
+               WHERE ex2.source_sale_line_id=x.id
+                 AND ex2.status='completed'
+             ) xr ON true
+             WHERE x.sale_id=s.id
+           ) active_totals ON true
+           WHERE ${settlementLineFilters.where}
+           ORDER BY p.paid_at DESC, s.sale_number DESC, sl.line_no ASC, sl.id ASC
+           LIMIT 500`,
+          settlementLineFilters.args
         ),
         pool.query(
           `SELECT DISTINCT actor
@@ -1356,6 +1555,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         variantId: row.variant_id ? String(row.variant_id) : null,
         saleNumber: row.sale_number,
         soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+        originalSoldAt: row.original_sold_at ? new Date(row.original_sold_at).toISOString() : null,
         actor: row.actor,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
@@ -1395,10 +1595,15 @@ export default function createAifAdminShopOverviewRouter(deps) {
         settlementDirection: row.settlement_direction || null,
         settlementMethod: row.settlement_method || null,
         settlementAmount: aifNumber(row.settlement_amount),
+        settlementPaymentId: row.settlement_payment_id ? String(row.settlement_payment_id) : null,
+        customerPaymentId: row.customer_payment_id ? String(row.customer_payment_id) : null,
+        settlementLineCount: aifNumber(row.settlement_line_count),
+        stockEffect: aifNumber(row.stock_effect),
       });
 
       const recentSales = [
         ...recentResult.rows.map((row) => mapRecentRow({ ...row, record_type: "sale", deletable: true })),
+        ...settlementRecentResult.rows.map(mapRecentRow),
         ...exchangeRecentResult.rows.map(mapRecentRow),
       ]
         .sort((a, b) => new Date(b.soldAt || 0).getTime() - new Date(a.soldAt || 0).getTime() || a.lineNo - b.lineNo)
