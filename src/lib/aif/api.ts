@@ -2992,6 +2992,7 @@ export type AifShopDailyProductItem = {
   saleId?: string | null;
   saleNumber?: string | null;
   soldAt?: string | null;
+  originalSoldAt?: string | null;
   customerId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
@@ -3010,6 +3011,9 @@ export type AifShopDailyProductItem = {
   revenue: number;
   discountTotal: number;
   transactions: number;
+  paymentLabel?: string | null;
+  settlementAmount?: number;
+  stockEffect?: number;
 };
 
 
