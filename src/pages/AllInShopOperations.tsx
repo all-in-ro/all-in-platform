@@ -2094,7 +2094,7 @@ export default function AllInShopOperations({
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
                           className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
                             settlement
-                              ? "bg-[#2b4058] hover:bg-[#304963]"
+                              ? "bg-[#334b5c] shadow-[inset_4px_0_0_#4fb8b2] hover:bg-[#39576a]"
                               : unpaid
                                 ? "bg-[#2c3546] hover:bg-[#303a4b]"
                                 : "bg-[#293548] hover:bg-[#2d3b4f]"
@@ -2115,7 +2115,7 @@ export default function AllInShopOperations({
                                 <span className="shrink-0 rounded-md bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#cffffd]">Csere</span>
                               ) : null}
                               {settlement ? (
-                                <span className="shrink-0 rounded-md border border-[#9bc8ff]/32 bg-[#3978b9]/18 px-2 py-0.5 text-[10px] text-[#d9ecff]">
+                                <span className="shrink-0 rounded-md border border-[#b9f5f2]/52 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white shadow-[0_3px_10px_rgba(42,141,139,0.22)]">
                                   Korábbi vásárlás rendezve
                                 </span>
                               ) : null}
@@ -2128,7 +2128,7 @@ export default function AllInShopOperations({
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
                             {settlement && item.originalSoldAt ? (
-                              <p className="mt-1 text-[10px] text-[#cfe5ff]/68">
+                              <p className="mt-1 text-[10px] text-[#cfe5ff]/82">
                                 Eredeti eladás: {formatExactDateTime(item.originalSoldAt)}
                               </p>
                             ) : null}
