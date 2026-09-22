@@ -25223,9 +25223,115 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         exchangeProductsResult,
         productLinesResult,
         exchangeProductLinesResult,
+        settlementProductLinesResult,
         salesResult,
         exchangeSalesResult,
       ] = await Promise.all([
+        pool.query(
+          `WITH payment_events AS (
+             SELECT
+               p.sale_id,
+               max(p.paid_at) AS paid_at,
+               COALESCE(sum(p.amount),0)::numeric AS paid_amount,
+               string_agg(
+                 DISTINCT CASE
+                   WHEN p.method='cash' THEN 'Készpénz'
+                   WHEN p.method='card' THEN 'Bankkártya'
+                   WHEN p.method='bank_transfer' THEN 'Átutalás'
+                   ELSE p.method
+                 END,
+                 ', '
+                 ORDER BY CASE
+                   WHEN p.method='cash' THEN 'Készpénz'
+                   WHEN p.method='card' THEN 'Bankkártya'
+                   WHEN p.method='bank_transfer' THEN 'Átutalás'
+                   ELSE p.method
+                 END
+               ) AS payment_label
+             FROM aif_shop_sale_payments p
+             JOIN aif_shop_sales s ON s.id=p.sale_id
+             WHERE s.location_id=$1
+               AND s.status='completed'
+               AND p.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND p.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND p.method <> 'credit'
+               AND s.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+             GROUP BY p.sale_id
+           ), active_lines AS (
+             SELECT
+               pe.sale_id,
+               pe.paid_at,
+               pe.paid_amount,
+               pe.payment_label,
+               sl.*,
+               GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS active_qty,
+               CASE
+                 WHEN sl.quantity > 0 THEN round(
+                   COALESCE(sl.line_total,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+                 ELSE 0::numeric
+               END AS active_line_value
+             FROM payment_events pe
+             JOIN aif_shop_sale_lines sl ON sl.sale_id=pe.sale_id
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(e.returned_qty),0)::numeric AS returned_qty
+               FROM aif_shop_exchanges e
+               WHERE e.source_sale_line_id=sl.id
+                 AND e.status='completed'
+                 AND e.created_at <= pe.paid_at
+             ) ret ON true
+           ), valued_lines AS (
+             SELECT
+               al.*,
+               COALESCE(sum(al.active_line_value) OVER (PARTITION BY al.sale_id),0)::numeric AS active_sale_value
+             FROM active_lines al
+             WHERE al.active_qty > 0
+           )
+           SELECT
+             ('payment_settlement:' || vl.sale_id::text || ':' || vl.id::text) AS key,
+             ('payment_settlement:' || vl.sale_id::text || ':' || vl.id::text) AS line_id,
+             s.id::text AS sale_id,
+             s.sale_number,
+             vl.paid_at AS sold_at,
+             s.sold_at AS original_sold_at,
+             s.customer_id::text AS customer_id,
+             s.customer_name,
+             s.customer_phone,
+             'paid'::text AS payment_status,
+             0::numeric AS balance_due,
+             s.sale_type,
+             'payment_settlement'::text AS record_type,
+             COALESCE(NULLIF(vl.product_title,''), NULLIF(vl.product_code,''), 'Ismeretlen termék') AS title,
+             vl.product_code,
+             vl.brand_name,
+             vl.subcategory_name,
+             vl.color_name,
+             vl.size,
+             COALESCE(NULLIF(vl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+             vl.active_qty AS qty,
+             CASE
+               WHEN vl.active_sale_value > 0 THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
+               ELSE 0::numeric
+             END AS revenue,
+             0::numeric AS discount_total,
+             0::int AS transactions,
+             vl.payment_label,
+             CASE
+               WHEN vl.active_sale_value > 0 THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
+               ELSE 0::numeric
+             END AS settlement_amount,
+             0::numeric AS stock_effect
+           FROM valued_lines vl
+           JOIN aif_shop_sales s ON s.id=vl.sale_id
+           LEFT JOIN aif_product_variants v ON v.id=vl.variant_id
+           ORDER BY vl.paid_at DESC, s.sale_number DESC, vl.line_no ASC`,
+          baseArgs
+        ),
         pool.query(
           `WITH filtered_sales AS (
              SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
@@ -25550,7 +25656,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Az üzleti eladó napi nézetében a kliens és a fizetési állapot csak
       // konkrét bizonylatsorhoz köthető biztonságosan. Ezért az összesített
       // products lista mellett külön sale-line szintű listát is visszaadunk.
-      const productLineRows = [...productLinesResult.rows, ...exchangeProductLinesResult.rows]
+      const productLineRows = [
+        ...productLinesResult.rows,
+        ...exchangeProductLinesResult.rows,
+        ...settlementProductLinesResult.rows,
+      ]
         .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
         .slice(0, 300);
 
@@ -25606,6 +25716,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           saleId: row.sale_id ? String(row.sale_id) : null,
           saleNumber: row.sale_number || null,
           soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+          originalSoldAt: row.original_sold_at ? new Date(row.original_sold_at).toISOString() : null,
           customerId: row.customer_id ? String(row.customer_id) : null,
           customerName: row.customer_name || null,
           customerPhone: row.customer_phone || null,
@@ -25624,6 +25735,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           revenue: aifNumber(row.revenue),
           discountTotal: aifNumber(row.discount_total),
           transactions: aifNumber(row.transactions),
+          paymentLabel: row.payment_label || null,
+          settlementAmount: aifNumber(row.settlement_amount),
+          stockEffect: aifNumber(row.stock_effect),
         })),
         sales: saleRows.map((row) => ({
           id: String(row.id),
