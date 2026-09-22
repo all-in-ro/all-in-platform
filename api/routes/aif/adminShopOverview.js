@@ -157,6 +157,95 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return { args, where: where.join(" AND ") };
       };
 
+      // Pénzmozgásnál a dátumot mindig a tényleges fizetés időpontja (p.paid_at)
+      // határozza meg, nem az eladás időpontja (s.sold_at).
+      // Így egy korábbi hiteles eladás későbbi rendezése azon a napon jelenik meg,
+      // amikor a pénz ténylegesen beérkezett.
+      const buildPaymentFilters = (rangeFrom, rangeTo) => {
+        const args = [location.id, rangeFrom, rangeTo];
+        const where = [
+          `s.location_id=$1`,
+          `s.status='completed'`,
+          `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
+          `abs(COALESCE(p.amount,0)) > 0`,
+        ];
+        const push = (value) => {
+          args.push(value);
+          return `$${args.length}`;
+        };
+        if (employee) {
+          const pEmployee = push(employee);
+          where.push(`COALESCE(NULLIF(p.actor,''), s.actor)=${pEmployee}`);
+        }
+        if (paymentStatus) {
+          const pStatus = push(paymentStatus);
+          where.push(`s.payment_status=${pStatus}`);
+        }
+        if (paymentMethod) {
+          const pMethod = push(paymentMethod);
+          where.push(`p.method=${pMethod}`);
+        }
+        if (saleType) {
+          const pSaleType = push(saleType);
+          where.push(`s.sale_type=${pSaleType}`);
+        }
+        if (brand) {
+          const pBrand = push(brand);
+          where.push(`EXISTS (
+            SELECT 1 FROM aif_shop_sale_lines slf
+            WHERE slf.sale_id=s.id
+              AND lower(COALESCE(slf.brand_name,''))=lower(${pBrand})
+          )`);
+        }
+        if (category) {
+          const pCategory = push(category);
+          where.push(`EXISTS (
+            SELECT 1
+            FROM aif_shop_sale_lines slf
+            LEFT JOIN aif_product_variants vf ON vf.id=slf.variant_id
+            LEFT JOIN aif_product_models mf ON mf.id=vf.model_id
+            LEFT JOIN aif_categories subcf ON subcf.id=mf.subcategory_id
+            WHERE slf.sale_id=s.id
+              AND lower(COALESCE(
+                NULLIF(slf.subcategory_name,''),
+                NULLIF(subcf.name_hu,''),
+                NULLIF(subcf.name_ro,''),
+                'Nincs alkategória'
+              ))=lower(${pCategory})
+          )`);
+        }
+        if (snCod) {
+          const pSnCod = push(`%${snCod}%`);
+          where.push(`EXISTS (
+            SELECT 1
+            FROM aif_shop_sale_lines slf
+            LEFT JOIN aif_product_variants vf ON vf.id=slf.variant_id
+            WHERE slf.sale_id=s.id
+              AND COALESCE(vf.sn_cod,'') ILIKE ${pSnCod}
+          )`);
+        }
+        if (search) {
+          const pSearch = push(`%${search}%`);
+          where.push(`(
+            s.sale_number ILIKE ${pSearch}
+            OR COALESCE(s.actor,'') ILIKE ${pSearch}
+            OR COALESCE(p.actor,'') ILIKE ${pSearch}
+            OR COALESCE(s.customer_name,'') ILIKE ${pSearch}
+            OR COALESCE(s.customer_phone,'') ILIKE ${pSearch}
+            OR EXISTS (
+              SELECT 1 FROM aif_shop_sale_lines slf
+              WHERE slf.sale_id=s.id
+                AND (
+                  COALESCE(slf.product_title,'') ILIKE ${pSearch}
+                  OR COALESCE(slf.product_code,'') ILIKE ${pSearch}
+                  OR COALESCE(slf.barcode,'') ILIKE ${pSearch}
+                )
+            )
+          )`);
+        }
+        return { args, where: where.join(" AND ") };
+      };
+
       const buildExchangeFilters = (rangeFrom, rangeTo) => {
         const args = [location.id, rangeFrom, rangeTo];
         const where = [
@@ -479,6 +568,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
 
       const currentFilters = buildFilters(from, to);
       const previousFilters = buildFilters(previousFrom, previousTo);
+      const currentPaymentFilters = buildPaymentFilters(from, to);
       const currentExchangeFilters = buildExchangeFilters(from, to);
       const previousExchangeFilters = buildExchangeFilters(previousFrom, previousTo);
       const currentSummaryQuery = summaryQuery(currentFilters);
@@ -703,19 +793,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
           currentFilters.args
         ),
         pool.query(
-          `WITH filtered_sales AS (
-             SELECT s.* FROM aif_shop_sales s WHERE ${currentFilters.where}
-           )
-           SELECT
+          `SELECT
              p.method,
              COALESCE(sum(p.amount),0)::numeric AS amount,
-             count(DISTINCT p.sale_id)::int AS transactions
+             count(DISTINCT COALESCE(p.customer_payment_id::text, p.id::text))::int AS transactions
            FROM aif_shop_sale_payments p
-           JOIN filtered_sales fs ON fs.id=p.sale_id
-           WHERE fs.status='completed'
+           JOIN aif_shop_sales s ON s.id=p.sale_id
+           WHERE ${currentPaymentFilters.where}
            GROUP BY p.method
            ORDER BY amount DESC`,
-          currentFilters.args
+          currentPaymentFilters.args
         ),
         pool.query(
           `WITH filtered_sales AS (
