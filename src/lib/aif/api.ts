@@ -2958,6 +2958,8 @@ export type AifShopSaleResult = {
   location: { id: string; code: string; name: string };
   subtotal: number;
   discountTotal: number;
+  percentDiscountTotal?: number;
+  extraDiscountAmount?: number;
   total: number;
   paidTotal: number;
   balanceDue: number;
@@ -4043,6 +4045,7 @@ export function apiAifCompleteShopSale(input: {
   location: string;
   paymentMethod: AifShopSalePaymentMethod;
   idempotencyKey: string;
+  extraDiscountAmount?: number;
   note?: string | null;
   customer?: {
     id?: string | null;
