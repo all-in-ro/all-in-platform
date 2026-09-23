@@ -638,6 +638,144 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       WHERE s.status='completed'
         AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date`);
 
+      // Korábbi hiteles kiadás tényleges rendezése.
+      // Az eredeti hiteles sor az elvitel napján 0 forgalom marad; a befizetett összeg
+      // kizárólag a tényleges p.paid_at napon kerül a forgalomba.
+      // Új termékszintű allokációnál a pontos la.amount összeget használjuk,
+      // régi befizetéseknél pedig az aktív (nem visszahozott) sorokra arányosan osztunk.
+      const creditPaymentNet = saleNetExpression("s", "alloc.allocated_amount", "$3", "$4");
+      branches.push(`SELECT
+        'live_sale'::text AS source,
+        ('credit-payment:' || p.id::text || ':' || sl.id::text) AS record_id,
+        NULL::text AS import_id,
+        NULL::text AS transaction_key,
+        (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS happened_on,
+        l.id::text AS location_id,
+        l.code AS location_code,
+        l.name AS location_name,
+        COALESCE(NULLIF(s.actor,''),NULLIF(p.actor,''),'Ismeretlen') AS actor,
+        COALESCE(NULLIF(sl.brand_name,''),NULLIF(b.name,'')) AS brand_name,
+        COALESCE(NULLIF(sl.category_name,''),NULLIF(cat.name_hu,''),NULLIF(cat.name_ro,'')) AS category_name,
+        COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
+        ${genderSql("COALESCE(NULLIF(sl.raw->>'gender',''),NULLIF(m.gender,''))")} AS gender_name,
+        COALESCE(NULLIF(sl.product_title,''),NULLIF(m.title_ro,''),NULLIF(sl.product_code,''),'Ismeretlen termék') AS product_title,
+        COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
+        COALESCE(NULLIF(sl.image_url,''),NULLIF(v.image_url,''),NULLIF(sl.raw->>'imageUrl',''),NULLIF(sl.raw->>'image_url','')) AS image_url,
+        NULLIF(v.sn_cod,'') AS sn_cod,
+        COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
+        COALESCE(NULLIF(sl.size,''),NULLIF(v.size,'')) AS size,
+        0::numeric AS quantity,
+        active.active_qty::numeric AS display_quantity,
+        NULL::numeric AS aggregate_transactions,
+        alloc.allocated_amount::numeric AS revenue,
+        (${creditPaymentNet})::numeric AS net_revenue,
+        (alloc.allocated_amount + CASE
+          WHEN active.active_line_total > 0
+          THEN active.active_discount_total * alloc.allocated_amount / active.active_line_total
+          ELSE 0::numeric
+        END)::numeric AS sales_before_discount,
+        (CASE
+          WHEN active.active_line_total > 0
+          THEN active.active_discount_total * alloc.allocated_amount / active.active_line_total
+          ELSE 0::numeric
+        END)::numeric AS discount_total,
+        alloc.allocated_amount::numeric AS paid_total,
+        0::numeric AS unpaid_total,
+        (CASE
+          WHEN active.active_line_total > 0
+          THEN active.active_cost * alloc.allocated_amount / active.active_line_total
+          ELSE 0::numeric
+        END)::numeric AS estimated_cost,
+        active.cost_covered AS cost_covered,
+        true AS net_covered,
+        p.method AS payment_method,
+        'line'::text AS source_granularity,
+        s.sale_number AS document_number,
+        s.customer_name,
+        s.customer_phone,
+        COALESCE(NULLIF(p.note,''),'Korábbi hitel rendezése') AS note
+      FROM aif_shop_sale_payments p
+      JOIN aif_shop_sales s ON s.id=p.sale_id
+      JOIN aif_locations l ON l.id=s.location_id
+      JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+      LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+      LEFT JOIN aif_product_models m ON m.id=v.model_id
+      LEFT JOIN aif_brands b ON b.id=m.brand_id
+      LEFT JOIN aif_categories cat ON cat.id=m.category_id
+      LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+        FROM aif_shop_exchanges ex
+        WHERE ex.source_sale_line_id=sl.id
+          AND ex.status='completed'
+          AND ex.created_at <= p.paid_at
+      ) ret ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS active_qty,
+          CASE WHEN sl.quantity > 0 THEN
+            COALESCE(sl.line_total,0)::numeric
+            * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+            / sl.quantity::numeric
+          ELSE 0::numeric END AS active_line_total,
+          CASE WHEN sl.quantity > 0 THEN
+            COALESCE(sl.discount_amount,0)::numeric
+            * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+            / sl.quantity::numeric
+          ELSE 0::numeric END AS active_discount_total,
+          COALESCE(sl.buy_price_snapshot,v.buy_price,0)::numeric
+            * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS active_cost,
+          (sl.buy_price_snapshot IS NOT NULL OR v.buy_price IS NOT NULL) AS cost_covered
+      ) active ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(sum(CASE WHEN x.quantity > 0 THEN
+            COALESCE(x.line_total,0)::numeric
+            * GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0)::numeric
+            / x.quantity::numeric
+          ELSE 0::numeric END),0)::numeric AS active_sale_total
+        FROM aif_shop_sale_lines x
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(sum(ex2.returned_qty),0)::numeric AS returned_qty
+          FROM aif_shop_exchanges ex2
+          WHERE ex2.source_sale_line_id=x.id
+            AND ex2.status='completed'
+            AND ex2.created_at <= p.paid_at
+        ) xr ON true
+        WHERE x.sale_id=s.id
+      ) sale_active ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          count(*)::int AS line_alloc_count
+        FROM aif_shop_customer_payment_line_allocations pla_any
+        WHERE pla_any.customer_payment_id=p.customer_payment_id
+          AND pla_any.sale_id=s.id
+      ) alloc_state ON true
+      LEFT JOIN LATERAL (
+        SELECT pla.amount::numeric AS amount
+        FROM aif_shop_customer_payment_line_allocations pla
+        WHERE pla.customer_payment_id=p.customer_payment_id
+          AND pla.sale_id=s.id
+          AND pla.sale_line_id=sl.id
+        LIMIT 1
+      ) line_alloc ON true
+      CROSS JOIN LATERAL (
+        SELECT CASE
+          WHEN COALESCE(alloc_state.line_alloc_count,0) > 0
+            THEN COALESCE(line_alloc.amount,0)::numeric
+          WHEN COALESCE(sale_active.active_sale_total,0) > 0
+            THEN p.amount::numeric * active.active_line_total / sale_active.active_sale_total
+          ELSE 0::numeric
+        END AS allocated_amount
+      ) alloc
+      WHERE s.status='completed'
+        AND s.sale_type='credit'
+        AND p.customer_payment_id IS NOT NULL
+        AND abs(COALESCE(p.amount,0)) > 0
+        AND active.active_qty > 0
+        AND alloc.allocated_amount > 0
+        AND (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date`);
+
       const exchangeNetReplacement = saleNetExpression("e", "el.line_total", "$3", "$4", "original_snapshot");
       branches.push(`SELECT
         'live_exchange'::text AS source,
