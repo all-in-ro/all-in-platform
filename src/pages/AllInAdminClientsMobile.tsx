@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
+  FileCheck2,
   Filter,
   Home,
   Loader2,
@@ -24,6 +25,7 @@ import {
   MapPin,
   Medal,
   Phone,
+  Printer,
   ReceiptText,
   RefreshCw,
   Search,
@@ -66,6 +68,100 @@ const FIRE_RED = "#c30d1c";
 const panel = "rounded-[22px] border border-white/16 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.20)]";
 const iconButton = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-white/[0.055] text-white transition active:scale-[0.96]";
 type MobileSelectOption = { value: string; label: string };
+
+type BonConsumDocumentSummary = {
+  id: string;
+  documentNumber: string;
+  series?: string | null;
+  sequenceNumber?: number | null;
+  sequenceYear?: number | null;
+  documentDate?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  customerId?: string | null;
+  customerName: string;
+  customerPhone?: string | null;
+  recipientName?: string | null;
+  purpose: string;
+  note?: string | null;
+  actor?: string | null;
+  status?: string | null;
+  totalQty: number;
+  purchaseTotal: number;
+  retailTotal: number;
+  actualSaleTotal: number;
+  discountTotal: number;
+  currencyCode?: string | null;
+  lineCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+type BonConsumDocumentLine = {
+  id: string;
+  lineNo: number;
+  sourceSaleId?: string | null;
+  sourceSaleLineId?: string | null;
+  sourceSaleNumber?: string | null;
+  sourceSoldAt?: string | null;
+  variantId?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  snCod?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  purchaseUnitPrice: number;
+  listUnitPrice: number;
+  actualUnitPrice: number;
+  salesTvaRate?: number | null;
+  purchaseValue: number;
+  retailValue: number;
+  actualSaleValue: number;
+  discountValue: number;
+};
+
+type BonConsumDocumentDetail = {
+  document: BonConsumDocumentSummary;
+  lines: BonConsumDocumentLine[];
+};
+
+
+async function mobileAdminJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(body?.error || `HTTP ${response.status}`);
+  }
+  return body as T;
+}
+
+async function apiMobileCustomerBonConsumDocuments(customerId: string, location: string, year: number) {
+  const query = new URLSearchParams({
+    location,
+    year: String(year),
+    salesLimit: "1",
+    paymentsLimit: "1",
+  });
+  return mobileAdminJson<{ ok: true; consumptionDocuments?: BonConsumDocumentSummary[] }>(
+    `/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`,
+  );
+}
+
+async function apiMobileGetBonConsum(documentId: string) {
+  return mobileAdminJson<{ ok: true } & BonConsumDocumentDetail>(
+    `/api/aif/bon-consum/${encodeURIComponent(documentId)}`,
+  );
+}
 
 function numberValue(value: unknown) {
   const parsed = Number(value);
@@ -663,15 +759,452 @@ function StoreCard({ store, onSelect }: { store: AifAdminCustomerStoreSummary; o
   );
 }
 
+function officialHtmlEscape(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function officialNumber(value: unknown, digits = 2) {
+  return numberValue(value).toLocaleString("ro-RO", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function officialFileSafe(value: unknown) {
+  return String(value || "bon_de_consum")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "bon_de_consum";
+}
+
+function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
+  const doc = detail.document;
+  const lines = detail.lines || [];
+  const generated = new Date().toLocaleDateString("ro-RO", { timeZone: "Europe/Bucharest" });
+
+  const adminRows = lines.map((line, index) => {
+    const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
+    const tva = line.salesTvaRate === null || line.salesTvaRate === undefined
+      ? "-"
+      : `${officialNumber(line.salesTvaRate, Number.isInteger(Number(line.salesTvaRate)) ? 0 : 2)}%`;
+    const source = [line.sourceSaleNumber, line.sourceSoldAt ? formatDate(line.sourceSoldAt) : ""].filter(Boolean).join(" • ");
+    return `<tr>
+      <td class="center">${index + 1}</td>
+      <td>
+        <strong>${officialHtmlEscape(line.productTitle || "Produs")}</strong>
+        <div class="muted">${officialHtmlEscape(variant || "-")}</div>
+      </td>
+      <td class="code">${officialHtmlEscape(line.productCode || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.snCod || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
+      <td class="center">buc.</td>
+      <td class="qty">${officialNumber(line.quantity, 0)}</td>
+      <td class="money">${officialNumber(line.purchaseUnitPrice)}</td>
+      <td class="money">${officialNumber(line.listUnitPrice)}</td>
+      <td class="money">${officialNumber(line.actualUnitPrice)}</td>
+      <td class="center">${officialHtmlEscape(tva)}</td>
+      <td class="money">${officialNumber(line.purchaseValue)}</td>
+      <td class="money strongValue">${officialNumber(line.retailValue)}</td>
+      <td class="money">${officialNumber(line.actualSaleValue)}</td>
+      <td class="money">${officialNumber(line.discountValue)}</td>
+      <td class="source">${officialHtmlEscape(source || "-")}</td>
+    </tr>`;
+  }).join("");
+
+  const signingRows = lines.map((line, index) => {
+    const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
+    const tva = line.salesTvaRate === null || line.salesTvaRate === undefined
+      ? "-"
+      : `${officialNumber(line.salesTvaRate, Number.isInteger(Number(line.salesTvaRate)) ? 0 : 2)}%`;
+    const source = [line.sourceSaleNumber, line.sourceSoldAt ? formatDate(line.sourceSoldAt) : ""].filter(Boolean).join(" • ");
+    return `<tr>
+      <td class="center">${index + 1}</td>
+      <td>
+        <strong>${officialHtmlEscape(line.productTitle || "Produs")}</strong>
+        <div class="muted">${officialHtmlEscape(variant || "-")}</div>
+      </td>
+      <td class="code">${officialHtmlEscape(line.productCode || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.snCod || "-")}</td>
+      <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
+      <td class="center">buc.</td>
+      <td class="qty">${officialNumber(line.quantity, 0)}</td>
+      <td class="money">${officialNumber(line.listUnitPrice)}</td>
+      <td class="money">${officialNumber(line.actualUnitPrice)}</td>
+      <td class="center">${officialHtmlEscape(tva)}</td>
+      <td class="money strongValue">${officialNumber(line.retailValue)}</td>
+      <td class="money">${officialNumber(line.actualSaleValue)}</td>
+      <td class="money">${officialNumber(line.discountValue)}</td>
+      <td class="source">${officialHtmlEscape(source || "-")}</td>
+    </tr>`;
+  }).join("");
+
+  const renderTop = () => `
+    <div class="top">
+      <div>
+        <div class="company">TITAN EURO-COM SRL</div>
+        <div class="companyMeta">
+          <div><strong>CUI:</strong> RO17495362</div>
+          <div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div>
+          <div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div>
+        </div>
+      </div>
+      <div class="docBox">
+        <h3>Datele documentului</h3>
+        <div class="docBoxBody">
+          <div class="docLine"><span>Nr. document</span><strong>${officialHtmlEscape(doc.documentNumber)}</strong></div>
+          <div class="docLine"><span>Data documentului</span><strong>${officialHtmlEscape(doc.documentDate || "-")}</strong></div>
+          <div class="docLine"><span>Cod formular</span><strong>14-3-4A</strong></div>
+          <div class="docLine"><span>Întocmit de</span><strong>${officialHtmlEscape(doc.actor || "-")}</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="title">
+      <div class="eyebrow">Document intern de gestiune</div>
+      <h1>BON DE CONSUM</h1>
+      <div class="subtitle">Scoatere din gestiune / consum pe baza unor ieșiri de stoc documentate</div>
+    </div>
+
+    <div class="meta">
+      <div class="metaBox"><span>Gestiune</span><strong>${officialHtmlEscape(doc.locationName || "-")}</strong></div>
+      <div class="metaBox"><span>Referință client</span><strong>${officialHtmlEscape(doc.customerName || "-")}${doc.customerPhone ? `<br>${officialHtmlEscape(doc.customerPhone)}` : ""}</strong></div>
+      <div class="metaBox"><span>Primitor</span><strong>${officialHtmlEscape(doc.recipientName || doc.customerName || "-")}</strong></div>
+      <div class="metaBox"><span>Scop / destinație</span><strong>${officialHtmlEscape(doc.purpose || "-")}</strong></div>
+    </div>`;
+
+  const renderSignatures = () => `
+    <div class="signatures">
+      <div class="signature"><div class="signatureTitle">Întocmit de / Administrator</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Gestionar</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Predat către / Primitor</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Verificat / Contabilitate</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+    </div>
+
+    <div class="footer">
+      <span>Document generat din sistemul AllInFashion.</span>
+      <span>${officialHtmlEscape(doc.documentNumber)} • Generat: ${officialHtmlEscape(generated)}</span>
+    </div>`;
+
+  return `<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8" />
+<title>${officialHtmlEscape(`Bon de consum ${doc.documentNumber}`)}</title>
+<style>
+  @page { size:A4 landscape; margin:10mm; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; background:#fff; color:#172033; }
+  body { font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .doc { width:100%; }
+  .pageBreak { break-before:page; page-break-before:always; }
+  .top { display:grid; grid-template-columns:minmax(0,1fr) minmax(74mm,.86fr); gap:9mm; align-items:start; padding-bottom:4mm; border-bottom:2px solid #255f54; }
+  .company { color:#183d36; font-size:16px; font-weight:700; letter-spacing:.03em; }
+  .companyMeta { margin-top:2mm; color:#465467; font-size:8.5px; line-height:1.45; }
+  .docBox { border:1px solid #b9c7c4; border-radius:3mm; overflow:hidden; }
+  .docBox h3 { margin:0; padding:2mm 3mm; background:#255f54; color:#fff; font-size:8px; letter-spacing:.09em; text-transform:uppercase; }
+  .docBoxBody { padding:2mm 3mm; background:#f5f8f7; }
+  .docLine { display:flex; justify-content:space-between; gap:5mm; padding:1mm 0; border-bottom:1px solid #d8e0de; }
+  .docLine:last-child { border-bottom:0; }
+  .docLine span { color:#667382; }
+  .docLine strong { text-align:right; color:#172033; }
+  .title { padding:4mm 0 3mm; text-align:center; }
+  .eyebrow { color:#255f54; font-size:8px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
+  h1 { margin:1.2mm 0 0; font-size:20px; letter-spacing:.04em; }
+  .subtitle { margin-top:1mm; color:#526070; font-size:9px; }
+  .meta { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-bottom:3mm; }
+  .metaBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.2mm 2.6mm; background:#f7faf9; min-height:13mm; }
+  .metaBox span { display:block; color:#6a7683; font-size:7px; letter-spacing:.08em; text-transform:uppercase; }
+  .metaBox strong { display:block; margin-top:1mm; font-size:9.5px; color:#172033; font-weight:600; overflow-wrap:anywhere; }
+  .declaration { margin-bottom:3mm; border-left:3px solid #255f54; background:#f5f8f7; padding:2.2mm 3mm; color:#354353; line-height:1.45; }
+  .trace { margin:0 0 3mm; border:1px solid #d7b65a; border-radius:2.2mm; background:#fff9e8; padding:2mm 2.7mm; color:#75580f; line-height:1.4; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  thead { display:table-header-group; }
+  tr { break-inside:avoid; page-break-inside:avoid; }
+  th { background:#26384b; color:#fff; border:1px solid #26384b; padding:1.7mm 1mm; font-size:6.5px; line-height:1.15; text-transform:uppercase; text-align:center; font-weight:500; }
+  td { border:1px solid #d4dcdf; padding:1.25mm 1mm; font-size:7.4px; line-height:1.18; vertical-align:middle; overflow-wrap:anywhere; }
+  tbody tr:nth-child(even) td { background:#f8fafb; }
+  td strong { display:block; font-size:7.8px; color:#172033; }
+  .muted { margin-top:.7mm; color:#64748b; font-size:6.6px; }
+  .center { text-align:center; }
+  .qty { text-align:center; font-size:8.5px; font-weight:700; color:#255f54; }
+  .money { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .strongValue { font-weight:700; color:#183d36; }
+  .code { font-family:"Courier New",monospace; text-align:center; font-size:6.6px; }
+  .source { font-size:6.5px; color:#435164; }
+
+  .adminTable th:nth-child(1),.adminTable td:nth-child(1){width:5mm}
+  .adminTable th:nth-child(2),.adminTable td:nth-child(2){width:41mm}
+  .adminTable th:nth-child(3),.adminTable td:nth-child(3){width:18mm}
+  .adminTable th:nth-child(4),.adminTable td:nth-child(4){width:14mm}
+  .adminTable th:nth-child(5),.adminTable td:nth-child(5){width:23mm}
+  .adminTable th:nth-child(6),.adminTable td:nth-child(6){width:8mm}
+  .adminTable th:nth-child(7),.adminTable td:nth-child(7){width:9mm}
+  .adminTable th:nth-child(8),.adminTable td:nth-child(8){width:18mm}
+  .adminTable th:nth-child(9),.adminTable td:nth-child(9){width:18mm}
+  .adminTable th:nth-child(10),.adminTable td:nth-child(10){width:18mm}
+  .adminTable th:nth-child(11),.adminTable td:nth-child(11){width:9mm}
+  .adminTable th:nth-child(12),.adminTable td:nth-child(12){width:19mm}
+  .adminTable th:nth-child(13),.adminTable td:nth-child(13){width:20mm}
+  .adminTable th:nth-child(14),.adminTable td:nth-child(14){width:19mm}
+  .adminTable th:nth-child(15),.adminTable td:nth-child(15){width:16mm}
+  .adminTable th:nth-child(16),.adminTable td:nth-child(16){width:28mm}
+
+  .signingTable th:nth-child(1),.signingTable td:nth-child(1){width:5mm}
+  .signingTable th:nth-child(2),.signingTable td:nth-child(2){width:48mm}
+  .signingTable th:nth-child(3),.signingTable td:nth-child(3){width:20mm}
+  .signingTable th:nth-child(4),.signingTable td:nth-child(4){width:15mm}
+  .signingTable th:nth-child(5),.signingTable td:nth-child(5){width:25mm}
+  .signingTable th:nth-child(6),.signingTable td:nth-child(6){width:8mm}
+  .signingTable th:nth-child(7),.signingTable td:nth-child(7){width:10mm}
+  .signingTable th:nth-child(8),.signingTable td:nth-child(8){width:22mm}
+  .signingTable th:nth-child(9),.signingTable td:nth-child(9){width:22mm}
+  .signingTable th:nth-child(10),.signingTable td:nth-child(10){width:10mm}
+  .signingTable th:nth-child(11),.signingTable td:nth-child(11){width:23mm}
+  .signingTable th:nth-child(12),.signingTable td:nth-child(12){width:22mm}
+  .signingTable th:nth-child(13),.signingTable td:nth-child(13){width:18mm}
+  .signingTable th:nth-child(14),.signingTable td:nth-child(14){width:31mm}
+
+  tfoot td { background:#eef4f2; border-top:2px solid #255f54; font-weight:700; }
+  .totalLabel { text-align:right; color:#183d36; letter-spacing:.07em; }
+  .retailTotal { background:#255f54 !important; color:#fff; font-size:8.5px; }
+  .summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-top:3mm; }
+  .summary.signingSummary { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .summaryBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.3mm 2.7mm; background:#f7faf9; }
+  .summaryBox span { display:block; color:#6a7683; font-size:7px; text-transform:uppercase; letter-spacing:.07em; }
+  .summaryBox strong { display:block; margin-top:1mm; font-size:11px; color:#172033; }
+  .summaryBox.retail { border-color:#255f54; background:#eef7f4; }
+  .summaryBox.retail strong { color:#183d36; }
+  .signatures { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4mm; margin-top:10mm; break-inside:avoid; }
+  .signature { min-height:24mm; border:1px solid #ccd7d4; border-radius:2.5mm; padding:2.5mm; }
+  .signatureTitle { color:#255f54; font-size:7.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+  .signatureLine { margin-top:8mm; border-top:1px solid #667382; padding-top:1.2mm; color:#667382; font-size:7px; text-align:center; }
+  .signatureDate { margin-top:2mm; color:#7b8793; font-size:7px; text-align:center; }
+  .footer { display:flex; justify-content:space-between; gap:8mm; margin-top:4mm; padding-top:2mm; border-top:1px solid #d7dfdd; color:#7b8793; font-size:7px; }
+</style>
+</head>
+<body>
+
+<section class="doc adminCopy">
+  ${renderTop()}
+
+  <div class="declaration">Prin prezentul document se consemnează consumul și scoaterea din gestiune a produselor enumerate mai jos. Valorile de achiziție și de vânzare sunt cele înregistrate la momentul ieșirii inițiale din stoc, fără recalculare după prețurile curente.</div>
+  <div class="trace"><strong>Trasabilitate:</strong> documentul leagă de acest Bon de consum ieșirile de stoc deja înregistrate în sistem și nu dublează diminuarea cantitativă. Prețul de achiziție este cel înregistrat la momentul vânzării, iar prețul de vânzare este prețul de listă înregistrat la acel moment, înainte de reducerea acordată clientului.${doc.note ? ` Observații: ${officialHtmlEscape(doc.note)}` : ""}</div>
+
+  <table class="adminTable">
+    <thead>
+      <tr>
+        <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. RON</th><th>P.U. vânzare listă RON</th><th>P.U. vânzare efectiv RON</th>
+        <th>TVA</th><th>Val. achiz. RON</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
+      </tr>
+    </thead>
+    <tbody>${adminRows || `<tr><td colspan="16" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" class="totalLabel">TOTAL</td>
+        <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
+        <td colspan="4"></td>
+        <td class="money">${officialNumber(doc.purchaseTotal)}</td>
+        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
+        <td class="money">${officialNumber(doc.actualSaleTotal)}</td>
+        <td class="money">${officialNumber(doc.discountTotal)}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="summary">
+    <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
+    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+  </div>
+
+  ${renderSignatures()}
+</section>
+
+<section class="doc pageBreak signingCopy">
+  ${renderTop()}
+
+  <div class="declaration">Prin prezentul document se consemnează consumul și scoaterea din gestiune a produselor enumerate mai jos. Valorile de vânzare sunt cele înregistrate la momentul ieșirii inițiale din stoc, fără recalculare după prețurile curente.</div>
+  <div class="trace"><strong>Trasabilitate:</strong> documentul leagă de acest Bon de consum ieșirile de stoc deja înregistrate în sistem și nu dublează diminuarea cantitativă. Prețul de vânzare este prețul de listă înregistrat la acel moment, înainte de reducerea acordată clientului.${doc.note ? ` Observații: ${officialHtmlEscape(doc.note)}` : ""}</div>
+
+  <table class="signingTable">
+    <thead>
+      <tr>
+        <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. vânzare listă RON</th><th>P.U. vânzare efectiv RON</th>
+        <th>TVA</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
+      </tr>
+    </thead>
+    <tbody>${signingRows || `<tr><td colspan="14" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" class="totalLabel">TOTAL</td>
+        <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
+        <td colspan="3"></td>
+        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
+        <td class="money">${officialNumber(doc.actualSaleTotal)}</td>
+        <td class="money">${officialNumber(doc.discountTotal)}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="summary signingSummary">
+    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+  </div>
+
+  ${renderSignatures()}
+</section>
+
+</body>
+</html>`;
+}
+
+function printOfficialBonConsum(detail: BonConsumDocumentDetail) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "0";
+  iframe.style.width = "297mm";
+  iframe.style.height = "210mm";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  document.body.appendChild(iframe);
+  const win = iframe.contentWindow;
+  const iframeDoc = win?.document;
+  if (!win || !iframeDoc) {
+    iframe.remove();
+    throw new Error("A böngésző nem engedte megnyitni a Bon de consum nyomtatási keretét.");
+  }
+  let cleaned = false;
+  let timer: number | undefined;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (timer) window.clearTimeout(timer);
+    iframe.remove();
+  };
+  win.addEventListener("afterprint", cleanup, { once: true });
+  iframeDoc.open();
+  iframeDoc.write(buildOfficialBonConsumHtml(detail));
+  iframeDoc.title = `bon_de_consum_${officialFileSafe(detail.document.documentNumber)}.pdf`;
+  iframeDoc.close();
+  win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
+    win.focus();
+    win.print();
+    timer = window.setTimeout(cleanup, 60000);
+  }));
+}
+
 function CustomerDetailSheet({
   item,
   year,
+  canManage,
   onClose,
 }: {
   item: AifAdminCustomerOverviewItem;
   year: number;
+  canManage: boolean;
   onClose: () => void;
 }) {
+  const [bonDocuments, setBonDocuments] = useState<BonConsumDocumentSummary[]>([]);
+  const [bonLoading, setBonLoading] = useState(false);
+  const [bonError, setBonError] = useState("");
+  const [bonPrintBusyId, setBonPrintBusyId] = useState("");
+  useEffect(() => {
+    if (!canManage) {
+      setBonDocuments([]);
+      setBonError("");
+      return;
+    }
+
+    let cancelled = false;
+    const stores = (item.stores || []).filter((store) =>
+      String(store.customerId || "").trim()
+      && String(store.locationCode || store.locationId || "").trim()
+    );
+
+    if (!stores.length) {
+      setBonDocuments([]);
+      return;
+    }
+
+    setBonLoading(true);
+    setBonError("");
+
+    void Promise.allSettled(
+      stores.map((store) =>
+        apiMobileCustomerBonConsumDocuments(
+          String(store.customerId || "").trim(),
+          String(store.locationCode || store.locationId || "").trim(),
+          year,
+        )
+      )
+    ).then((results) => {
+      if (cancelled) return;
+
+      const byId = new Map<string, BonConsumDocumentSummary>();
+      let failed = 0;
+
+      for (const result of results) {
+        if (result.status !== "fulfilled") {
+          failed += 1;
+          continue;
+        }
+        for (const doc of result.value.consumptionDocuments || []) {
+          if (doc?.id) byId.set(String(doc.id), doc);
+        }
+      }
+
+      const docs = Array.from(byId.values()).sort((a, b) => {
+        const aTime = new Date(String(a.documentDate || a.createdAt || 0)).getTime();
+        const bTime = new Date(String(b.documentDate || b.createdAt || 0)).getTime();
+        if (bTime !== aTime) return bTime - aTime;
+        return String(b.documentNumber || "").localeCompare(String(a.documentNumber || ""), "hu");
+      });
+
+      setBonDocuments(docs);
+      if (failed === results.length) {
+        setBonError("A Bon de consum archívum nem tölthető be.");
+      }
+    }).finally(() => {
+      if (!cancelled) setBonLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canManage, item.key, item.stores, year]);
+
+  async function printMobileBonConsum(documentId: string) {
+    if (!documentId || bonPrintBusyId) return;
+    setBonPrintBusyId(documentId);
+    setBonError("");
+    try {
+      const response = await apiMobileGetBonConsum(documentId);
+      printOfficialBonConsum({
+        document: response.document,
+        lines: response.lines || [],
+      });
+    } catch (caught) {
+      setBonError(caught instanceof Error ? caught.message : "A Bon de consum PDF nem tölthető be.");
+    } finally {
+      setBonPrintBusyId("");
+    }
+  }
+
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -712,6 +1245,76 @@ function CustomerDetailSheet({
           </section>
 
           <BrightDebt amount={numberValue(item.currentOpenBalance)} caption={`${integer(item.currentOpenSales)} nyitott vásárlás`} />
+
+          {canManage ? (
+            <section className="overflow-hidden rounded-[22px] border border-[#9be9e5]/58 bg-gradient-to-br from-[#26374b] via-[#2d3f51] to-[#244f55] shadow-[0_14px_34px_rgba(15,23,42,0.28),0_0_0_1px_rgba(155,233,229,0.08)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[#9be9e5]/22 bg-[#214c52]/58 px-3.5 py-3">
+                <div className="min-w-0">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-[#cffffd]/58">Hivatalos akták</p>
+                  <h3 className="mt-0.5 text-[15px] text-white">Bon de consum archívum</h3>
+                </div>
+                <span className="shrink-0 rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/22 px-2.5 py-1 text-[10px] text-[#d7fffd]">
+                  {bonLoading ? "…" : `${bonDocuments.length} db`}
+                </span>
+              </div>
+
+              <div className="space-y-2 p-3">
+                {bonLoading ? (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#293548] px-3 py-5 text-[11px] text-white/58">
+                    <Loader2 size={15} className="animate-spin text-[#8ee6e2]" />
+                    Bon de consum betöltése…
+                  </div>
+                ) : null}
+
+                {!bonLoading && bonDocuments.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="rounded-2xl border border-[#bff8f5]/40 bg-gradient-to-r from-[#344154] to-[#2c4952] p-3 shadow-[0_10px_24px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.05)]"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#9be9e5]/50 bg-[#2a8d8b]/30 text-white shadow-[0_6px_16px_rgba(42,141,139,0.20)]">
+                        <FileCheck2 size={17} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-[13px] text-white">{doc.documentNumber}</p>
+                        <p className="mt-1 text-[10px] text-white/48">
+                          {doc.documentDate || "–"} • {doc.locationName || "Üzlet"}
+                        </p>
+                        <p className="mt-1 truncate text-[10px] text-white/55" title={doc.purpose}>
+                          {doc.purpose || "Bon de consum"}
+                        </p>
+                        <p className="mt-1.5 text-[10px] text-[#d7fffd]/72">
+                          {integer(doc.totalQty)} db • teljes eladási érték: {money(doc.retailTotal)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void printMobileBonConsum(doc.id)}
+                      disabled={Boolean(bonPrintBusyId)}
+                      className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#ff9aa4]/80 bg-[#E21C2A] px-3 text-[12px] text-white shadow-[0_8px_20px_rgba(226,28,42,0.32)] transition active:scale-[0.98] disabled:opacity-45"
+                    >
+                      {bonPrintBusyId === doc.id ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
+                      {bonPrintBusyId === doc.id ? "PDF megnyitása…" : "PDF • 2 oldalas példány"}
+                    </button>
+                  </div>
+                ))}
+
+                {!bonLoading && !bonDocuments.length && !bonError ? (
+                  <div className="rounded-2xl border border-dashed border-white/14 bg-black/5 px-3 py-5 text-center text-[11px] text-white/42">
+                    Ehhez a klienshez nincs Bon de consum ebben az évben.
+                  </div>
+                ) : null}
+
+                {bonError ? (
+                  <div className="rounded-xl border border-red-200/40 bg-red-600/18 px-3 py-2.5 text-[11px] text-red-50">
+                    {bonError}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           <section className={`${panel} p-4`}>
             <p className="text-[9px] uppercase tracking-[0.12em] text-white/40">Kapcsolati adatok</p>
@@ -784,7 +1387,7 @@ function CustomerDetailSheet({
   );
 }
 
-export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
+export default function AllInAdminClientsMobile({ actor = "ADMIN", role = "admin" }: Props) {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
   const [location, setLocation] = useState<LocationScope>("all");
@@ -1042,7 +1645,7 @@ export default function AllInAdminClientsMobile({ actor = "ADMIN" }: Props) {
         onClose={() => setFilterOpen(false)}
       />
 
-      {selected ? <CustomerDetailSheet item={selected} year={year} onClose={() => setSelected(null)} /> : null}
+      {selected ? <CustomerDetailSheet item={selected} year={year} canManage={role !== "shop"} onClose={() => setSelected(null)} /> : null}
 
       {loading ? (
         <div className="fixed inset-0 z-[500] grid place-items-center bg-slate-950/24 backdrop-blur-[2px]">
