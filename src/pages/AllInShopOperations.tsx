@@ -2081,6 +2081,21 @@ export default function AllInShopOperations({
                         (unpaid ? "Utólag fizet" : "Nincs adat"),
                       );
                       const paymentKey = paymentLabel.toLocaleLowerCase("hu-HU");
+                      const normalPriceTotal = numberValue(item.listTotal) > 0.005
+                        ? numberValue(item.listTotal)
+                        : Math.max(
+                            numberValue(item.netTotal || item.revenue) + numberValue(item.discountTotal),
+                            numberValue(item.revenue),
+                          );
+                      const netPriceTotal = numberValue(item.netTotal) > 0.005 || normalPriceTotal <= 0.005
+                        ? numberValue(item.netTotal)
+                        : Math.max(0, normalPriceTotal - numberValue(item.discountTotal));
+                      const discountValue = Math.max(0, numberValue(item.discountTotal));
+                      const discountPercent = numberValue(item.discountPercent) > 0.005
+                        ? numberValue(item.discountPercent)
+                        : normalPriceTotal > 0.005 && discountValue > 0.005
+                          ? (discountValue / normalPriceTotal) * 100
+                          : 0;
                       const PaymentIcon = paymentKey.includes("készpénz")
                         ? Banknote
                         : paymentKey.includes("bankkártya") || paymentKey.includes("kártya")
@@ -2092,7 +2107,7 @@ export default function AllInShopOperations({
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_190px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
+                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_260px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
                             settlement
                               ? "bg-[#334b5c] shadow-[inset_4px_0_0_#4fb8b2] hover:bg-[#39576a]"
                               : unpaid
@@ -2206,32 +2221,49 @@ export default function AllInShopOperations({
                           </div>
 
                           <div className="flex h-full min-w-0 items-center justify-end">
-                            <div className="text-right">
+                            <div className="w-full max-w-[260px] text-right">
                               <p className="text-[11px] uppercase tracking-[0.08em] text-white/34">
                                 {item.qty} db
                               </p>
+
+                              <div className="mt-1.5 space-y-1">
+                                <div className="flex items-center justify-between gap-3 text-[10px]">
+                                  <span className="uppercase tracking-[0.06em] text-white/40">Rendes eladási ár</span>
+                                  <span className="whitespace-nowrap tabular-nums text-[13px] text-white/82">
+                                    {formatMoney(normalPriceTotal)}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3 text-[10px]">
+                                  <span className="uppercase tracking-[0.06em] text-amber-100/68">Akció</span>
+                                  {discountValue > 0.005 ? (
+                                    <span className="whitespace-nowrap tabular-nums text-[12px] text-amber-100">
+                                      −{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • −{formatMoney(discountValue)}
+                                    </span>
+                                  ) : (
+                                    <span className="whitespace-nowrap text-[11px] text-white/32">Nincs</span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3 border-t border-white/[0.10] pt-1.5">
+                                  <span className="text-[10px] uppercase tracking-[0.08em] text-[#bdf8f5]/74">Nettó ár</span>
+                                  <span className="whitespace-nowrap text-[19px] tracking-tight tabular-nums text-[#d7fffd]">
+                                    {formatMoney(netPriceTotal)}
+                                  </span>
+                                </div>
+                              </div>
+
                               {settlement ? (
-                                <>
-                                  <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/60">Kifizetve ezen a napon</p>
-                                  <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-[#d9ecff]">
+                                <div className="mt-2 border-t border-white/[0.08] pt-1.5">
+                                  <p className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/58">Kifizetve ezen a napon</p>
+                                  <p className="mt-0.5 whitespace-nowrap text-[13px] tabular-nums text-[#d9ecff]">
                                     {formatMoney(item.settlementAmount ?? item.revenue)}
                                   </p>
-                                  <p className="mt-1 whitespace-nowrap text-[10px] text-white/38">
+                                  <p className="mt-0.5 whitespace-nowrap text-[9px] text-white/32">
                                     Készletmozgás: 0 db
                                   </p>
-                                </>
-                              ) : (
-                                <>
-                                  <p className="mt-1 whitespace-nowrap text-[21px] tracking-tight text-white">
-                                    {formatMoney(item.revenue)}
-                                  </p>
-                                  {item.discountTotal > 0 ? (
-                                    <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100/76">
-                                      Kedvezmény −{formatMoney(item.discountTotal)}
-                                    </p>
-                                  ) : null}
-                                </>
-                              )}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
