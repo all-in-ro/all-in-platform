@@ -1004,7 +1004,7 @@ function StorePerformanceCard({
           <span>{share.toFixed(1)}%</span>
           <span>{integer(data?.summary.itemsSold)} db</span>
         </div>
-        <p className="truncate">{integer(data?.summary.transactions)} lezárt eladás</p>
+        <p className="truncate">{integer(data?.summary.transactions)} eladás • hitel nélkül</p>
       </div>
     </button>
   );
@@ -1490,7 +1490,7 @@ export default function AllInAdminMagazinDashboardMobile({
           <section className="overflow-hidden rounded-[24px] border border-[#9be9e5]/30 bg-gradient-to-br from-[#227c72] via-[#2d6968] to-[#344154] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.24)]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/62">{scopeLabel} forgalma</p>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/62">{scopeLabel} forgalma • hitel nélkül</p>
                 <p className="mt-2 break-words text-[clamp(1.75rem,8.7vw,2.5rem)] leading-none tracking-tight text-white">{money(summary.revenue)}</p>
               </div>
               <DeltaPill current={summary.revenue} previous={previousSummary.revenue} />
@@ -1736,7 +1736,7 @@ export default function AllInAdminMagazinDashboardMobile({
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3.5">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Csapat</p>
-                <h2 className="mt-0.5 text-base text-white">Ki mennyit adott el?</h2>
+                <h2 className="mt-0.5 text-base text-white">Ki mennyit adott el? • hitel nélkül</h2>
               </div>
               <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]">
                 <UsersRound size={17} />
@@ -1989,9 +1989,9 @@ export default function AllInAdminMagazinDashboardMobile({
                     {!paymentTotals.length ? <p className="py-4 text-center text-xs text-white/40">Nincs rögzített fizetés.</p> : null}
                   </div>
                 </div>
-                <RankingList title="Márkák forgalom szerint" items={brands} mode="money" />
-                <RankingList title="Alkategóriák darab szerint" items={categories} mode="qty" />
-                <RankingList title="Top termékek forgalom szerint" items={products} mode="money" />
+                <RankingList title="Márkák forgalom szerint • hitel nélkül" items={brands} mode="money" />
+                <RankingList title="Alkategóriák darab szerint • hitel nélkül" items={categories} mode="qty" />
+                <RankingList title="Top termékek forgalom szerint • hitel nélkül" items={products} mode="money" />
               </div>
             ) : null}
           </section>
