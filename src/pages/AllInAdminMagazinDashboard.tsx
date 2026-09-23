@@ -1473,6 +1473,15 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
+  const showCreditRowsInEventLog = applied.saleType === "credit" || applied.paymentStatus === "credit";
+  const eventLogSales = useMemo(
+    () => (data?.recentSales || []).filter((sale) =>
+      showCreditRowsInEventLog
+      || isPaymentSettlement(sale)
+      || String(sale.saleType || "").toLowerCase() !== "credit"
+    ),
+    [data?.recentSales, showCreditRowsInEventLog],
+  );
   const dayClosure = shiftDay?.dayClosure || null;
   const dayClosureAt = dayClosure?.closedAt || dayClosure?.createdAt || null;
   const dayClosureDate = shiftDay?.date || dayClosure?.date || applied.to;
@@ -2036,7 +2045,7 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Eladott termékek és fizetési események</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-[10px] text-white/50">
-                {data?.recentSales.length || 0} sor
+                {eventLogSales.length} sor
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -2058,7 +2067,7 @@ export default function AllInAdminMagazinDashboard({
                   </tr>
                 </thead>
                 <tbody>
-                  {(data?.recentSales || []).map((sale) => {
+                  {eventLogSales.map((sale) => {
                     const settlement = isPaymentSettlement(sale);
                     const settlementMeta = settlementInfo(sale);
                     return (
@@ -2167,7 +2176,7 @@ export default function AllInAdminMagazinDashboard({
                   })}
                 </tbody>
               </table>
-              {!data?.recentSales.length ? (
+              {!eventLogSales.length ? (
                 <div className="px-4 py-12 text-center">
                   <ReceiptText className="mx-auto text-[#7bd7d4]/70" size={28} />
                   <p className="mt-2 text-sm text-white">Nincs eladási vagy fizetési esemény ebben az időszakban.</p>
