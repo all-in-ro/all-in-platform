@@ -426,8 +426,8 @@ export default function createAifAdminShopOverviewRouter(deps) {
           GROUP BY sl.sale_id
         )
         SELECT
-          count(*) FILTER (WHERE fs.status='completed')::int AS transactions,
-          COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS revenue,
+          count(*) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit')::int AS transactions,
+          COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS revenue,
           COALESCE(sum(
             CASE
               WHEN COALESCE(
@@ -458,10 +458,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
               )
               ELSE fs.total
             END
-          ) FILTER (WHERE fs.status='completed'),0)::numeric AS net_revenue,
-          COALESCE(sum(fs.subtotal) FILTER (WHERE fs.status='completed'),0)::numeric AS sales_before_discount,
-          COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed'),0)::numeric AS discount_total,
-          COALESCE(sum(fs.paid_total) FILTER (WHERE fs.status='completed'),0)::numeric AS paid_total,
+          ) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS net_revenue,
+          COALESCE(sum(fs.subtotal) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS sales_before_discount,
+          COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS discount_total,
+          COALESCE(sum(fs.paid_total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS paid_total,
           COALESCE(sum(fs.balance_due) FILTER (WHERE fs.status='completed'),0)::numeric AS unpaid_total,
           count(*) FILTER (
             WHERE fs.status='completed' AND fs.balance_due > 0
@@ -469,12 +469,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
           count(*) FILTER (
             WHERE fs.status='completed' AND (fs.payment_status='credit' OR fs.sale_type='credit')
           )::int AS credit_sales,
-          COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed'),0)::numeric AS items_sold,
-          COALESCE(sum(lt.estimated_cost) FILTER (WHERE fs.status='completed'),0)::numeric AS estimated_cost,
-          COALESCE(sum(lt.cost_snapshot_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_snapshot_qty,
-          COALESCE(sum(lt.cost_fallback_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_fallback_qty,
-          COALESCE(sum(lt.cost_missing_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_missing_qty,
-          COALESCE(avg(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS average_basket,
+          COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS items_sold,
+          COALESCE(sum(lt.estimated_cost) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS estimated_cost,
+          COALESCE(sum(lt.cost_snapshot_qty) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS cost_snapshot_qty,
+          COALESCE(sum(lt.cost_fallback_qty) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS cost_fallback_qty,
+          COALESCE(sum(lt.cost_missing_qty) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS cost_missing_qty,
+          COALESCE(avg(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS average_basket,
           count(*) FILTER (WHERE fs.status='cancelled')::int AS cancelled_sales,
           count(*) FILTER (WHERE fs.status='refunded')::int AS refunded_sales
         FROM filtered_sales fs
@@ -495,7 +495,9 @@ export default function createAifAdminShopOverviewRouter(deps) {
         WITH filtered_exchanges AS (
           SELECT e.*
           FROM aif_shop_exchanges e
+          JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
           WHERE ${where}
+            AND source_sale.sale_type <> 'credit'
         ),
         exchange_rows AS (
           SELECT
@@ -811,10 +813,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
            SELECT
              d.day::text AS date,
              to_char(d.day,'MM.DD') AS label,
-             COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS revenue,
-             count(fs.id) FILTER (WHERE fs.status='completed')::int AS transactions,
-             COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed'),0)::numeric AS items_sold,
-             COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed'),0)::numeric AS discount_total,
+             COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS revenue,
+             count(fs.id) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit')::int AS transactions,
+             COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS items_sold,
+             COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS discount_total,
              COALESCE(sum(fs.balance_due) FILTER (WHERE fs.status='completed'),0)::numeric AS unpaid_total
            FROM days d
            LEFT JOIN filtered_sales fs
@@ -836,6 +838,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
            FROM filtered_sales fs
            JOIN aif_shop_sale_lines sl ON sl.sale_id=fs.id
            WHERE fs.status='completed'
+             AND fs.sale_type <> 'credit'
            GROUP BY COALESCE(NULLIF(sl.brand_name,''),'Ismeretlen márka')
            ORDER BY revenue DESC, qty DESC
            LIMIT 12`,
@@ -861,6 +864,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
            LEFT JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
            WHERE fs.status='completed'
+             AND fs.sale_type <> 'credit'
            GROUP BY COALESCE(
              NULLIF(sl.subcategory_name,''),
              NULLIF(subc.name_hu,''),
@@ -884,6 +888,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
            FROM filtered_sales fs
            JOIN aif_shop_sale_lines sl ON sl.sale_id=fs.id
            WHERE fs.status='completed'
+             AND fs.sale_type <> 'credit'
            GROUP BY COALESCE(NULLIF(sl.product_title,''),NULLIF(sl.product_code,''),'Ismeretlen termék')
            ORDER BY revenue DESC, qty DESC
            LIMIT 12`,
@@ -925,12 +930,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
            )
            SELECT
              COALESCE(NULLIF(fs.actor,''),'Ismeretlen') AS actor,
-             COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS revenue,
-             count(*) FILTER (WHERE fs.status='completed')::int AS transactions,
-             COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed'),0)::numeric AS items_sold,
-             COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed'),0)::numeric AS discount_total,
+             COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS revenue,
+             count(*) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit')::int AS transactions,
+             COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS items_sold,
+             COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS discount_total,
              COALESCE(sum(fs.balance_due) FILTER (WHERE fs.status='completed'),0)::numeric AS unpaid_total,
-             COALESCE(avg(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS average_basket
+             COALESCE(avg(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS average_basket
            FROM filtered_sales fs
            LEFT JOIN line_totals lt ON lt.sale_id=fs.id
            GROUP BY COALESCE(NULLIF(fs.actor,''),'Ismeretlen')
@@ -1134,7 +1139,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
         pool.query(previousExchangeSummaryQuery.sql, previousExchangeSummaryQuery.args),
         pool.query(
           `WITH filtered_exchanges AS (
-             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+             SELECT e.*
+             FROM aif_shop_exchanges e
+             JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
+             WHERE ${currentExchangeFilters.where}
+               AND source_sale.sale_type <> 'credit'
            ),
            exchange_days AS (
              SELECT
@@ -1162,7 +1171,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
         ),
         pool.query(
           `WITH filtered_exchanges AS (
-             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+             SELECT e.*
+             FROM aif_shop_exchanges e
+             JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
+             WHERE ${currentExchangeFilters.where}
+               AND source_sale.sale_type <> 'credit'
            )
            SELECT * FROM (
              SELECT
@@ -1217,7 +1230,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
         ),
         pool.query(
           `WITH filtered_exchanges AS (
-             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+             SELECT e.*
+             FROM aif_shop_exchanges e
+             JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
+             WHERE ${currentExchangeFilters.where}
+               AND source_sale.sale_type <> 'credit'
            )
            SELECT
              COALESCE(NULLIF(e.actor,''),'Ismeretlen') AS actor,
