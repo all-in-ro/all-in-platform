@@ -80,8 +80,9 @@ type Session =
       actor: string;
     };
 
-const SHOP_INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
+const SHOP_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 15 * 1000;
+const SESSION_ACTIVITY_HEARTBEAT_MS = 45 * 1000;
 const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
 const LAST_ACTIVITY_AT_KEY = "allin:last-activity-at:v1";
 const SESSION_REQUIRED_HEADER = "X-AllIn-Auth";
@@ -514,22 +515,59 @@ export default function App() {
   }, [api]);
 
   useEffect(() => {
-    // Az automatikus inaktivitási kijelentkezés csak az üzleti/shop belépésekre vonatkozik.
-    // Admin munkamenetet munka közben nem zárunk le kliensoldali időzítővel.
+    // Shop belépésnél 10 perc VALÓDI felhasználói inaktivitás után jelentkezünk ki.
+    // A háttérben futó API-hívás önmagában nem aktivitás.
+    // Viszont ha az eladó ténylegesen dolgozik (kattint, gépel, olvas, görget),
+    // rendszeresen megérintjük a szerveres sessiont is, így nem tud a belépéstől
+    // számított fix idő után lejárni munka közben.
     if (!session || session.role !== "shop") return;
 
     let lastActivityAt = Math.max(Date.now(), readSharedLastActivityAt());
     let lastStorageWriteAt = 0;
+    let lastHeartbeatAt = Date.now();
+    let heartbeatInFlight = false;
     let logoutStarted = false;
     writeSharedLastActivityAt(lastActivityAt);
+
+    const keepServerSessionAlive = async (now = Date.now()) => {
+      if (logoutStarted || heartbeatInFlight) return;
+      if (document.visibilityState !== "visible") return;
+      if (now - lastHeartbeatAt < SESSION_ACTIVITY_HEARTBEAT_MS) return;
+
+      lastHeartbeatAt = now;
+      heartbeatInFlight = true;
+      try {
+        const response = await fetch(`${api}/auth/activity`, {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        // Hálózati/5xx hiba miatt nem dobjuk ki az eladót.
+        // Csak a szerver által egyértelműen lejártnak jelzett session zárja le a felületet.
+        if (response.status === 401) {
+          logoutStarted = true;
+          void performLogout(true);
+        }
+      } catch {
+        // Ideiglenes hálózati hiba nem egyenlő kijelentkezéssel.
+      } finally {
+        heartbeatInFlight = false;
+      }
+    };
 
     const markActivity = () => {
       const now = Date.now();
       lastActivityAt = now;
+
       if (now - lastStorageWriteAt >= 3000) {
         lastStorageWriteAt = now;
         writeSharedLastActivityAt(now);
       }
+
+      // Csak valódi felhasználói esemény indíthat heartbeatet.
+      // Maga a heartbeat nem számít aktivitásnak.
+      void keepServerSessionAlive(now);
     };
 
     const checkInactivity = () => {
@@ -537,6 +575,7 @@ export default function App() {
       const sharedActivityAt = readSharedLastActivityAt();
       const effectiveLastActivityAt = Math.max(lastActivityAt, sharedActivityAt);
       if (Date.now() - effectiveLastActivityAt < SHOP_INACTIVITY_LOGOUT_MS) return;
+
       logoutStarted = true;
       void performLogout(true);
     };
@@ -566,8 +605,11 @@ export default function App() {
 
     const interval = window.setInterval(checkInactivity, INACTIVITY_CHECK_MS);
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") checkInactivity();
+      if (document.visibilityState !== "visible") return;
+      checkInactivity();
+      if (!logoutStarted) void keepServerSessionAlive(Date.now());
     };
+
     window.addEventListener("storage", onStorage);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -579,7 +621,7 @@ export default function App() {
       window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [performLogout, session]);
+  }, [api, performLogout, session]);
 
   if (!authReady) {
     return (
