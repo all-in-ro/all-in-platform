@@ -26061,6 +26061,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              sl.size,
              COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
              GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS qty,
+             COALESCE(sl.list_price,0)::numeric AS list_price,
+             COALESCE(sl.unit_price,0)::numeric AS unit_price,
+             round(
+               COALESCE(sl.list_price,0)::numeric
+               * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric,
+               2
+             ) AS list_total,
+             COALESCE(sl.discount_percent,0)::numeric AS discount_percent,
              CASE
                WHEN sl.quantity > 0 THEN
                  round(
@@ -26071,6 +26079,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  )
                ELSE 0::numeric
              END AS revenue,
+             CASE
+               WHEN sl.quantity > 0 THEN
+                 round(
+                   COALESCE(sl.line_total,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+               ELSE 0::numeric
+             END AS net_total,
              CASE
                WHEN sl.quantity > 0 THEN
                  round(
@@ -26120,7 +26138,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              el.size,
              COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
              el.quantity::numeric AS qty,
-             el.line_total::numeric AS revenue,
+             COALESCE(el.unit_price,0)::numeric AS list_price,
+             COALESCE(el.unit_price,0)::numeric AS unit_price,
+             COALESCE(el.line_total,0)::numeric AS list_total,
+             0::numeric AS discount_percent,
+             COALESCE(el.line_total,0)::numeric AS revenue,
+             COALESCE(el.line_total,0)::numeric AS net_total,
              0::numeric AS discount_total,
              1::int AS transactions
            FROM filtered_exchanges e
@@ -26168,7 +26191,48 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                sl.subcategory_name,
                sl.color_name,
                sl.size,
-               sl.image_url
+               sl.image_url,
+               COALESCE(sl.list_price,0)::numeric AS list_price,
+               COALESCE(sl.unit_price,0)::numeric AS unit_price,
+               COALESCE(sl.discount_percent,0)::numeric AS discount_percent,
+               CASE
+                 WHEN sl.quantity > 0 THEN
+                   round(
+                     COALESCE(sl.list_price,0)::numeric
+                     * LEAST(
+                         la.quantity::numeric,
+                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                       ),
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS active_list_total,
+               CASE
+                 WHEN sl.quantity > 0 THEN
+                   round(
+                     COALESCE(sl.discount_amount,0)::numeric
+                     * LEAST(
+                         la.quantity::numeric,
+                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                       )
+                     / sl.quantity::numeric,
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS active_discount_total,
+               CASE
+                 WHEN sl.quantity > 0 THEN
+                   round(
+                     COALESCE(sl.line_total,0)::numeric
+                     * LEAST(
+                         la.quantity::numeric,
+                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                       )
+                     / sl.quantity::numeric,
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS active_net_total
              FROM aif_shop_customer_payment_line_allocations la
              JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
              JOIN aif_shop_sales ps ON ps.id=la.sale_id
@@ -26244,7 +26308,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                sl.color_name,
                sl.size,
                sl.image_url,
+               COALESCE(sl.list_price,0)::numeric AS list_price,
+               COALESCE(sl.unit_price,0)::numeric AS unit_price,
+               COALESCE(sl.discount_percent,0)::numeric AS discount_percent,
                GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS active_qty,
+               round(
+                 COALESCE(sl.list_price,0)::numeric
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric,
+                 2
+               ) AS active_list_total,
+               CASE
+                 WHEN sl.quantity > 0 THEN round(
+                   COALESCE(sl.discount_amount,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+                 ELSE 0::numeric
+               END AS active_discount_total,
                CASE
                  WHEN sl.quantity > 0 THEN round(
                    COALESCE(sl.line_total,0)::numeric
@@ -26294,8 +26375,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                el.size,
                COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
                el.active_qty AS qty,
+               el.list_price,
+               el.unit_price,
+               el.active_list_total AS list_total,
+               el.discount_percent,
                el.paid_amount AS revenue,
-               0::numeric AS discount_total,
+               el.active_net_total AS net_total,
+               el.active_discount_total AS discount_total,
                0::int AS transactions,
                el.payment_label,
                el.paid_amount AS settlement_amount,
@@ -26328,12 +26414,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                vl.size,
                COALESCE(NULLIF(vl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
                vl.active_qty AS qty,
+               vl.list_price,
+               vl.unit_price,
+               vl.active_list_total AS list_total,
+               vl.discount_percent,
                CASE
                  WHEN vl.active_sale_value > 0
                  THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
                  ELSE 0::numeric
                END AS revenue,
-               0::numeric AS discount_total,
+               vl.active_line_value AS net_total,
+               vl.active_discount_total AS discount_total,
                0::int AS transactions,
                vl.payment_label,
                CASE
@@ -26548,7 +26639,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           size: row.size || null,
           imageUrl: row.image_url || null,
           qty: aifNumber(row.qty),
+          listPrice: aifNumber(row.list_price),
+          unitPrice: aifNumber(row.unit_price),
+          listTotal: aifNumber(row.list_total),
+          discountPercent: aifNumber(row.discount_percent),
           revenue: aifNumber(row.revenue),
+          netTotal: aifNumber(row.net_total),
           discountTotal: aifNumber(row.discount_total),
           transactions: aifNumber(row.transactions),
           paymentLabel: row.payment_label || null,
