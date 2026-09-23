@@ -1230,6 +1230,7 @@ export default function AllInAdminMagazinDashboardMobile({
   const summary = useMemo(() => combineSummaries(scopedData, "summary"), [scopedData]);
   const previousSummary = useMemo(() => combineSummaries(scopedData, "previousSummary"), [scopedData]);
   const networkRevenue = numberValue(primaryData?.summary.revenue) + numberValue(otherData?.summary.revenue);
+  const showCreditRowsInEventLog = applied.saleType === "credit" || applied.paymentStatus === "credit";
   const scopeLabel = scope === "all" ? "Mindkét üzlet" : scope === "primary" ? cityName : otherCityName;
   const periodLabel = applied.from === applied.to
     ? shortDate(applied.from)
@@ -1283,12 +1284,17 @@ export default function AllInAdminMagazinDashboardMobile({
         storeName: store.cityName,
         locationName: store.locationName,
       })))
+      .filter((sale) =>
+        showCreditRowsInEventLog
+        || isPaymentSettlement(sale)
+        || String(sale.saleType || "").toLowerCase() !== "credit"
+      )
       .sort((a, b) => {
         const aTime = new Date(a.soldAt || 0).getTime();
         const bTime = new Date(b.soldAt || 0).getTime();
         return bTime - aTime;
       });
-  }, [scopedStores]);
+  }, [scopedStores, showCreditRowsInEventLog]);
 
   const brands = useMemo(() => mergeRankings(scopedData, "brands"), [scopedData]);
   const categories = useMemo(() => mergeRankings(scopedData, "categories"), [scopedData]);
