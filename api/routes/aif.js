@@ -25957,25 +25957,57 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         pool.query(
           `WITH filtered_sales AS (
              SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           ), active_sale_lines AS (
+             SELECT
+               sl.*,
+               GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS active_qty,
+               CASE
+                 WHEN sl.quantity > 0 THEN
+                   round(
+                     COALESCE(sl.line_total,0)::numeric
+                     * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                     / sl.quantity::numeric,
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS active_line_total,
+               CASE
+                 WHEN sl.quantity > 0 THEN
+                   round(
+                     COALESCE(sl.discount_amount,0)::numeric
+                     * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                     / sl.quantity::numeric,
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS active_discount_amount
+             FROM aif_shop_sale_lines sl
+             JOIN filtered_sales fs ON fs.id=sl.sale_id
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+               FROM aif_shop_exchanges ex
+               WHERE ex.source_sale_line_id=sl.id
+                 AND ex.status='completed'
+             ) ret ON true
            )
            SELECT
-             COALESCE(sl.variant_id::text, sl.product_code, sl.product_title, sl.id::text) AS key,
-             COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS title,
-             max(sl.product_code) AS product_code,
-             max(sl.brand_name) AS brand_name,
-             max(sl.subcategory_name) AS subcategory_name,
-             max(sl.color_name) AS color_name,
-             max(sl.size) AS size,
-             max(COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,''))) AS image_url,
-             COALESCE(sum(sl.quantity),0)::numeric AS qty,
-             COALESCE(sum(sl.line_total),0)::numeric AS revenue,
-             COALESCE(sum(sl.discount_amount),0)::numeric AS discount_total,
-             count(DISTINCT sl.sale_id)::int AS transactions
-           FROM aif_shop_sale_lines sl
-           JOIN filtered_sales fs ON fs.id=sl.sale_id
-           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
-           GROUP BY COALESCE(sl.variant_id::text, sl.product_code, sl.product_title, sl.id::text),
-                    COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék')`,
+             COALESCE(asl.variant_id::text, asl.product_code, asl.product_title, asl.id::text) AS key,
+             COALESCE(NULLIF(asl.product_title,''), NULLIF(asl.product_code,''), 'Ismeretlen termék') AS title,
+             max(asl.product_code) AS product_code,
+             max(asl.brand_name) AS brand_name,
+             max(asl.subcategory_name) AS subcategory_name,
+             max(asl.color_name) AS color_name,
+             max(asl.size) AS size,
+             max(COALESCE(NULLIF(asl.image_url,''), NULLIF(v.image_url,''))) AS image_url,
+             COALESCE(sum(asl.active_qty),0)::numeric AS qty,
+             COALESCE(sum(asl.active_line_total),0)::numeric AS revenue,
+             COALESCE(sum(asl.active_discount_amount),0)::numeric AS discount_total,
+             count(DISTINCT asl.sale_id)::int AS transactions
+           FROM active_sale_lines asl
+           LEFT JOIN aif_product_variants v ON v.id=asl.variant_id
+           WHERE asl.active_qty > 0
+           GROUP BY COALESCE(asl.variant_id::text, asl.product_code, asl.product_title, asl.id::text),
+                    COALESCE(NULLIF(asl.product_title,''), NULLIF(asl.product_code,''), 'Ismeretlen termék')`,
           baseArgs
         ),
         pool.query(
@@ -26028,13 +26060,38 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              sl.color_name,
              sl.size,
              COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
-             sl.quantity::numeric AS qty,
-             sl.line_total::numeric AS revenue,
-             sl.discount_amount::numeric AS discount_total,
+             GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS qty,
+             CASE
+               WHEN sl.quantity > 0 THEN
+                 round(
+                   COALESCE(sl.line_total,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+               ELSE 0::numeric
+             END AS revenue,
+             CASE
+               WHEN sl.quantity > 0 THEN
+                 round(
+                   COALESCE(sl.discount_amount,0)::numeric
+                   * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   / sl.quantity::numeric,
+                   2
+                 )
+               ELSE 0::numeric
+             END AS discount_total,
              1::int AS transactions
            FROM aif_shop_sale_lines sl
            JOIN filtered_sales fs ON fs.id=sl.sale_id
            LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+             FROM aif_shop_exchanges ex
+             WHERE ex.source_sale_line_id=sl.id
+               AND ex.status='completed'
+           ) ret ON true
+           WHERE GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0
            ORDER BY fs.sold_at DESC, sl.line_no ASC`,
           baseArgs
         ),
@@ -26079,7 +26136,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              SELECT
                la.sale_id AS payment_sale_id,
                cp.paid_at,
-               la.amount::numeric AS paid_amount,
+               CASE
+                 WHEN la.quantity > 0 THEN
+                   round(
+                     la.amount::numeric
+                     * LEAST(
+                         la.quantity::numeric,
+                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                       )
+                     / la.quantity::numeric,
+                     2
+                   )
+                 ELSE 0::numeric
+               END AS paid_amount,
                CASE
                  WHEN cp.method='cash' THEN 'Készpénz'
                  WHEN cp.method='card' THEN 'Bankkártya'
@@ -26089,7 +26158,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                sl.id AS sale_line_id,
                sl.line_no,
                sl.variant_id,
-               la.quantity::numeric AS active_qty,
+               LEAST(
+                 la.quantity::numeric,
+                 GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+               ) AS active_qty,
                sl.product_title,
                sl.product_code,
                sl.brand_name,
@@ -26101,6 +26173,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
              JOIN aif_shop_sales ps ON ps.id=la.sale_id
              JOIN aif_shop_sale_lines sl ON sl.id=la.sale_line_id
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
+               FROM aif_shop_exchanges ex
+               WHERE ex.source_sale_line_id=sl.id
+                 AND ex.status='completed'
+             ) ret ON true
              WHERE ps.location_id=$1
                AND ps.status='completed'
                AND cp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
@@ -26108,6 +26186,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g'))
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+               AND LEAST(
+                     la.quantity::numeric,
+                     GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                   ) > 0
            ), payment_events AS (
              SELECT
                p.sale_id AS payment_sale_id,
@@ -26179,7 +26261,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                FROM aif_shop_exchanges ex
                WHERE ex.source_sale_line_id=sl.id
                  AND ex.status='completed'
-                 AND ex.created_at <= pe.paid_at
              ) ret ON true
            ), valued_lines AS (
              SELECT
@@ -26387,6 +26468,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Az üzleti eladó napi nézetében a kliens és a fizetési állapot csak
       // konkrét bizonylatsorhoz köthető biztonságosan. Ezért az összesített
       // products lista mellett külön sale-line szintű listát is visszaadunk.
+      // A sale/payment terméksorok a JELENLEGI megtartott mennyiséget mutatják:
+      // a később teljesen visszahozott termék eltűnik, részleges visszárunál pedig
+      // csak a kliensnél maradt darab és annak arányos összege marad látható.
+      // A felső napi forgalmi összesítést ettől nem írjuk át; az történelmi napérték.
       const productLineRows = [
         ...productLinesResult.rows,
         ...exchangeProductLinesResult.rows,
