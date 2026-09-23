@@ -587,6 +587,27 @@ app.get("/api/auth/me", async (req, res) => {
   }
 });
 
+// Valódi kliensoldali aktivitás heartbeatje.
+// A frontend ezt csak tényleges shop-felhasználói esemény után hívja,
+// ezért háttérpolling nem tudja mesterségesen életben tartani az inaktív belépést.
+app.post("/api/auth/activity", async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const sid = getSid(req);
+    const s = sid ? await loadSession(sid) : null;
+
+    if (!s) return rejectExpiredSession(res);
+
+    return res.json({
+      ok: true,
+      role: s.role,
+    });
+  } catch (error) {
+    console.error("Auth activity heartbeat failed", error);
+    return res.status(500).json({ error: "A munkamenet aktivitása nem frissíthető." });
+  }
+});
+
 app.post("/api/auth/logout", async (req, res) => {
   try {
     const sid = getSid(req);
