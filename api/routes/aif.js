@@ -20045,17 +20045,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            GROUP BY sl.sale_id
          )
          SELECT
-           COALESCE(sum(fs.total),0)::numeric AS revenue,
-           COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
-           count(*)::int AS transactions,
-           COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
-           COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
-           COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
+           COALESCE(sum(fs.total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS revenue,
+           COALESCE(sum(fs.subtotal) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS sales_before_discount,
+           count(*) FILTER (WHERE fs.sale_type <> 'credit')::int AS transactions,
+           COALESCE(sum(lt.item_count) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS items_sold,
+           COALESCE(sum(fs.discount_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS discount_total,
+           COALESCE(sum(fs.paid_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS paid_total,
            COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
            count(*) FILTER (WHERE fs.balance_due > 0)::int AS unpaid_sales,
-           count(*) FILTER (WHERE fs.customer_id IS NOT NULL)::int AS customer_sales,
-           min(fs.sold_at) AS first_sale_at,
-           max(fs.sold_at) AS last_sale_at
+           count(*) FILTER (WHERE fs.customer_id IS NOT NULL AND fs.sale_type <> 'credit')::int AS customer_sales,
+           min(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS first_sale_at,
+           max(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS last_sale_at
          FROM filtered_sales fs
          LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
         args
@@ -20071,6 +20071,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            min(e.created_at) AS first_sale_at,
            max(e.created_at) AS last_sale_at
          FROM aif_shop_exchanges e
+         JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
          LEFT JOIN LATERAL (
            SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
            FROM aif_shop_exchange_lines el
@@ -20078,6 +20079,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ) lines ON true
          WHERE e.location_id=$1
            AND e.status='completed'
+           AND source_sale.sale_type <> 'credit'
            AND e.created_at >= $2::timestamptz
            AND e.created_at < $3::timestamptz
            ${actorExchangeEventFilter}`,
@@ -25879,17 +25881,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              GROUP BY sl.sale_id
            )
            SELECT
-             COALESCE(sum(fs.total),0)::numeric AS revenue,
-             COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
-             count(*)::int AS transactions,
-             COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
-             COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
-             COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
+             COALESCE(sum(fs.total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS revenue,
+             COALESCE(sum(fs.subtotal) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS sales_before_discount,
+             count(*) FILTER (WHERE fs.sale_type <> 'credit')::int AS transactions,
+             COALESCE(sum(lt.item_count) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS items_sold,
+             COALESCE(sum(fs.discount_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS discount_total,
+             COALESCE(sum(fs.paid_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS paid_total,
              COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
              count(*) FILTER (WHERE fs.balance_due > 0)::int AS unpaid_sales,
-             count(*) FILTER (WHERE fs.customer_id IS NOT NULL)::int AS customer_sales,
-             min(fs.sold_at) AS first_sale_at,
-             max(fs.sold_at) AS last_sale_at
+             count(*) FILTER (WHERE fs.customer_id IS NOT NULL AND fs.sale_type <> 'credit')::int AS customer_sales,
+             min(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS first_sale_at,
+             max(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS last_sale_at
            FROM filtered_sales fs
            LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
           baseArgs
@@ -25905,12 +25907,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              min(e.created_at) AS first_sale_at,
              max(e.created_at) AS last_sale_at
            FROM aif_shop_exchanges e
+           JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
            LEFT JOIN LATERAL (
              SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
              FROM aif_shop_exchange_lines el
              WHERE el.exchange_id=e.id
            ) lines ON true
-           WHERE ${exchangeFilter}`,
+           WHERE ${exchangeFilter}
+             AND source_sale.sale_type <> 'credit'`,
           baseArgs
         ),
         pool.query(
