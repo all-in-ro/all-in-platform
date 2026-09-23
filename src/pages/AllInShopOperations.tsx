@@ -1654,7 +1654,13 @@ export default function AllInShopOperations({
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-                <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2"><p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi forgalom</p><p className="mt-2 text-4xl tracking-tight">{formatMoney(daySummary.revenue)}</p></div>
+                <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi forgalom</p>
+                    <span className="rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Hitel nélkül</span>
+                  </div>
+                  <p className="mt-2 text-4xl tracking-tight">{formatMoney(daySummary.revenue)}</p>
+                </div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladások</p><p className="mt-2 text-3xl">{daySummary.transactions}</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladott darab</p><p className="mt-2 text-3xl">{daySummary.itemsSold}</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Átlagkosár</p><p className="mt-2 text-2xl">{formatMoney(daySummary.averageBasket)}</p></div>
@@ -1665,7 +1671,7 @@ export default function AllInShopOperations({
                 {PAYMENT_META.map((item) => {
                   const Icon = item.icon;
                   const payment = paymentMap.get(item.method) || { amount: 0, transactions: 0 };
-                  return <div key={item.method} className="rounded-2xl border border-white/12 bg-[#374357] p-3"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span><span className="text-[10px] text-white/38">{payment.transactions} eladás</span></div><p className="mt-2 text-xl">{formatMoney(payment.amount)}</p></div>;
+                  return <div key={item.method} className="rounded-2xl border border-white/12 bg-[#374357] p-3"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span><span className="text-[10px] text-white/38">{payment.transactions} {item.method === "credit" ? "hitel" : "eladás"}</span></div><p className="mt-2 text-xl">{formatMoney(payment.amount)}</p></div>;
                 })}
               </div>
 
