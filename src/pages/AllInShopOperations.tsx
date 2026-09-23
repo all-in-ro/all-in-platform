@@ -928,6 +928,7 @@ export default function AllInShopOperations({
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [salesPanelOpen, setSalesPanelOpen] = useState(false);
   const [customerQuickId, setCustomerQuickId] = useState<string | null>(null);
   const [customerQuickName, setCustomerQuickName] = useState("");
@@ -1349,6 +1350,7 @@ export default function AllInShopOperations({
     setError("");
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
+    setOutstandingOnly(false);
     setSalesPanelOpen(false);
     setCustomerQuickId(null);
     setCustomerQuickName("");
@@ -1467,6 +1469,26 @@ export default function AllInShopOperations({
   const dailyProductLines = summaryData?.productLines?.length
     ? summaryData.productLines
     : (summaryData?.products || []);
+
+  const isOutstandingProductLine = (item: (typeof dailyProductLines)[number]) => {
+    const settlement = String(item.recordType || "") === "payment_settlement";
+    if (settlement) return false;
+    const paymentStatus = String(item.paymentStatus || "").toLowerCase();
+    return (
+      numberValue(item.balanceDue) > 0.005 ||
+      ["unpaid", "partial", "credit"].includes(paymentStatus)
+    );
+  };
+
+  const visibleDailyProductLines = dailyProductLines.filter((item) =>
+    outstandingOnly ? isOutstandingProductLine(item) : !isOutstandingProductLine(item)
+  );
+
+  const dailySales = summaryData?.sales || [];
+  const visibleDailySales = dailySales.filter((sale) => {
+    const outstanding = numberValue(sale.balanceDue) > 0.005;
+    return outstandingOnly ? outstanding : !outstanding;
+  });
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -1653,7 +1675,7 @@ export default function AllInShopOperations({
                 <button type="button" onClick={() => void refreshSummaryPage()} disabled={summaryLoading || shiftLoading || cashLoading} className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-4 text-sm hover:bg-[#3e4d63] disabled:opacity-55"><RefreshCw className={summaryLoading || shiftLoading || cashLoading ? "animate-spin" : ""} size={17} /> Frissítés</button>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi forgalom</p>
@@ -1663,8 +1685,25 @@ export default function AllInShopOperations({
                 </div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladások</p><p className="mt-2 text-3xl">{daySummary.transactions}</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladott darab</p><p className="mt-2 text-3xl">{daySummary.itemsSold}</p></div>
-                <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Átlagkosár</p><p className="mt-2 text-2xl">{formatMoney(daySummary.averageBasket)}</p></div>
-                <div className={`rounded-2xl border p-4 ${daySummary.unpaidTotal > 0 ? "border-red-300/55 bg-red-600/24" : "border-white/12 bg-[#374357]"}`}><p className="text-[10px] uppercase tracking-[0.12em] text-white/55">Kintlévőség</p><p className="mt-2 text-2xl">{formatMoney(daySummary.unpaidTotal)}</p></div>
+                <button
+                  type="button"
+                  onClick={() => setOutstandingOnly((current) => !current)}
+                  className={`relative overflow-hidden rounded-2xl border border-[#ff9aa4]/85 bg-[#E21C2A] p-4 text-left text-white shadow-[0_10px_26px_rgba(226,28,42,0.28)] transition hover:bg-[#C91522] active:scale-[0.99] ${
+                    outstandingOnly ? "ring-2 ring-white/70 ring-offset-2 ring-offset-[#303a4c]" : ""
+                  }`}
+                  aria-pressed={outstandingOnly}
+                  title={outstandingOnly ? "Vissza a normál nézethez" : "Kintlévőséges termékek megjelenítése"}
+                >
+                  <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/82">Kintlévőség</p>
+                    <WalletCards size={17} className="text-white" />
+                  </div>
+                  <p className="mt-2 text-2xl">{formatMoney(daySummary.unpaidTotal)}</p>
+                  <p className="mt-1.5 text-[10px] text-white/76">
+                    {outstandingOnly ? "Kintlévőség nézet aktív • kattints vissza" : "Kattints a nyitott tételekhez"}
+                  </p>
+                </button>
               </div>
 
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -2054,10 +2093,12 @@ export default function AllInShopOperations({
                   <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/8 px-1 pb-2.5">
                     <div>
                       <p className="text-[10px] uppercase tracking-[0.14em] text-[#9be9e5]/62">Mit adtam el / mit fizettek ki?</p>
-                      <h3 className="mt-1 text-[19px] text-white">Termékek és későbbi kifizetések</h3>
+                      <h3 className="mt-1 text-[19px] text-white">
+                        {outstandingOnly ? "Kintlévőséges termékek" : "Termékek és későbbi kifizetések"}
+                      </h3>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-[10px] text-white/42">{dailyProductLines.length} eseménysor</span>
+                      <span className="text-[10px] text-white/42">{visibleDailyProductLines.length} eseménysor</span>
                       {daySummary.unpaidSales > 0 ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
                           <TriangleAlert size={11} /> {daySummary.unpaidSales} nyitott fizetés
@@ -2066,7 +2107,7 @@ export default function AllInShopOperations({
                     </div>
                   </div>
                   <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.14]">
-                    {dailyProductLines.map((item) => {
+                    {visibleDailyProductLines.map((item) => {
                       const settlement = String(item.recordType || "") === "payment_settlement";
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
                       const unpaid = !settlement && (
@@ -2275,7 +2316,16 @@ export default function AllInShopOperations({
                         </div>
                       );
                     })}
-                    {!summaryLoading && !dailyProductLines.length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladási vagy későbbi kifizetési termékesemény.</p></div> : null}
+                    {!summaryLoading && !visibleDailyProductLines.length ? (
+                      <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
+                        <ShoppingBag size={34} />
+                        <p className="mt-2 text-sm">
+                          {outstandingOnly
+                            ? "Ezen a napon nincs nyitott kintlévőséges termék."
+                            : "Ezen a napon még nincs megjeleníthető eladási vagy későbbi kifizetési termékesemény."}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 </section>
 
@@ -2299,7 +2349,7 @@ export default function AllInShopOperations({
                           </span>
                           <span className="min-w-0">
                             <span className="block text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</span>
-                            <span className="mt-0.5 block truncate text-sm text-white">{summaryData?.sales.length || 0} db</span>
+                            <span className="mt-0.5 block truncate text-sm text-white">{visibleDailySales.length} db</span>
                           </span>
                         </span>
                         <ChevronRight size={18} className="shrink-0 text-[#bff8f5]" />
@@ -2316,7 +2366,7 @@ export default function AllInShopOperations({
 
                   {salesPanelOpen ? (
                     <div className="space-y-1.5 border-t border-white/10 p-2.5">
-                      {(summaryData?.sales || []).map((sale) => (
+                      {visibleDailySales.map((sale) => (
                         <button
                           key={sale.id}
                           type="button"
@@ -2338,8 +2388,10 @@ export default function AllInShopOperations({
                           </div>
                         </button>
                       ))}
-                      {!summaryLoading && !(summaryData?.sales || []).length ? (
-                        <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">Ezen a napon még nincs eladás.</div>
+                      {!summaryLoading && !visibleDailySales.length ? (
+                        <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">
+                          {outstandingOnly ? "Ezen a napon nincs nyitott kintlévőséges bizonylat." : "Ezen a napon még nincs megjeleníthető eladás."}
+                        </div>
                       ) : null}
                     </div>
                   ) : null}
