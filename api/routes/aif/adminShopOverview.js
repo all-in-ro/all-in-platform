@@ -751,6 +751,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         productResult,
         paymentResult,
         previousPaymentResult,
+        paymentTrendResult,
         employeeResult,
         recentResult,
         settlementRecentResult,
@@ -813,7 +814,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
            SELECT
              d.day::text AS date,
              to_char(d.day,'MM.DD') AS label,
-             COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS revenue,
+             0::numeric AS revenue,
              count(fs.id) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit')::int AS transactions,
              COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS items_sold,
              COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed' AND fs.sale_type <> 'credit'),0)::numeric AS discount_total,
@@ -917,6 +918,22 @@ export default function createAifAdminShopOverviewRouter(deps) {
            GROUP BY p.method
            ORDER BY amount DESC`,
           previousPaymentFilters.args
+        ),
+        pool.query(
+          `SELECT
+             (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date::text AS date,
+             to_char((p.paid_at AT TIME ZONE 'Europe/Bucharest')::date,'MM.DD') AS label,
+             COALESCE(sum(p.amount),0)::numeric AS revenue,
+             0::int AS transactions,
+             0::numeric AS items_sold,
+             0::numeric AS discount_total,
+             0::numeric AS unpaid_total
+           FROM aif_shop_sale_payments p
+           JOIN aif_shop_sales s ON s.id=p.sale_id
+           WHERE ${currentPaymentFilters.where}
+           GROUP BY (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date
+           ORDER BY (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date ASC`,
+          currentPaymentFilters.args
         ),
         pool.query(
           `WITH filtered_sales AS (
@@ -1436,8 +1453,9 @@ export default function createAifAdminShopOverviewRouter(deps) {
       currentCombinedRow.exchange_transactions = aifNumber(exchangeSummaryResult.rows[0]?.transactions);
       // A "Fizetve" érték pénzmozgás, ezért nem az adott napon eladott tételek
       // s.paid_total snapshotjából számoljuk. A tényleges, kiválasztott időszakban
-      // beérkezett sale-payment összegeket használjuk p.paid_at szerint. Így például
-      // egy 17-i hiteles eladás 19-i rendezése a 19-i "Fizetve" összegbe kerül.
+      // beérkezett sale-payment összegeket használjuk p.paid_at szerint.
+      // Ugyanez az összeg lesz a vezetői Forgalom alapja is: nyitott hitel = 0 forgalom,
+      // későbbi tényleges befizetés = forgalom a befizetés napján.
       currentCombinedRow.paid_total =
         paymentResult.rows.reduce((sum, row) => sum + aifNumber(row.amount), 0)
         + aifNumber(exchangeSummaryResult.rows[0]?.paid_total);
@@ -1451,6 +1469,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
 
       const summary = mapSummary(currentCombinedRow);
       const previousSummary = mapSummary(previousCombinedRow);
+
+      // Forgalom = ténylegesen realizált pénzmozgás.
+      // A hitelbe kiadott áru addig NEM forgalom, amíg nincs tényleges befizetés.
+      // Amikor a tartozást később rendezik, a befizetés napján válik forgalommá.
+      // Így a vezetői "Forgalom" és "Fizetve" ugyanazt a realizált összeget mutatja,
+      // miközben a nyitott hitel továbbra is csak Kintlévőség marad.
+      summary.revenue = aifNumber(currentCombinedRow.paid_total);
+      previousSummary.revenue = aifNumber(previousCombinedRow.paid_total);
 
       const mergeRankingRows = (saleRows, exchangeRows, nameKey, productCodeKey = null) => {
         const map = new Map();
@@ -1506,7 +1532,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       };
 
       const trendMap = new Map();
-      for (const row of [...trendResult.rows, ...exchangeTrendResult.rows]) {
+      for (const row of [...trendResult.rows, ...paymentTrendResult.rows, ...exchangeTrendResult.rows]) {
         const key = String(row.date);
         const current = trendMap.get(key) || {
           date: key,
