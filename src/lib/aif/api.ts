@@ -3044,7 +3044,12 @@ export type AifShopDailyProductItem = {
   size?: string | null;
   imageUrl?: string | null;
   qty: number;
+  listPrice?: number;
+  unitPrice?: number;
+  listTotal?: number;
+  discountPercent?: number;
   revenue: number;
+  netTotal?: number;
   discountTotal: number;
   transactions: number;
   paymentLabel?: string | null;
