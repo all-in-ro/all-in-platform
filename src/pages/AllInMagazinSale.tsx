@@ -125,6 +125,16 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function moneyInputValue(value: unknown) {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(",", ".");
+  if (!normalized) return 0;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function roundMoney(value: number) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
@@ -256,6 +266,7 @@ export default function AllInMagazinSale({
   onLogout,
 }: Props) {
   const storageKey = `allin:shop-sale-cart:${locationCode}`;
+  const extraDiscountStorageKey = `${storageKey}:extra-discount`;
   const shopId = shopIdProp || (
     locationCode === "main_warehouse"
       ? "csikszereda"
@@ -293,6 +304,13 @@ export default function AllInMagazinSale({
   const [administrationBusy, setAdministrationBusy] = useState(false);
   const [administrationError, setAdministrationError] = useState("");
   const [discountEditor, setDiscountEditor] = useState<DiscountEditor | null>(null);
+  const [extraDiscountInput, setExtraDiscountInput] = useState(() => {
+    try {
+      return sessionStorage.getItem(extraDiscountStorageKey) || "";
+    } catch {
+      return "";
+    }
+  });
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -311,12 +329,24 @@ export default function AllInMagazinSale({
   }, [cart, storageKey]);
 
   useEffect(() => {
+    try {
+      if (extraDiscountInput) sessionStorage.setItem(extraDiscountStorageKey, extraDiscountInput);
+      else sessionStorage.removeItem(extraDiscountStorageKey);
+    } catch {}
+  }, [extraDiscountInput, extraDiscountStorageKey]);
+
+  useEffect(() => {
+    if (!cart.length && extraDiscountInput) setExtraDiscountInput("");
+  }, [cart.length, extraDiscountInput]);
+
+  useEffect(() => {
     cancelAutomaticLookup();
     searchRequestIdRef.current += 1;
     setLoading(false);
     setQuery("");
     setProducts([]);
     setHasSearched(false);
+    setExtraDiscountInput("");
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, [locationCode]);
 
@@ -406,14 +436,26 @@ export default function AllInMagazinSale({
     () => roundMoney(cart.reduce((sum, line) => sum + roundMoney(numberValue(line.sellPrice)) * line.quantity, 0)),
     [cart],
   );
-  const total = useMemo(
+  const percentDiscountedTotal = useMemo(
     () => roundMoney(cart.reduce((sum, line) => {
       const unitPrice = discountedUnitPrice(numberValue(line.sellPrice), line.discountPercent);
       return sum + unitPrice * line.quantity;
     }, 0)),
     [cart],
   );
-  const discountTotal = Math.max(0, roundMoney(subtotal - total));
+  const percentDiscountTotal = Math.max(0, roundMoney(subtotal - percentDiscountedTotal));
+  const requestedExtraDiscount = Math.max(0, roundMoney(moneyInputValue(extraDiscountInput)));
+  const extraDiscountTooLarge = requestedExtraDiscount > percentDiscountedTotal + 0.005;
+  const extraDiscountAmount = extraDiscountTooLarge
+    ? requestedExtraDiscount
+    : Math.min(requestedExtraDiscount, percentDiscountedTotal);
+  const total = extraDiscountTooLarge
+    ? percentDiscountedTotal
+    : roundMoney(percentDiscountedTotal - extraDiscountAmount);
+  const discountTotal = Math.max(
+    0,
+    roundMoney(percentDiscountTotal + (extraDiscountTooLarge ? 0 : extraDiscountAmount)),
+  );
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const selectedQuickDiscount = useMemo(() => {
     if (!cart.length) return null;
@@ -746,6 +788,7 @@ export default function AllInMagazinSale({
     invalidateRequestKey();
     setCart([]);
     setSelectedCustomer(null);
+    setExtraDiscountInput("");
     setNote("");
     setError("");
   }
@@ -764,6 +807,15 @@ export default function AllInMagazinSale({
       openCustomerModal("search");
       return;
     }
+    if (extraDiscountTooLarge) {
+      setError("");
+      setSaleErrorDialog({
+        title: "Túl nagy plusz kedvezmény",
+        message: `A plusz kedvezmény legfeljebb ${formatMoney(percentDiscountedTotal)} lehet ennél a kosárnál.`,
+        hint: "A százalékos kedvezmény után fennmaradó összeg nem mehet 0 RON alá.",
+      });
+      return;
+    }
 
     setSubmitting(true);
     setError("");
@@ -774,6 +826,7 @@ export default function AllInMagazinSale({
         location: locationCode,
         paymentMethod,
         idempotencyKey: requestKeyRef.current,
+        extraDiscountAmount,
         note: note.trim() || null,
         customer: selectedCustomer
           ? {
@@ -798,6 +851,7 @@ export default function AllInMagazinSale({
       setSuccess(result);
       setCart([]);
       setSelectedCustomer(null);
+      setExtraDiscountInput("");
       setNote("");
       requestKeyRef.current = "";
       resetSearchResults();
@@ -1126,10 +1180,51 @@ export default function AllInMagazinSale({
                       ))}
                     </div>
                   </div>
-                  <div className="mt-3 space-y-1.5 border-t border-white/10 pt-3 text-sm">
-                    <div className="flex justify-between text-white/58"><span>Eredeti összeg</span><span>{formatMoney(subtotal)}</span></div>
-                    <div className="flex justify-between text-amber-100"><span>Kedvezmény</span><span>-{formatMoney(discountTotal)}</span></div>
-                    <div className="flex items-end justify-between pt-1"><span className="text-base text-white/75">Fizetendő</span><span className="text-3xl tracking-tight text-[#d7fffd]">{formatMoney(total)}</span></div>
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_150px]">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.11em] text-white/45">Plusz kedvezmény összegben</p>
+                        <p className="mt-1 text-[10px] leading-relaxed text-white/38">
+                          A százalékos kedvezmény mellé is adható. Például 98,50 RON helyett 95,00 RON.
+                        </p>
+                      </div>
+                      <label className={`grid h-12 grid-cols-[1fr_auto] overflow-hidden rounded-xl border bg-[#273243] ${
+                        extraDiscountTooLarge ? "border-red-400 ring-2 ring-red-500/25" : "border-[#7bd7d4]/32 focus-within:border-[#72d8d4]"
+                      }`}>
+                        <input
+                          value={extraDiscountInput}
+                          onChange={(event) => {
+                            invalidateRequestKey();
+                            const raw = event.target.value.replace(/[^0-9.,]/g, "");
+                            const separatorIndex = raw.search(/[.,]/);
+                            const cleaned = separatorIndex < 0
+                              ? raw
+                              : `${raw.slice(0, separatorIndex)},${raw.slice(separatorIndex + 1).replace(/[.,]/g, "").slice(0, 2)}`;
+                            setExtraDiscountInput(cleaned);
+                            setError("");
+                          }}
+                          onFocus={(event) => event.currentTarget.select()}
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          className="min-w-0 bg-transparent px-3 text-right text-lg text-white outline-none placeholder:text-white/26"
+                        />
+                        <span className="inline-flex items-center border-l border-white/10 bg-white/[0.04] px-3 text-xs text-white/50">RON</span>
+                      </label>
+                    </div>
+
+                    {extraDiscountTooLarge ? (
+                      <div className="mt-2 rounded-xl border border-red-400/70 bg-red-600/24 px-3 py-2 text-[11px] text-red-50">
+                        Maximum: {formatMoney(percentDiscountedTotal)}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-3 space-y-1.5 border-t border-white/10 pt-3 text-sm">
+                      <div className="flex justify-between text-white/58"><span>Eredeti összeg</span><span>{formatMoney(subtotal)}</span></div>
+                      <div className="flex justify-between text-amber-100/82"><span>Százalékos kedvezmény</span><span>-{formatMoney(percentDiscountTotal)}</span></div>
+                      <div className="flex justify-between text-amber-100"><span>Plusz kedvezmény</span><span>-{formatMoney(extraDiscountTooLarge ? 0 : extraDiscountAmount)}</span></div>
+                      <div className="flex justify-between border-t border-white/10 pt-2 text-amber-50"><span>Összes kedvezmény</span><span>-{formatMoney(discountTotal)}</span></div>
+                      <div className="flex items-end justify-between pt-1"><span className="text-base text-white/75">Fizetendő</span><span className="text-3xl tracking-tight text-[#d7fffd]">{formatMoney(total)}</span></div>
+                    </div>
                   </div>
                 </div>
 
@@ -1170,7 +1265,7 @@ export default function AllInMagazinSale({
                 <button
                   type="button"
                   onClick={() => void completeSale()}
-                  disabled={submitting || total < 0}
+                  disabled={submitting || total < 0 || extraDiscountTooLarge}
                   className="mt-3 inline-flex min-h-16 w-full touch-manipulation items-center justify-center gap-3 rounded-[20px] border border-[#a4efeb]/55 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-5 text-lg shadow-[0_12px_28px_rgba(22,120,117,0.28)] transition hover:brightness-110 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? <Loader2 className="animate-spin" size={24} /> : <Receipt size={24} />}
