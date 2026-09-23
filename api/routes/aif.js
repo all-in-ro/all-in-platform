@@ -223,6 +223,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_lines ADD COLUMN IF NOT EXISTS image_url text NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_subcategory_idx
           ON aif_shop_sale_lines (lower(subcategory_name)) WHERE subcategory_name IS NOT NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_sales
+          ADD COLUMN IF NOT EXISTS extra_discount_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (extra_discount_amount >= 0)`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_lines
+          ADD COLUMN IF NOT EXISTS extra_discount_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (extra_discount_amount >= 0)`);
         await pool.query(`UPDATE aif_shop_sale_lines sl
           SET subcategory_name=COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,''))
           FROM aif_product_variants v
@@ -19950,6 +19954,46 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return aifRoundMoneyUp(price * (1 - discount / 100));
   }
 
+  function aifAllocateExtraDiscountCents(lines = [], extraDiscountAmount = 0) {
+    const requestedCents = Math.max(0, Math.round(aifRoundMoney(extraDiscountAmount) * 100));
+    const baseCents = lines.map((line) => Math.max(
+      0,
+      Math.round(aifRoundMoney(line.baseLineTotal ?? line.lineTotal) * 100),
+    ));
+    const totalBaseCents = baseCents.reduce((sum, value) => sum + value, 0);
+    if (!requestedCents || !totalBaseCents) return lines.map(() => 0);
+
+    const targetCents = Math.min(requestedCents, totalBaseCents);
+    const rows = baseCents.map((value, index) => {
+      const exact = targetCents * value / totalBaseCents;
+      const allocated = Math.min(value, Math.floor(exact));
+      return { index, value, allocated, fraction: exact - allocated };
+    });
+    let remainder = targetCents - rows.reduce((sum, row) => sum + row.allocated, 0);
+
+    for (const row of rows.slice().sort((a, b) => b.fraction - a.fraction || b.value - a.value || a.index - b.index)) {
+      if (remainder <= 0) break;
+      if (row.allocated >= row.value) continue;
+      row.allocated += 1;
+      remainder -= 1;
+    }
+
+    if (remainder > 0) {
+      for (const row of rows.slice().sort((a, b) => (b.value - b.allocated) - (a.value - a.allocated))) {
+        if (remainder <= 0) break;
+        const capacity = Math.max(0, row.value - row.allocated);
+        if (!capacity) continue;
+        const take = Math.min(capacity, remainder);
+        row.allocated += take;
+        remainder -= take;
+      }
+    }
+
+    const result = new Array(lines.length).fill(0);
+    for (const row of rows) result[row.index] = row.allocated;
+    return result;
+  }
+
   function aifEmployeeKey(value) {
     return text(value).replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -20479,6 +20523,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function aifShopSaleResponse(row, location, duplicate = false) {
+    const raw = row?.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+    const extraDiscountAmount = aifRoundMoney(row?.extra_discount_amount ?? raw.extraDiscountAmount ?? 0);
+    const discountTotal = aifRoundMoney(row?.discount_total);
     return {
       ok: true,
       duplicate,
@@ -20489,7 +20536,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       saleType: row.sale_type,
       location: { id: String(location.id), code: location.code, name: location.name },
       subtotal: aifNumber(row.subtotal),
-      discountTotal: aifNumber(row.discount_total),
+      discountTotal,
+      percentDiscountTotal: aifRoundMoney(Math.max(0, discountTotal - extraDiscountAmount)),
+      extraDiscountAmount,
       total: aifNumber(row.total),
       paidTotal: aifNumber(row.paid_total),
       balanceDue: aifNumber(row.balance_due),
@@ -22512,6 +22561,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const currentPercent = aifNumber(line.discount_percent);
+      const currentExtraDiscount = aifRoundMoney(
+        line.extra_discount_amount ?? line.raw?.extraDiscountAmount ?? 0,
+      );
       const nextPercent = Math.max(0, Math.min(100, Number(requestedPercent)));
 
       // Már részben vagy teljesen visszavett tétel árát nem írjuk át utólag.
@@ -22541,8 +22593,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const previousUnitPrice = aifRoundMoney(line.unit_price);
       const previousLineTotal = aifRoundMoney(line.line_total);
       const previousLineDiscount = aifRoundMoney(line.discount_amount);
-      const nextUnitPrice = aifDiscountedUnitPrice(listPrice, nextPercent);
-      const nextLineTotal = aifRoundMoney(nextUnitPrice * quantity);
+      const nextBaseUnitPrice = aifDiscountedUnitPrice(listPrice, nextPercent);
+      const nextBaseLineTotal = aifRoundMoney(nextBaseUnitPrice * quantity);
+      const nextExtraDiscount = aifRoundMoney(
+        Math.min(currentExtraDiscount, Math.max(0, nextBaseLineTotal)),
+      );
+      const nextLineTotal = aifRoundMoney(Math.max(0, nextBaseLineTotal - nextExtraDiscount));
+      const nextUnitPrice = quantity > 0 ? aifRoundMoney(nextLineTotal / quantity) : 0;
       const nextLineDiscount = aifRoundMoney(Math.max(0, listPrice * quantity - nextLineTotal));
       const paidTotal = aifRoundMoney(sale.paid_total);
       const previousBalanceDue = aifRoundMoney(sale.balance_due);
@@ -22585,20 +22642,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          SET unit_price=$2,
              discount_amount=$3,
              discount_percent=$4,
-             line_total=$5,
-             raw=COALESCE(raw,'{}'::jsonb) || $6::jsonb
+             extra_discount_amount=$5,
+             line_total=$6,
+             raw=COALESCE(raw,'{}'::jsonb) || $7::jsonb
          WHERE id=$1`,
         [
           line.id,
           nextUnitPrice,
           nextLineDiscount,
           nextPercent,
+          nextExtraDiscount,
           nextLineTotal,
           JSON.stringify({
             lateDiscountUpdatedAt: new Date().toISOString(),
             lateDiscountUpdatedBy: actorFrom(req),
             lateDiscountPreviousPercent: currentPercent,
             lateDiscountPreviousAmount: previousLineDiscount,
+            lateDiscountPreservedExtraDiscount: nextExtraDiscount,
             lateDiscountPreviousBalanceDue: previousBalanceDue,
             lateDiscountBalanceDelta: balanceDelta,
             lateDiscountNextBalanceDue: balanceDue,
@@ -22619,13 +22679,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const subtotal = aifRoundMoney(totalsResult.rows[0]?.subtotal);
       const total = aifRoundMoney(totalsResult.rows[0]?.total);
       const discountTotal = aifRoundMoney(Math.max(0, subtotal - total));
+      const extraDiscountResult = await client.query(
+        `SELECT COALESCE(sum(extra_discount_amount),0)::numeric AS extra_discount_amount
+         FROM aif_shop_sale_lines
+         WHERE sale_id=$1`,
+        [sale.id],
+      );
+      const saleExtraDiscountAmount = aifRoundMoney(
+        extraDiscountResult.rows[0]?.extra_discount_amount,
+      );
       const paymentStatus = balanceDue <= 0.005 ? "paid" : paidTotal > 0.005 ? "partial" : "credit";
 
       await client.query(
         `UPDATE aif_shop_sales
-         SET subtotal=$2, discount_total=$3, total=$4, balance_due=$5, payment_status=$6, updated_at=now()
+         SET subtotal=$2,
+             discount_total=$3,
+             extra_discount_amount=$4,
+             total=$5,
+             balance_due=$6,
+             payment_status=$7,
+             raw=COALESCE(raw,'{}'::jsonb) || $8::jsonb,
+             updated_at=now()
          WHERE id=$1`,
-        [sale.id, subtotal, discountTotal, total, balanceDue, paymentStatus],
+        [
+          sale.id,
+          subtotal,
+          discountTotal,
+          saleExtraDiscountAmount,
+          total,
+          balanceDue,
+          paymentStatus,
+          JSON.stringify({
+            percentDiscountTotal: aifRoundMoney(Math.max(0, discountTotal - saleExtraDiscountAmount)),
+            extraDiscountAmount: saleExtraDiscountAmount,
+            discountTotal,
+          }),
+        ],
       );
 
       await client.query(
@@ -22647,6 +22736,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             before: {
               discountPercent: currentPercent,
               discountAmount: previousLineDiscount,
+              extraDiscountAmount: currentExtraDiscount,
               unitPrice: previousUnitPrice,
               lineTotal: previousLineTotal,
               saleTotal: aifNumber(sale.total),
@@ -22655,6 +22745,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             after: {
               discountPercent: nextPercent,
               discountAmount: nextLineDiscount,
+              extraDiscountAmount: nextExtraDiscount,
               unitPrice: nextUnitPrice,
               lineTotal: nextLineTotal,
               saleTotal: total,
@@ -26688,12 +26779,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const linesInput = Array.isArray(body.lines) ? body.lines : [];
     const paymentMethod = normCode(body.paymentMethod || body.payment_method || "cash");
+    const requestedExtraDiscount = toMoney(body.extraDiscountAmount ?? body.extra_discount_amount ?? 0) ?? 0;
     const allowedPayments = new Set(["cash", "card", "bank_transfer", "credit"]);
     const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
 
     if (!linesInput.length) return res.status(400).json({ error: "A kosár üres." });
     if (linesInput.length > 250) return res.status(400).json({ error: "Egy eladásban legfeljebb 250 tétel lehet." });
     if (!allowedPayments.has(paymentMethod)) return res.status(400).json({ error: "Érvénytelen fizetési mód." });
+    if (requestedExtraDiscount < 0) return res.status(400).json({ error: "A plusz kedvezmény nem lehet negatív." });
+    if (requestedExtraDiscount > 999999.99) return res.status(400).json({ error: "A plusz kedvezmény összege túl nagy." });
     if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik az eladás biztonsági azonosítója." });
 
     const client = await pool.connect();
@@ -26782,7 +26876,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const saleLines = [];
       let subtotal = 0;
-      let total = 0;
+      let percentDiscountedTotal = 0;
       let itemCount = 0;
       for (const input of preparedInput) {
         const stock = stockByVariant.get(input.variantId);
@@ -26800,22 +26894,49 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           error.code = "missing_sell_price";
           throw error;
         }
-        const unitPrice = aifDiscountedUnitPrice(listPrice, input.discountPercent);
+        const baseUnitPrice = aifDiscountedUnitPrice(listPrice, input.discountPercent);
         const lineSubtotal = aifRoundMoney(listPrice * input.quantity);
-        const lineTotal = aifRoundMoney(unitPrice * input.quantity);
-        const lineDiscount = aifRoundMoney(lineSubtotal - lineTotal);
+        const baseLineTotal = aifRoundMoney(baseUnitPrice * input.quantity);
+        const percentDiscountAmount = aifRoundMoney(lineSubtotal - baseLineTotal);
         subtotal = aifRoundMoney(subtotal + lineSubtotal);
-        total = aifRoundMoney(total + lineTotal);
+        percentDiscountedTotal = aifRoundMoney(percentDiscountedTotal + baseLineTotal);
         itemCount += input.quantity;
         saleLines.push({
           ...input,
           stock,
           listPrice: aifRoundMoney(listPrice),
-          unitPrice,
-          lineTotal,
-          lineDiscount,
+          baseUnitPrice,
+          baseLineTotal,
+          percentDiscountAmount,
         });
       }
+
+      const extraDiscountAmount = aifRoundMoney(requestedExtraDiscount);
+      if (extraDiscountAmount > percentDiscountedTotal + 0.005) {
+        const error = new Error(`A plusz kedvezmény legfeljebb ${percentDiscountedTotal.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON lehet.`);
+        error.statusCode = 400;
+        error.code = "extra_discount_exceeds_total";
+        error.maxExtraDiscount = percentDiscountedTotal;
+        throw error;
+      }
+
+      const extraDiscountCentsByLine = aifAllocateExtraDiscountCents(saleLines, extraDiscountAmount);
+      let total = 0;
+      for (let index = 0; index < saleLines.length; index += 1) {
+        const line = saleLines[index];
+        const allocatedExtraDiscount = aifRoundMoney((extraDiscountCentsByLine[index] || 0) / 100);
+        const lineTotal = aifRoundMoney(Math.max(0, line.baseLineTotal - allocatedExtraDiscount));
+        const lineDiscount = aifRoundMoney(Math.max(0, line.percentDiscountAmount + allocatedExtraDiscount));
+        const unitPrice = line.quantity > 0 ? aifRoundMoney(lineTotal / line.quantity) : 0;
+
+        line.extraDiscountAmount = allocatedExtraDiscount;
+        line.lineTotal = lineTotal;
+        line.lineDiscount = lineDiscount;
+        line.unitPrice = unitPrice;
+        total = aifRoundMoney(total + lineTotal);
+      }
+
+      const percentDiscountTotal = aifRoundMoney(subtotal - percentDiscountedTotal);
       const discountTotal = aifRoundMoney(subtotal - total);
 
       const customerInput = body.customer && typeof body.customer === "object" ? body.customer : {};
@@ -26943,11 +27064,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const saleInsert = await client.query(
         `INSERT INTO aif_shop_sales (
            sale_number, location_id, customer_id, status, sale_type, payment_status,
-           actor, sold_at, subtotal, discount_total, total, paid_total, balance_due,
+           actor, sold_at, subtotal, discount_total, extra_discount_amount, total, paid_total, balance_due,
            currency_code, customer_name, customer_phone, note, client_request_id, raw
          ) VALUES (
-           $1,$2,$3,'completed',$4,$5,$6,now(),$7,$8,$9,$10,$11,
-           'RON',$12,$13,$14,$15,$16::jsonb
+           $1,$2,$3,'completed',$4,$5,$6,now(),$7,$8,$9,$10,$11,$12,
+           'RON',$13,$14,$15,$16,$17::jsonb
          ) RETURNING *`,
         [
           saleNumber,
@@ -26958,6 +27079,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           actorFrom(req),
           subtotal,
           discountTotal,
+          extraDiscountAmount,
           total,
           isCredit ? 0 : total,
           isCredit ? total : 0,
@@ -26969,6 +27091,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             source: "shop_sale_screen",
             paymentMethod,
             role: req.session?.role || null,
+            percentDiscountTotal,
+            extraDiscountAmount,
+            discountTotal,
             salesTvaRate: Number(saleTvaSettings?.salesTvaRate || 0),
             sellPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
             salesPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
@@ -26984,11 +27109,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(
           `INSERT INTO aif_shop_sale_lines (
              sale_id, line_no, variant_id, quantity, list_price, unit_price,
-             discount_amount, discount_percent, line_total, buy_price_snapshot,
+             discount_amount, discount_percent, extra_discount_amount, line_total, buy_price_snapshot,
              product_title, product_code, barcode, brand_name, category_name,
              subcategory_name, color_name, size, image_url, raw
            ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb
            )`,
           [
             sale.id,
@@ -26999,6 +27124,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             line.unitPrice,
             line.lineDiscount,
             line.discountPercent,
+            line.extraDiscountAmount,
             line.lineTotal,
             toMoney(line.stock.buy_price),
             line.stock.title || null,
@@ -27013,6 +27139,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             JSON.stringify({
               availableBefore: before - Number(line.stock.reserved_qty || 0),
               listPriceSource: "variant_sell_price",
+              basePercentUnitPrice: line.baseUnitPrice,
+              basePercentLineTotal: line.baseLineTotal,
+              percentDiscountAmount: line.percentDiscountAmount,
+              extraDiscountAmount: line.extraDiscountAmount,
+              effectiveUnitPriceExact: line.quantity > 0 ? line.lineTotal / line.quantity : 0,
+              discountCompositionVersion: 1,
               imageUrl: line.stock.image_url || null,
             }),
           ]
@@ -27041,6 +27173,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             listPrice: line.listPrice,
             unitPrice: line.unitPrice,
             discountPercent: line.discountPercent,
+            percentDiscountAmount: line.percentDiscountAmount,
+            extraDiscountAmount: line.extraDiscountAmount,
+            discountAmount: line.lineDiscount,
             lineTotal: line.lineTotal,
             locationCode: location.code,
             locationName: location.name,
@@ -27079,6 +27214,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           JSON.stringify({
             paymentMethod,
             subtotal,
+            percentDiscountTotal,
+            extraDiscountAmount,
             discountTotal,
             total,
             itemCount,
@@ -27111,6 +27248,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       res.status(status >= 400 && status < 600 ? status : 500).json({
         error: error?.message || "Az eladás rögzítése nem sikerült.",
         code: error?.code || null,
+        maxExtraDiscount: error?.maxExtraDiscount ?? null,
       });
     } finally {
       client.release();
