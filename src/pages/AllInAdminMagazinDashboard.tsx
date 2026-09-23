@@ -1857,7 +1857,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Forgalom"
             value={money(summary?.revenue)}
-            hint="TVA-val, kedvezmény után"
+            hint="TVA-val, kedvezmény után • hitel nélkül"
             icon={CircleDollarSign}
             current={numberValue(summary?.revenue)}
             previous={numberValue(previous?.revenue)}
@@ -1866,7 +1866,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Eladások"
             value={integer(summary?.transactions)}
-            hint="Lezárt tranzakció"
+            hint="Lezárt valódi eladás • hitel nélkül"
             icon={ReceiptText}
             current={numberValue(summary?.transactions)}
             previous={numberValue(previous?.transactions)}
@@ -1874,7 +1874,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Eladott termék"
             value={`${integer(summary?.itemsSold)} db`}
-            hint="Összes eladott darab"
+            hint="Valóban eladott darab • hitel nélkül"
             icon={ShoppingBag}
             current={numberValue(summary?.itemsSold)}
             previous={numberValue(previous?.itemsSold)}
@@ -1951,13 +1951,13 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Csak a kiválasztott üzleti eladások</h2>
               </div>
               <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-3 py-1 text-[10px] text-[#cffffd]/70">
-                Nem tartalmaz áthelyezést
+                Hitel nélkül
               </span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {[
-                ["Eladott", `${integer(summary?.itemsSold)} db`, "text-[#bff8f5]"],
-                ["Tranzakció", integer(summary?.transactions), "text-white"],
+                ["Eladott • hitel nélkül", `${integer(summary?.itemsSold)} db`, "text-[#bff8f5]"],
+                ["Eladás • hitel nélkül", integer(summary?.transactions), "text-white"],
                 ["Fizetve", money(summary?.paidTotal), "text-emerald-100"],
                 ["Kedvezmény", money(summary?.discountTotal), "text-amber-50"],
               ].map(([title, value, tone]) => (
@@ -1978,7 +1978,7 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Napi forgalom alakulása</h2>
               </div>
               <div className="flex items-center gap-4 text-[10px] text-white/48">
-                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#49d2ca]" /> Forgalom</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#49d2ca]" /> Forgalom • hitel nélkül</span>
                 <span>{data?.period.from} → {data?.period.to}</span>
               </div>
             </div>
@@ -1989,16 +1989,16 @@ export default function AllInAdminMagazinDashboard({
         </section>
 
         <section className="grid gap-3 xl:grid-cols-3">
-          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom szerint" items={data?.brands || []} icon={Tags} />
-          <RankingBars title="Alkategóriák" subtitle="Eladott darab szerint" items={data?.categories || []} valueMode="qty" icon={Layers3} />
-          <RankingBars title="Top termékek" subtitle="Forgalom szerint" items={data?.products || []} icon={ShoppingBag} />
+          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom szerint • hitel nélkül" items={data?.brands || []} icon={Tags} />
+          <RankingBars title="Alkategóriák" subtitle="Eladott darab szerint • hitel nélkül" items={data?.categories || []} valueMode="qty" icon={Layers3} />
+          <RankingBars title="Top termékek" subtitle="Forgalom szerint • hitel nélkül" items={data?.products || []} icon={ShoppingBag} />
         </section>
 
         <section className="grid gap-3">
           <div className={`${card} overflow-hidden`}>
             <div className="border-b border-white/10 px-4 py-3">
               <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Csapat</p>
-              <h2 className="mt-1 text-base">Eladók teljesítménye</h2>
+              <h2 className="mt-1 text-base">Eladók teljesítménye • hitel nélkül</h2>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[760px] border-collapse text-xs">
