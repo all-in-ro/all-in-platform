@@ -560,12 +560,16 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
 
     const branches = [];
     if (source !== "history") {
+      // Üzleti szabály:
+      // Hitelbe kiadott termék nem számít eladásnak, forgalomnak, darabnak,
+      // tranzakciónak, profitnak vagy kedvezménynek. A tartozás viszont
+      // továbbra is megmarad a Kintlévőség mutatóban és a részletes adatokban.
       const saleNet = saleNetExpression("s", "sl.line_total", "$3", "$4");
       branches.push(`SELECT
         'live_sale'::text AS source,
         sl.id::text AS record_id,
         NULL::text AS import_id,
-        ('sale:' || s.id::text) AS transaction_key,
+        CASE WHEN s.sale_type='credit' THEN NULL::text ELSE ('sale:' || s.id::text) END AS transaction_key,
         (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date AS happened_on,
         l.id::text AS location_id,
         l.code AS location_code,
@@ -581,18 +585,38 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         NULLIF(v.sn_cod,'') AS sn_cod,
         COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(sl.size,''),NULLIF(v.size,'')) AS size,
-        sl.quantity::numeric AS quantity,
+        CASE WHEN s.sale_type='credit' THEN 0::numeric ELSE sl.quantity::numeric END AS quantity,
+        sl.quantity::numeric AS display_quantity,
         NULL::numeric AS aggregate_transactions,
-        sl.line_total::numeric AS revenue,
-        (${saleNet})::numeric AS net_revenue,
-        (COALESCE(sl.list_price,sl.unit_price,0) * sl.quantity)::numeric AS sales_before_discount,
-        GREATEST((COALESCE(sl.list_price,sl.unit_price,0) * sl.quantity) - sl.line_total,0)::numeric AS discount_total,
-        CASE WHEN s.total <> 0 THEN (s.paid_total * sl.line_total / s.total)::numeric ELSE 0::numeric END AS paid_total,
+        CASE WHEN s.sale_type='credit' THEN 0::numeric ELSE sl.line_total::numeric END AS revenue,
+        CASE WHEN s.sale_type='credit' THEN 0::numeric ELSE (${saleNet})::numeric END AS net_revenue,
+        CASE WHEN s.sale_type='credit'
+          THEN 0::numeric
+          ELSE (COALESCE(sl.list_price,sl.unit_price,0) * sl.quantity)::numeric
+        END AS sales_before_discount,
+        CASE WHEN s.sale_type='credit'
+          THEN 0::numeric
+          ELSE GREATEST((COALESCE(sl.list_price,sl.unit_price,0) * sl.quantity) - sl.line_total,0)::numeric
+        END AS discount_total,
+        CASE
+          WHEN s.sale_type='credit' THEN 0::numeric
+          WHEN s.total <> 0 THEN (s.paid_total * sl.line_total / s.total)::numeric
+          ELSE 0::numeric
+        END AS paid_total,
         CASE WHEN s.total <> 0 THEN (s.balance_due * sl.line_total / s.total)::numeric ELSE 0::numeric END AS unpaid_total,
-        (COALESCE(sl.buy_price_snapshot,v.buy_price,0) * sl.quantity)::numeric AS estimated_cost,
-        (sl.buy_price_snapshot IS NOT NULL OR v.buy_price IS NOT NULL) AS cost_covered,
+        CASE WHEN s.sale_type='credit'
+          THEN 0::numeric
+          ELSE (COALESCE(sl.buy_price_snapshot,v.buy_price,0) * sl.quantity)::numeric
+        END AS estimated_cost,
+        CASE WHEN s.sale_type='credit'
+          THEN true
+          ELSE (sl.buy_price_snapshot IS NOT NULL OR v.buy_price IS NOT NULL)
+        END AS cost_covered,
         true AS net_covered,
-        COALESCE(NULLIF(pay.method,''),'mixed') AS payment_method,
+        CASE
+          WHEN s.sale_type='credit' THEN 'credit'
+          ELSE COALESCE(NULLIF(pay.method,''),'mixed')
+        END AS payment_method,
         'line'::text AS source_granularity,
         s.sale_number AS document_number,
         s.customer_name,
@@ -636,6 +660,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(el.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(el.size,''),NULLIF(v.size,'')) AS size,
         el.quantity::numeric AS quantity,
+        el.quantity::numeric AS display_quantity,
         NULL::numeric AS aggregate_transactions,
         el.line_total::numeric AS revenue,
         (${exchangeNetReplacement})::numeric AS net_revenue,
@@ -653,6 +678,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         e.customer_phone,
         e.note
       FROM aif_shop_exchanges e
+      JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
       JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
       JOIN aif_locations l ON l.id=e.location_id
       LEFT JOIN aif_product_variants v ON v.id=el.variant_id
@@ -661,6 +687,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       LEFT JOIN aif_categories cat ON cat.id=m.category_id
       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
       WHERE e.status='completed'
+        AND source_sale.sale_type <> 'credit'
         AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date`);
 
       const exchangeNetReturn = saleNetExpression("e", "(-e.return_credit)", "$3", "$4", "original_snapshot");
@@ -685,6 +712,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(src.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(src.size,''),NULLIF(v.size,'')) AS size,
         (-e.returned_qty)::numeric AS quantity,
+        (-e.returned_qty)::numeric AS display_quantity,
         NULL::numeric AS aggregate_transactions,
         (-e.return_credit)::numeric AS revenue,
         (${exchangeNetReturn})::numeric AS net_revenue,
@@ -702,6 +730,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         e.customer_phone,
         e.note
       FROM aif_shop_exchanges e
+      JOIN aif_shop_sales source_sale ON source_sale.id=e.source_sale_id
       JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
       JOIN aif_locations l ON l.id=e.location_id
       LEFT JOIN aif_product_variants v ON v.id=src.variant_id
@@ -710,6 +739,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       LEFT JOIN aif_categories cat ON cat.id=m.category_id
       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
       WHERE e.status='completed'
+        AND source_sale.sale_type <> 'credit'
         AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date`);
     }
 
@@ -737,6 +767,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         h.color_name,
         h.size,
         COALESCE(h.quantity,0)::numeric AS quantity,
+        COALESCE(h.quantity,0)::numeric AS display_quantity,
         h.transactions::numeric AS aggregate_transactions,
         h.revenue::numeric AS revenue,
         COALESCE(
@@ -1081,7 +1112,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
   const detailsSelectSql = `SELECT
     source, record_id, import_id, happened_on, location_id, location_code, location_name,
     actor, brand_name, category_name, subcategory_name, product_title, product_code, image_url,
-    color_name, size, quantity, aggregate_transactions, revenue, net_revenue,
+    color_name, size, quantity, display_quantity, aggregate_transactions, revenue, net_revenue,
     sales_before_discount, discount_total, paid_total, unpaid_total, estimated_cost,
     cost_covered, net_covered, payment_method, source_granularity, document_number,
     customer_name, customer_phone, note
@@ -1190,7 +1221,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       imageUrl: row.image_url || null,
       colorName: row.color_name || null,
       size: row.size || null,
-      quantity: numberValue(row.quantity),
+      quantity: numberValue(row.display_quantity ?? row.quantity),
       transactions: row.aggregate_transactions === null || row.aggregate_transactions === undefined ? null : numberValue(row.aggregate_transactions),
       revenue: numberValue(row.revenue),
       netRevenue: numberValue(row.net_revenue),
