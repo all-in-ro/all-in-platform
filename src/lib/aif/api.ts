@@ -1269,6 +1269,9 @@ export type AifOpeningInventorySession = {
   startedAt?: string | null;
   updatedAt?: string | null;
   editable?: boolean;
+  line_count?: number | string | null;
+  counted_lines?: number | string | null;
+  counted_qty?: number | string | null;
 };
 
 export type AifOpeningInventoryLineStatus = "awaiting_known" | "uncounted" | "missing" | "untracked" | "ok";
@@ -1411,13 +1414,22 @@ export function apiAifListOpeningInventorySessions(options?: {
   location?: string;
   status?: AifOpeningInventoryStatus;
   limit?: number;
+  offset?: number;
 }) {
   const q = new URLSearchParams();
   if (options?.location) q.set("location", options.location);
   if (options?.status) q.set("status", options.status);
   if (options?.limit) q.set("limit", String(options.limit));
+  if (options?.offset) q.set("offset", String(options.offset));
   const suffix = q.toString() ? `?${q.toString()}` : "";
-  return fetchAifJSON<{ ok: true; items: AifOpeningInventorySession[] }>(`/opening-inventory/admin/sessions${suffix}`);
+  return fetchAifJSON<{
+    ok: true;
+    items: AifOpeningInventorySession[];
+    total?: number;
+    offset?: number;
+    limit?: number;
+    hasMore?: boolean;
+  }>(`/opening-inventory/admin/sessions${suffix}`);
 }
 
 export function apiAifStartOpeningInventory(input: {
