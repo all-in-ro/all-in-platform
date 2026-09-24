@@ -13,7 +13,9 @@ import express from "express";
  * - the manager sees the live result and the conservative "known minimum";
  * - applying the inventory overwrites the location stock only after review;
  * - every stock correction is logged through insertStockMovementSafe;
- * - any stock-changing movement after the session baseline blocks apply.
+ * - normal sales and stock movements may continue while counting;
+ * - movements after a product's last count are replayed onto that physical count,
+ *   so a multi-day inventory does not resurrect items sold in the meantime.
  */
 export default function createAifOpeningInventoryRouter({
   pool,
@@ -197,6 +199,8 @@ export default function createAifOpeningInventoryRouter({
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_unknown_session_idx
           ON aif_opening_inventory_unknown_scans (session_id, resolved_at, last_scanned_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_movements_lookup_idx
+          ON aif_stock_movements (location_id, variant_id, created_at)`);
         return true;
       })().catch((error) => {
         schemaPromise = null;
@@ -373,41 +377,60 @@ export default function createAifOpeningInventoryRouter({
     return result.rowCount || 0;
   }
 
-  async function loadAdminSummary(client, sessionId) {
-    const result = await client.query(
-      `SELECT
-         count(*)::int AS line_count,
-         count(*) FILTER (WHERE l.counted_qty IS NOT NULL)::int AS counted_lines,
-         COALESCE(sum(l.counted_qty) FILTER (WHERE l.counted_qty IS NOT NULL),0)::numeric AS counted_qty,
-         COALESCE(sum(l.system_qty_start),0)::numeric AS system_qty_start,
-         COALESCE(sum(l.trusted_net_qty),0)::numeric AS trusted_net_qty,
-         COALESCE(sum(l.trusted_in_qty),0)::numeric AS trusted_in_qty,
-         COALESCE(sum(l.trusted_out_qty),0)::numeric AS trusted_out_qty,
-         COALESCE(sum(l.known_min_qty),0)::numeric AS known_min_qty,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN GREATEST(l.known_min_qty-l.counted_qty,0) ELSE 0 END),0)::numeric AS definite_missing_qty,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NULL THEN l.known_min_qty ELSE 0 END),0)::numeric AS unseen_known_min_qty,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN GREATEST(l.counted_qty-l.known_min_qty,0) ELSE 0 END),0)::numeric AS untracked_qty,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN (l.counted_qty-l.system_qty_start) ELSE 0 END),0)::numeric AS system_correction_qty,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN l.counted_qty*COALESCE(l.sell_price,0) ELSE 0 END),0)::numeric(16,2) AS counted_retail_value,
-         COALESCE(sum(l.trusted_net_qty*COALESCE(l.sell_price,0)),0)::numeric(16,2) AS trusted_net_retail_value,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN GREATEST(l.known_min_qty-l.counted_qty,0)*COALESCE(l.sell_price,0) ELSE 0 END),0)::numeric(16,2) AS definite_missing_retail_value,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN GREATEST(l.counted_qty-l.known_min_qty,0)*COALESCE(l.sell_price,0) ELSE 0 END),0)::numeric(16,2) AS untracked_retail_value,
-         COALESCE(sum(CASE WHEN l.counted_qty IS NOT NULL THEN (l.counted_qty-l.system_qty_start)*COALESCE(l.sell_price,0) ELSE 0 END),0)::numeric(16,2) AS system_correction_retail_value
-       FROM aif_opening_inventory_lines l
-       WHERE l.session_id=$1`,
-      [sessionId],
+  async function syncSessionLinesFromLiveStock(client, session) {
+    if (!session || !ACTIVE_STATUSES.has(session.status)) return 0;
+    const inserted = await client.query(
+      `INSERT INTO aif_opening_inventory_lines (
+         session_id, variant_id, system_qty_start, system_reserved_start,
+         trusted_net_qty, trusted_in_qty, trusted_out_qty, known_min_qty,
+         buy_price, sell_price, raw
+       )
+       SELECT
+         $1, v.id, 0, 0, 0, 0, 0, 0,
+         v.buy_price, v.sell_price,
+         jsonb_build_object(
+           'baseline', false,
+           'discoveredDuringSession', true,
+           'baselineAt', $3::text
+         )
+       FROM aif_product_variants v
+       WHERE COALESCE(v.status,'active') <> 'archived'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM aif_opening_inventory_lines l
+           WHERE l.session_id=$1 AND l.variant_id=v.id
+         )
+         AND (
+           EXISTS (
+             SELECT 1
+             FROM aif_stock st
+             WHERE st.location_id=$2
+               AND st.variant_id=v.id
+               AND (COALESCE(st.qty,0)<>0 OR COALESCE(st.reserved_qty,0)<>0)
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM aif_stock_movements sm
+             WHERE sm.location_id=$2
+               AND sm.variant_id=v.id
+               AND sm.created_at > $3::timestamptz
+               AND COALESCE(sm.qty_delta,0)<>0
+               AND COALESCE(sm.source_type,'') <> 'opening_inventory'
+               AND COALESCE(sm.raw->>'reason','') NOT IN ('opening_inventory_apply','opening_inventory_live_sale_sync','opening_inventory_sale_bridge')
+               AND NOT (
+                 sm.source_type='stock_transfer'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM aif_stock_transfer_document_deletions del
+                   WHERE del.transfer_id = COALESCE(sm.raw->>'transferId', sm.raw->>'operationId', '')
+                 )
+               )
+           )
+         )
+       ON CONFLICT (session_id, variant_id) DO NOTHING`,
+      [session.id, session.location_id, session.baseline_at],
     );
-    const unknown = await client.query(
-      `SELECT count(*)::int AS rows, COALESCE(sum(qty),0)::numeric AS qty
-       FROM aif_opening_inventory_unknown_scans
-       WHERE session_id=$1 AND resolved_at IS NULL AND qty > 0`,
-      [sessionId],
-    );
-    return {
-      ...(result.rows[0] || {}),
-      unknown_rows: Number(unknown.rows[0]?.rows || 0),
-      unknown_qty: Number(unknown.rows[0]?.qty || 0),
-    };
+    return inserted.rowCount || 0;
   }
 
   function adminLineStatus(row) {
@@ -421,18 +444,17 @@ export default function createAifOpeningInventoryRouter({
     return "ok";
   }
 
-  async function loadAdminLines(client, sessionId) {
+  async function loadAdminLines(client, session, { lock = false } = {}) {
     const result = await client.query(
       `SELECT
          l.id, l.session_id, l.variant_id,
          l.system_qty_start, l.system_reserved_start,
          l.trusted_net_qty, l.trusted_in_qty, l.trusted_out_qty, l.known_min_qty,
          l.counted_qty,
-         CASE WHEN l.counted_qty IS NULL THEN NULL ELSE GREATEST(l.known_min_qty-l.counted_qty,0) END AS definite_missing_qty,
-         CASE WHEN l.counted_qty IS NULL THEN NULL ELSE GREATEST(l.counted_qty-l.known_min_qty,0) END AS untracked_qty,
-         CASE WHEN l.counted_qty IS NULL THEN NULL ELSE (l.counted_qty-l.system_qty_start) END AS system_correction_qty,
          l.buy_price, l.sell_price, l.first_scanned_at, l.last_scanned_at, l.last_scanned_by,
          l.auto_zeroed, l.note, l.raw, l.created_at, l.updated_at,
+         COALESCE(st.qty,0)::numeric AS current_system_qty,
+         COALESCE(st.reserved_qty,0)::numeric AS current_reserved_qty,
          v.internal_sku, v.barcode, v.sn_cod, v.size, v.color_code, v.color_name, v.color_hex, v.image_url,
          m.model_code, m.title_ro, m.shopify_title,
          b.name AS brand_name, b.code AS brand_code,
@@ -441,6 +463,7 @@ export default function createAifOpeningInventoryRouter({
        FROM aif_opening_inventory_lines l
        JOIN aif_product_variants v ON v.id=l.variant_id
        JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_stock st ON st.location_id=$2 AND st.variant_id=l.variant_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
        LEFT JOIN aif_categories cat ON cat.id=m.category_id
        LEFT JOIN LATERAL (
@@ -452,22 +475,202 @@ export default function createAifOpeningInventoryRouter({
        ) sc ON true
        WHERE l.session_id=$1
        ORDER BY
-         CASE WHEN l.counted_qty IS NULL AND l.known_min_qty>0 THEN 0
-              WHEN l.counted_qty IS NOT NULL AND l.counted_qty<l.known_min_qty THEN 1
-              WHEN l.counted_qty IS NOT NULL AND l.counted_qty>l.known_min_qty THEN 2
-              WHEN l.counted_qty IS NULL THEN 3 ELSE 4 END,
          l.last_scanned_at DESC NULLS LAST,
          b.name ASC NULLS LAST,
          m.title_ro ASC,
          v.color_name ASC NULLS LAST,
-         v.size ASC`,
-      [sessionId],
+         v.size ASC
+       ${lock ? "FOR UPDATE OF l" : ""}`,
+      [session.id, session.location_id],
     );
-    return result.rows.map((row) => ({
-      ...row,
-      status: adminLineStatus(row),
-      product: productPayload(row),
-    }));
+
+    const cutoff = session.applied_at || session.cancelled_at || null;
+    const movements = await client.query(
+      `SELECT sm.variant_id, sm.qty_delta, sm.created_at
+       FROM aif_stock_movements sm
+       WHERE sm.location_id=$1
+         AND sm.created_at > $2::timestamptz
+         AND ($3::timestamptz IS NULL OR sm.created_at <= $3::timestamptz)
+         AND COALESCE(sm.qty_delta,0)<>0
+         AND COALESCE(sm.source_type,'') <> 'opening_inventory'
+         AND COALESCE(sm.raw->>'reason','') NOT IN ('opening_inventory_apply','opening_inventory_live_sale_sync','opening_inventory_sale_bridge')
+               AND NOT (
+                 sm.source_type='stock_transfer'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM aif_stock_transfer_document_deletions del
+                   WHERE del.transfer_id = COALESCE(sm.raw->>'transferId', sm.raw->>'operationId', '')
+                 )
+               )
+       ORDER BY sm.created_at ASC`,
+      [session.location_id, session.baseline_at, cutoff],
+    );
+
+    const movementByVariant = new Map();
+    for (const movement of movements.rows) {
+      const key = String(movement.variant_id || "");
+      if (!key) continue;
+      const list = movementByVariant.get(key) || [];
+      list.push({
+        qty: Number(movement.qty_delta || 0),
+        at: movement.created_at ? new Date(movement.created_at).getTime() : 0,
+      });
+      movementByVariant.set(key, list);
+    }
+
+    return result.rows.map((row) => {
+      const variantMovements = movementByVariant.get(String(row.variant_id)) || [];
+      let liveNet = 0;
+      let liveIn = 0;
+      let liveOut = 0;
+      for (const movement of variantMovements) {
+        liveNet += movement.qty;
+        if (movement.qty > 0) liveIn += movement.qty;
+        if (movement.qty < 0) liveOut += Math.abs(movement.qty);
+      }
+
+      const physicalCounted = row.counted_qty === null || row.counted_qty === undefined
+        ? null
+        : Number(row.counted_qty || 0);
+      const observationRaw = row.last_scanned_at
+        || (row.auto_zeroed ? session.counting_closed_at : null)
+        || (physicalCounted !== null ? session.counting_closed_at : null)
+        || session.baseline_at;
+      const observationAt = observationRaw ? new Date(observationRaw).getTime() : 0;
+      let movementAfterCountQty = 0;
+      let movementAfterCountCount = 0;
+      if (physicalCounted !== null) {
+        for (const movement of variantMovements) {
+          if (movement.at > observationAt) {
+            movementAfterCountQty += movement.qty;
+            movementAfterCountCount += 1;
+          }
+        }
+      }
+
+      const baselineKnownMin = Number(row.known_min_qty || 0);
+      const baselineTrustedNet = Number(row.trusted_net_qty || 0);
+      const currentKnownMin = Math.max(0, baselineKnownMin + liveNet);
+      const effectiveCounted = physicalCounted === null
+        ? null
+        : Math.max(0, physicalCounted + movementAfterCountQty);
+      const currentSystemQty = Number(row.current_system_qty || 0);
+      const systemCorrection = effectiveCounted === null ? null : effectiveCounted - currentSystemQty;
+      const currentTrustedNet = baselineTrustedNet + liveNet;
+      const currentTrustedIn = Number(row.trusted_in_qty || 0) + liveIn;
+      const currentTrustedOut = Number(row.trusted_out_qty || 0) + liveOut;
+
+      const decorated = {
+        ...row,
+        baseline_trusted_net_qty: baselineTrustedNet,
+        baseline_known_min_qty: baselineKnownMin,
+        physical_counted_qty: physicalCounted,
+        live_net_qty: liveNet,
+        live_in_qty: liveIn,
+        live_out_qty: liveOut,
+        movement_after_count_qty: movementAfterCountQty,
+        movement_after_count_count: movementAfterCountCount,
+        trusted_net_qty: currentTrustedNet,
+        trusted_in_qty: currentTrustedIn,
+        trusted_out_qty: currentTrustedOut,
+        known_min_qty: currentKnownMin,
+        counted_qty: effectiveCounted,
+        definite_missing_qty: effectiveCounted === null ? null : Math.max(0, currentKnownMin - effectiveCounted),
+        untracked_qty: effectiveCounted === null ? null : Math.max(0, effectiveCounted - currentKnownMin),
+        system_correction_qty: systemCorrection,
+        current_system_qty: currentSystemQty,
+        current_reserved_qty: Number(row.current_reserved_qty || 0),
+        observation_at: physicalCounted === null ? null : observationRaw,
+        product: productPayload(row),
+      };
+      return {
+        ...decorated,
+        status: adminLineStatus(decorated),
+      };
+    }).sort((a, b) => {
+      const rank = (line) => {
+        if (line.status === "awaiting_known") return 0;
+        if (line.status === "missing") return 1;
+        if (line.status === "untracked") return 2;
+        if (line.status === "uncounted") return 3;
+        return 4;
+      };
+      const byRank = rank(a) - rank(b);
+      if (byRank) return byRank;
+      const aTime = a.last_scanned_at ? new Date(a.last_scanned_at).getTime() : 0;
+      const bTime = b.last_scanned_at ? new Date(b.last_scanned_at).getTime() : 0;
+      return bTime - aTime;
+    });
+  }
+
+  function summarizeAdminLines(lines, unknown) {
+    const summary = {
+      line_count: lines.length,
+      counted_lines: 0,
+      counted_qty: 0,
+      system_qty_start: 0,
+      trusted_net_qty: 0,
+      trusted_in_qty: 0,
+      trusted_out_qty: 0,
+      known_min_qty: 0,
+      definite_missing_qty: 0,
+      unseen_known_min_qty: 0,
+      untracked_qty: 0,
+      system_correction_qty: 0,
+      counted_retail_value: 0,
+      trusted_net_retail_value: 0,
+      definite_missing_retail_value: 0,
+      untracked_retail_value: 0,
+      system_correction_retail_value: 0,
+      live_net_qty: 0,
+      live_in_qty: 0,
+      live_out_qty: 0,
+      live_movement_lines: 0,
+      unknown_rows: 0,
+      unknown_qty: 0,
+    };
+
+    for (const line of lines) {
+      const sell = Number(line.sell_price || 0);
+      const counted = line.counted_qty === null || line.counted_qty === undefined ? null : Number(line.counted_qty || 0);
+      summary.system_qty_start += Number(line.system_qty_start || 0);
+      summary.trusted_net_qty += Number(line.trusted_net_qty || 0);
+      summary.trusted_in_qty += Number(line.trusted_in_qty || 0);
+      summary.trusted_out_qty += Number(line.trusted_out_qty || 0);
+      summary.known_min_qty += Number(line.known_min_qty || 0);
+      summary.live_net_qty += Number(line.live_net_qty || 0);
+      summary.live_in_qty += Number(line.live_in_qty || 0);
+      summary.live_out_qty += Number(line.live_out_qty || 0);
+      if (Math.abs(Number(line.live_net_qty || 0)) > 0.0001) summary.live_movement_lines += 1;
+      summary.trusted_net_retail_value += Number(line.trusted_net_qty || 0) * sell;
+      if (counted === null) {
+        summary.unseen_known_min_qty += Number(line.known_min_qty || 0);
+        continue;
+      }
+      summary.counted_lines += 1;
+      summary.counted_qty += counted;
+      summary.definite_missing_qty += Number(line.definite_missing_qty || 0);
+      summary.untracked_qty += Number(line.untracked_qty || 0);
+      summary.system_correction_qty += Number(line.system_correction_qty || 0);
+      summary.counted_retail_value += counted * sell;
+      summary.definite_missing_retail_value += Number(line.definite_missing_qty || 0) * sell;
+      summary.untracked_retail_value += Number(line.untracked_qty || 0) * sell;
+      summary.system_correction_retail_value += Number(line.system_correction_qty || 0) * sell;
+    }
+
+    const unresolved = (unknown || []).filter((item) => !item.resolved_at && Number(item.qty || 0) > 0);
+    summary.unknown_rows = unresolved.length;
+    summary.unknown_qty = unresolved.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+    for (const key of [
+      "counted_retail_value",
+      "trusted_net_retail_value",
+      "definite_missing_retail_value",
+      "untracked_retail_value",
+      "system_correction_retail_value",
+    ]) {
+      summary[key] = Math.round((Number(summary[key] || 0) + Number.EPSILON) * 100) / 100;
+    }
+    return summary;
   }
 
   async function loadUnknown(client, sessionId) {
@@ -483,11 +686,14 @@ export default function createAifOpeningInventoryRouter({
   }
 
   async function adminDetail(client, session) {
-    const [summary, lines, unknown] = await Promise.all([
-      loadAdminSummary(client, session.id),
-      loadAdminLines(client, session.id),
+    if (session && ACTIVE_STATUSES.has(session.status)) {
+      await syncSessionLinesFromLiveStock(client, session);
+    }
+    const [lines, unknown] = await Promise.all([
+      loadAdminLines(client, session),
       loadUnknown(client, session.id),
     ]);
+    const summary = summarizeAdminLines(lines, unknown);
     const legacy = numberOrNull(session.legacy_retail_value);
     const trustedRetail = Number(summary.trusted_net_retail_value || 0);
     const countedRetail = Number(summary.counted_retail_value || 0);
@@ -579,7 +785,8 @@ export default function createAifOpeningInventoryRouter({
     if (existing.rowCount) return existing.rows[0];
 
     // A session indulásakor ez a variáns 0 rendszerkészlet és 0 igazolt nettó mozgás miatt
-    // nem került az előtöltött sorok közé. Ha időközben lenne stockmozgás, az apply úgyis blokkol.
+    // nem került az előtöltött sorok közé. A későbbi eladásokat / mozgásokat időbélyeggel
+    // rávezetjük a fizikai számolásra, ezért többnapos leltár mellett is biztonságosan kezelhető.
     const inserted = await client.query(
       `INSERT INTO aif_opening_inventory_lines (
          session_id, variant_id, system_qty_start, system_reserved_start,
@@ -1011,18 +1218,26 @@ export default function createAifOpeningInventoryRouter({
         await client.query("ROLLBACK");
         return res.status(409).json({ error: session.status === "review" ? "A beolvasás már le van zárva." : "Ez a nyitó leltár már nem zárható le." });
       }
+      const actor = actorFrom(req);
+      await syncSessionLinesFromLiveStock(client, session);
+      const closeTimeResult = await client.query(`SELECT now() AS now`);
+      const closeTime = closeTimeResult.rows[0]?.now || new Date();
       await client.query(
         `UPDATE aif_opening_inventory_lines
-         SET counted_qty=0,auto_zeroed=true,updated_at=now()
+         SET counted_qty=0,
+             first_scanned_at=COALESCE(first_scanned_at,$2),
+             last_scanned_at=COALESCE(last_scanned_at,$2),
+             last_scanned_by=COALESCE(last_scanned_by,$3),
+             auto_zeroed=true,
+             updated_at=now()
          WHERE session_id=$1 AND counted_qty IS NULL`,
-        [session.id],
+        [session.id, closeTime, actor],
       );
-      const actor = actorFrom(req);
       await client.query(
         `UPDATE aif_opening_inventory_sessions
-         SET status='review',counting_closed_at=now(),closed_by=$2,updated_at=now()
+         SET status='review',counting_closed_at=$3,closed_by=$2,updated_at=now()
          WHERE id=$1`,
-        [session.id, actor],
+        [session.id, actor, closeTime],
       );
       await client.query("COMMIT");
       const fresh = await sessionById(client, session.id);
@@ -1052,7 +1267,12 @@ export default function createAifOpeningInventoryRouter({
       }
       await client.query(
         `UPDATE aif_opening_inventory_lines
-         SET counted_qty=NULL,auto_zeroed=false,updated_at=now()
+         SET counted_qty=NULL,
+             first_scanned_at=NULL,
+             last_scanned_at=NULL,
+             last_scanned_by=NULL,
+             auto_zeroed=false,
+             updated_at=now()
          WHERE session_id=$1 AND auto_zeroed=true`,
         [session.id],
       );
@@ -1105,72 +1325,49 @@ export default function createAifOpeningInventoryRouter({
         });
       }
 
-      const changedAfterBaseline = await client.query(
-        `SELECT count(*)::int AS c, min(sm.created_at) AS first_at, max(sm.created_at) AS last_at
-         FROM aif_stock_movements sm
-         WHERE sm.location_id=$1
-           AND sm.created_at > $2
-           AND COALESCE(sm.qty_delta,0) <> 0
-           AND sm.source_type <> 'opening_inventory'`,
-        [session.location_id, session.baseline_at],
-      );
-      if (Number(changedAfterBaseline.rows[0]?.c || 0) > 0) {
-        await client.query("ROLLBACK");
-        return res.status(409).json({
-          error: `A leltár indítása óta ${changedAfterBaseline.rows[0].c} készletmozgás történt ezen a helyszínen. Így nem írhatom felül vakon a készletet. Ellenőrizd a mozgásokat, majd indíts tiszta leltárt vagy rendezd őket.`,
-          code: "opening_inventory_stock_changed_during_count",
-          movementCount: Number(changedAfterBaseline.rows[0].c || 0),
-          firstAt: changedAfterBaseline.rows[0]?.first_at || null,
-          lastAt: changedAfterBaseline.rows[0]?.last_at || null,
-        });
-      }
-
-      const lines = await client.query(
-        `SELECT l.*,
-                v.internal_sku,v.barcode,v.sn_cod,v.size,v.color_name,
-                m.title_ro,m.model_code,
-                sc.supplier_product_code,sc.supplier_barcode
-         FROM aif_opening_inventory_lines l
-         JOIN aif_product_variants v ON v.id=l.variant_id
-         JOIN aif_product_models m ON m.id=v.model_id
-         LEFT JOIN LATERAL (
-           SELECT supplier_product_code,supplier_barcode
-           FROM aif_variant_supplier_codes sc
-           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
-           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST LIMIT 1
-         ) sc ON true
-         WHERE l.session_id=$1
-         ORDER BY l.variant_id
-         FOR UPDATE OF l`,
-        [session.id],
+      // A bolt a leltár alatt is működhet. Ugyanazzal a lokációs advisory lockkal
+      // sorba állítjuk a készlet-véglegesítést és a bolti eladást, így az utolsó
+      // pillanatban rögzített eladás sem veszhet el.
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+        [`aif_opening_inventory_stock:${session.location_id}`],
       );
 
-      const missingCount = lines.rows.filter((line) => line.counted_qty === null || line.counted_qty === undefined).length;
-      if (missingCount > 0) {
-        await client.query("ROLLBACK");
-        return res.status(409).json({ error: `Még ${missingCount} leltársor nincs lezárva.`, code: "opening_inventory_uncounted_lines" });
-      }
+      await syncSessionLinesFromLiveStock(client, session);
 
-      const existingNotInSession = await client.query(
-        `SELECT count(*)::int AS c
-         FROM aif_stock s
-         WHERE s.location_id=$1
-           AND (COALESCE(s.qty,0)<>0 OR COALESCE(s.reserved_qty,0)<>0)
-           AND NOT EXISTS (
-             SELECT 1 FROM aif_opening_inventory_lines l WHERE l.session_id=$2 AND l.variant_id=s.variant_id
-           )`,
-        [session.location_id, session.id],
+      // Ha a leltár lezárása után érkezett be új termék, az a zárási időpontban
+      // 0-nak tekintett sor lesz, majd a későbbi hiteles mozgásokat rávezetjük.
+      const observationAt = session.counting_closed_at || session.baseline_at;
+      await client.query(
+        `UPDATE aif_opening_inventory_lines
+         SET counted_qty=0,
+             first_scanned_at=COALESCE(first_scanned_at,$2),
+             last_scanned_at=COALESCE(last_scanned_at,$2),
+             last_scanned_by=COALESCE(last_scanned_by,$3),
+             auto_zeroed=true,
+             updated_at=now()
+         WHERE session_id=$1 AND counted_qty IS NULL`,
+        [session.id, observationAt, actorFrom(req)],
       );
-      if (Number(existingNotInSession.rows[0]?.c || 0) > 0) {
-        await client.query("ROLLBACK");
-        return res.status(409).json({ error: "A rendszerkészlet közben olyan tétellel bővült, amely nem volt a nyitó leltárban. Biztonsági okból az alkalmazást leállítottam.", code: "opening_inventory_stock_shape_changed" });
-      }
+
+      // A már létező stock sorokat lezárjuk a tranzakció végéig. A bolti eladás
+      // ugyanezen session alatt az advisory lock miatt amúgy is megvár minket.
+      await client.query(
+        `SELECT variant_id
+         FROM aif_stock
+         WHERE location_id=$1
+         ORDER BY variant_id
+         FOR UPDATE`,
+        [session.location_id],
+      );
+
+      const lines = await loadAdminLines(client, session, { lock: true });
 
       const actor = actorFrom(req);
       let changed = 0;
       let netDiff = 0;
       let correctionRetailValue = 0;
-      for (const line of lines.rows) {
+      for (const line of lines) {
         const stock = await client.query(
           `SELECT qty,reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
           [session.location_id, line.variant_id],
@@ -1219,8 +1416,14 @@ export default function createAifOpeningInventoryRouter({
               openingInventoryCode: session.code,
               openingInventoryLineId: String(line.id),
               systemQtyAtStart: Number(line.system_qty_start || 0),
+              currentSystemQtyBeforeApply: beforeQty,
+              baselineTrustedNetQty: Number(line.baseline_trusted_net_qty || 0),
               trustedNetQty: Number(line.trusted_net_qty || 0),
+              baselineKnownMinimumQty: Number(line.baseline_known_min_qty || 0),
               knownMinimumQty: Number(line.known_min_qty || 0),
+              physicalCountedQty: Number(line.physical_counted_qty || 0),
+              movementAfterCountQty: Number(line.movement_after_count_qty || 0),
+              effectiveCountedQty: afterQty,
               countedQty: afterQty,
               definiteMissingQty: Math.max(0, Number(line.known_min_qty || 0) - afterQty),
               untrackedQty: Math.max(0, afterQty - Number(line.known_min_qty || 0)),
@@ -1241,7 +1444,13 @@ export default function createAifOpeningInventoryRouter({
          SET status='applied',applied_at=now(),applied_by=$2,
              raw=COALESCE(raw,'{}'::jsonb) || $3::jsonb,updated_at=now()
          WHERE id=$1`,
-        [session.id, actor, JSON.stringify({ changed, netDiff, correctionRetailValue })],
+        [session.id, actor, JSON.stringify({
+          changed,
+          netDiff,
+          correctionRetailValue,
+          liveMovementReconciliation: true,
+          movementPolicy: "physical_count_plus_movements_after_last_count",
+        })],
       );
       await client.query("COMMIT");
       const fresh = await sessionById(client, session.id);
