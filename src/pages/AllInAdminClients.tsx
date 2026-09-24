@@ -972,37 +972,37 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:#fff; color:#172033; }
   body { font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .doc { width:297mm; max-width:297mm; margin:0 auto; padding:7mm 5mm; }
+  .doc { width:297mm; height:210mm; min-height:210mm; max-height:210mm; margin:0; padding:5mm; display:flex; flex-direction:column; overflow:hidden; }
   .adminCopy { break-after:page; page-break-after:always; }
-  .pageBreak { break-before:page; page-break-before:always; }
-  .top { display:grid; grid-template-columns:minmax(0,1fr) minmax(74mm,.86fr); gap:9mm; align-items:start; padding-bottom:4mm; border-bottom:2px solid #255f54; }
+  .pageBreak { break-before:auto; page-break-before:auto; }
+  .top { display:grid; grid-template-columns:minmax(0,1fr) minmax(74mm,.86fr); gap:8mm; align-items:start; padding-bottom:3mm; border-bottom:2px solid #255f54; }
   .company { color:#183d36; font-size:16px; font-weight:700; letter-spacing:.03em; }
-  .companyMeta { margin-top:2mm; color:#465467; font-size:8.5px; line-height:1.45; }
+  .companyMeta { margin-top:1.5mm; color:#465467; font-size:8.3px; line-height:1.35; }
   .docBox { border:1px solid #b9c7c4; border-radius:3mm; overflow:hidden; }
-  .docBox h3 { margin:0; padding:2mm 3mm; background:#255f54; color:#fff; font-size:8px; letter-spacing:.09em; text-transform:uppercase; }
-  .docBoxBody { padding:2mm 3mm; background:#f5f8f7; }
-  .docLine { display:flex; justify-content:space-between; gap:5mm; padding:1mm 0; border-bottom:1px solid #d8e0de; }
+  .docBox h3 { margin:0; padding:1.5mm 3mm; background:#255f54; color:#fff; font-size:8px; letter-spacing:.09em; text-transform:uppercase; }
+  .docBoxBody { padding:1.4mm 3mm; background:#f5f8f7; }
+  .docLine { display:flex; justify-content:space-between; gap:5mm; padding:.75mm 0; border-bottom:1px solid #d8e0de; }
   .docLine:last-child { border-bottom:0; }
   .docLine span { color:#667382; }
   .docLine strong { text-align:right; color:#172033; }
-  .title { padding:4mm 0 3mm; text-align:center; }
+  .title { padding:3mm 0 2mm; text-align:center; }
   .eyebrow { color:#255f54; font-size:8px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
-  h1 { margin:1.2mm 0 0; font-size:20px; letter-spacing:.04em; }
-  .subtitle { margin-top:1mm; color:#526070; font-size:9px; }
-  .meta { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-bottom:3mm; }
-  .metaBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.2mm 2.6mm; background:#f7faf9; min-height:13mm; }
+  h1 { margin:.8mm 0 0; font-size:19px; letter-spacing:.04em; }
+  .subtitle { margin-top:.7mm; color:#526070; font-size:8.7px; }
+  .meta { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.2mm; margin-bottom:2mm; }
+  .metaBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:1.7mm 2.5mm; background:#f7faf9; min-height:11mm; }
   .metaBox span { display:block; color:#6a7683; font-size:7px; letter-spacing:.08em; text-transform:uppercase; }
-  .metaBox strong { display:block; margin-top:1mm; font-size:9.5px; color:#172033; font-weight:600; overflow-wrap:anywhere; }
-  .declaration { margin-bottom:3mm; border-left:3px solid #255f54; background:#f5f8f7; padding:2.2mm 3mm; color:#354353; line-height:1.45; }
-  .trace { margin:0 0 3mm; border:1px solid #d7b65a; border-radius:2.2mm; background:#fff9e8; padding:2mm 2.7mm; color:#75580f; line-height:1.4; }
+  .metaBox strong { display:block; margin-top:.7mm; font-size:9.2px; color:#172033; font-weight:600; overflow-wrap:anywhere; }
+  .declaration { margin-bottom:2mm; border-left:3px solid #255f54; background:#f5f8f7; padding:1.7mm 3mm; color:#354353; line-height:1.35; }
+  .trace { margin:0 0 2mm; border:1px solid #d7b65a; border-radius:2.2mm; background:#fff9e8; padding:1.6mm 2.7mm; color:#75580f; line-height:1.3; }
   table { width:100%; border-collapse:collapse; table-layout:fixed; }
   thead { display:table-header-group; }
   tr { break-inside:avoid; page-break-inside:avoid; }
-  th { background:#26384b; color:#fff; border:1px solid #26384b; padding:1.7mm 1mm; font-size:6.5px; line-height:1.15; text-transform:uppercase; text-align:center; font-weight:500; }
-  td { border:1px solid #d4dcdf; padding:1.25mm 1mm; font-size:7.4px; line-height:1.18; vertical-align:middle; overflow-wrap:anywhere; }
+  th { background:#26384b; color:#fff; border:1px solid #26384b; padding:1.25mm 1mm; font-size:6.4px; line-height:1.1; text-transform:uppercase; text-align:center; font-weight:500; }
+  td { border:1px solid #d4dcdf; padding:.95mm 1mm; font-size:7.3px; line-height:1.14; vertical-align:middle; overflow-wrap:anywhere; }
   tbody tr:nth-child(even) td { background:#f8fafb; }
   td strong { display:block; font-size:7.8px; color:#172033; }
-  .muted { margin-top:.7mm; color:#64748b; font-size:6.6px; }
+  .muted { margin-top:.45mm; color:#64748b; font-size:6.5px; }
   .center { text-align:center; }
   .qty { text-align:center; font-size:8.5px; font-weight:700; color:#255f54; }
   .money { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
@@ -1034,18 +1034,18 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   tfoot td { background:#eef4f2; border-top:2px solid #255f54; font-weight:700; }
   .totalLabel { text-align:right; color:#183d36; letter-spacing:.07em; }
   .retailTotal { background:#255f54 !important; color:#fff; font-size:8.5px; }
-  .summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.5mm; margin-top:3mm; }
+  .summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:2.2mm; margin-top:2mm; }
   .summary.signingSummary { grid-template-columns:repeat(3,minmax(0,1fr)); }
-  .summaryBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:2.3mm 2.7mm; background:#f7faf9; }
+  .summaryBox { border:1px solid #ccd7d4; border-radius:2.4mm; padding:1.8mm 2.5mm; background:#f7faf9; }
   .summaryBox span { display:block; color:#6a7683; font-size:7px; text-transform:uppercase; letter-spacing:.07em; }
-  .summaryBox strong { display:block; margin-top:1mm; font-size:11px; color:#172033; }
+  .summaryBox strong { display:block; margin-top:.7mm; font-size:10.5px; color:#172033; }
   .summaryBox.retail { border-color:#255f54; background:#eef7f4; }
   .summaryBox.retail strong { color:#183d36; }
-  .signatures { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4mm; margin-top:10mm; break-inside:avoid; }
-  .signature { min-height:24mm; border:1px solid #ccd7d4; border-radius:2.5mm; padding:2.5mm; }
+  .signatures { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:3mm; margin-top:auto; padding-top:3mm; break-inside:avoid; }
+  .signature { min-height:20mm; border:1px solid #ccd7d4; border-radius:2.5mm; padding:2mm; }
   .signatureTitle { color:#255f54; font-size:7.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
-  .signatureLine { margin-top:8mm; border-top:1px solid #667382; padding-top:1.2mm; color:#667382; font-size:7px; text-align:center; }
-  .signatureDate { margin-top:2mm; color:#7b8793; font-size:7px; text-align:center; }
+  .signatureLine { margin-top:5.5mm; border-top:1px solid #667382; padding-top:1mm; color:#667382; font-size:6.8px; text-align:center; }
+  .signatureDate { margin-top:1.2mm; color:#7b8793; font-size:6.8px; text-align:center; }
 </style>
 </head>
 <body>
