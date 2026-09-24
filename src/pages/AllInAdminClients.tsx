@@ -891,13 +891,9 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
         <strong>${officialHtmlEscape(line.productTitle || "Produs")}</strong>
         <div class="muted">${officialHtmlEscape(variant || "-")}</div>
       </td>
-      <td class="code">${officialHtmlEscape(line.productCode || "-")}</td>
-      <td class="code">${officialHtmlEscape(line.snCod || "-")}</td>
-      <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
       <td class="center">buc.</td>
       <td class="qty">${officialNumber(line.quantity, 0)}</td>
       <td class="money">${officialNumber(line.purchaseUnitPrice)}</td>
-      <td class="money">${officialNumber(line.purchaseValue)}</td>
       <td class="money">${markup.unit === null ? "-" : officialNumber(markup.unit)}</td>
       <td class="money">${markup.value === null ? "-" : officialNumber(markup.value)}</td>
       <td class="money">${officialNumber(line.listUnitPrice)}</td>
@@ -907,7 +903,6 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
 
   const signingRows = lines.map((line, index) => {
     const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
-    const markup = lineMarkup(line);
     return `<tr>
       <td class="center">${index + 1}</td>
       <td>
@@ -919,11 +914,9 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
       <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
       <td class="center">buc.</td>
       <td class="qty">${officialNumber(line.quantity, 0)}</td>
-      <td class="money">${officialNumber(line.purchaseUnitPrice)}</td>
-      <td class="money">${markup.unit === null ? "-" : officialNumber(markup.unit)}</td>
-      <td class="money">${markup.value === null ? "-" : officialNumber(markup.value)}</td>
-      <td class="money">${officialNumber(line.listUnitPrice)}</td>
-      <td class="money strongValue">${officialNumber(line.retailValue)}</td>
+      <td class="money">${officialNumber(line.retailValue)}</td>
+      <td class="money strongValue">${officialNumber(line.actualSaleValue)}</td>
+      <td class="money">${officialNumber(line.discountValue)}</td>
     </tr>`;
   }).join("");
 
@@ -1017,32 +1010,26 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   .code { font-family:"Courier New",monospace; text-align:center; font-size:6.6px; }
   .source { font-size:6.5px; color:#435164; }
 
-  .adminTable th:nth-child(1),.adminTable td:nth-child(1){width:5mm}
-  .adminTable th:nth-child(2),.adminTable td:nth-child(2){width:42mm}
-  .adminTable th:nth-child(3),.adminTable td:nth-child(3){width:20mm}
-  .adminTable th:nth-child(4),.adminTable td:nth-child(4){width:16mm}
-  .adminTable th:nth-child(5),.adminTable td:nth-child(5){width:25mm}
-  .adminTable th:nth-child(6),.adminTable td:nth-child(6){width:8mm}
-  .adminTable th:nth-child(7),.adminTable td:nth-child(7){width:9mm}
-  .adminTable th:nth-child(8),.adminTable td:nth-child(8){width:19mm}
-  .adminTable th:nth-child(9),.adminTable td:nth-child(9){width:19mm}
-  .adminTable th:nth-child(10),.adminTable td:nth-child(10){width:18mm}
-  .adminTable th:nth-child(11),.adminTable td:nth-child(11){width:19mm}
-  .adminTable th:nth-child(12),.adminTable td:nth-child(12){width:19mm}
-  .adminTable th:nth-child(13),.adminTable td:nth-child(13){width:20mm}
+  .adminTable th:nth-child(1),.adminTable td:nth-child(1){width:7mm}
+  .adminTable th:nth-child(2),.adminTable td:nth-child(2){width:92mm}
+  .adminTable th:nth-child(3),.adminTable td:nth-child(3){width:13mm}
+  .adminTable th:nth-child(4),.adminTable td:nth-child(4){width:15mm}
+  .adminTable th:nth-child(5),.adminTable td:nth-child(5){width:28mm}
+  .adminTable th:nth-child(6),.adminTable td:nth-child(6){width:26mm}
+  .adminTable th:nth-child(7),.adminTable td:nth-child(7){width:28mm}
+  .adminTable th:nth-child(8),.adminTable td:nth-child(8){width:28mm}
+  .adminTable th:nth-child(9),.adminTable td:nth-child(9){width:30mm}
 
-  .signingTable th:nth-child(1),.signingTable td:nth-child(1){width:5mm}
-  .signingTable th:nth-child(2),.signingTable td:nth-child(2){width:50mm}
-  .signingTable th:nth-child(3),.signingTable td:nth-child(3){width:22mm}
-  .signingTable th:nth-child(4),.signingTable td:nth-child(4){width:18mm}
-  .signingTable th:nth-child(5),.signingTable td:nth-child(5){width:28mm}
-  .signingTable th:nth-child(6),.signingTable td:nth-child(6){width:9mm}
-  .signingTable th:nth-child(7),.signingTable td:nth-child(7){width:10mm}
-  .signingTable th:nth-child(8),.signingTable td:nth-child(8){width:20mm}
-  .signingTable th:nth-child(9),.signingTable td:nth-child(9){width:20mm}
-  .signingTable th:nth-child(10),.signingTable td:nth-child(10){width:20mm}
-  .signingTable th:nth-child(11),.signingTable td:nth-child(11){width:20mm}
-  .signingTable th:nth-child(12),.signingTable td:nth-child(12){width:22mm}
+  .signingTable th:nth-child(1),.signingTable td:nth-child(1){width:7mm}
+  .signingTable th:nth-child(2),.signingTable td:nth-child(2){width:74mm}
+  .signingTable th:nth-child(3),.signingTable td:nth-child(3){width:28mm}
+  .signingTable th:nth-child(4),.signingTable td:nth-child(4){width:22mm}
+  .signingTable th:nth-child(5),.signingTable td:nth-child(5){width:34mm}
+  .signingTable th:nth-child(6),.signingTable td:nth-child(6){width:12mm}
+  .signingTable th:nth-child(7),.signingTable td:nth-child(7){width:13mm}
+  .signingTable th:nth-child(8),.signingTable td:nth-child(8){width:31mm}
+  .signingTable th:nth-child(9),.signingTable td:nth-child(9){width:31mm}
+  .signingTable th:nth-child(10),.signingTable td:nth-child(10){width:30mm}
 
   tfoot td { background:#eef4f2; border-top:2px solid #255f54; font-weight:700; }
   .totalLabel { text-align:right; color:#183d36; letter-spacing:.07em; }
@@ -1072,17 +1059,16 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   <table class="adminTable">
     <thead>
       <tr>
-        <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
-        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. fără TVA RON</th><th>Val. achiz. RON</th>
-        <th>Adaos / U.M. RON</th><th>Val. adaos RON</th><th>Preț amănunt RON</th><th>Val. amănunt RON</th>
+        <th>Nr. crt.</th><th>Denumirea materialelor</th><th>U.M.</th><th>Cant.</th>
+        <th>Preț achiz. fără T.V.A. RON</th><th>Adaos pe U.M. RON</th><th>Valoare adaos RON</th>
+        <th>Preț amănunt RON</th><th>Valoare amănunt RON</th>
       </tr>
     </thead>
-    <tbody>${adminRows || `<tr><td colspan="13" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tbody>${adminRows || `<tr><td colspan="9" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
     <tfoot>
       <tr>
-        <td colspan="6" class="totalLabel">TOTAL</td>
+        <td colspan="3" class="totalLabel">TOTAL</td>
         <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
-        <td></td>
         <td class="money">${officialNumber(doc.purchaseTotal)}</td>
         <td></td>
         <td class="money">${hasUnknownMarkup ? "-" : officialNumber(markupTotal)}</td>
@@ -1112,29 +1098,25 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
     <thead>
       <tr>
         <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
-        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. fără TVA RON</th>
-        <th>Adaos / U.M. RON</th><th>Val. adaos RON</th><th>Preț amănunt RON</th><th>Val. amănunt RON</th>
+        <th>U.M.</th><th>Cant.</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th>
       </tr>
     </thead>
-    <tbody>${signingRows || `<tr><td colspan="12" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tbody>${signingRows || `<tr><td colspan="10" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
     <tfoot>
       <tr>
         <td colspan="6" class="totalLabel">TOTAL</td>
         <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
-        <td></td>
-        <td></td>
-        <td class="money">${hasUnknownMarkup ? "-" : officialNumber(markupTotal)}</td>
-        <td></td>
-        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
+        <td class="money">${officialNumber(doc.retailTotal)}</td>
+        <td class="money retailTotal">${officialNumber(doc.actualSaleTotal)}</td>
+        <td class="money">${officialNumber(doc.discountTotal)}</td>
       </tr>
     </tfoot>
   </table>
 
-  <div class="summary">
-    <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Valoare adaos</span><strong>${hasUnknownMarkup ? "-" : `${officialNumber(markupTotal)} RON`}</strong></div>
-    <div class="summaryBox retail"><span>Valoare amănunt</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Cota TVA</span><strong>${officialHtmlEscape(vatSummary)}</strong></div>
+  <div class="summary signingSummary">
+    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
   </div>
 
   ${renderSignatures()}
