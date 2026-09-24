@@ -2576,6 +2576,21 @@ export default function AllInInventory() {
                   <Eye size={15} /> Bolti nézet
                 </button>
               ) : null}
+              {active && !isMobileLayout && canEditActive ? (
+                <button className={headerPrimaryBtn} type="button" onClick={commitCount} disabled={saving}>
+                  <ClipboardCheck size={15} /> Beolvasás lezárása
+                </button>
+              ) : null}
+              {active && !isMobileLayout && activeReview ? (
+                <>
+                  <button className={headerBtnSoft} type="button" onClick={requestReopen} disabled={saving}>
+                    <RotateCcw size={15} /> Újranyitás
+                  </button>
+                  <button className={headerPrimaryBtn} type="button" onClick={requestApply} disabled={saving || unresolvedUnknown.length > 0}>
+                    <CheckCircle2 size={15} /> Készlet alkalmazása
+                  </button>
+                </>
+              ) : null}
               <button className={headerPrimaryBtn} type="button" onClick={createCount} disabled={saving || !location || Boolean(active && !activeFinal)}>
                 <ClipboardList size={15} /> Új leltár
               </button>
