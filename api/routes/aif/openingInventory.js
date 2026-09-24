@@ -319,6 +319,7 @@ export default function createAifOpeningInventoryRouter({
       colorHex: row.color_hex || null,
       size: row.size || null,
       imageUrl: row.image_url || null,
+      sellPrice: row.sell_price === null || row.sell_price === undefined ? null : Number(row.sell_price || 0),
     };
   }
 
@@ -943,6 +944,7 @@ export default function createAifOpeningInventoryRouter({
       `SELECT
          l.id, l.variant_id, l.counted_qty, l.first_scanned_at, l.last_scanned_at, l.last_scanned_by,
          v.internal_sku, v.barcode, v.sn_cod, v.size, v.color_code, v.color_name, v.color_hex, v.image_url,
+         v.sell_price,
          m.model_code, m.title_ro, m.shopify_title,
          b.name AS brand_name,
          sc.supplier_product_code, sc.supplier_barcode
