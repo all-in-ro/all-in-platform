@@ -1191,28 +1191,49 @@ function StatCard({
   active?: boolean;
 }) {
   const toneClass = tone === "green"
-    ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/12"
+    ? "border-[#3aa9a5]/28 bg-[#344c55]"
     : tone === "red"
       ? active
-        ? "border-[#ff6b78] bg-[#e3132c] shadow-[0_10px_26px_rgba(227,19,44,0.34)] ring-1 ring-[#ff8a94]/30"
-        : "border-[#ff5a68] bg-[#d81028] shadow-[0_8px_22px_rgba(216,16,40,0.24)] hover:bg-[#e3132c] hover:border-[#ff7682]"
+        ? "border-[#ff6574] bg-[#e3132c] shadow-[0_12px_28px_rgba(227,19,44,0.28)] ring-1 ring-[#ff8a94]/25"
+        : "border-[#ff5969] bg-[#d81028] shadow-[0_10px_24px_rgba(216,16,40,0.22)] hover:border-[#ff7b87] hover:bg-[#e3132c]"
       : tone === "blue"
-        ? "border-sky-300/30 bg-sky-500/10"
-        : "border-white/18 bg-white/[0.06]";
+        ? "border-[#7fb7d1]/26 bg-[#36495a]"
+        : "border-white/14 bg-[#3a4557]";
+
+  const accentClass = tone === "red"
+    ? "bg-white/85"
+    : tone === "green"
+      ? "bg-[#70d7d2]"
+      : tone === "blue"
+        ? "bg-[#8fc8de]"
+        : "bg-white/28";
+
+  const iconClass = tone === "red"
+    ? "border-white/28 bg-white/[0.12] text-white"
+    : tone === "green"
+      ? "border-[#7de3de]/24 bg-[#2a8d8b]/14 text-[#bdf8f5]"
+      : tone === "blue"
+        ? "border-sky-200/18 bg-sky-300/8 text-sky-100/85"
+        : "border-white/12 bg-white/[0.055] text-white/66";
 
   const content = (
     <>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className={tone === "red" ? "text-xs text-white/84" : "text-xs text-white/62"}>{label}</div>
-          <div className="mt-2 text-2xl font-semibold leading-none text-white">{value}</div>
+      <span className={`absolute bottom-3 left-0 top-3 w-[3px] rounded-r-full ${accentClass}`} />
+      <div className="flex items-start justify-between gap-3 pl-1">
+        <div className="min-w-0">
+          <div className={tone === "red" ? "text-[11px] leading-tight text-white/92" : "text-[11px] leading-tight text-white/64"}>{label}</div>
+          <div className="mt-2 text-[27px] font-medium leading-none tracking-[-0.02em] text-white">{value}</div>
         </div>
-        {icon ? <div className={`rounded-xl border p-2 ${tone === "red" ? "border-white/26 bg-white/[0.12] text-white" : "border-white/16 bg-white/[0.08] text-white/78"}`}>{icon}</div> : null}
+        {icon ? <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border ${iconClass}`}>{icon}</div> : null}
       </div>
-      {hint ? <div className={tone === "red" ? "mt-2 text-xs text-white/78" : "mt-2 text-xs text-white/58"}>{hint}</div> : null}
-      {onClick ? <div className="mt-2 text-[10px] uppercase tracking-[0.08em] text-white/68">{active ? "Szűrés aktív · kattints a kikapcsoláshoz" : "Kattints a hiányzó termékekhez"}</div> : null}
+      <div className={`mt-3 border-t pt-2 pl-1 ${tone === "red" ? "border-white/18" : "border-white/8"}`}>
+        {hint ? <div className={tone === "red" ? "text-[11px] text-white/82" : "text-[11px] text-white/52"}>{hint}</div> : null}
+        {onClick ? <div className="mt-1 text-[9px] uppercase tracking-[0.09em] text-white/70">{active ? "Szűrés aktív · kattints a kikapcsoláshoz" : "Kattints a hiányzó termékekhez"}</div> : null}
+      </div>
     </>
   );
+
+  const baseClass = `relative min-h-[132px] overflow-hidden rounded-[18px] border px-3.5 py-3 text-left shadow-[0_8px_20px_rgba(15,23,42,0.14)] transition-all ${toneClass}`;
 
   if (onClick) {
     return (
@@ -1220,14 +1241,14 @@ function StatCard({
         type="button"
         onClick={onClick}
         aria-pressed={active}
-        className={`w-full rounded-2xl border p-4 text-left transition-all focus:outline-none focus:ring-2 focus:ring-[#ff8a94]/45 ${toneClass}`}
+        className={`w-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#ff8a94]/40 ${baseClass}`}
       >
         {content}
       </button>
     );
   }
 
-  return <div className={`rounded-2xl border p-4 ${toneClass}`}>{content}</div>;
+  return <div className={baseClass}>{content}</div>;
 }
 
 function HoverZoomImage({ src, title }: { src?: string | null; title: string }) {
@@ -2815,7 +2836,7 @@ export default function AllInInventory() {
                       </button>
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
-                        <button className={headerBtnSoft} type="button" onClick={() => void downloadArchiveCsv(count.id)} disabled={saving}><Download size={13} /> CSV</button>
+                        <button className={headerBtnSoft} type="button" disabled title="Hamarosan Excel export"><Download size={13} /> CSV</button>
                         <button className={headerBtnSoft} type="button" onClick={() => void printArchivePdf(count.id)} disabled={saving}><Printer size={13} /> PDF</button>
                       </div>
                     </div>
@@ -2852,7 +2873,7 @@ export default function AllInInventory() {
               <div className="flex flex-wrap gap-2">
                 <button className={btnSoft} type="button" onClick={() => printPdf("sheet")}><Printer size={15} /> Leltárív PDF</button>
                 <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><Download size={15} /> Eredmény PDF</button>
-                {openingDetail ? <button className={btnSoft} type="button" onClick={() => downloadOpeningCsv(openingDetail)}><Download size={15} /> CSV</button> : null}
+                {openingDetail ? <button className={btnSoft} type="button" disabled title="Hamarosan Excel export"><Download size={15} /> CSV</button> : null}
                 {!activeFinal ? <button className={btnSoft} type="button" onClick={openShopView}><Eye size={15} /> Bolti nézet</button> : null}
                 {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés{dirtyLineIds.length ? ` (${dirtyLineIds.length})` : ""}</button> : null}
                 {canEditActive ? <button className={primaryBtn} type="button" onClick={commitCount} disabled={saving}><ClipboardCheck size={15} /> Beolvasás lezárása</button> : null}
