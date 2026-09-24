@@ -5,7 +5,6 @@ import {
   Banknote,
   Barcode,
   CheckCircle2,
-  ClipboardCheck,
   Clock3,
   CreditCard,
   Landmark,
@@ -515,13 +514,6 @@ export default function AllInMagazinSale({
     setAdministrationAccessOpen(true);
   }
 
-  function openOpeningInventory() {
-    try {
-      window.sessionStorage.setItem("allin:opening-inventory:location", locationCode);
-    } catch {}
-    window.location.hash = "openinginventoryshop";
-  }
-
   async function unlockAdministration(rawValue = administrationCode) {
     if (administrationBusy || administrationUnlockingRef.current) return;
     const code = normalizeEmployeeAccessCode(rawValue);
@@ -908,13 +900,6 @@ export default function AllInMagazinSale({
                   <ShieldCheck size={18} /> Adminisztráció
                 </button>
               ) : null}
-              <button
-                type="button"
-                onClick={openOpeningInventory}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/42 bg-[#2a8d8b]/24 px-4 text-sm text-white transition hover:border-[#9be9e5]/70 hover:bg-[#2a8d8b]/38 active:scale-[0.98]"
-              >
-                <ClipboardCheck size={18} /> Leltározás
-              </button>
               <button
                 type="button"
                 onClick={() => void onLogout?.()}
