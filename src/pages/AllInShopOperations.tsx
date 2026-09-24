@@ -385,6 +385,20 @@ function shiftPayment(snapshot: AifShopShiftSnapshot | null | undefined, method:
   };
 }
 
+function shiftCollectedTotal(snapshot: AifShopShiftSnapshot | null | undefined) {
+  return ["cash", "card", "bank_transfer"].reduce(
+    (sum, method) => sum + numberValue(shiftPayment(snapshot, method).amount),
+    0,
+  );
+}
+
+function shiftCustomerPaymentTotal(snapshot: AifShopShiftSnapshot | null | undefined) {
+  return ["cash", "card", "bank_transfer"].reduce(
+    (sum, method) => sum + numberValue(shiftPayment(snapshot, method).customerPaymentAmount),
+    0,
+  );
+}
+
 function shiftStatusLabel(status?: string | null) {
   if (status === "accepted") return "Átvéve";
   if (status === "cancelled") return "Visszavonva";
@@ -2003,8 +2017,11 @@ export default function AllInShopOperations({
                           <p className="mt-1 text-sm text-white/55">Minden dolgozó együtt • {formatDate(summaryDate)}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Eladási forgalom</p>
-                          <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftData?.totals.revenue || 0)}</p>
+                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi befolyt összeg</p>
+                          <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(shiftData?.totals))}</p>
+                          <p className="mt-1 text-[9px] text-white/38">
+                            Eladás {formatMoney(shiftData?.totals.revenue || 0)} • Tartozásrendezés {formatMoney(shiftCustomerPaymentTotal(shiftData?.totals))}
+                          </p>
                         </div>
                       </div>
 
@@ -2032,7 +2049,13 @@ export default function AllInShopOperations({
                         <UserRound size={22} className="text-[#8ee6e2]" />
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2">
-                        <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladási forgalom</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(currentEmployeeDay?.revenue || 0)}</p></div>
+                        <div className="rounded-xl border border-white/10 bg-black/10 p-2.5">
+                          <p className="text-[9px] text-white/38">Befolyt összeg</p>
+                          <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(shiftCollectedTotal(currentEmployeeDay))}</p>
+                          {shiftCustomerPaymentTotal(currentEmployeeDay) > 0.005 ? (
+                            <p className="mt-1 text-[8px] text-[#bdf8f5]/60">ebből tartozás {formatMoney(shiftCustomerPaymentTotal(currentEmployeeDay))}</p>
+                          ) : null}
+                        </div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-sm">{currentEmployeeDay?.transactions || 0}</p></div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-sm">{currentEmployeeDay?.itemsSold || 0}</p></div>
                       </div>
@@ -2064,8 +2087,11 @@ export default function AllInShopOperations({
                                 </div>
                                 {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white">Te</span> : null}
                               </div>
-                              <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
-                              <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Eladási forgalom</p>
+                              <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(employee))}</p>
+                              <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Befolyt összeg</p>
+                              <p className="mt-1 text-[9px] text-white/36">
+                                Eladás {formatMoney(employee.revenue)}{shiftCustomerPaymentTotal(employee) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(employee))}` : ""}
+                              </p>
                               <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                                 <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
                                   <p className="text-white/40">Készpénz</p>
@@ -2106,7 +2132,7 @@ export default function AllInShopOperations({
                               </div>
                               <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
                                 {[
-                                  ["Műszak forgalma", formatMoney(item.snapshot?.shift?.revenue || 0)],
+                                  ["Műszak befolyt", formatMoney(shiftCollectedTotal(item.snapshot?.shift))],
                                   ["Műszak KP", formatMoney(shiftPayment(item.snapshot?.shift, "cash").amount)],
                                   ["Műszak kártya", formatMoney(shiftPayment(item.snapshot?.shift, "card").amount)],
                                   ["Átadandó KP", formatMoney(item.expectedCash)],
@@ -2678,7 +2704,11 @@ export default function AllInShopOperations({
                   <div className="rounded-[22px] border border-[#9be9e5]/25 bg-[#263345] p-4">
                     <p className="text-[10px] uppercase tracking-[0.13em] text-[#bdf8f5]/55">Amit most lezársz</p>
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Műszak forgalma</p><p className="mt-1 text-base text-[#d7fffd]">{formatMoney(handoverShiftPreview?.revenue || 0)}</p></div>
+                      <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                        <p className="text-[9px] text-white/38">Műszak befolyt összeg</p>
+                        <p className="mt-1 text-base text-[#d7fffd]">{formatMoney(shiftCollectedTotal(handoverShiftPreview))}</p>
+                        <p className="mt-1 text-[8px] text-white/36">Eladás {formatMoney(handoverShiftPreview?.revenue || 0)}{shiftCustomerPaymentTotal(handoverShiftPreview) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(handoverShiftPreview))}` : ""}</p>
+                      </div>
                       <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-base">{handoverShiftPreview?.transactions || 0}</p></div>
                       <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-base">{handoverShiftPreview?.itemsSold || 0}</p></div>
                     </div>
