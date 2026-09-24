@@ -899,13 +899,6 @@ export default function AllInMagazinSale({
                   {role === "admin" ? <span className="text-white/45">• admin előnézet</span> : null}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={openOpeningInventory}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/42 bg-[#2a8d8b]/24 px-4 text-sm text-white transition hover:border-[#9be9e5]/70 hover:bg-[#2a8d8b]/38 active:scale-[0.98]"
-              >
-                <ClipboardCheck size={18} /> Leltározás
-              </button>
               {administrationEnabled ? (
                 <button
                   type="button"
@@ -915,6 +908,13 @@ export default function AllInMagazinSale({
                   <ShieldCheck size={18} /> Adminisztráció
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={openOpeningInventory}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/42 bg-[#2a8d8b]/24 px-4 text-sm text-white transition hover:border-[#9be9e5]/70 hover:bg-[#2a8d8b]/38 active:scale-[0.98]"
+              >
+                <ClipboardCheck size={18} /> Leltározás
+              </button>
               <button
                 type="button"
                 onClick={() => void onLogout?.()}
@@ -1018,7 +1018,7 @@ export default function AllInMagazinSale({
                           {productCode(item)}
                         </span>
                         <span className="rounded-full border border-[#7bd7d4]/28 bg-[#2a8d8b]/20 px-2 py-1 text-[10px] text-[#d7fffd]">
-                          {item.openingInventorySaleBridge ? "Nyitó leltár • eladható" : `${numberValue(item.availableQty)} db`}
+                          {item.openingInventorySaleBridge ? "Leltár • eladható" : `${numberValue(item.availableQty)} db`}
                         </span>
                       </span>
                       <span className="mt-2 block text-lg text-[#d7fffd]">{formatMoney(numberValue(item.sellPrice))}</span>
