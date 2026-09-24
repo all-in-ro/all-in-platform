@@ -290,14 +290,16 @@ export default function AllInOpeningInventoryShop({
                     <h2 className="mt-1 truncate text-lg font-normal">{lastLine.product.title}</h2>
                     <p className="mt-1 truncate text-xs text-white/58">{productMeta(lastLine) || "–"}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-[128px] rounded-2xl border border-white/18 bg-[#283446] px-4 py-3 text-center">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladási ár</div>
-                      <div className="mt-1 text-xl text-[#d7fffd]">{lastLine.product.sellPrice == null ? "–" : formatMoney(lastLine.product.sellPrice)}</div>
-                    </div>
+                  <div className="flex items-center gap-3">
                     <div className="rounded-2xl border border-white/18 bg-white/[0.08] px-5 py-3 text-center">
                       <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Talált</div>
                       <div className="mt-1 text-3xl">{lastLine.countedQty} <span className="text-sm text-white/55">db</span></div>
+                    </div>
+                    <div className="min-w-[128px] border-l border-white/10 pl-3">
+                      <div className="rounded-2xl border border-white/18 bg-[#283446] px-4 py-3 text-center">
+                        <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladási ár</div>
+                        <div className="mt-1 text-xl text-[#d7fffd]">{lastLine.product.sellPrice == null ? "–" : formatMoney(lastLine.product.sellPrice)}</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -325,11 +327,7 @@ export default function AllInOpeningInventoryShop({
                       <p className="mt-1 truncate text-[11px] text-white/48">{productMeta(line) || "–"}</p>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-3 sm:flex-nowrap">
-                      <div className="min-w-[124px] rounded-xl border border-[#8ce7e2]/16 bg-[#263244]/72 px-3 py-2 text-center">
-                        <div className="text-[9px] uppercase tracking-[0.1em] text-white/38">Eladási ár</div>
-                        <div className="mt-1 whitespace-nowrap text-sm text-[#d7fffd]">{line.product.sellPrice == null ? "–" : formatMoney(line.product.sellPrice)}</div>
-                      </div>
-                      <div className="flex items-center gap-2 sm:border-l sm:border-white/10 sm:pl-3">
+                      <div className="flex items-center gap-2">
                         {editable ? (
                           <button type="button" disabled={editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
                         ) : null}
@@ -337,6 +335,12 @@ export default function AllInOpeningInventoryShop({
                         {editable ? (
                           <button type="button" disabled={editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
                         ) : null}
+                      </div>
+                      <div className="min-w-[136px] sm:border-l sm:border-white/10 sm:pl-3">
+                        <div className="rounded-xl border border-[#8ce7e2]/16 bg-[#263244]/72 px-3 py-2 text-center">
+                          <div className="text-[9px] uppercase tracking-[0.1em] text-white/38">Eladási ár</div>
+                          <div className="mt-1 whitespace-nowrap text-sm text-[#d7fffd]">{line.product.sellPrice == null ? "–" : formatMoney(line.product.sellPrice)}</div>
+                        </div>
                       </div>
                     </div>
                   </div>
