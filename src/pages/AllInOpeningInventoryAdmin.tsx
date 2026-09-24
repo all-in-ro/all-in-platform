@@ -10,11 +10,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Download,
   Eye,
   History,
   Loader2,
   PackageSearch,
   Play,
+  Printer,
   RefreshCw,
   RotateCcw,
   Search,
@@ -44,6 +46,7 @@ type ConfirmAction = "close" | "reopen" | "apply" | "cancel" | null;
 type InventoryMode = "standard" | "recovery";
 
 const LOCATION_STORAGE_KEY = "allin:opening-inventory:location";
+const ARCHIVE_PAGE_SIZE = 12;
 
 function n(value: unknown) {
   const parsed = Number(value ?? 0);
@@ -96,6 +99,233 @@ function lineStatusLabel(line: AifOpeningInventoryAdminLine, mode: InventoryMode
   return "MÉG NEM SZÁMOLT";
 }
 
+
+
+function inventoryModeOf(session?: AifOpeningInventorySession | null): InventoryMode {
+  return (session?.inventory_mode || session?.inventoryMode) === "standard" ? "standard" : "recovery";
+}
+
+function inventoryModeLabel(mode: InventoryMode) {
+  return mode === "recovery" ? "Helyreállító leltár" : "Rendes leltár";
+}
+
+function safeFilePart(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 90) || "leltar";
+}
+
+function csvCell(value: unknown) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadInventoryCsv(full: AifOpeningInventoryAdminDetail) {
+  const session = full.session;
+  const summary = full.summary;
+  const mode = inventoryModeOf(session);
+  const missingLabel = mode === "recovery" ? "Biztos hiány" : "Hiány";
+  const extraLabel = mode === "recovery" ? "Régi / nem nyilvántartott" : "Többlet";
+  const expectedLabel = mode === "recovery" ? "Igazolható minimum" : "Elvárt";
+
+  const rows: unknown[][] = [
+    ["ALL IN - Üzleti leltár"],
+    ["Kód", session.code],
+    ["Helyszín", session.location_name || session.location?.name || ""],
+    ["Állapot", statusLabel(session.status)],
+    ["Típus", inventoryModeLabel(mode)],
+    ["Indítva", formatDateTime(session.started_at || session.startedAt || session.created_at)],
+    ["Beolvasás lezárva", formatDateTime(session.counting_closed_at)],
+    ["Készletre alkalmazva", formatDateTime(session.applied_at)],
+    ["Megjegyzés", session.note || ""],
+    [],
+    ["Összesítő"],
+    ["Leltár szerint most", `${qty(summary.counted_qty)} db`],
+    [expectedLabel, `${qty(summary.known_min_qty)} db`],
+    [missingLabel, `${qty(summary.definite_missing_qty)} db`],
+    [extraLabel, `${qty(summary.untracked_qty)} db`],
+    ["Készletkorrekció", `${n(summary.system_correction_qty) > 0 ? "+" : ""}${qty(summary.system_correction_qty)} db`],
+    ["Leltárérték", `${money(summary.counted_retail_value)} RON`],
+    ["Hiány értéke", `${money(summary.definite_missing_retail_value)} RON`],
+    ["Többlet / régi készlet értéke", `${money(summary.untracked_retail_value)} RON`],
+    [],
+    [
+      "Termék",
+      "Márka",
+      "Kategória",
+      "Szín",
+      "Méret",
+      "Termékkód",
+      "Vonalkód",
+      "Belső SKU",
+      "Rendszer induláskor",
+      "Rendszer most",
+      "Igazolt nettó / mozgás",
+      expectedLabel,
+      "Fizikailag számolt",
+      "Leltár szerint most",
+      "Számolás utáni mozgás",
+      missingLabel,
+      extraLabel,
+      "Készletkorrekció",
+      "Eladási ár",
+      "Állapot",
+      "Utolsó beolvasás",
+      "Beolvasta",
+      "Megjegyzés",
+    ],
+  ];
+
+  for (const line of full.lines || []) {
+    rows.push([
+      line.product.title,
+      line.product.brandName || "",
+      line.product.categoryName || "",
+      line.product.colorName || line.product.colorCode || "",
+      line.product.size || "",
+      line.product.productCode || line.product.modelCode || "",
+      line.product.barcode || "",
+      line.product.internalSku || "",
+      qty(line.system_qty_start),
+      qty(line.current_system_qty ?? line.system_qty_start),
+      `${n(line.trusted_net_qty) > 0 ? "+" : ""}${qty(line.trusted_net_qty)}`,
+      qty(line.known_min_qty),
+      line.physical_counted_qty === null || line.physical_counted_qty === undefined ? "" : qty(line.physical_counted_qty),
+      line.counted_qty === null || line.counted_qty === undefined ? "" : qty(line.counted_qty),
+      `${n(line.movement_after_count_qty) > 0 ? "+" : ""}${qty(line.movement_after_count_qty || 0)}`,
+      line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "" : qty(line.definite_missing_qty),
+      line.untracked_qty === null || line.untracked_qty === undefined ? "" : qty(line.untracked_qty),
+      line.system_correction_qty === null || line.system_correction_qty === undefined ? "" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${qty(line.system_correction_qty)}`,
+      money(line.sell_price),
+      lineStatusLabel(line, mode),
+      formatDateTime(line.last_scanned_at),
+      line.last_scanned_by || "",
+      line.note || "",
+    ]);
+  }
+
+  const unresolved = (full.unknown || []).filter((item) => !item.resolved_at && n(item.qty) > 0);
+  if (unresolved.length) {
+    rows.push([], ["Ellenőrzendő / ismeretlen kódok"], ["Kód", "Darab", "Utolsó beolvasás", "Beolvasta"]);
+    for (const item of unresolved) {
+      rows.push([item.scan_code, qty(item.qty), formatDateTime(item.last_scanned_at), item.last_scanned_by || ""]);
+    }
+  }
+
+  const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(";")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const date = String(session.started_at || session.created_at || "").slice(0, 10) || localDateInput();
+  anchor.href = url;
+  anchor.download = `${safeFilePart(session.location_name || session.location?.name)}_${date}_${safeFilePart(session.code)}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function writeInventoryPrintReport(target: Window, full: AifOpeningInventoryAdminDetail) {
+  const session = full.session;
+  const summary = full.summary;
+  const mode = inventoryModeOf(session);
+  const missingLabel = mode === "recovery" ? "Biztos hiány" : "Hiány";
+  const extraLabel = mode === "recovery" ? "Régi / nem nyilvántartott" : "Többlet";
+  const expectedLabel = mode === "recovery" ? "Igazolható minimum" : "Elvárt";
+  const lineRows = (full.lines || []).map((line, index) => {
+    const counted = line.counted_qty === null || line.counted_qty === undefined ? "–" : qty(line.counted_qty);
+    const missing = line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "–" : qty(line.definite_missing_qty);
+    const extra = line.untracked_qty === null || line.untracked_qty === undefined ? "–" : qty(line.untracked_qty);
+    const correction = line.system_correction_qty === null || line.system_correction_qty === undefined
+      ? "–"
+      : `${n(line.system_correction_qty) > 0 ? "+" : ""}${qty(line.system_correction_qty)}`;
+    return `<tr>
+      <td class="center">${index + 1}</td>
+      <td><strong>${escapeHtml(line.product.title)}</strong><br><span>${escapeHtml([line.product.brandName, line.product.colorName, line.product.size].filter(Boolean).join(" • "))}</span><br><span>${escapeHtml([line.product.productCode, line.product.barcode].filter(Boolean).join(" • "))}</span></td>
+      <td class="right">${escapeHtml(qty(line.current_system_qty ?? line.system_qty_start))}</td>
+      <td class="right">${escapeHtml(qty(line.known_min_qty))}</td>
+      <td class="right">${escapeHtml(counted)}</td>
+      <td class="right neg">${escapeHtml(missing)}</td>
+      <td class="right pos">${escapeHtml(extra)}</td>
+      <td class="right">${escapeHtml(correction)}</td>
+      <td>${escapeHtml(lineStatusLabel(line, mode))}</td>
+      <td>${escapeHtml(formatDateTime(line.last_scanned_at))}<br><span>${escapeHtml(line.last_scanned_by || "")}</span></td>
+    </tr>`;
+  }).join("");
+
+  const unknownRows = (full.unknown || [])
+    .filter((item) => !item.resolved_at && n(item.qty) > 0)
+    .map((item) => `<tr><td>${escapeHtml(item.scan_code)}</td><td class="right">${escapeHtml(qty(item.qty))}</td><td>${escapeHtml(formatDateTime(item.last_scanned_at))}</td><td>${escapeHtml(item.last_scanned_by || "–")}</td></tr>`)
+    .join("");
+
+  const title = `Üzleti leltár - ${session.code}`;
+  const locationName = session.location_name || session.location?.name || "Üzlet";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: #111827; font-size: 10px; }
+    header { display:flex; justify-content:space-between; gap:20px; border-bottom:2px solid #111827; padding-bottom:10px; margin-bottom:10px; }
+    h1 { margin:0; font-size:20px; font-weight:600; }
+    .meta { margin-top:4px; color:#4b5563; line-height:1.45; }
+    .summary { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin:10px 0; }
+    .stat { border:1px solid #cbd5e1; border-radius:8px; padding:7px; }
+    .stat b { display:block; font-size:13px; margin-top:3px; }
+    table { width:100%; border-collapse:collapse; }
+    th { background:#1f2937; color:#fff; padding:6px; border:1px solid #1f2937; text-align:left; font-size:9px; }
+    td { padding:5px; border:1px solid #d1d5db; vertical-align:top; }
+    tr:nth-child(even) td { background:#f8fafc; }
+    .right { text-align:right; white-space:nowrap; }
+    .center { text-align:center; }
+    .neg { color:#b91c1c; }
+    .pos { color:#047857; }
+    span { color:#6b7280; font-size:8px; }
+    h2 { font-size:13px; margin:14px 0 6px; }
+    .note { margin-top:8px; border:1px solid #d1d5db; padding:7px; border-radius:8px; }
+    footer { margin-top:12px; display:flex; justify-content:space-between; color:#6b7280; font-size:9px; }
+  </style></head><body>
+    <header>
+      <div>
+        <h1>${escapeHtml(title)}</h1>
+        <div class="meta">${escapeHtml(locationName)} • ${escapeHtml(inventoryModeLabel(mode))} • ${escapeHtml(statusLabel(session.status))}</div>
+        <div class="meta">Indítva: ${escapeHtml(formatDateTime(session.started_at || session.startedAt || session.created_at))}${session.applied_at ? ` • Alkalmazva: ${escapeHtml(formatDateTime(session.applied_at))}` : ""}</div>
+      </div>
+      <div class="meta">ALL IN • üzleti készletellenőrzés</div>
+    </header>
+    <div class="summary">
+      <div class="stat">Leltár szerint most<b>${escapeHtml(qty(summary.counted_qty))} db</b></div>
+      <div class="stat">${escapeHtml(expectedLabel)}<b>${escapeHtml(qty(summary.known_min_qty))} db</b></div>
+      <div class="stat">${escapeHtml(missingLabel)}<b>${escapeHtml(qty(summary.definite_missing_qty))} db</b></div>
+      <div class="stat">${escapeHtml(extraLabel)}<b>${escapeHtml(qty(summary.untracked_qty))} db</b></div>
+      <div class="stat">Leltárérték<b>${escapeHtml(money(summary.counted_retail_value))} RON</b></div>
+      <div class="stat">Készletkorrekció<b>${escapeHtml(`${n(summary.system_correction_qty) > 0 ? "+" : ""}${qty(summary.system_correction_qty)} db`)}</b></div>
+    </div>
+    ${session.note ? `<div class="note"><strong>Megjegyzés:</strong> ${escapeHtml(session.note)}</div>` : ""}
+    <h2>Tételes leltár</h2>
+    <table>
+      <thead><tr><th>#</th><th>Termék</th><th class="right">Rendszer most</th><th class="right">${escapeHtml(expectedLabel)}</th><th class="right">Leltár szerint</th><th class="right">${escapeHtml(missingLabel)}</th><th class="right">${escapeHtml(extraLabel)}</th><th class="right">Korrekció</th><th>Állapot</th><th>Utolsó beolvasás</th></tr></thead>
+      <tbody>${lineRows || `<tr><td colspan="10" class="center">Nincs tétel.</td></tr>`}</tbody>
+    </table>
+    ${unknownRows ? `<h2>Ellenőrzendő / ismeretlen kódok</h2><table><thead><tr><th>Kód</th><th class="right">Darab</th><th>Utolsó beolvasás</th><th>Beolvasta</th></tr></thead><tbody>${unknownRows}</tbody></table>` : ""}
+    <footer><span>${escapeHtml(session.code)}</span><span>Nyomtatva: ${escapeHtml(new Date().toLocaleString("hu-HU"))}</span></footer>
+    <script>window.addEventListener("load",()=>setTimeout(()=>window.print(),150));<\/script>
+  </body></html>`;
+
+  target.document.open();
+  target.document.write(html);
+  target.document.close();
+}
 
 type SmartSelectOption = { value: string; label: string };
 
@@ -535,6 +765,9 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
   const [note, setNote] = useState("");
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [archiveBusyId, setArchiveBusyId] = useState("");
 
   const activeSession = useMemo(
     () => sessions.find((item) => ["draft", "counting", "review"].includes(item.status)) || null,
@@ -547,12 +780,51 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
   const detailMode: InventoryMode = (detail?.session.inventory_mode || detail?.session.inventoryMode) === "standard" ? "standard" : "recovery";
   const recoveryMode = detail ? detailMode === "recovery" : inventoryMode === "recovery";
 
+  const filteredHistory = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    if (!query) return sessions;
+    return sessions.filter((item) => {
+      const haystack = [
+        item.code,
+        item.title,
+        item.location_name,
+        item.status,
+        statusLabel(item.status),
+        inventoryModeLabel(inventoryModeOf(item)),
+        item.note,
+        item.started_at,
+        item.created_at,
+        item.applied_at,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [historySearch, sessions]);
+
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / ARCHIVE_PAGE_SIZE));
+  const visibleHistory = useMemo(() => {
+    const start = (historyPage - 1) * ARCHIVE_PAGE_SIZE;
+    return filteredHistory.slice(start, start + ARCHIVE_PAGE_SIZE);
+  }, [filteredHistory, historyPage]);
+
   const loadSessions = useCallback(async (locationValue: string, silent = false) => {
     if (!locationValue) return;
     if (!silent) setLoading(true);
     try {
-      const response = await apiAifListOpeningInventorySessions({ location: locationValue, limit: 30 });
-      const history = response.items || [];
+      const historyMap = new Map<string, AifOpeningInventorySession>();
+      let offset = 0;
+      const limit = 100;
+      for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+        const response = await apiAifListOpeningInventorySessions({ location: locationValue, limit, offset });
+        const pageItems = response.items || [];
+        const before = historyMap.size;
+        for (const item of pageItems) historyMap.set(String(item.id), item);
+        const added = historyMap.size - before;
+        offset += pageItems.length;
+        const total = Number(response.total || 0);
+        const hasMore = response.hasMore === true || (total > 0 && offset < total);
+        if (!pageItems.length || added === 0 || (!hasMore && pageItems.length < limit) || (total > 0 && offset >= total)) break;
+      }
+      const history = Array.from(historyMap.values());
       setSessions(history);
       const active = history.find((item) => ["draft", "counting", "review"].includes(item.status));
       if (!active) {
@@ -615,6 +887,14 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
     setDetail(null);
     void loadSessions(location);
   }, [location]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [location, historySearch]);
+
+  useEffect(() => {
+    if (historyPage > historyTotalPages) setHistoryPage(historyTotalPages);
+  }, [historyPage, historyTotalPages]);
 
   useEffect(() => {
     const id = detail?.session.id || activeSession?.id;
@@ -738,12 +1018,71 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
     window.location.hash = "openinginventoryshop";
   }
 
+  async function getArchiveDetail(item: AifOpeningInventorySession) {
+    if (detail?.session.id === item.id) return detail;
+    return apiAifGetOpeningInventory(item.id);
+  }
+
   function openHistorySession(item: AifOpeningInventorySession) {
     setBusy(true);
-    void apiAifGetOpeningInventory(item.id)
-      .then((response) => { setDetail(response); setNotice(null); })
+    void getArchiveDetail(item)
+      .then((response) => {
+        setDetail(response);
+        setNotice(null);
+        window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+      })
       .catch((error) => setNotice({ tone: "error", text: error instanceof Error ? error.message : "A korábbi leltár nem tölthető be." }))
       .finally(() => setBusy(false));
+  }
+
+  async function downloadHistorySession(item: AifOpeningInventorySession) {
+    if (archiveBusyId) return;
+    setArchiveBusyId(item.id);
+    try {
+      const full = await getArchiveDetail(item);
+      downloadInventoryCsv(full);
+      setNotice({ tone: "success", text: `${item.code} leltár CSV fájlja letöltve.` });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár letöltése nem sikerült." });
+    } finally {
+      setArchiveBusyId("");
+    }
+  }
+
+  async function printHistorySession(item: AifOpeningInventorySession) {
+    if (archiveBusyId) return;
+    const popup = window.open("", "_blank");
+    if (!popup) {
+      setNotice({ tone: "error", text: "A böngésző letiltotta a nyomtatási ablakot. Engedélyezd a felugró ablakokat ennél az oldalnál." });
+      return;
+    }
+
+    setArchiveBusyId(item.id);
+    try {
+      const full = await getArchiveDetail(item);
+      writeInventoryPrintReport(popup, full);
+    } catch (error) {
+      try { popup.close(); } catch {}
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár nyomtatható nézete nem készíthető el." });
+    } finally {
+      setArchiveBusyId("");
+    }
+  }
+
+  function downloadCurrentDetail() {
+    if (!detail) return;
+    downloadInventoryCsv(detail);
+    setNotice({ tone: "success", text: `${detail.session.code} leltár CSV fájlja letöltve.` });
+  }
+
+  function printCurrentDetail() {
+    if (!detail) return;
+    const popup = window.open("", "_blank");
+    if (!popup) {
+      setNotice({ tone: "error", text: "A böngésző letiltotta a nyomtatási ablakot. Engedélyezd a felugró ablakokat ennél az oldalnál." });
+      return;
+    }
+    writeInventoryPrintReport(popup, detail);
   }
 
   const activeDetail = detail && ["draft", "counting", "review"].includes(detail.session.status);
@@ -864,19 +1203,27 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                   <h2 className="mt-2 text-xl font-normal">{detail.session.title}</h2>
                   <p className="mt-1 text-xs text-white/45">{detail.session.location_name || detail.session.location?.name || location} • indítva: {formatDateTime(detail.session.started_at || detail.session.startedAt)}</p>
                 </div>
-                {activeDetail ? (
-                  <div className="flex flex-wrap gap-2">
-                    {detail.session.status === "review" ? (
-                      <button type="button" onClick={() => setConfirmAction("reopen")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-3 text-xs text-white hover:bg-white/[0.09]"><RotateCcw size={15} /> Újranyitás</button>
-                    ) : (
-                      <button type="button" onClick={() => setConfirmAction("close")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-amber-200/30 bg-amber-500/12 px-3 text-xs text-amber-50 hover:bg-amber-500/18"><ClipboardCheck size={15} /> Beolvasás lezárása</button>
-                    )}
-                    {detail.session.status === "review" ? (
-                      <button type="button" onClick={() => setConfirmAction("apply")} disabled={busy || unresolvedUnknown.length > 0} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-3 text-xs text-white hover:bg-[#149b98] disabled:opacity-45"><CheckCircle2 size={15} /> Készlet alkalmazása</button>
-                    ) : null}
-                    <button type="button" onClick={() => setConfirmAction("cancel")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-red-300/32 bg-red-600/18 px-3 text-xs text-red-50 hover:bg-red-600/26"><X size={15} /> Megszakítás</button>
-                  </div>
-                ) : null}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={downloadCurrentDetail} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-3 text-xs text-white hover:border-[#8ce7e2]/30 hover:bg-white/[0.09]">
+                    <Download size={15} /> CSV
+                  </button>
+                  <button type="button" onClick={printCurrentDetail} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-3 text-xs text-white hover:border-[#8ce7e2]/30 hover:bg-white/[0.09]">
+                    <Printer size={15} /> PDF / nyomtatás
+                  </button>
+                  {activeDetail ? (
+                    <>
+                      {detail.session.status === "review" ? (
+                        <button type="button" onClick={() => setConfirmAction("reopen")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-3 text-xs text-white hover:bg-white/[0.09]"><RotateCcw size={15} /> Újranyitás</button>
+                      ) : (
+                        <button type="button" onClick={() => setConfirmAction("close")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-amber-200/30 bg-amber-500/12 px-3 text-xs text-amber-50 hover:bg-amber-500/18"><ClipboardCheck size={15} /> Beolvasás lezárása</button>
+                      )}
+                      {detail.session.status === "review" ? (
+                        <button type="button" onClick={() => setConfirmAction("apply")} disabled={busy || unresolvedUnknown.length > 0} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-3 text-xs text-white hover:bg-[#149b98] disabled:opacity-45"><CheckCircle2 size={15} /> Készlet alkalmazása</button>
+                      ) : null}
+                      <button type="button" onClick={() => setConfirmAction("cancel")} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-red-300/32 bg-red-600/18 px-3 text-xs text-red-50 hover:bg-red-600/26"><X size={15} /> Megszakítás</button>
+                    </>
+                  ) : null}
+                </div>
               </div>
             </section>
 
@@ -990,16 +1337,119 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
         ) : null}
 
         {sessions.length ? (
-          <section className="rounded-[22px] border border-white/14 bg-[#354153] p-3 shadow-lg">
-            <div className="flex items-center gap-2 px-1 pb-2"><History size={15} className="text-white/46" /><span className="text-xs text-white/58">Korábbi / aktuális leltárak</span></div>
-            <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
-              {sessions.slice(0, 9).map((item) => (
-                <button key={item.id} type="button" onClick={() => openHistorySession(item)} className="rounded-xl border border-white/12 bg-white/[0.035] px-3 py-2.5 text-left hover:bg-white/[0.07]">
-                  <div className="flex items-center justify-between gap-2"><span className="truncate text-sm text-white">{item.title}</span><span className="shrink-0 text-[9px] text-white/45">{statusLabel(item.status)}</span></div>
-                  <div className="mt-1 text-[10px] text-white/36">{item.code} • {formatDateTime(item.started_at || item.created_at)}</div>
-                </button>
-              ))}
+          <section className="overflow-hidden rounded-[22px] border border-white/14 bg-[#354153] shadow-lg">
+            <div className="border-b border-white/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/14 text-[#d7fffd]"><History size={17} /></span>
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.13em] text-white/40">Leltár archívum</p>
+                    <h3 className="mt-0.5 text-base font-normal text-white">Minden korábbi és aktuális leltár</h3>
+                  </div>
+                </div>
+                <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/50">
+                  {filteredHistory.length} leltár
+                </span>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                <label className="relative block">
+                  <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" />
+                  <input
+                    value={historySearch}
+                    onChange={(event) => setHistorySearch(event.target.value)}
+                    placeholder="Keresés kód, dátum, állapot vagy megjegyzés alapján…"
+                    className="h-10 w-full rounded-xl border border-white/15 bg-[#293649] pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55"
+                  />
+                </label>
+                <div className="flex items-center justify-end gap-2 text-[10px] text-white/45">
+                  <span>{historyPage} / {historyTotalPages}</span>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                    disabled={historyPage <= 1}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.09] disabled:opacity-35"
+                    aria-label="Előző oldal"
+                  >
+                    <ChevronLeft size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryPage((page) => Math.min(historyTotalPages, page + 1))}
+                    disabled={historyPage >= historyTotalPages}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.09] disabled:opacity-35"
+                    aria-label="Következő oldal"
+                  >
+                    <ChevronRight size={15} />
+                  </button>
+                </div>
+              </div>
             </div>
+
+            <div className="grid gap-2 p-3 lg:grid-cols-2 xl:grid-cols-3">
+              {visibleHistory.map((item) => {
+                const itemMode = inventoryModeOf(item);
+                const lineCount = n((item as any).line_count);
+                const countedLines = n((item as any).counted_lines);
+                const countedQty = n((item as any).counted_qty);
+                const selected = detail?.session.id === item.id;
+                const itemBusy = archiveBusyId === item.id;
+                return (
+                  <article key={item.id} className={`rounded-[18px] border p-3 transition ${selected ? "border-[#8ce7e2]/45 bg-[#108D8B]/10 shadow-[0_8px_22px_rgba(16,141,139,0.12)]" : "border-white/12 bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.055]"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="rounded-lg border border-white/12 bg-black/10 px-2 py-1 font-mono text-[9px] text-white/55">{item.code}</span>
+                          <span className={`rounded-lg border px-2 py-1 text-[9px] ${item.status === "applied" ? "border-[#8ce7e2]/28 bg-[#108D8B]/14 text-[#d7fffd]" : item.status === "cancelled" ? "border-red-300/25 bg-red-500/10 text-red-50" : item.status === "review" ? "border-amber-200/26 bg-amber-500/10 text-amber-50" : "border-sky-200/22 bg-sky-500/8 text-sky-50"}`}>
+                            {statusLabel(item.status)}
+                          </span>
+                          <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] text-white/50">{itemMode === "recovery" ? "HELYREÁLLÍTÓ" : "RENDES"}</span>
+                        </div>
+                        <h4 className="mt-2 truncate text-sm text-white" title={item.title}>{item.title}</h4>
+                        <p className="mt-1 text-[10px] text-white/40">{formatDateTime(item.started_at || item.created_at)}</p>
+                        <p className="mt-2 text-[10px] text-white/48">
+                          {lineCount > 0 ? `${qty(countedLines)} / ${qty(lineCount)} tétel számolva` : "Tételszám betöltése…"}
+                          {countedQty > 0 ? ` • ${qty(countedQty)} db` : ""}
+                        </p>
+                        {item.note ? <p className="mt-1 truncate text-[10px] text-white/34" title={item.note}>{item.note}</p> : null}
+                      </div>
+                      {selected ? <span className="shrink-0 rounded-full border border-[#8ce7e2]/28 bg-[#108D8B]/18 px-2 py-1 text-[9px] text-[#d7fffd]">MEGNYITVA</span> : null}
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-3 gap-1.5 border-t border-white/9 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => openHistorySession(item)}
+                        disabled={busy || itemBusy}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/30 bg-[#108D8B]/14 px-2 text-[10px] text-[#d7fffd] transition hover:bg-[#108D8B]/24 disabled:opacity-45"
+                      >
+                        {busy && selected ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />} Átnézés
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void downloadHistorySession(item)}
+                        disabled={Boolean(archiveBusyId)}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-2 text-[10px] text-white/72 transition hover:border-[#8ce7e2]/25 hover:bg-white/[0.09] disabled:opacity-45"
+                      >
+                        {itemBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void printHistorySession(item)}
+                        disabled={Boolean(archiveBusyId)}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-2 text-[10px] text-white/72 transition hover:border-[#8ce7e2]/25 hover:bg-white/[0.09] disabled:opacity-45"
+                      >
+                        <Printer size={13} /> PDF
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {!visibleHistory.length ? (
+              <div className="border-t border-white/10 px-4 py-10 text-center text-sm text-white/40">Nincs találat az archívumban.</div>
+            ) : null}
           </section>
         ) : null}
       </div>
