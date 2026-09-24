@@ -1,21 +1,21 @@
 import express from "express";
 
 /**
- * ALL IN - opening / recovery inventory
+ * ALL IN - store inventory / physical stock count
  *
- * This module is intentionally separate from the normal inventory-count flow.
- * It exists for a one-time migration situation where the physical stock is the
- * final truth, while the location's current database stock is known to be only
- * partially reliable.
+ * This flow is reusable for both stores. It supports:
+ * - a normal recurring inventory where the current system stock is the expected baseline;
+ * - a recovery inventory for the first large cleanup when historical store stock is incomplete.
  *
  * Rules:
  * - shop staff count blindly; expected/system quantities are never returned by shop endpoints;
- * - the manager sees the live result and the conservative "known minimum";
- * - applying the inventory overwrites the location stock only after review;
- * - every stock correction is logged through insertStockMovementSafe;
- * - normal sales and stock movements may continue while counting;
- * - movements after a product's last count are replayed onto that physical count,
- *   so a multi-day inventory does not resurrect items sold in the meantime.
+ * - the manager sees the live comparison and discrepancies;
+ * - sales and stock movements may continue while counting, even for several days;
+ * - movements after a product's last count are replayed onto that physical count;
+ * - applying the inventory updates stock only after manager review and logs every correction.
+ *
+ * The existing aif_opening_inventory_* table names are intentionally kept for
+ * backward compatibility with already-created production tables.
  */
 export default function createAifOpeningInventoryRouter({
   pool,
@@ -65,7 +65,7 @@ export default function createAifOpeningInventoryRouter({
   function sessionCode() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, "0");
-    return `OPEN-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    return `INV-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
   }
 
   function openingStatus(value) {
@@ -108,6 +108,7 @@ export default function createAifOpeningInventoryRouter({
           location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
           title text NOT NULL,
           status text NOT NULL DEFAULT 'draft',
+          inventory_mode text NOT NULL DEFAULT 'recovery',
           sales_trusted_from date NOT NULL,
           legacy_retail_value numeric(16,2) NULL,
           baseline_at timestamptz NOT NULL DEFAULT now(),
@@ -126,6 +127,15 @@ export default function createAifOpeningInventoryRouter({
           CHECK (status IN ('draft','counting','review','applied','cancelled')),
           CHECK (legacy_retail_value IS NULL OR legacy_retail_value >= 0)
         )`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_opening_inventory_sessions
+          ADD COLUMN IF NOT EXISTS inventory_mode text NOT NULL DEFAULT 'recovery'`);
+        await pool.query(`UPDATE aif_opening_inventory_sessions
+          SET inventory_mode='standard'
+          WHERE lower(COALESCE(raw->>'mode','')) IN ('standard','standard_inventory','regular_inventory')
+            AND inventory_mode IS DISTINCT FROM 'standard'`);
+        await pool.query(`UPDATE aif_opening_inventory_sessions
+          SET inventory_mode='recovery'
+          WHERE inventory_mode IS NULL OR inventory_mode NOT IN ('recovery','standard')`);
         await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_opening_inventory_one_active_location_uq
           ON aif_opening_inventory_sessions (location_id)
           WHERE status IN ('draft','counting','review')`);
@@ -313,6 +323,58 @@ export default function createAifOpeningInventoryRouter({
   }
 
   async function preloadSessionLines(client, session) {
+    const mode = String(session?.inventory_mode || "recovery").toLowerCase();
+
+    if (mode === "standard") {
+      const result = await client.query(
+        `SELECT
+           v.id AS variant_id,
+           COALESCE(cs.qty,0)::numeric AS system_qty_start,
+           COALESCE(cs.reserved_qty,0)::numeric AS system_reserved_start,
+           0::numeric AS trusted_net_qty,
+           0::numeric AS trusted_in_qty,
+           0::numeric AS trusted_out_qty,
+           GREATEST(COALESCE(cs.qty,0),0)::numeric AS known_min_qty,
+           v.buy_price,
+           v.sell_price
+         FROM aif_product_variants v
+         JOIN aif_stock cs ON cs.variant_id=v.id AND cs.location_id=$1
+         WHERE COALESCE(v.status,'active') <> 'archived'
+           AND (COALESCE(cs.qty,0) <> 0 OR COALESCE(cs.reserved_qty,0) <> 0)`,
+        [session.location_id],
+      );
+
+      for (const row of result.rows) {
+        await client.query(
+          `INSERT INTO aif_opening_inventory_lines (
+             session_id, variant_id, system_qty_start, system_reserved_start,
+             trusted_net_qty, trusted_in_qty, trusted_out_qty, known_min_qty,
+             buy_price, sell_price, raw
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
+           ON CONFLICT (session_id, variant_id) DO NOTHING`,
+          [
+            session.id,
+            row.variant_id,
+            row.system_qty_start,
+            row.system_reserved_start,
+            row.trusted_net_qty,
+            row.trusted_in_qty,
+            row.trusted_out_qty,
+            row.known_min_qty,
+            row.buy_price,
+            row.sell_price,
+            JSON.stringify({
+              baseline: true,
+              baselineAt: session.baseline_at,
+              inventoryMode: "standard",
+              expectedSource: "system_stock_at_start",
+            }),
+          ],
+        );
+      }
+      return result.rowCount || 0;
+    }
+
     const result = await client.query(
       `WITH trusted AS (
          SELECT
@@ -370,7 +432,12 @@ export default function createAifOpeningInventoryRouter({
           row.known_min_qty,
           row.buy_price,
           row.sell_price,
-          JSON.stringify({ baseline: true, baselineAt: session.baseline_at, salesTrustedFrom: session.sales_trusted_from }),
+          JSON.stringify({
+            baseline: true,
+            baselineAt: session.baseline_at,
+            inventoryMode: "recovery",
+            salesTrustedFrom: session.sales_trusted_from,
+          }),
         ],
       );
     }
@@ -391,7 +458,8 @@ export default function createAifOpeningInventoryRouter({
          jsonb_build_object(
            'baseline', false,
            'discoveredDuringSession', true,
-           'baselineAt', $3::text
+           'baselineAt', $3::text,
+           'inventoryMode', COALESCE($4::text,'recovery')
          )
        FROM aif_product_variants v
        WHERE COALESCE(v.status,'active') <> 'archived'
@@ -428,7 +496,7 @@ export default function createAifOpeningInventoryRouter({
            )
          )
        ON CONFLICT (session_id, variant_id) DO NOTHING`,
-      [session.id, session.location_id, session.baseline_at],
+      [session.id, session.location_id, session.baseline_at, session.inventory_mode || "recovery"],
     );
     return inserted.rowCount || 0;
   }
@@ -618,6 +686,7 @@ export default function createAifOpeningInventoryRouter({
       untracked_qty: 0,
       system_correction_qty: 0,
       counted_retail_value: 0,
+      comparison_retail_value: 0,
       trusted_net_retail_value: 0,
       definite_missing_retail_value: 0,
       untracked_retail_value: 0,
@@ -643,6 +712,7 @@ export default function createAifOpeningInventoryRouter({
       summary.live_out_qty += Number(line.live_out_qty || 0);
       if (Math.abs(Number(line.live_net_qty || 0)) > 0.0001) summary.live_movement_lines += 1;
       summary.trusted_net_retail_value += Number(line.trusted_net_qty || 0) * sell;
+      summary.comparison_retail_value += Number(line.known_min_qty || 0) * sell;
       if (counted === null) {
         summary.unseen_known_min_qty += Number(line.known_min_qty || 0);
         continue;
@@ -663,6 +733,7 @@ export default function createAifOpeningInventoryRouter({
     summary.unknown_qty = unresolved.reduce((sum, item) => sum + Number(item.qty || 0), 0);
     for (const key of [
       "counted_retail_value",
+      "comparison_retail_value",
       "trusted_net_retail_value",
       "definite_missing_retail_value",
       "untracked_retail_value",
@@ -694,14 +765,20 @@ export default function createAifOpeningInventoryRouter({
       loadUnknown(client, session.id),
     ]);
     const summary = summarizeAdminLines(lines, unknown);
+    const mode = String(session?.inventory_mode || "recovery").toLowerCase();
     const legacy = numberOrNull(session.legacy_retail_value);
     const trustedRetail = Number(summary.trusted_net_retail_value || 0);
     const countedRetail = Number(summary.counted_retail_value || 0);
-    const bookExpected = legacy === null ? null : legacy + trustedRetail;
+    const bookExpected = mode === "standard"
+      ? Number(summary.comparison_retail_value || 0)
+      : legacy === null
+        ? null
+        : legacy + trustedRetail;
     return {
       session,
       summary: {
         ...summary,
+        inventory_mode: mode,
         legacy_retail_value: legacy,
         book_expected_retail_value: bookExpected,
         book_diff_retail_value: bookExpected === null ? null : countedRetail - bookExpected,
@@ -718,6 +795,8 @@ export default function createAifOpeningInventoryRouter({
       code: session.code,
       title: session.title,
       status: session.status,
+      inventoryMode: session.inventory_mode || "recovery",
+      inventory_mode: session.inventory_mode || "recovery",
       location: {
         id: String(session.location_id),
         code: session.location_code,
@@ -795,7 +874,7 @@ export default function createAifOpeningInventoryRouter({
        ) VALUES ($1,$2,0,0,0,0,0,0,$3,$4,$5::jsonb)
        ON CONFLICT (session_id, variant_id) DO UPDATE SET updated_at=now()
        RETURNING *`,
-      [session.id, variant.variant_id, variant.buy_price, variant.sell_price, JSON.stringify({ baseline: false, discoveredByScan: true })],
+      [session.id, variant.variant_id, variant.buy_price, variant.sell_price, JSON.stringify({ baseline: false, discoveredByScan: true, inventoryMode: session.inventory_mode || "recovery" })],
     );
     return inserted.rows[0];
   }
@@ -812,7 +891,7 @@ export default function createAifOpeningInventoryRouter({
       const session = await activeSession(client, location.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "Ehhez az üzlethez nincs aktív nyitó leltár.", code: "opening_inventory_not_active" });
+        return res.status(404).json({ error: "Ehhez az üzlethez nincs aktív leltár.", code: "opening_inventory_not_active" });
       }
       if (!EDITABLE_STATUSES.has(session.status)) {
         await client.query("ROLLBACK");
@@ -923,7 +1002,7 @@ export default function createAifOpeningInventoryRouter({
       });
     } catch (error) {
       const status = Number(error?.statusCode || 500);
-      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A nyitó leltár állapota nem tölthető be.", code: error?.code || null });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A leltár állapota nem tölthető be.", code: error?.code || null });
     } finally {
       client.release();
     }
@@ -942,7 +1021,7 @@ export default function createAifOpeningInventoryRouter({
       const session = await activeSession(client, location.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "Nincs aktív nyitó leltár.", code: "opening_inventory_not_active" });
+        return res.status(404).json({ error: "Nincs aktív leltár.", code: "opening_inventory_not_active" });
       }
       if (!EDITABLE_STATUSES.has(session.status)) {
         await client.query("ROLLBACK");
@@ -1045,7 +1124,7 @@ export default function createAifOpeningInventoryRouter({
       );
       return res.json({ ok: true, items: result.rows });
     } catch (error) {
-      return res.status(500).json({ error: error?.message || "A nyitó leltárak listája nem tölthető be." });
+      return res.status(500).json({ error: error?.message || "A leltárak listája nem tölthető be." });
     } finally {
       client.release();
     }
@@ -1053,12 +1132,19 @@ export default function createAifOpeningInventoryRouter({
 
   router.post("/admin/sessions", requireAdminOrSecret, async (req, res) => {
     const body = req.body || {};
-    const salesTrustedFrom = cleanIsoDate(body.salesTrustedFrom || body.sales_trusted_from);
-    if (!salesTrustedFrom) {
-      return res.status(400).json({ error: "Add meg, melyik naptól tekinthetők a Kézdi bolti eladások biztos, valódi rendszeradatnak.", code: "opening_inventory_sales_cutoff_required" });
+    const requestedMode = normCode(body.inventoryMode || body.inventory_mode || body.mode);
+    const inventoryMode = requestedMode === "standard" ? "standard" : "recovery";
+    const requestedSalesTrustedFrom = cleanIsoDate(body.salesTrustedFrom || body.sales_trusted_from);
+    if (inventoryMode === "recovery" && !requestedSalesTrustedFrom) {
+      return res.status(400).json({
+        error: "Helyreállító leltárnál add meg, melyik naptól tekinthetők a bolti eladások biztos rendszeradatnak.",
+        code: "opening_inventory_sales_cutoff_required",
+      });
     }
-    const legacyRetailValue = numberOrNull(body.legacyRetailValue ?? body.legacy_retail_value);
-    if (legacyRetailValue !== null && legacyRetailValue < 0) return res.status(400).json({ error: "A régi készletérték nem lehet negatív." });
+    const requestedLegacyRetailValue = numberOrNull(body.legacyRetailValue ?? body.legacy_retail_value);
+    if (requestedLegacyRetailValue !== null && requestedLegacyRetailValue < 0) {
+      return res.status(400).json({ error: "A papír szerinti készletérték nem lehet negatív." });
+    }
 
     const client = await pool.connect();
     try {
@@ -1068,36 +1154,57 @@ export default function createAifOpeningInventoryRouter({
       const existing = await activeSession(client, location.id, { lock: true });
       if (existing) {
         await client.query("ROLLBACK");
-        return res.status(409).json({ error: "Ehhez az üzlethez már van aktív nyitó leltár.", code: "opening_inventory_already_active", sessionId: String(existing.id) });
+        return res.status(409).json({
+          error: "Ehhez az üzlethez már van aktív leltár.",
+          code: "opening_inventory_already_active",
+          sessionId: String(existing.id),
+        });
       }
 
       const actor = actorFrom(req);
-      const nowResult = await client.query(`SELECT now() AS now`);
+      const nowResult = await client.query(
+        `SELECT now() AS now, (now() AT TIME ZONE 'Europe/Bucharest')::date::text AS local_date`,
+      );
       const baselineAt = nowResult.rows[0]?.now || new Date();
+      const salesTrustedFrom = requestedSalesTrustedFrom || nowResult.rows[0]?.local_date || new Date().toISOString().slice(0, 10);
+      const legacyRetailValue = inventoryMode === "recovery" ? requestedLegacyRetailValue : null;
+      const defaultTitle = inventoryMode === "recovery"
+        ? `Helyreállító leltár - ${location.name}`
+        : `Leltár - ${location.name}`;
+
       const inserted = await client.query(
         `INSERT INTO aif_opening_inventory_sessions (
-           code,location_id,title,status,sales_trusted_from,legacy_retail_value,baseline_at,started_at,started_by,note,raw
-         ) VALUES ($1,$2,$3,'draft',$4,$5,$6,$6,$7,$8,$9::jsonb)
+           code,location_id,title,status,inventory_mode,sales_trusted_from,legacy_retail_value,
+           baseline_at,started_at,started_by,note,raw
+         ) VALUES ($1,$2,$3,'draft',$4,$5,$6,$7,$7,$8,$9,$10::jsonb)
          RETURNING *`,
         [
           sessionCode(),
           location.id,
-          text(body.title) || `Nyitó leltár - ${location.name}`,
+          text(body.title) || defaultTitle,
+          inventoryMode,
           salesTrustedFrom,
           legacyRetailValue,
           baselineAt,
           actor,
           text(body.note) || null,
           JSON.stringify({
-            mode: "opening_recovery_inventory",
+            mode: inventoryMode === "standard" ? "standard_inventory" : "recovery_inventory",
+            inventoryMode,
             blindShopCounting: true,
-            trustedAlwaysSourceTypes: TRUSTED_ALWAYS_SOURCE_TYPES,
-            trustedSalesSourceTypes: TRUSTED_SALES_SOURCE_TYPES,
+            salesAllowedDuringCount: true,
+            trustedAlwaysSourceTypes: inventoryMode === "recovery" ? TRUSTED_ALWAYS_SOURCE_TYPES : [],
+            trustedSalesSourceTypes: inventoryMode === "recovery" ? TRUSTED_SALES_SOURCE_TYPES : [],
             salesTrustedFrom,
           }),
         ],
       );
-      const session = { ...inserted.rows[0], location_code: location.code, location_name: location.name, location_type: location.location_type };
+      const session = {
+        ...inserted.rows[0],
+        location_code: location.code,
+        location_name: location.name,
+        location_type: location.location_type,
+      };
       const preloaded = await preloadSessionLines(client, session);
       await client.query(
         `UPDATE aif_opening_inventory_sessions
@@ -1111,9 +1218,12 @@ export default function createAifOpeningInventoryRouter({
       return res.json({ ok: true, ...detail });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF opening inventory start failed", error);
+      console.error("AIF store inventory start failed", error);
       const status = Number(error?.statusCode || 500);
-      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A nyitó leltár indítása nem sikerült.", code: error?.code || null });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A leltár indítása nem sikerült.",
+        code: error?.code || null,
+      });
     } finally {
       client.release();
     }
@@ -1124,11 +1234,11 @@ export default function createAifOpeningInventoryRouter({
     try {
       await ensureSchema();
       const session = await sessionById(client, req.params.id);
-      if (!session) return res.status(404).json({ error: "A nyitó leltár nem található." });
+      if (!session) return res.status(404).json({ error: "A leltár nem található." });
       const detail = await adminDetail(client, session);
       return res.json({ ok: true, ...detail });
     } catch (error) {
-      return res.status(500).json({ error: error?.message || "A nyitó leltár nem tölthető be." });
+      return res.status(500).json({ error: error?.message || "A leltár nem tölthető be." });
     } finally {
       client.release();
     }
@@ -1142,11 +1252,11 @@ export default function createAifOpeningInventoryRouter({
       const session = await sessionById(client, req.params.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A nyitó leltár nem található." });
+        return res.status(404).json({ error: "A leltár nem található." });
       }
       if (!["draft", "counting", "review"].includes(session.status)) {
         await client.query("ROLLBACK");
-        return res.status(409).json({ error: "Lezárt nyitó leltár nem egyeztethető újra." });
+        return res.status(409).json({ error: "Lezárt leltár nem egyeztethető újra." });
       }
       const unknowns = await client.query(
         `SELECT * FROM aif_opening_inventory_unknown_scans
@@ -1212,11 +1322,11 @@ export default function createAifOpeningInventoryRouter({
       const session = await sessionById(client, req.params.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A nyitó leltár nem található." });
+        return res.status(404).json({ error: "A leltár nem található." });
       }
       if (!EDITABLE_STATUSES.has(session.status)) {
         await client.query("ROLLBACK");
-        return res.status(409).json({ error: session.status === "review" ? "A beolvasás már le van zárva." : "Ez a nyitó leltár már nem zárható le." });
+        return res.status(409).json({ error: session.status === "review" ? "A beolvasás már le van zárva." : "Ez a leltár már nem zárható le." });
       }
       const actor = actorFrom(req);
       await syncSessionLinesFromLiveStock(client, session);
@@ -1259,11 +1369,11 @@ export default function createAifOpeningInventoryRouter({
       const session = await sessionById(client, req.params.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A nyitó leltár nem található." });
+        return res.status(404).json({ error: "A leltár nem található." });
       }
       if (session.status !== "review") {
         await client.query("ROLLBACK");
-        return res.status(409).json({ error: "Csak ellenőrzés alatt lévő nyitó leltár nyitható újra." });
+        return res.status(409).json({ error: "Csak ellenőrzés alatt lévő leltár nyitható újra." });
       }
       await client.query(
         `UPDATE aif_opening_inventory_lines
@@ -1288,7 +1398,7 @@ export default function createAifOpeningInventoryRouter({
       return res.json({ ok: true, ...detail });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
-      return res.status(500).json({ error: error?.message || "A nyitó leltár újranyitása nem sikerült." });
+      return res.status(500).json({ error: error?.message || "A leltár újranyitása nem sikerült." });
     } finally {
       client.release();
     }
@@ -1302,7 +1412,7 @@ export default function createAifOpeningInventoryRouter({
       const session = await sessionById(client, req.params.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A nyitó leltár nem található." });
+        return res.status(404).json({ error: "A leltár nem található." });
       }
       if (session.status !== "review") {
         await client.query("ROLLBACK");
@@ -1432,7 +1542,7 @@ export default function createAifOpeningInventoryRouter({
               locationName: session.location_name,
             },
           });
-          if (!logged) throw Object.assign(new Error("A nyitó leltár egyik készletkorrekcióját nem sikerült naplózni."), { statusCode: 500 });
+          if (!logged) throw Object.assign(new Error("A leltár egyik készletkorrekcióját nem sikerült naplózni."), { statusCode: 500 });
           changed += 1;
           netDiff += delta;
           correctionRetailValue += delta * Number(line.sell_price || 0);
@@ -1460,7 +1570,7 @@ export default function createAifOpeningInventoryRouter({
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF opening inventory apply failed", error);
       const status = Number(error?.statusCode || 500);
-      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A nyitó leltár készletre alkalmazása nem sikerült.", code: error?.code || null });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A leltár készletre alkalmazása nem sikerült.", code: error?.code || null });
     } finally {
       client.release();
     }
@@ -1474,11 +1584,11 @@ export default function createAifOpeningInventoryRouter({
       const session = await sessionById(client, req.params.id, { lock: true });
       if (!session) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A nyitó leltár nem található." });
+        return res.status(404).json({ error: "A leltár nem található." });
       }
       if (session.status === "applied") {
         await client.query("ROLLBACK");
-        return res.status(409).json({ error: "Alkalmazott nyitó leltár nem törölhető vagy vonható vissza innen." });
+        return res.status(409).json({ error: "Alkalmazott leltár nem törölhető vagy vonható vissza innen." });
       }
       if (session.status === "cancelled") {
         await client.query("ROLLBACK");
@@ -1495,7 +1605,7 @@ export default function createAifOpeningInventoryRouter({
       return res.json({ ok: true, session: fresh });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
-      return res.status(500).json({ error: error?.message || "A nyitó leltár megszakítása nem sikerült." });
+      return res.status(500).json({ error: error?.message || "A leltár megszakítása nem sikerült." });
     } finally {
       client.release();
     }
