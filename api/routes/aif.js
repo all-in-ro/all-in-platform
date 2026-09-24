@@ -23629,7 +23629,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
     if (!table.rows[0]?.table_name) return null;
     const result = await client.query(
-      `SELECT id,code,status,location_id,baseline_at,counting_closed_at,started_at
+      `SELECT id,code,status,inventory_mode,location_id,baseline_at,counting_closed_at,started_at
        FROM aif_opening_inventory_sessions
        WHERE location_id=$1
          AND status IN ('draft','counting','review')
@@ -27124,7 +27124,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.json(aifShopSaleResponse(previous, location, true));
       }
 
-      // A nyitó leltár mellett is mehet az értékesítés. A készletmódosításokat
+      // A leltár mellett is mehet az értékesítés. A készletmódosításokat
       // időbélyeggel rávezetjük a leltárra, ezért nem fagyasztjuk be az üzletet.
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_opening_inventory_stock:${location.id}`]);
       const openingInventory = await aifActiveOpeningInventorySession(client, location.id);
@@ -27160,8 +27160,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const variantIds = preparedInput.map((item) => item.variantId).sort();
 
-      // Nyitó leltár alatt a régi készletből fizikailag előkerülő terméket akkor is
-      // el kell tudni adni, ha a Kézdi stock-sora eddig nem létezett vagy 0 volt.
+      // Aktív leltár alatt a fizikailag előkerülő terméket akkor is
+      // el kell tudni adni, ha az üzlet stock-sora eddig nem létezett vagy 0 volt.
       // A 0-s sor csak ugyanebben a tranzakcióban készül el; sikertelen eladásnál rollbackel.
       if (openingInventory) {
         await client.query(
@@ -27243,7 +27243,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const reserved = aifNumber(stock.reserved_qty);
         const effectiveQty = Math.max(0, aifNumber(openingLine.effectiveQty));
         if (reserved > effectiveQty) {
-          const error = new Error(`${stock.title || "A termék"}: ${reserved} db foglalt, de a nyitó leltár szerint most csak ${effectiveQty} db van.`);
+          const error = new Error(`${stock.title || "A termék"}: ${reserved} db foglalt, de a leltár szerint most csak ${effectiveQty} db van.`);
           error.statusCode = 409;
           error.code = "opening_inventory_reserved_conflict";
           throw error;
@@ -27292,7 +27292,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Ha a terméket még nem számolták meg, de a vevő fizikailag behozza a kasszához
       // (pontos kódos találat), a 0-s régi rendszerkészlet nem blokkolhatja az eladást.
       // Ilyenkor csak annyi átmeneti készletet nyitunk meg, amennyi az adott eladáshoz kell.
-      // Ez NEM lesz leltári darabszám: a bridge mozgást a nyitó leltár számításai kizárják,
+      // Ez NEM lesz leltári darabszám: a bridge mozgást a leltár számításai kizárják,
       // a valódi sale mozgás viszont időbélyeggel megmarad az auditban.
       if (openingInventory) {
         for (const input of preparedInput) {
@@ -27338,7 +27338,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             },
           });
           if (!bridged) {
-            const error = new Error("A nyitó leltár alatti eladás készletnyitása nem naplózható.");
+            const error = new Error("A leltár alatti eladás készletnyitása nem naplózható.");
             error.statusCode = 500;
             throw error;
           }
