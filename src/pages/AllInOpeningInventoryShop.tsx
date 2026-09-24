@@ -227,7 +227,7 @@ export default function AllInOpeningInventoryShop({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.13em] text-white/45">Állapot</p>
-                  <p className="mt-1 text-base text-white">{editable ? "Beolvasás folyamatban" : "A beolvasást a főnök lezárta"}</p>
+                  <p className="mt-1 text-base text-white">{editable ? "Beolvasás folyamatban • eladás mehet" : "Beolvasás lezárva • eladás mehet tovább"}</p>
                 </div>
                 <div className="flex gap-2 text-center">
                   <div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2">
@@ -326,7 +326,7 @@ export default function AllInOpeningInventoryShop({
 
             {!editable ? (
               <div className="rounded-[20px] border border-[#8ce7e2]/30 bg-[#108D8B]/14 px-4 py-3 text-sm text-[#d7fffd]">
-                <CheckCircle2 className="mr-2 inline" size={17} /> A bolti számolás lezárva. Innentől a főnöki ellenőrzés és készletalkalmazás következik.
+                <CheckCircle2 className="mr-2 inline" size={17} /> A bolti számolás lezárva. Az eladási oldal továbbra is használható.
               </div>
             ) : null}
           </>
