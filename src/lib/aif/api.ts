@@ -1220,6 +1220,7 @@ export function apiAifDeleteInventoryCount(id: string) {
 
 
 export type AifOpeningInventoryStatus = "draft" | "counting" | "review" | "applied" | "cancelled";
+export type AifOpeningInventoryMode = "standard" | "recovery";
 
 export type AifOpeningInventoryProduct = {
   variantId: string;
@@ -1248,6 +1249,8 @@ export type AifOpeningInventorySession = {
   location_type?: string | null;
   location?: { id: string; code?: string | null; name?: string | null };
   status: AifOpeningInventoryStatus;
+  inventory_mode?: AifOpeningInventoryMode | null;
+  inventoryMode?: AifOpeningInventoryMode | null;
   sales_trusted_from?: string | null;
   legacy_retail_value?: number | string | null;
   baseline_at?: string | null;
@@ -1320,6 +1323,7 @@ export type AifOpeningInventorySummary = {
   untracked_qty: number | string;
   system_correction_qty: number | string;
   counted_retail_value: number | string;
+  comparison_retail_value?: number | string;
   trusted_net_retail_value: number | string;
   definite_missing_retail_value: number | string;
   untracked_retail_value: number | string;
@@ -1419,7 +1423,8 @@ export function apiAifListOpeningInventorySessions(options?: {
 export function apiAifStartOpeningInventory(input: {
   location: string;
   title?: string;
-  salesTrustedFrom: string;
+  inventoryMode?: AifOpeningInventoryMode;
+  salesTrustedFrom?: string;
   legacyRetailValue?: number | string | null;
   note?: string | null;
 }) {
