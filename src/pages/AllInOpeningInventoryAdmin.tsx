@@ -36,6 +36,7 @@ type Props = { actor?: string; role?: string };
 type LineFilter = "all" | "missing" | "awaiting" | "untracked" | "system" | "ok";
 type Notice = { tone: "success" | "error" | "info"; text: string };
 type ConfirmAction = "close" | "reopen" | "apply" | "cancel" | null;
+type InventoryMode = "standard" | "recovery";
 
 const LOCATION_STORAGE_KEY = "allin:opening-inventory:location";
 
@@ -82,10 +83,10 @@ function lineTone(line: AifOpeningInventoryAdminLine) {
   return "border-white/10 bg-white/[0.025]";
 }
 
-function lineStatusLabel(line: AifOpeningInventoryAdminLine) {
-  if (line.status === "missing") return "BIZTOS HIÁNY";
+function lineStatusLabel(line: AifOpeningInventoryAdminLine, mode: InventoryMode) {
+  if (line.status === "missing") return mode === "recovery" ? "BIZTOS HIÁNY" : "HIÁNY";
   if (line.status === "awaiting_known") return "MÉG NEM TALÁLTÁK";
-  if (line.status === "untracked") return "RÉGI / NEM NYILVÁNTARTOTT";
+  if (line.status === "untracked") return mode === "recovery" ? "RÉGI / NEM NYILVÁNTARTOTT" : "TÖBBLET";
   if (line.status === "ok") return "RENDBEN";
   return "MÉG NEM SZÁMOLT";
 }
@@ -100,6 +101,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<LineFilter>("all");
+  const [inventoryMode, setInventoryMode] = useState<InventoryMode>("standard");
   const [salesTrustedFrom, setSalesTrustedFrom] = useState(localDateInput());
   const [legacyRetailValue, setLegacyRetailValue] = useState("");
   const [note, setNote] = useState("");
@@ -110,14 +112,25 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
     () => sessions.find((item) => ["draft", "counting", "review"].includes(item.status)) || null,
     [sessions],
   );
+  const currentLocation = useMemo(
+    () => locations.find((item) => item.code === location || item.id === location) || null,
+    [locations, location],
+  );
+  const detailMode: InventoryMode = (detail?.session.inventory_mode || detail?.session.inventoryMode) === "standard" ? "standard" : "recovery";
+  const recoveryMode = detail ? detailMode === "recovery" : inventoryMode === "recovery";
 
   const loadSessions = useCallback(async (locationValue: string, silent = false) => {
     if (!locationValue) return;
     if (!silent) setLoading(true);
     try {
       const response = await apiAifListOpeningInventorySessions({ location: locationValue, limit: 30 });
-      setSessions(response.items || []);
-      const active = (response.items || []).find((item) => ["draft", "counting", "review"].includes(item.status));
+      const history = response.items || [];
+      setSessions(history);
+      const active = history.find((item) => ["draft", "counting", "review"].includes(item.status));
+      if (!active) {
+        const hasApplied = history.some((item) => item.status === "applied");
+        setInventoryMode(hasApplied ? "standard" : locationValue === "magazin_targu_secuiesc" ? "recovery" : "standard");
+      }
       if (active) {
         const full = await apiAifGetOpeningInventory(active.id);
         setDetail(full);
@@ -127,7 +140,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
       setLastRefresh(new Date());
       if (!silent) setNotice(null);
     } catch (error) {
-      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A nyitó leltár adatai nem tölthetők be." });
+      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár adatai nem tölthetők be." });
     } finally {
       if (!silent) setLoading(false);
     }
@@ -140,9 +153,9 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
       const response = await apiAifGetOpeningInventory(id);
       setDetail(response);
       setLastRefresh(new Date());
-      if (!silent) setNotice({ tone: "success", text: "Nyitó leltár frissítve." });
+      if (!silent) setNotice({ tone: "success", text: "Leltár frissítve." });
     } catch (error) {
-      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A nyitó leltár frissítése nem sikerült." });
+      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár frissítése nem sikerült." });
     }
   }, [activeSession?.id, detail?.session.id]);
 
@@ -152,9 +165,13 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
       try {
         const meta = await apiAifMeta();
         const activeLocations = (meta.locations || []).filter((item) => item.is_active !== false);
-        setLocations(activeLocations);
-        const kezdi = activeLocations.find((item) => item.code === "magazin_targu_secuiesc");
-        const first = kezdi || activeLocations.find((item) => item.location_type === "shop") || activeLocations[0];
+        const storeLocations = activeLocations.filter((item) =>
+          item.code === "main_warehouse" || item.code === "magazin_targu_secuiesc"
+        );
+        const usable = storeLocations.length ? storeLocations : activeLocations.filter((item) => item.location_type === "shop");
+        setLocations(usable);
+        const kezdi = usable.find((item) => item.code === "magazin_targu_secuiesc");
+        const first = kezdi || usable[0];
         const next = first?.code || first?.id || "";
         setLocation(next);
       } catch (error) {
@@ -213,8 +230,12 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
   }, [filter, lines, search]);
 
   async function startInventory() {
-    if (!location || !salesTrustedFrom) {
-      setNotice({ tone: "error", text: "A helyszín és az eladások kezdő dátuma kötelező." });
+    if (!location) {
+      setNotice({ tone: "error", text: "Válassz üzletet." });
+      return;
+    }
+    if (inventoryMode === "recovery" && !salesTrustedFrom) {
+      setNotice({ tone: "error", text: "Helyreállító leltárnál add meg a biztos rendszeres eladások kezdő dátumát." });
       return;
     }
     setBusy(true);
@@ -222,15 +243,18 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
     try {
       const response = await apiAifStartOpeningInventory({
         location,
-        salesTrustedFrom,
-        legacyRetailValue: legacyRetailValue.trim() ? legacyRetailValue.trim().replace(",", ".") : null,
+        inventoryMode,
+        salesTrustedFrom: inventoryMode === "recovery" ? salesTrustedFrom : undefined,
+        legacyRetailValue: inventoryMode === "recovery" && legacyRetailValue.trim()
+          ? legacyRetailValue.trim().replace(",", ".")
+          : null,
         note: note.trim() || null,
       });
       setDetail(response);
-      setNotice({ tone: "success", text: "Nyitó leltár elindítva. A csippogtatás és az eladás mehet párhuzamosan." });
+      setNotice({ tone: "success", text: "Leltár elindítva. A számolás és az eladás mehet párhuzamosan." });
       await loadSessions(location, true);
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "A nyitó leltár indítása nem sikerült." });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár indítása nem sikerült." });
     } finally {
       setBusy(false);
     }
@@ -264,14 +288,14 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
       if (action === "cancel") {
         await apiAifCancelOpeningInventory(detail.session.id);
         setDetail(null);
-        setNotice({ tone: "success", text: "A nyitó leltár megszakítva. A készlethez nem nyúlt." });
+        setNotice({ tone: "success", text: "A leltár megszakítva. A készlethez nem nyúlt." });
         await loadSessions(location, true);
         return;
       }
       if (response) setDetail(response);
       if (action === "close") setNotice({ tone: "success", text: "A bolti beolvasás lezárva. Az üzlet továbbra is árulhat." });
-      if (action === "reopen") setNotice({ tone: "success", text: "A leltár újranyitva. Kézdin újra lehet csippogtatni." });
-      if (action === "apply") setNotice({ tone: "success", text: "A nyitó leltár készletre alkalmazva, a közbeni mozgásokkal együtt." });
+      if (action === "reopen") setNotice({ tone: "success", text: "A leltár újranyitva. Az üzletben újra lehet csippogtatni." });
+      if (action === "apply") setNotice({ tone: "success", text: "A leltár készletre alkalmazva, a közbeni mozgásokkal együtt." });
       await loadSessions(location, true);
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "A művelet nem sikerült." });
@@ -303,9 +327,9 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
           <div className="flex flex-wrap items-center gap-3">
             <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#8ce7e2]/38 bg-[#108D8B]/20 text-[#d7fffd]"><ShieldCheck size={24} /></span>
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">ALL IN • helyreállító készlet</p>
-              <h1 className="mt-1 text-2xl font-normal">Kézdi nyitó leltár</h1>
-              <p className="mt-1 text-xs text-white/52">Kézdivásárhely • {actor}</p>
+              <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">ALL IN • üzleti készletellenőrzés</p>
+              <h1 className="mt-1 text-2xl font-normal">Üzleti leltár</h1>
+              <p className="mt-1 text-xs text-white/52">{currentLocation?.name || "Üzlet"} • {actor}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => { window.location.hash = "home"; }} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white hover:bg-[#405066]"><ArrowLeft size={15} /> Főmenü</button>
@@ -344,34 +368,42 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#8ce7e2]/30 bg-[#108D8B]/16 text-[#d7fffd]"><Play size={20} /></span>
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Első nagy leltár</p>
-                  <h2 className="mt-1 text-xl font-normal">Új nyitó leltár</h2>
+                  <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Új leltár</p>
+                  <h2 className="mt-1 text-xl font-normal">{currentLocation?.name || "Üzlet"}</h2>
                 </div>
               </div>
-              <span className="rounded-xl border border-[#8ce7e2]/26 bg-[#108D8B]/12 px-3 py-2 text-[11px] text-[#d7fffd]">Az üzlet közben is árulhat</span>
+              <span className="rounded-xl border border-[#8ce7e2]/26 bg-[#108D8B]/12 px-3 py-2 text-[11px] text-[#d7fffd]">Eladás közben is működik</span>
             </div>
 
-            <div className="mt-4 grid gap-3 lg:grid-cols-[220px_260px_minmax(260px,1fr)_auto] lg:items-end">
+            <div className="mt-4 grid gap-3 lg:grid-cols-[230px_minmax(260px,1fr)_auto] lg:items-end">
               <label className="grid gap-1.5 text-xs text-white/58">
-                Valódi eladások ettől
-                <input type="date" value={salesTrustedFrom} onChange={(event) => setSalesTrustedFrom(event.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55" />
-              </label>
-              <label className="grid gap-1.5 text-xs text-white/58">
-                Papír szerinti készletérték (RON)
-                <input value={legacyRetailValue} onChange={(event) => setLegacyRetailValue(event.target.value.replace(/[^0-9.,]/g, ""))} inputMode="decimal" placeholder="pl. 190000" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
+                Leltár típusa
+                <select value={inventoryMode} onChange={(event) => setInventoryMode(event.target.value as InventoryMode)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55">
+                  <option value="standard">Rendes leltár</option>
+                  <option value="recovery">Helyreállító leltár</option>
+                </select>
               </label>
               <label className="grid gap-1.5 text-xs text-white/58">
                 Megjegyzés
-                <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="pl. első Kézdi nyitó leltár" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
+                <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="pl. teljes üzleti leltár / cipők / szezonváltás" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
               </label>
-              <button type="button" onClick={() => void startInventory()} disabled={busy || !location || !salesTrustedFrom} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-5 text-sm text-white shadow-[0_10px_24px_rgba(16,141,139,0.22)] hover:bg-[#149b98] disabled:opacity-45">
+              <button type="button" onClick={() => void startInventory()} disabled={busy || !location || (inventoryMode === "recovery" && !salesTrustedFrom)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-5 text-sm text-white shadow-[0_10px_24px_rgba(16,141,139,0.22)] hover:bg-[#149b98] disabled:opacity-45">
                 {busy ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />} Leltár indítása
               </button>
             </div>
 
-            <div className="mt-3 text-[11px] text-white/46">
-              Több napon át folytatható. A közben történt eladásokat és készletmozgásokat a rendszer automatikusan rávezeti a leltárra.
-            </div>
+            {inventoryMode === "recovery" ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1.5 text-xs text-white/58">
+                  Biztos rendszeres eladások ettől
+                  <input type="date" value={salesTrustedFrom} onChange={(event) => setSalesTrustedFrom(event.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55" />
+                </label>
+                <label className="grid gap-1.5 text-xs text-white/58">
+                  Papír szerinti készletérték (RON, opcionális)
+                  <input value={legacyRetailValue} onChange={(event) => setLegacyRetailValue(event.target.value.replace(/[^0-9.,]/g, ""))} inputMode="decimal" placeholder="pl. 190000" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
+                </label>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
@@ -383,6 +415,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/60">{detail.session.code}</span>
                     <span className={`rounded-full border px-2.5 py-1 text-[10px] ${detail.session.status === "review" ? "border-amber-200/30 bg-amber-500/12 text-amber-50" : detail.session.status === "applied" ? "border-[#8ce7e2]/34 bg-[#108D8B]/18 text-[#d7fffd]" : detail.session.status === "cancelled" ? "border-red-300/28 bg-red-500/12 text-red-50" : "border-sky-200/26 bg-sky-500/10 text-sky-50"}`}>{statusLabel(detail.session.status)}</span>
+                    <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/60">{detailMode === "recovery" ? "HELYREÁLLÍTÓ" : "RENDES"}</span>
                     {activeDetail ? <span className="rounded-full border border-[#8ce7e2]/28 bg-[#108D8B]/12 px-2.5 py-1 text-[10px] text-[#d7fffd]">ELADÁS MEHET</span> : null}
                   </div>
                   <h2 className="mt-2 text-xl font-normal">{detail.session.title}</h2>
@@ -407,12 +440,12 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
             {summary ? (
               <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
                 <Stat label="Leltár szerint most" value={`${qty(summary.counted_qty)} db`} hint={`${qty(summary.counted_lines)} tétel`} />
-                <Stat label="Igazolható minimum" value={`${qty(summary.known_min_qty)} db`} hint={`élő mozgás ${n(summary.live_net_qty) > 0 ? "+" : ""}${qty(summary.live_net_qty || 0)} db`} tone="blue" />
-                <Stat label="Biztos hiány" value={`${qty(summary.definite_missing_qty)} db`} hint={`${money(summary.definite_missing_retail_value)} RON`} tone="red" />
-                <Stat label="Még nem talált minimum" value={`${qty(summary.unseen_known_min_qty)} db`} hint={detail.session.status === "review" ? "lezáráskor ez már 0" : "még keresendő"} tone="amber" />
-                <Stat label="Régi / nem nyilvántartott" value={`${qty(summary.untracked_qty)} db`} hint={`${money(summary.untracked_retail_value)} RON`} tone="green" />
+                <Stat label={recoveryMode ? "Igazolható minimum" : "Rendszer szerint"} value={`${qty(summary.known_min_qty)} db`} hint={`közbeni mozgás ${n(summary.live_net_qty) > 0 ? "+" : ""}${qty(summary.live_net_qty || 0)} db`} tone="blue" />
+                <Stat label={recoveryMode ? "Biztos hiány" : "Hiány"} value={`${qty(summary.definite_missing_qty)} db`} hint={`${money(summary.definite_missing_retail_value)} RON`} tone="red" />
+                <Stat label={recoveryMode ? "Még nem talált minimum" : "Még nem számolt"} value={`${qty(summary.unseen_known_min_qty)} db`} hint={detail.session.status === "review" ? "lezáráskor 0-nak számít" : "még ellenőrizendő"} tone="amber" />
+                <Stat label={recoveryMode ? "Régi / nem nyilvántartott" : "Többlet"} value={`${qty(summary.untracked_qty)} db`} hint={`${money(summary.untracked_retail_value)} RON`} tone="green" />
                 <Stat label="Leltárérték most" value={`${money(summary.counted_retail_value)} RON`} hint={`korrekció: ${money(summary.system_correction_retail_value)} RON`} />
-                <Stat label="Könyv szerinti becslés" value={summary.book_expected_retail_value === null || summary.book_expected_retail_value === undefined ? "–" : `${money(summary.book_expected_retail_value)} RON`} hint={summary.book_diff_retail_value === null || summary.book_diff_retail_value === undefined ? "régi érték nélkül nincs összevetés" : `eltérés: ${money(summary.book_diff_retail_value)} RON`} tone={summary.book_diff_retail_value !== null && summary.book_diff_retail_value !== undefined && n(summary.book_diff_retail_value) < 0 ? "red" : "neutral"} />
+                <Stat label={recoveryMode ? "Könyv szerinti becslés" : "Rendszerérték"} value={summary.book_expected_retail_value === null || summary.book_expected_retail_value === undefined ? "–" : `${money(summary.book_expected_retail_value)} RON`} hint={summary.book_diff_retail_value === null || summary.book_diff_retail_value === undefined ? "–" : `eltérés: ${money(summary.book_diff_retail_value)} RON`} tone={summary.book_diff_retail_value !== null && summary.book_diff_retail_value !== undefined && n(summary.book_diff_retail_value) < 0 ? "red" : "neutral"} />
               </section>
             ) : null}
 
@@ -445,7 +478,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                   </label>
                   <div className="flex flex-wrap gap-1.5">
                     {([
-                      ["all", "Mind"], ["missing", "Biztos hiány"], ["awaiting", "Még nem talált"], ["untracked", "Régi készlet"], ["system", "Korrekció"], ["ok", "Rendben"],
+                      ["all", "Mind"], ["missing", recoveryMode ? "Biztos hiány" : "Hiány"], ["awaiting", "Még nem talált"], ["untracked", recoveryMode ? "Régi készlet" : "Többlet"], ["system", "Korrekció"], ["ok", "Rendben"],
                     ] as Array<[LineFilter, string]>).map(([value, label]) => (
                       <button key={value} type="button" onClick={() => setFilter(value)} className={`h-10 rounded-xl border px-3 text-[11px] ${filter === value ? "border-[#8ce7e2]/45 bg-[#108D8B] text-white" : "border-white/14 bg-white/[0.04] text-white/65 hover:bg-white/[0.08]"}`}>{label}</button>
                     ))}
@@ -460,11 +493,11 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                     <tr>
                       <th className="px-3 py-2.5">Termék</th>
                       <th className="px-3 py-2.5 text-right">Rendszer most</th>
-                      <th className="px-3 py-2.5 text-right">Igazolt nettó</th>
-                      <th className="px-3 py-2.5 text-right">Minimum</th>
+                      <th className="px-3 py-2.5 text-right">{recoveryMode ? "Igazolt nettó" : "Mozgás"}</th>
+                      <th className="px-3 py-2.5 text-right">{recoveryMode ? "Minimum" : "Elvárt"}</th>
                       <th className="px-3 py-2.5 text-right">Leltár szerint</th>
-                      <th className="px-3 py-2.5 text-right">Biztos hiány</th>
-                      <th className="px-3 py-2.5 text-right">Régi / plusz</th>
+                      <th className="px-3 py-2.5 text-right">{recoveryMode ? "Biztos hiány" : "Hiány"}</th>
+                      <th className="px-3 py-2.5 text-right">{recoveryMode ? "Régi / plusz" : "Többlet"}</th>
                       <th className="px-3 py-2.5 text-right">Készletkorrekció</th>
                       <th className="px-3 py-2.5">Állapot</th>
                     </tr>
@@ -502,7 +535,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                         <td className="px-3 py-2.5 text-right text-red-100">{line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "–" : qty(line.definite_missing_qty)}</td>
                         <td className="px-3 py-2.5 text-right text-[#bdf8f5]">{line.untracked_qty === null || line.untracked_qty === undefined ? "–" : qty(line.untracked_qty)}</td>
                         <td className={`px-3 py-2.5 text-right ${n(line.system_correction_qty) < 0 ? "text-red-100" : n(line.system_correction_qty) > 0 ? "text-[#bdf8f5]" : "text-white/50"}`}>{line.system_correction_qty === null || line.system_correction_qty === undefined ? "–" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${qty(line.system_correction_qty)}`}</td>
-                        <td className="px-3 py-2.5"><span className="rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-[9px] text-white/72">{lineStatusLabel(line)}</span></td>
+                        <td className="px-3 py-2.5"><span className="rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-[9px] text-white/72">{lineStatusLabel(line, detailMode)}</span></td>
                       </tr>
                     ))}
                     {!filteredLines.length ? <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-white/40">Nincs tétel ebben a szűrésben.</td></tr> : null}
@@ -515,7 +548,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
 
         {sessions.length ? (
           <section className="rounded-[22px] border border-white/14 bg-[#354153] p-3 shadow-lg">
-            <div className="flex items-center gap-2 px-1 pb-2"><History size={15} className="text-white/46" /><span className="text-xs text-white/58">Korábbi / aktuális nyitó leltárak</span></div>
+            <div className="flex items-center gap-2 px-1 pb-2"><History size={15} className="text-white/46" /><span className="text-xs text-white/58">Korábbi / aktuális leltárak</span></div>
             <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
               {sessions.slice(0, 9).map((item) => (
                 <button key={item.id} type="button" onClick={() => openHistorySession(item)} className="rounded-xl border border-white/12 bg-white/[0.035] px-3 py-2.5 text-left hover:bg-white/[0.07]">
@@ -535,7 +568,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
               <div className="flex gap-3">
                 <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.06]">{confirmAction === "apply" ? <CheckCircle2 size={19} /> : confirmAction === "cancel" ? <AlertTriangle size={19} /> : <ClipboardCheck size={19} />}</span>
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Nyitó leltár</p>
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Üzleti leltár</p>
                   <h2 className="mt-1 text-lg font-normal">{confirmAction === "close" ? "Beolvasás lezárása" : confirmAction === "reopen" ? "Leltár újranyitása" : confirmAction === "apply" ? "Készlet végleges alkalmazása" : "Leltár megszakítása"}</h2>
                 </div>
               </div>
@@ -543,9 +576,9 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
             </header>
             <div className="space-y-3 p-4 text-sm leading-relaxed text-white/70">
               {confirmAction === "close" ? <p>A bolti beolvasás leáll. Az addig nem beolvasott, de rendszerből ismert tételeket 0 talált darabbal vesszük figyelembe az ellenőrzéshez.</p> : null}
-              {confirmAction === "reopen" ? <p>A lezáráskor automatikusan 0-ra tett, nem talált sorok újra „még nem számolt” állapotba kerülnek, és Kézdin folytatható a csippogtatás.</p> : null}
-              {confirmAction === "apply" ? <p>A megszámolt mennyiségekre rávezetjük a közben történt eladásokat és készletmozgásokat, majd ezt alkalmazzuk Kézdivásárhely készletére. Minden korrekció naplózódik.</p> : null}
-              {confirmAction === "cancel" ? <p>A nyitó leltár megszakad, a beolvasások megmaradnak auditként, de a készlethez nem nyúlunk.</p> : null}
+              {confirmAction === "reopen" ? <p>A lezáráskor automatikusan 0-ra tett, nem talált sorok újra „még nem számolt” állapotba kerülnek, és az üzletben folytatható a csippogtatás.</p> : null}
+              {confirmAction === "apply" ? <p>A megszámolt mennyiségekre rávezetjük a közben történt eladásokat és készletmozgásokat, majd ezt alkalmazzuk az üzlet készletére. Minden korrekció naplózódik.</p> : null}
+              {confirmAction === "cancel" ? <p>A leltár megszakad, a beolvasások megmaradnak auditként, de a készlethez nem nyúlunk.</p> : null}
               <div className="rounded-xl border border-white/12 bg-[#283446] px-3 py-2 text-xs text-white/55">{detail.session.title} • {detail.session.location_name || location} • talált {qty(detail.summary.counted_qty)} db</div>
             </div>
             <footer className="flex justify-end gap-2 border-t border-white/10 bg-[#293548] px-4 py-3">
