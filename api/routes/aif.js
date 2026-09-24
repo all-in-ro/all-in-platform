@@ -26407,7 +26407,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ),
         pool.query(
           `WITH filtered_sales AS (
-             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+             -- A napi terméklista csak az aznap ténylegesen eladott termékeket mutatja.
+             -- Az "Utólag fizet" (credit) elvitel nem aznapi eladás: az majd a
+             -- tényleges rendezés napján jelenik meg payment_settlement eseményként.
+             SELECT s.* FROM aif_shop_sales s
+             WHERE ${salesFilter}
+               AND s.sale_type <> 'credit'
            ), active_sale_lines AS (
              SELECT
                sl.*,
@@ -26489,7 +26494,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ),
         pool.query(
           `WITH filtered_sales AS (
-             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+             -- Ugyanaz a szabály a részletes terméksorokra is: a credit elvitel
+             -- az eredeti napon nem jelenik meg, a későbbi befizetés viszont igen.
+             SELECT s.* FROM aif_shop_sales s
+             WHERE ${salesFilter}
+               AND s.sale_type <> 'credit'
            )
            SELECT
              sl.id::text AS key,
