@@ -214,7 +214,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
 
   async function startInventory() {
     if (!location || !salesTrustedFrom) {
-      setNotice({ tone: "error", text: "A helyszín és a valódi bolti eladások kezdő dátuma kötelező." });
+      setNotice({ tone: "error", text: "A helyszín és az eladások kezdő dátuma kötelező." });
       return;
     }
     setBusy(true);
@@ -227,7 +227,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
         note: note.trim() || null,
       });
       setDetail(response);
-      setNotice({ tone: "success", text: "Nyitó leltár elindítva. Kézdivásárhelyen azonnal kezdhetik a csippogtatást." });
+      setNotice({ tone: "success", text: "Nyitó leltár elindítva. A csippogtatás és az eladás mehet párhuzamosan." });
       await loadSessions(location, true);
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "A nyitó leltár indítása nem sikerült." });
@@ -269,9 +269,9 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
         return;
       }
       if (response) setDetail(response);
-      if (action === "close") setNotice({ tone: "success", text: "A bolti beolvasás lezárva. Most már a hiányok teljesen értékelhetők." });
+      if (action === "close") setNotice({ tone: "success", text: "A bolti beolvasás lezárva. Az üzlet továbbra is árulhat." });
       if (action === "reopen") setNotice({ tone: "success", text: "A leltár újranyitva. Kézdin újra lehet csippogtatni." });
-      if (action === "apply") setNotice({ tone: "success", text: "A nyitó leltár készletre alkalmazva. Kézdi mostantól a fizikai leltár szerinti készlettel működik." });
+      if (action === "apply") setNotice({ tone: "success", text: "A nyitó leltár készletre alkalmazva, a közbeni mozgásokkal együtt." });
       await loadSessions(location, true);
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "A művelet nem sikerült." });
@@ -305,7 +305,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
             <div className="min-w-0 flex-1">
               <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">ALL IN • helyreállító készlet</p>
               <h1 className="mt-1 text-2xl font-normal">Kézdi nyitó leltár</h1>
-              <p className="mt-1 text-xs text-white/52">Fizikai készlet + igazolható új rendszer mozgások • {actor}</p>
+              <p className="mt-1 text-xs text-white/52">Kézdivásárhely • {actor}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => { window.location.hash = "home"; }} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white hover:bg-[#405066]"><ArrowLeft size={15} /> Főmenü</button>
@@ -339,51 +339,38 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
         </section>
 
         {!activeDetail && (!detail || ["applied", "cancelled"].includes(detail.session.status)) ? (
-          <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <div className="rounded-[22px] border border-white/14 bg-[#354153] p-4 shadow-lg">
+          <section className="rounded-[22px] border border-white/14 bg-[#354153] p-4 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#8ce7e2]/30 bg-[#108D8B]/16 text-[#d7fffd]"><Play size={20} /></span>
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Első nagy leltár</p>
-                  <h2 className="mt-1 text-xl font-normal">Új nyitó leltár indítása</h2>
+                  <h2 className="mt-1 text-xl font-normal">Új nyitó leltár</h2>
                 </div>
               </div>
+              <span className="rounded-xl border border-[#8ce7e2]/26 bg-[#108D8B]/12 px-3 py-2 text-[11px] text-[#d7fffd]">Az üzlet közben is árulhat</span>
+            </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <label className="grid gap-1.5 text-xs text-white/58">
-                  Bolti eladások biztos kezdő dátuma
-                  <input type="date" value={salesTrustedFrom} onChange={(event) => setSalesTrustedFrom(event.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55" />
-                  <span className="text-[10px] leading-relaxed text-white/38">Ettől a naptól számoljuk a Kézdi bolti eladásokat valódi készletmozgásnak. A régi/fake eladásokat így nem keverjük bele.</span>
-                </label>
-                <label className="grid gap-1.5 text-xs text-white/58">
-                  Régi rendszer / papír szerinti maradó készletérték (RON)
-                  <input value={legacyRetailValue} onChange={(event) => setLegacyRetailValue(event.target.value.replace(/[^0-9.,]/g, ""))} inputMode="decimal" placeholder="pl. 190000" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
-                  <span className="text-[10px] leading-relaxed text-white/38">Opcionális. Például 200.000 induló értékből 10.000 papíron eladva → 190.000. Az új rendszer igazolt nettó mozgását a rendszer ehhez külön hozzáadja.</span>
-                </label>
-              </div>
-
-              <label className="mt-3 grid gap-1.5 text-xs text-white/58">
+            <div className="mt-4 grid gap-3 lg:grid-cols-[220px_260px_minmax(260px,1fr)_auto] lg:items-end">
+              <label className="grid gap-1.5 text-xs text-white/58">
+                Valódi eladások ettől
+                <input type="date" value={salesTrustedFrom} onChange={(event) => setSalesTrustedFrom(event.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55" />
+              </label>
+              <label className="grid gap-1.5 text-xs text-white/58">
+                Papír szerinti készletérték (RON)
+                <input value={legacyRetailValue} onChange={(event) => setLegacyRetailValue(event.target.value.replace(/[^0-9.,]/g, ""))} inputMode="decimal" placeholder="pl. 190000" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
+              </label>
+              <label className="grid gap-1.5 text-xs text-white/58">
                 Megjegyzés
                 <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="pl. első Kézdi nyitó leltár" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
               </label>
-
-              <div className="mt-4 rounded-xl border border-amber-200/24 bg-amber-500/8 px-3 py-2.5 text-xs leading-relaxed text-amber-50/85">
-                A leltár indításakor pillanatképet készítünk. Amíg tart a számolás, ezen a helyszínen ne legyen eladás, áruátvétel vagy készletmozgatás. Ha mégis történik, a végleges alkalmazást a backend biztonsági okból blokkolja.
-              </div>
-
-              <button type="button" onClick={() => void startInventory()} disabled={busy || !location || !salesTrustedFrom} className="mt-4 inline-flex h-12 items-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-5 text-sm text-white shadow-[0_10px_24px_rgba(16,141,139,0.22)] hover:bg-[#149b98] disabled:opacity-45">
-                {busy ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />} Nyitó leltár indítása
+              <button type="button" onClick={() => void startInventory()} disabled={busy || !location || !salesTrustedFrom} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#108D8B] px-5 text-sm text-white shadow-[0_10px_24px_rgba(16,141,139,0.22)] hover:bg-[#149b98] disabled:opacity-45">
+                {busy ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />} Leltár indítása
               </button>
             </div>
 
-            <div className="rounded-[22px] border border-white/14 bg-[#354153] p-4 shadow-lg">
-              <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Miért külön leltár?</p>
-              <h2 className="mt-1 text-lg font-normal">A fizikai készlet lesz az új alap</h2>
-              <div className="mt-3 space-y-2 text-xs leading-relaxed text-white/58">
-                <p>A jelenlegi Kézdi 0 nem jelent automatikusan hiányt, mert a régi készlet nagy része nem került darabszámban az új rendszerbe.</p>
-                <p>Az Aviz, új rendszeres bevételezés és a valódi bolti eladás viszont auditálható. Ezekből számolunk egy konzervatív igazolható minimumot.</p>
-                <p>A végén a fizikailag megszámolt darabszám írja felül Kézdi készletét, teljes naplóval.</p>
-              </div>
+            <div className="mt-3 text-[11px] text-white/46">
+              Több napon át folytatható. A közben történt eladásokat és készletmozgásokat a rendszer automatikusan rávezeti a leltárra.
             </div>
           </section>
         ) : null}
@@ -396,6 +383,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/60">{detail.session.code}</span>
                     <span className={`rounded-full border px-2.5 py-1 text-[10px] ${detail.session.status === "review" ? "border-amber-200/30 bg-amber-500/12 text-amber-50" : detail.session.status === "applied" ? "border-[#8ce7e2]/34 bg-[#108D8B]/18 text-[#d7fffd]" : detail.session.status === "cancelled" ? "border-red-300/28 bg-red-500/12 text-red-50" : "border-sky-200/26 bg-sky-500/10 text-sky-50"}`}>{statusLabel(detail.session.status)}</span>
+                    {activeDetail ? <span className="rounded-full border border-[#8ce7e2]/28 bg-[#108D8B]/12 px-2.5 py-1 text-[10px] text-[#d7fffd]">ELADÁS MEHET</span> : null}
                   </div>
                   <h2 className="mt-2 text-xl font-normal">{detail.session.title}</h2>
                   <p className="mt-1 text-xs text-white/45">{detail.session.location_name || detail.session.location?.name || location} • indítva: {formatDateTime(detail.session.started_at || detail.session.startedAt)}</p>
@@ -418,12 +406,12 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
 
             {summary ? (
               <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
-                <Stat label="Talált" value={`${qty(summary.counted_qty)} db`} hint={`${qty(summary.counted_lines)} tétel`} />
-                <Stat label="Igazolható minimum" value={`${qty(summary.known_min_qty)} db`} hint={`bejött ${qty(summary.trusted_in_qty)} • kiment ${qty(summary.trusted_out_qty)}`} tone="blue" />
+                <Stat label="Leltár szerint most" value={`${qty(summary.counted_qty)} db`} hint={`${qty(summary.counted_lines)} tétel`} />
+                <Stat label="Igazolható minimum" value={`${qty(summary.known_min_qty)} db`} hint={`élő mozgás ${n(summary.live_net_qty) > 0 ? "+" : ""}${qty(summary.live_net_qty || 0)} db`} tone="blue" />
                 <Stat label="Biztos hiány" value={`${qty(summary.definite_missing_qty)} db`} hint={`${money(summary.definite_missing_retail_value)} RON`} tone="red" />
                 <Stat label="Még nem talált minimum" value={`${qty(summary.unseen_known_min_qty)} db`} hint={detail.session.status === "review" ? "lezáráskor ez már 0" : "még keresendő"} tone="amber" />
                 <Stat label="Régi / nem nyilvántartott" value={`${qty(summary.untracked_qty)} db`} hint={`${money(summary.untracked_retail_value)} RON`} tone="green" />
-                <Stat label="Talált eladási érték" value={`${money(summary.counted_retail_value)} RON`} hint={`korrekció: ${money(summary.system_correction_retail_value)} RON`} />
+                <Stat label="Leltárérték most" value={`${money(summary.counted_retail_value)} RON`} hint={`korrekció: ${money(summary.system_correction_retail_value)} RON`} />
                 <Stat label="Könyv szerinti becslés" value={summary.book_expected_retail_value === null || summary.book_expected_retail_value === undefined ? "–" : `${money(summary.book_expected_retail_value)} RON`} hint={summary.book_diff_retail_value === null || summary.book_diff_retail_value === undefined ? "régi érték nélkül nincs összevetés" : `eltérés: ${money(summary.book_diff_retail_value)} RON`} tone={summary.book_diff_retail_value !== null && summary.book_diff_retail_value !== undefined && n(summary.book_diff_retail_value) < 0 ? "red" : "neutral"} />
               </section>
             ) : null}
@@ -463,7 +451,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                     ))}
                   </div>
                 </div>
-                <p className="mt-2 text-[10px] text-white/38">{filteredLines.length} / {lines.length} tétel • a főnöki nézet mutatja a rendszer és az igazolható minimum adatait; a bolti nézet ezeket nem látja.</p>
+                <p className="mt-2 text-[10px] text-white/38">{filteredLines.length} / {lines.length} tétel • a közbeni eladások és mozgások automatikusan beleszámítanak.</p>
               </div>
 
               <div className="max-h-[62vh] overflow-auto">
@@ -471,10 +459,10 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                   <thead className="sticky top-0 z-10 bg-[#293548] text-[10px] uppercase tracking-[0.07em] text-white/48">
                     <tr>
                       <th className="px-3 py-2.5">Termék</th>
-                      <th className="px-3 py-2.5 text-right">Rendszer induláskor</th>
+                      <th className="px-3 py-2.5 text-right">Rendszer most</th>
                       <th className="px-3 py-2.5 text-right">Igazolt nettó</th>
                       <th className="px-3 py-2.5 text-right">Minimum</th>
-                      <th className="px-3 py-2.5 text-right">Talált</th>
+                      <th className="px-3 py-2.5 text-right">Leltár szerint</th>
                       <th className="px-3 py-2.5 text-right">Biztos hiány</th>
                       <th className="px-3 py-2.5 text-right">Régi / plusz</th>
                       <th className="px-3 py-2.5 text-right">Készletkorrekció</th>
@@ -496,10 +484,21 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
                             </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-right text-white/70">{qty(line.system_qty_start)}</td>
+                        <td className="px-3 py-2.5 text-right text-white/70">{qty(line.current_system_qty ?? line.system_qty_start)}</td>
                         <td className={`px-3 py-2.5 text-right ${n(line.trusted_net_qty) < 0 ? "text-amber-100" : "text-white/70"}`}>{n(line.trusted_net_qty) > 0 ? "+" : ""}{qty(line.trusted_net_qty)}</td>
                         <td className="px-3 py-2.5 text-right text-sky-100">{qty(line.known_min_qty)}</td>
-                        <td className="px-3 py-2.5 text-right text-base text-white">{line.counted_qty === null || line.counted_qty === undefined ? "–" : qty(line.counted_qty)}</td>
+                        <td className="px-3 py-2.5 text-right">
+                          {line.counted_qty === null || line.counted_qty === undefined ? "–" : (
+                            <>
+                              <div className="text-base text-white">{qty(line.counted_qty)}</div>
+                              {Math.abs(n(line.movement_after_count_qty)) > 0.0001 ? (
+                                <div className="mt-0.5 text-[9px] text-[#bdf8f5]">
+                                  számolt {qty(line.physical_counted_qty)} • azóta {n(line.movement_after_count_qty) > 0 ? "+" : ""}{qty(line.movement_after_count_qty)}
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-right text-red-100">{line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "–" : qty(line.definite_missing_qty)}</td>
                         <td className="px-3 py-2.5 text-right text-[#bdf8f5]">{line.untracked_qty === null || line.untracked_qty === undefined ? "–" : qty(line.untracked_qty)}</td>
                         <td className={`px-3 py-2.5 text-right ${n(line.system_correction_qty) < 0 ? "text-red-100" : n(line.system_correction_qty) > 0 ? "text-[#bdf8f5]" : "text-white/50"}`}>{line.system_correction_qty === null || line.system_correction_qty === undefined ? "–" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${qty(line.system_correction_qty)}`}</td>
@@ -545,7 +544,7 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
             <div className="space-y-3 p-4 text-sm leading-relaxed text-white/70">
               {confirmAction === "close" ? <p>A bolti beolvasás leáll. Az addig nem beolvasott, de rendszerből ismert tételeket 0 talált darabbal vesszük figyelembe az ellenőrzéshez.</p> : null}
               {confirmAction === "reopen" ? <p>A lezáráskor automatikusan 0-ra tett, nem talált sorok újra „még nem számolt” állapotba kerülnek, és Kézdin folytatható a csippogtatás.</p> : null}
-              {confirmAction === "apply" ? <p>Ez a művelet Kézdivásárhely készletét a fizikailag megszámolt darabszámokra állítja. Minden eltérés készletmozgásként naplózódik. Ha a leltár alatt bármilyen készletmozgás történt, a backend nem engedi végrehajtani.</p> : null}
+              {confirmAction === "apply" ? <p>A megszámolt mennyiségekre rávezetjük a közben történt eladásokat és készletmozgásokat, majd ezt alkalmazzuk Kézdivásárhely készletére. Minden korrekció naplózódik.</p> : null}
               {confirmAction === "cancel" ? <p>A nyitó leltár megszakad, a beolvasások megmaradnak auditként, de a készlethez nem nyúlunk.</p> : null}
               <div className="rounded-xl border border-white/12 bg-[#283446] px-3 py-2 text-xs text-white/55">{detail.session.title} • {detail.session.location_name || location} • talált {qty(detail.summary.counted_qty)} db</div>
             </div>
