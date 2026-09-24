@@ -3294,6 +3294,8 @@ export type AifShopDailyPaymentItem = {
   label: string;
   amount: number;
   transactions: number;
+  customerPaymentAmount?: number;
+  customerPaymentTransactions?: number;
 };
 
 export type AifShopDailyProductItem = {
@@ -3423,7 +3425,13 @@ export type AifShopDailySummaryResponse = {
   employee: string;
   location: { id: string; code: string; name: string };
   summary: {
+    /** Az adott napon létrejött eladások forgalma. Az átlagkosár továbbra is ebből számolódik. */
     revenue: number;
+    salesRevenue?: number;
+    /** Az adott napon ténylegesen befolyt összeg, a korábbi tartozások aznapi rendezésével együtt. */
+    collectedTotal?: number;
+    /** A collectedTotal azon része, amely korábbi hiteles vásárlások aznapi rendezése. */
+    customerPaymentTotal?: number;
     salesBeforeDiscount: number;
     transactions: number;
     itemsSold: number;
