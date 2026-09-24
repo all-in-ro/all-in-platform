@@ -311,6 +311,26 @@ function formatDate(value: string) {
   });
 }
 
+const CASH_HISTORY_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+
+function monthLabel(value: string) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return value;
+  const month = Math.max(1, Math.min(12, Number(match[2])));
+  return `${match[1]} ${CASH_HISTORY_MONTHS[month - 1]}`;
+}
+
+function recentMonthOptions(count = 18) {
+  const now = new Date(`${todayIso().slice(0, 7)}-15T12:00:00Z`);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - index, 15, 12));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  });
+}
+
 function formatTime(value?: string | null) {
   if (!value) return "–";
   const date = new Date(value);
@@ -974,6 +994,8 @@ export default function AllInShopOperations({
   const [cashMoveOpen, setCashMoveOpen] = useState(false);
   const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
   const [cashMoveAmount, setCashMoveAmount] = useState("");
+  const [cashHandoverToDate, setCashHandoverToDate] = useState("");
+  const [cashHistoryMonth, setCashHistoryMonth] = useState(() => todayIso().slice(0, 7));
   const [cashMoveReference, setCashMoveReference] = useState("");
   const [cashMoveNote, setCashMoveNote] = useState("");
   const [cashMoveSaving, setCashMoveSaving] = useState(false);
@@ -1026,6 +1048,10 @@ export default function AllInShopOperations({
     ? (shiftData?.dayClosure || cashData?.todayClosure || null)
     : (shiftData?.dayClosure || null);
   const pendingBossHandover = (cashData?.pendingManagerHandovers || [])[0] || null;
+  const cashHandoverPlan = cashData?.handoverPlan || null;
+  const selectedCashHandoverDay = (cashHandoverPlan?.days || []).find((day) => day.date === cashHandoverToDate) || null;
+  const cashHistoryMonths = useMemo(() => recentMonthOptions(18), []);
+  const cashHandoverHistory = cashData?.managerHandoverHistory || (cashData?.movements || []).filter((item) => item.type === "manager_handover");
   const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
   const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
     ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
@@ -1143,10 +1169,10 @@ export default function AllInShopOperations({
     }
   }
 
-  async function loadCashContext() {
+  async function loadCashContext(month = cashHistoryMonth) {
     setCashLoading(true);
     try {
-      const response = await apiAifShopCashOverview({ location: locationCode, limit: 80 });
+      const response = await apiAifShopCashOverview({ location: locationCode, limit: 160, month });
       setCashData(response);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A kassza naplója nem tölthető be.");
@@ -1156,8 +1182,8 @@ export default function AllInShopOperations({
     }
   }
 
-  async function refreshSummaryPage(date = summaryDate) {
-    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext()]);
+  async function refreshSummaryPage(date = summaryDate, month = cashHistoryMonth) {
+    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext(month)]);
   }
 
 
@@ -1290,23 +1316,37 @@ export default function AllInShopOperations({
   }
 
   async function createCashMovement() {
-    const amount = Number(String(cashMoveAmount || "").replace(",", "."));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setError("Add meg az átadott / befizetett készpénz összegét.");
-      return;
+    const bankAmount = Number(String(cashMoveAmount || "").replace(",", "."));
+
+    if (cashMoveType === "manager_handover") {
+      if (!selectedCashHandoverDay || !cashHandoverToDate) {
+        setError("Válaszd ki, melyik napig adod át a készpénzt.");
+        return;
+      }
+      if (numberValue(selectedCashHandoverDay.amount) <= 0) {
+        setError("A kiválasztott napig nincs átadható készpénz.");
+        return;
+      }
+    } else {
+      if (!Number.isFinite(bankAmount) || bankAmount <= 0) {
+        setError("Add meg a bankba befizetett készpénz összegét.");
+        return;
+      }
+      if (!cashMoveReference.trim()) {
+        setError("Bankbefizetésnél a referencia vagy bizonylatszám kötelező.");
+        return;
+      }
     }
-    if (cashMoveType === "bank_deposit" && !cashMoveReference.trim()) {
-      setError("Bankbefizetésnél a referencia vagy bizonylatszám kötelező.");
-      return;
-    }
+
     setCashMoveSaving(true);
     setError("");
     try {
       const response = await apiAifCreateShopCashMovement({
         location: locationCode,
         type: cashMoveType,
-        amount,
-        reference: cashMoveReference.trim() || null,
+        amount: cashMoveType === "bank_deposit" ? bankAmount : undefined,
+        handoverToDate: cashMoveType === "manager_handover" ? cashHandoverToDate : null,
+        reference: cashMoveType === "bank_deposit" ? (cashMoveReference.trim() || null) : null,
         note: cashMoveNote.trim() || null,
         idempotencyKey: typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
@@ -1314,14 +1354,15 @@ export default function AllInShopOperations({
       });
       setHandoverNotice(
         response.item.type === "manager_handover"
-          ? `${formatMoney(response.item.amount)} főnöki átadás rögzítve. A főnök visszaigazolására vár.`
+          ? `${formatMoney(response.item.amount)} készpénzátadás rögzítve (${response.item.handoverFromDate || "–"} → ${response.item.handoverToDate || "–"}). Átvételre vár.`
           : `${formatMoney(response.item.amount)} bankbefizetés rögzítve (${response.item.reference || "referencia nélkül"}).`,
       );
       setCashMoveOpen(false);
       setCashMoveAmount("");
+      setCashHandoverToDate("");
       setCashMoveReference("");
       setCashMoveNote("");
-      await refreshSummaryPage(summaryDate);
+      await refreshSummaryPage(summaryDate, cashHistoryMonth);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A kasszamozgás rögzítése nem sikerült.");
     } finally {
@@ -1334,7 +1375,7 @@ export default function AllInShopOperations({
     setError("");
     try {
       await apiAifCancelShopCashMovement(id);
-      setHandoverNotice("A függő főnöki pénzátadást visszavontad.");
+      setHandoverNotice("Az átvételre váró készpénzátadást visszavontad.");
       await refreshSummaryPage(summaryDate);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A pénzátadás visszavonása nem sikerült.");
@@ -1351,12 +1392,22 @@ export default function AllInShopOperations({
     setDayCloseOpen(true);
   }
 
-  function openCashMovement(type: AifShopCashMovementType) {
-    setError("");
+  function selectCashMovementType(type: AifShopCashMovementType) {
     setCashMoveType(type);
     setCashMoveAmount("");
     setCashMoveReference("");
+    if (type === "manager_handover") {
+      const selectableDays = (cashHandoverPlan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      setCashHandoverToDate(selectableDays[selectableDays.length - 1]?.date || "");
+    } else {
+      setCashHandoverToDate("");
+    }
+  }
+
+  function openCashMovement(type: AifShopCashMovementType) {
+    setError("");
     setCashMoveNote("");
+    selectCashMovementType(type);
     setCashMoveOpen(true);
   }
 
@@ -1395,9 +1446,11 @@ export default function AllInShopOperations({
       void loadStock("");
     } else {
       const today = todayIso();
+      const currentMonth = today.slice(0, 7);
       setSummaryDate(today);
+      setCashHistoryMonth(currentMonth);
       setHandoverNotice("");
-      void refreshSummaryPage(today);
+      void refreshSummaryPage(today, currentMonth);
     }
   }, [open, mode, locationCode]);
 
@@ -1812,8 +1865,11 @@ export default function AllInShopOperations({
                       <div className="flex items-start gap-3">
                         <Clock3 className="mt-0.5 shrink-0 text-orange-100" size={18} />
                         <div>
-                          <p className="text-sm text-orange-50">Főnöki átvétel visszaigazolására vár: {formatMoney(pendingBossHandover.amount)}</p>
+                          <p className="text-sm text-orange-50">Készpénzátadás átvételre vár: {formatMoney(pendingBossHandover.amount)}</p>
                           <p className="mt-1 text-xs text-white/48">{pendingBossHandover.requestedBy} rögzítette • {formatTime(pendingBossHandover.requestedAt)}</p>
+                          {(pendingBossHandover.handoverFromDate || pendingBossHandover.handoverToDate) ? (
+                            <p className="mt-1 text-[11px] text-[#fff4a5]/78">Időszak: {pendingBossHandover.handoverFromDate || pendingBossHandover.handoverToDate} → {pendingBossHandover.handoverToDate || pendingBossHandover.handoverFromDate}</p>
+                          ) : null}
                         </div>
                       </div>
                       <button
@@ -1836,7 +1892,7 @@ export default function AllInShopOperations({
                           <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
-                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Függő főnöki átadás</p>
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Átvételre vár</p>
                           <p className="mt-1 text-lg text-orange-50">{formatMoney(cashData?.balance.pendingOut || 0)}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
@@ -1850,10 +1906,10 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={() => openCashMovement("manager_handover")}
-                            disabled={Boolean(pendingBossHandover) || currentCashBalance <= 0}
-                            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-orange-200/30 bg-orange-500/14 px-3 text-sm text-orange-50 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={Boolean(pendingBossHandover) || !(cashHandoverPlan?.days || []).some((day) => day.status !== "pending" && numberValue(day.amount) > 0)}
+                            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            <WalletCards size={17} /> Átadás a főnöknek
+                            <WalletCards size={17} /> Készpénz átadása
                           </button>
                           <button
                             type="button"
@@ -1908,7 +1964,7 @@ export default function AllInShopOperations({
                           }`}>
                             <div className="flex items-center justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="truncate text-xs text-white">{movement.type === "manager_handover" ? "Átadás a főnöknek" : "Bankbefizetés"}</p>
+                                <p className="truncate text-xs text-white">{movement.type === "manager_handover" ? "Készpénz átadása" : "Bankbefizetés"}</p>
                                 <p className="mt-1 truncate text-[10px] text-white/42">{movement.requestedBy} • {formatTime(movement.requestedAt)}{movement.reference ? ` • ${movement.reference}` : ""}</p>
                               </div>
                               <div className="shrink-0 text-right">
@@ -1921,11 +1977,89 @@ export default function AllInShopOperations({
                           </div>
                         ))}
                         {!cashLoading && !(cashData?.movements || []).length ? (
-                          <div className="rounded-xl border border-dashed border-white/12 px-3 py-7 text-center text-xs text-white/40">Még nincs főnöki átadás vagy bankbefizetés.</div>
+                          <div className="rounded-xl border border-dashed border-white/12 px-3 py-7 text-center text-xs text-white/40">Még nincs készpénzátadás vagy bankbefizetés.</div>
                         ) : null}
                       </div>
                     </div>
                   </div>
+                </div>
+              </section>
+
+              <section className="mt-4 overflow-hidden rounded-[26px] border border-[#ffe66b]/35 bg-[#2d394b] shadow-[0_16px_38px_rgba(15,23,42,0.20)]">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303a4c] px-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#ffe66b]/55 bg-[#fed700] text-[#243044]"><History size={20} /></span>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Saját átadási előzmények</p>
+                      <h3 className="mt-1 text-lg text-white">Készpénzátadások</h3>
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-[0.1em] text-white/42">Hónap</span>
+                    <select
+                      value={cashHistoryMonth}
+                      onChange={(event) => {
+                        const month = event.target.value;
+                        setCashHistoryMonth(month);
+                        void loadCashContext(month);
+                      }}
+                      className="h-10 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
+                    >
+                      {cashHistoryMonths.map((month) => <option key={month} value={month}>{monthLabel(month)}</option>)}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid gap-2 p-3 lg:grid-cols-2">
+                  {cashHandoverHistory.map((movement) => {
+                    const confirmed = movement.status === "confirmed";
+                    const pending = movement.status === "pending";
+                    return (
+                      <article key={`handover-history-${movement.id}`} className={`rounded-2xl border p-3 ${
+                        pending
+                          ? "border-[#ffe66b]/35 bg-[#fed700]/[0.07]"
+                          : confirmed
+                            ? "border-emerald-200/18 bg-emerald-500/[0.06]"
+                            : "border-white/10 bg-[#303a4c]"
+                      }`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                                confirmed
+                                  ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
+                                  : pending
+                                    ? "border-[#ffe66b]/45 bg-[#fed700]/12 text-[#fff4a5]"
+                                    : "border-white/12 bg-white/[0.04] text-white/55"
+                              }`}>
+                                {confirmed ? "Átvéve" : pending ? "Átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
+                              </span>
+                              <span className="text-[10px] text-white/42">
+                                {(movement.handoverFromDate || movement.handoverToDate)
+                                  ? `${movement.handoverFromDate || movement.handoverToDate} → ${movement.handoverToDate || movement.handoverFromDate}`
+                                  : formatDate(String(movement.requestedAt || "").slice(0, 10))}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-[11px] text-white/58">
+                              Rögzítve: {movement.requestedAt ? formatExactDateTime(movement.requestedAt) : "–"}
+                            </p>
+                            {movement.confirmedAt ? (
+                              <p className="mt-1 text-[11px] text-emerald-100/70">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
+                            ) : null}
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xl text-white">{formatMoney(movement.amount)}</p>
+                            <p className="mt-1 text-[9px] text-white/36">{movement.coveredDayCount || 1} nap</p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {!cashLoading && !cashHandoverHistory.length ? (
+                    <div className="lg:col-span-2 rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/42">
+                      {monthLabel(cashHistoryMonth)} hónapban nincs készpénzátadás.
+                    </div>
+                  ) : null}
                 </div>
               </section>
 
@@ -2615,68 +2749,192 @@ export default function AllInShopOperations({
 
         {cashMoveOpen ? createPortal(
           <div className="fixed inset-0 z-[434] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5">
-            <section className="w-full max-w-[820px] overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
-              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#304257] to-[#315a5d] px-5 py-4">
+            <section className="flex max-h-[94vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] border border-white/18 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#354153] px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/24"><CircleDollarSign size={23} /></span>
+                  <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
+                    cashMoveType === "manager_handover"
+                      ? "border-[#ffe66b] bg-[#fed700] text-[#243044]"
+                      : "border-[#9be9e5]/34 bg-[#2a8d8b]/24 text-white"
+                  }`}><CircleDollarSign size={23} /></span>
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Készpénz útja</p>
-                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Átadás a főnöknek" : "Bankba befizetés"}</h3>
-                    <p className="mt-1 text-xs text-white/52">{locationName} • kassza {formatMoney(currentCashBalance)}</p>
+                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz átadása" : "Bankba befizetés"}</h3>
+                    <p className="mt-1 text-xs text-white/52">{locationName} • jelenlegi kassza {formatMoney(currentCashBalance)}</p>
                   </div>
                 </div>
                 <button type="button" disabled={cashMoveSaving} onClick={() => setCashMoveOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-45"><X size={18} /></button>
               </header>
 
-              <div className="space-y-4 p-5">
+              <div className="min-h-0 flex-1 overflow-y-auto p-5">
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <button type="button" onClick={() => setCashMoveType("manager_handover")} className={`min-h-16 rounded-2xl border p-3 text-left ${cashMoveType === "manager_handover" ? "border-orange-200/40 bg-orange-500/16" : "border-white/12 bg-[#374357]"}`}>
-                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Átadás a főnöknek</p>
-                    <p className="mt-1 text-[11px] text-white/48">Függő tétel lesz, amíg a főnök a saját felületén vissza nem igazolja.</p>
+                  <button
+                    type="button"
+                    onClick={() => selectCashMovementType("manager_handover")}
+                    className={`min-h-16 rounded-2xl border p-3 text-left transition ${
+                      cashMoveType === "manager_handover"
+                        ? "border-[#ffe66b] bg-[#fed700] text-[#243044] shadow-[0_8px_24px_rgba(254,215,0,0.18)]"
+                        : "border-white/12 bg-[#374357] text-white hover:border-[#ffe66b]/45"
+                    }`}
+                  >
+                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Készpénz átadása</p>
+                    <p className={`mt-1 text-[11px] ${cashMoveType === "manager_handover" ? "text-[#243044]/70" : "text-white/48"}`}>Válaszd ki, melyik üzleti napig adod át az összegyűlt készpénzt.</p>
                   </button>
-                  <button type="button" onClick={() => setCashMoveType("bank_deposit")} className={`min-h-16 rounded-2xl border p-3 text-left ${cashMoveType === "bank_deposit" ? "border-[#9be9e5]/40 bg-[#2a8d8b]/16" : "border-white/12 bg-[#374357]"}`}>
+                  <button
+                    type="button"
+                    onClick={() => selectCashMovementType("bank_deposit")}
+                    className={`min-h-16 rounded-2xl border p-3 text-left transition ${
+                      cashMoveType === "bank_deposit"
+                        ? "border-[#9be9e5]/40 bg-[#2a8d8b]/18"
+                        : "border-white/12 bg-[#374357]"
+                    }`}
+                  >
                     <p className="flex items-center gap-2 text-sm"><Landmark size={17} /> Bankba befizetés</p>
                     <p className="mt-1 text-[11px] text-white/48">Azonnal naplózott pénzkiadás. A banki referencia / bizonylatszám kötelező.</p>
                   </button>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
-                    <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Összeg</span>
-                    <input value={cashMoveAmount} onChange={(event) => setCashMoveAmount(event.target.value)} inputMode="decimal" autoFocus className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]" placeholder="0,00" />
-                    <button type="button" onClick={() => setCashMoveAmount(currentCashBalance.toFixed(2).replace(".", ","))} className="mt-2 text-[11px] text-[#bdf8f5]">Teljes kassza: {formatMoney(currentCashBalance)}</button>
-                  </label>
-                  <label className={`rounded-[22px] border p-4 ${cashMoveType === "bank_deposit" ? "border-[#9be9e5]/20 bg-[#374357]" : "border-white/8 bg-[#374357]/60"}`}>
-                    <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Referencia / bizonylatszám {cashMoveType === "bank_deposit" ? "• kötelező" : "• opcionális"}</span>
-                    <input value={cashMoveReference} onChange={(event) => setCashMoveReference(event.target.value.slice(0, 120))} className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-sm text-white outline-none focus:border-[#72d8d4]" placeholder={cashMoveType === "bank_deposit" ? "Pl. DEP-2026-0811-01" : "Pl. boríték / belső hivatkozás"} />
-                  </label>
-                </div>
+                {cashMoveType === "manager_handover" ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 lg:grid-cols-[1.05fr_0.95fr]">
+                      <div className="rounded-[22px] border border-[#ffe66b]/42 bg-[#2a3445] p-4">
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#fff4a5]/68">Átadási időszak</p>
+                        <p className="mt-2 text-xl text-white">
+                          {cashHandoverPlan?.nextFrom || "–"} → {cashHandoverToDate || "válassz napot"}
+                        </p>
+                        <p className="mt-2 text-xs leading-relaxed text-white/50">
+                          Az előző átvett készpénz után csak a még le nem fedett üzleti napok választhatók.
+                        </p>
+                        {cashHandoverPlan?.lastConfirmedTo ? (
+                          <p className="mt-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[11px] text-white/58">
+                            Utolsó átvett időszak vége: <span className="text-white">{cashHandoverPlan.lastConfirmedTo}</span>
+                          </p>
+                        ) : null}
+                      </div>
 
-                <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
-                  <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megjegyzés • opcionális</span>
-                  <textarea value={cashMoveNote} onChange={(event) => setCashMoveNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]" placeholder={cashMoveType === "manager_handover" ? "Pl. készpénz átadva személyesen…" : "Pl. bankfiók / automata / megjegyzés…"} />
-                </label>
+                      <div className="rounded-[22px] border border-[#ffe66b]/55 bg-[#fed700] p-4 text-[#243044] shadow-[0_12px_28px_rgba(254,215,0,0.15)]">
+                        <p className="text-[10px] uppercase tracking-[0.13em] opacity-65">Átadandó készpénz</p>
+                        <p className="mt-2 text-4xl tracking-tight">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                          <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
+                            {selectedCashHandoverDay?.closed ? "Napzárással ellenőrizve" : "Rendszer szerinti érték"}
+                          </span>
+                          {selectedCashHandoverDay?.closingCash != null ? (
+                            <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
+                              Záró kassza: {formatMoney(selectedCashHandoverDay.closingCash)}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
 
-                <div className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${cashMoveType === "manager_handover" ? "border-orange-200/24 bg-orange-500/8" : "border-[#9be9e5]/22 bg-[#2a8d8b]/8"}`}>
-                  <TriangleAlert className="mt-0.5 shrink-0" size={18} />
-                  <p className="text-xs leading-relaxed text-white/66">
-                    {cashMoveType === "manager_handover"
-                      ? "Az összeg addig nem csökken a rendszer szerinti kasszából, amíg a főnök nem igazolja vissza az átvételt. Így nincs több „odaadtam / nem emlékszem” vita."
-                      : "A bankbefizetés azonnal csökkenti a kasszát, és a referencia örökre megmarad az auditnaplóban."}
-                  </p>
-                </div>
+                    <section className="overflow-hidden rounded-[22px] border border-white/12 bg-[#374357]">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Átadás eddig a napig</p>
+                          <h4 className="mt-1 text-base text-white">Válaszd ki a zárónapot</h4>
+                        </div>
+                        <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/52">
+                          {(cashHandoverPlan?.days || []).length} nap
+                        </span>
+                      </div>
+                      <div className="grid max-h-[320px] gap-2 overflow-y-auto p-3 sm:grid-cols-2">
+                        {(cashHandoverPlan?.days || []).map((day) => {
+                          const selected = day.date === cashHandoverToDate;
+                          const blocked = day.status === "pending" || numberValue(day.amount) <= 0;
+                          return (
+                            <button
+                              key={day.date}
+                              type="button"
+                              disabled={blocked}
+                              onClick={() => setCashHandoverToDate(day.date)}
+                              className={`flex min-h-[76px] items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 text-left transition ${
+                                selected
+                                  ? "border-[#ffe66b] bg-[#fed700] text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.16)]"
+                                  : blocked
+                                    ? "border-white/8 bg-black/[0.07] text-white/32"
+                                    : "border-white/12 bg-[#293548] text-white hover:border-[#ffe66b]/40 hover:bg-[#313e52]"
+                              }`}
+                            >
+                              <span className="min-w-0">
+                                <span className="block text-sm">{formatDate(day.date)}</span>
+                                <span className={`mt-1 block text-[10px] ${selected ? "text-[#243044]/65" : "text-white/42"}`}>
+                                  {day.status === "pending" ? "Már átvételre vár" : day.closed ? "Napzárás rögzítve" : "Nincs külön napzárás"}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-right">
+                                <span className="block text-base">{formatMoney(day.amount)}</span>
+                                <span className={`mt-1 block text-[9px] ${selected ? "text-[#243044]/55" : "text-white/35"}`}>eddig átadható</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {!cashLoading && !(cashHandoverPlan?.days || []).length ? (
+                          <div className="sm:col-span-2 rounded-xl border border-dashed border-white/12 px-4 py-7 text-center text-sm text-white/42">
+                            Nincs még átadható készpénzes időszak.
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megjegyzés • opcionális</span>
+                      <textarea value={cashMoveNote} onChange={(event) => setCashMoveNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#fed700]" placeholder="Pl. boríték azonosító, megjegyzés…" />
+                    </label>
+
+                    <div className="flex items-start gap-3 rounded-2xl border border-[#ffe66b]/26 bg-[#fed700]/[0.07] px-4 py-3">
+                      <TriangleAlert className="mt-0.5 shrink-0 text-[#ffe66b]" size={18} />
+                      <p className="text-xs leading-relaxed text-white/68">
+                        A rendszer számolja az összeget a kiválasztott napig. Kézzel nem írható át. A kassza csak akkor csökken, amikor az Admin ténylegesen visszaigazolja az átvételt.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                        <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Befizetett összeg</span>
+                        <input value={cashMoveAmount} onChange={(event) => setCashMoveAmount(event.target.value)} inputMode="decimal" autoFocus className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]" placeholder="0,00" />
+                        <button type="button" onClick={() => setCashMoveAmount(currentCashBalance.toFixed(2).replace(".", ","))} className="mt-2 text-[11px] text-[#bdf8f5]">Teljes kassza: {formatMoney(currentCashBalance)}</button>
+                      </label>
+                      <label className="rounded-[22px] border border-[#9be9e5]/20 bg-[#374357] p-4">
+                        <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Referencia / bizonylatszám • kötelező</span>
+                        <input value={cashMoveReference} onChange={(event) => setCashMoveReference(event.target.value.slice(0, 120))} className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-sm text-white outline-none focus:border-[#72d8d4]" placeholder="Pl. DEP-2026-0811-01" />
+                      </label>
+                    </div>
+
+                    <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megjegyzés • opcionális</span>
+                      <textarea value={cashMoveNote} onChange={(event) => setCashMoveNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]" placeholder="Pl. bankfiók / automata / megjegyzés…" />
+                    </label>
+
+                    <div className="flex items-start gap-3 rounded-2xl border border-[#9be9e5]/22 bg-[#2a8d8b]/8 px-4 py-3">
+                      <TriangleAlert className="mt-0.5 shrink-0" size={18} />
+                      <p className="text-xs leading-relaxed text-white/66">A bankbefizetés azonnal csökkenti a kasszát, és a referencia megmarad az auditnaplóban.</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
                 <button type="button" disabled={cashMoveSaving} onClick={() => setCashMoveOpen(false)} className="h-11 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm disabled:opacity-45">Mégse</button>
                 <button
                   type="button"
-                  disabled={cashMoveSaving || !cashMoveAmount.trim() || (cashMoveType === "bank_deposit" && !cashMoveReference.trim())}
+                  disabled={
+                    cashMoveSaving ||
+                    (cashMoveType === "manager_handover"
+                      ? !selectedCashHandoverDay || numberValue(selectedCashHandoverDay.amount) <= 0
+                      : !cashMoveAmount.trim() || !cashMoveReference.trim())
+                  }
                   onClick={() => void createCashMovement()}
-                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                  className={`inline-flex h-11 items-center gap-2 rounded-xl border px-5 text-sm disabled:cursor-not-allowed disabled:opacity-45 ${
+                    cashMoveType === "manager_handover"
+                      ? "border-[#ffe66b] bg-[#fed700] text-[#243044] hover:bg-[#eac600]"
+                      : "border-[#b9f5f2]/50 bg-[#2a8d8b] text-white hover:bg-[#319c99]"
+                  }`}
                 >
                   {cashMoveSaving ? <Loader2 size={17} className="animate-spin" /> : cashMoveType === "manager_handover" ? <WalletCards size={17} /> : <Landmark size={17} />}
-                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Átadás rögzítése" : "Bankbefizetés rögzítése"}
+                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Készpénzátadás rögzítése" : "Bankbefizetés rögzítése"}
                 </button>
               </footer>
             </section>
