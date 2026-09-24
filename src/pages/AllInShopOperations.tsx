@@ -966,9 +966,19 @@ export default function AllInShopOperations({
   const [cashCancelBusyId, setCashCancelBusyId] = useState<string | null>(null);
 
   const paymentMap = useMemo(() => {
-    const map = new Map<string, { amount: number; transactions: number }>();
+    const map = new Map<string, {
+      amount: number;
+      transactions: number;
+      customerPaymentAmount: number;
+      customerPaymentTransactions: number;
+    }>();
     for (const item of summaryData?.payments || []) {
-      map.set(item.method, { amount: numberValue(item.amount), transactions: numberValue(item.transactions) });
+      map.set(item.method, {
+        amount: numberValue(item.amount),
+        transactions: numberValue(item.transactions),
+        customerPaymentAmount: numberValue(item.customerPaymentAmount),
+        customerPaymentTransactions: numberValue(item.customerPaymentTransactions),
+      });
     }
     return map;
   }, [summaryData]);
@@ -1454,6 +1464,9 @@ export default function AllInShopOperations({
   };
   const daySummary = summaryData?.summary || {
     revenue: 0,
+    salesRevenue: 0,
+    collectedTotal: 0,
+    customerPaymentTotal: 0,
     salesBeforeDiscount: 0,
     transactions: 0,
     itemsSold: 0,
@@ -1466,6 +1479,11 @@ export default function AllInShopOperations({
     firstSaleAt: null,
     lastSaleAt: null,
   };
+  // Rolling deploy kompatibilitás: ha a frontend egy rövid időre még a régi
+  // backenddel beszél, ne mutasson 0 RON-t, hanem essen vissza a régi revenue-ra.
+  const daySalesRevenue = numberValue(daySummary.salesRevenue ?? daySummary.revenue);
+  const dayCollectedTotal = numberValue(daySummary.collectedTotal ?? daySummary.revenue);
+  const dayCustomerPaymentTotal = numberValue(daySummary.customerPaymentTotal);
   const dailyProductLines = summaryData?.productLines?.length
     ? summaryData.productLines
     : (summaryData?.products || []);
@@ -1678,10 +1696,14 @@ export default function AllInShopOperations({
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi forgalom</p>
-                    <span className="rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Hitel nélkül</span>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi befolyt összeg</p>
+                    <span className="rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
                   </div>
-                  <p className="mt-2 text-4xl tracking-tight">{formatMoney(daySummary.revenue)}</p>
+                  <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCollectedTotal)}</p>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-white/16 pt-2 text-[10px] text-white/72">
+                    <span>Mai eladási forgalom: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
+                    <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladások</p><p className="mt-2 text-3xl">{daySummary.transactions}</p></div>
                 <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladott darab</p><p className="mt-2 text-3xl">{daySummary.itemsSold}</p></div>
@@ -1709,8 +1731,26 @@ export default function AllInShopOperations({
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {PAYMENT_META.map((item) => {
                   const Icon = item.icon;
-                  const payment = paymentMap.get(item.method) || { amount: 0, transactions: 0 };
-                  return <div key={item.method} className="rounded-2xl border border-white/12 bg-[#374357] p-3"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span><span className="text-[10px] text-white/38">{payment.transactions} {item.method === "credit" ? "hitel" : "eladás"}</span></div><p className="mt-2 text-xl">{formatMoney(payment.amount)}</p></div>;
+                  const payment = paymentMap.get(item.method) || {
+                    amount: 0,
+                    transactions: 0,
+                    customerPaymentAmount: 0,
+                    customerPaymentTransactions: 0,
+                  };
+                  return (
+                    <div key={item.method} className="rounded-2xl border border-white/12 bg-[#374357] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span>
+                        <span className="text-[10px] text-white/38">{payment.transactions} {item.method === "credit" ? "hitel" : "fizetés"}</span>
+                      </div>
+                      <p className="mt-2 text-xl">{formatMoney(payment.amount)}</p>
+                      {item.method !== "credit" && payment.customerPaymentAmount > 0.005 ? (
+                        <p className="mt-1.5 text-[10px] text-[#bdf8f5]/72">
+                          ebből tartozásrendezés: {formatMoney(payment.customerPaymentAmount)} • {payment.customerPaymentTransactions} befizetés
+                        </p>
+                      ) : null}
+                    </div>
+                  );
                 })}
               </div>
 
@@ -1963,7 +2003,7 @@ export default function AllInShopOperations({
                           <p className="mt-1 text-sm text-white/55">Minden dolgozó együtt • {formatDate(summaryDate)}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Összes forgalom</p>
+                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Eladási forgalom</p>
                           <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftData?.totals.revenue || 0)}</p>
                         </div>
                       </div>
@@ -1992,7 +2032,7 @@ export default function AllInShopOperations({
                         <UserRound size={22} className="text-[#8ee6e2]" />
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2">
-                        <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Forgalom</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(currentEmployeeDay?.revenue || 0)}</p></div>
+                        <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladási forgalom</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(currentEmployeeDay?.revenue || 0)}</p></div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-sm">{currentEmployeeDay?.transactions || 0}</p></div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-sm">{currentEmployeeDay?.itemsSold || 0}</p></div>
                       </div>
@@ -2025,6 +2065,7 @@ export default function AllInShopOperations({
                                 {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white">Te</span> : null}
                               </div>
                               <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(employee.revenue)}</p>
+                              <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Eladási forgalom</p>
                               <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                                 <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
                                   <p className="text-white/40">Készpénz</p>
