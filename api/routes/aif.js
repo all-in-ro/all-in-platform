@@ -4,6 +4,7 @@ import createAifShopReturnsRouter from "./aif/shopReturns.js";
 import createAifShopReservationsRouter from "./aif/shopReservations.js";
 import createAifShopIncomingRouter from "./aif/shopIncoming.js";
 import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
+import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -26806,6 +26807,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.json(aifShopSaleResponse(previous, location, true));
       }
 
+      // Nyitó/helyreállító leltár alatt az üzleti készletet befagyasztjuk.
+      // Egyetlen közben eladott darab is összekeverné a fizikai számolás időpillanatát.
+      const openingInventoryTable = await client.query(
+        `SELECT to_regclass('public.aif_opening_inventory_sessions') AS table_name`
+      );
+      if (openingInventoryTable.rows[0]?.table_name) {
+        const openingInventory = await client.query(
+          `SELECT id,code,status
+           FROM aif_opening_inventory_sessions
+           WHERE location_id=$1
+             AND status IN ('draft','counting','review')
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [location.id]
+        );
+        if (openingInventory.rowCount) {
+          const error = new Error("Ebben az üzletben nyitó leltár van folyamatban. Eladás csak a leltár lezárása vagy megszakítása után rögzíthető.");
+          error.statusCode = 409;
+          error.code = "opening_inventory_in_progress";
+          error.openingInventoryId = String(openingInventory.rows[0].id);
+          error.openingInventoryCode = openingInventory.rows[0].code;
+          throw error;
+        }
+      }
+
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
       await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
 
@@ -27313,6 +27339,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifBucharestIsoDate,
     aifValidIsoDate,
     aifInclusiveDayCount,
+  }));
+
+
+  // Egyszeri nyitó/helyreállító leltár. Külön modul, hogy a normál leltárt ne keverjük a migrációs logikával.
+  router.use("/opening-inventory", createAifOpeningInventoryRouter({
+    pool,
+    requireAuthed,
+    requireAdminOrSecret,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    normCode,
+    aifNumber,
+    insertStockMovementSafe,
   }));
 
   // Admin üzletmonitor külön modulokban. Innentől ezt a funkciócsaládot ne az aif.js-ben bővítsük.
