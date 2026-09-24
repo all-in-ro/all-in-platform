@@ -27,6 +27,8 @@ const AllInReserved = lazy(() => import("./pages/AllInReserved"));
 const AllInStockMoves = lazy(() => import("./pages/AllInStockMoves"));
 const AllInInventory = lazy(() => import("./pages/AllInInventory"));
 const AllInInventoryMobile = lazy(() => import("./pages/AllInInventoryMobile"));
+const AllInOpeningInventoryAdmin = lazy(() => import("./pages/AllInOpeningInventoryAdmin"));
+const AllInOpeningInventoryShop = lazy(() => import("./pages/AllInOpeningInventoryShop"));
 const AllInSuppliers = lazy(() => import("./pages/AllInSuppliers"));
 const AllInReceptions = lazy(() => import("./pages/AllInReceptions"));
 const AllInBarcodes = lazy(() => import("./pages/AllInBarcodes"));
@@ -58,6 +60,8 @@ type ScreenName =
   | "reserved"
   | "stockmoves"
   | "inventory"
+  | "openinginventoryadmin"
+  | "openinginventoryshop"
   | "suppliers"
   | "receptions"
   | "barcodes"
@@ -213,6 +217,8 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "reserved") return { name: "reserved" };
   if (key === "stockmoves") return { name: "stockmoves" };
   if (key === "inventory") return { name: "inventory" };
+  if (key === "openinginventoryadmin" || key === "opening-inventory-admin" || key === "kezdi-opening-inventory") return { name: "openinginventoryadmin" };
+  if (key === "openinginventoryshop" || key === "opening-inventory-shop" || key === "shop-opening-inventory") return { name: "openinginventoryshop" };
   if (key === "suppliers") return { name: "suppliers" };
   if (key === "receptions") return { name: "receptions" };
   if (key === "barcodes") return { name: "barcodes" };
@@ -232,6 +238,8 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinreserved") return { name: "reserved" };
   if (key === "allinstockmoves" || key === "allin-stockmoves" || key === "allin-stock-moves") return { name: "stockmoves" };
   if (key === "allininventory") return { name: "inventory" };
+  if (key === "allinopeninginventoryadmin" || key === "allin-opening-inventory-admin") return { name: "openinginventoryadmin" };
+  if (key === "allinopeninginventoryshop" || key === "allin-opening-inventory-shop") return { name: "openinginventoryshop" };
   if (key === "allinsuppliers" || key === "allin-suppliers" || key === "aif-suppliers") return { name: "suppliers" };
   if (key === "allinreceptions" || key === "allin-receptions" || key === "aif-receptions") return { name: "receptions" };
   if (key === "allinbarcodes" || key === "allin-barcodes" || key === "aif-barcodes" || key === "barcode" || key === "labels") return { name: "barcodes" };
@@ -256,6 +264,7 @@ function shopHomeScreen(shopId: ShopId): ScreenName {
 }
 
 function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
+  if (screenName === "openinginventoryshop") return true;
   if (shopId === "csikszereda") {
     return screenName === "magazinciuc" || screenName === "magazinciucsale";
   }
@@ -289,6 +298,7 @@ function clearShopBrowserState() {
       key && (
         key.startsWith("allin:shop-sale-cart:") ||
         key.startsWith("allin:shop-administration-unlock:") ||
+        key.startsWith("allin:opening-inventory:") ||
         key === "allin:last_hash"
       )
     ) {
@@ -742,6 +752,24 @@ export default function App() {
         {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
         {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
         {screen.name === "inventory" && (inventoryMobile ? <AllInInventoryMobile {...(commonProps as any)} /> : <AllInInventory {...(commonProps as any)} />)}
+        {screen.name === "openinginventoryadmin" && session.role === "admin" && (
+          <AllInOpeningInventoryAdmin actor={session.actor} role="admin" />
+        )}
+        {screen.name === "openinginventoryshop" && (
+          <AllInOpeningInventoryShop
+            actor={session.actor}
+            role={session.role}
+            shopId={session.role === "shop" ? session.shopId : undefined}
+            locationCode={session.role === "shop"
+              ? (session.locationCode || (session.shopId === "kezdivasarhely"
+                ? "magazin_targu_secuiesc"
+                : session.shopId === "csikszereda"
+                  ? "main_warehouse"
+                  : session.shopId))
+              : undefined}
+            locationName={session.role === "shop" ? (session.locationName || session.shopName || session.shopId) : undefined}
+          />
+        )}
         {screen.name === "suppliers" && <AllInSuppliers {...(commonProps as any)} />}
         {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
         {screen.name === "barcodes" && <AllInBarcodes {...(commonProps as any)} />}
