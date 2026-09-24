@@ -75,7 +75,7 @@ const incomingItems: MenuItem[] = [
   { key: "suppliers", label: "Beszállítók", hash: "#allinsuppliers", icon: Building2 },
   { key: "orders", label: "Rendelések", hash: "#allinorderhistory", icon: History },
   { key: "legacy_import", label: "Régi rendszer import", hash: "#allinincoming", icon: History },
-  { key: "opening_inventory_kezdi", label: "Kézdi nyitó leltár", hash: "#allinopeninginventoryadmin", icon: ClipboardCheck },
+  { key: "store_inventory", label: "Üzleti leltár", hash: "#allinopeninginventoryadmin", icon: ClipboardCheck },
 ];
 
 function justDate(value?: string | null): string | undefined {
