@@ -1217,6 +1217,242 @@ export function apiAifDeleteInventoryCount(id: string) {
   });
 }
 
+
+
+export type AifOpeningInventoryStatus = "draft" | "counting" | "review" | "applied" | "cancelled";
+
+export type AifOpeningInventoryProduct = {
+  variantId: string;
+  title: string;
+  internalSku?: string | null;
+  modelCode?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  snCod?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  colorCode?: string | null;
+  colorName?: string | null;
+  colorHex?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+};
+
+export type AifOpeningInventorySession = {
+  id: string;
+  code: string;
+  title: string;
+  location_id?: string;
+  location_code?: string | null;
+  location_name?: string | null;
+  location_type?: string | null;
+  location?: { id: string; code?: string | null; name?: string | null };
+  status: AifOpeningInventoryStatus;
+  sales_trusted_from?: string | null;
+  legacy_retail_value?: number | string | null;
+  baseline_at?: string | null;
+  started_at?: string | null;
+  counting_closed_at?: string | null;
+  applied_at?: string | null;
+  cancelled_at?: string | null;
+  started_by?: string | null;
+  closed_by?: string | null;
+  applied_by?: string | null;
+  cancelled_by?: string | null;
+  note?: string | null;
+  raw?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  startedAt?: string | null;
+  updatedAt?: string | null;
+  editable?: boolean;
+};
+
+export type AifOpeningInventoryLineStatus = "awaiting_known" | "uncounted" | "missing" | "untracked" | "ok";
+
+export type AifOpeningInventoryAdminLine = {
+  id: string;
+  session_id: string;
+  variant_id: string;
+  status: AifOpeningInventoryLineStatus;
+  system_qty_start: number | string;
+  system_reserved_start: number | string;
+  trusted_net_qty: number | string;
+  trusted_in_qty: number | string;
+  trusted_out_qty: number | string;
+  known_min_qty: number | string;
+  counted_qty?: number | string | null;
+  definite_missing_qty?: number | string | null;
+  untracked_qty?: number | string | null;
+  system_correction_qty?: number | string | null;
+  buy_price?: number | string | null;
+  sell_price?: number | string | null;
+  first_scanned_at?: string | null;
+  last_scanned_at?: string | null;
+  last_scanned_by?: string | null;
+  auto_zeroed?: boolean;
+  note?: string | null;
+  product: AifOpeningInventoryProduct;
+};
+
+export type AifOpeningInventorySummary = {
+  line_count: number | string;
+  counted_lines: number | string;
+  counted_qty: number | string;
+  system_qty_start: number | string;
+  trusted_net_qty: number | string;
+  trusted_in_qty: number | string;
+  trusted_out_qty: number | string;
+  known_min_qty: number | string;
+  definite_missing_qty: number | string;
+  unseen_known_min_qty: number | string;
+  untracked_qty: number | string;
+  system_correction_qty: number | string;
+  counted_retail_value: number | string;
+  trusted_net_retail_value: number | string;
+  definite_missing_retail_value: number | string;
+  untracked_retail_value: number | string;
+  system_correction_retail_value: number | string;
+  unknown_rows: number | string;
+  unknown_qty: number | string;
+  legacy_retail_value?: number | string | null;
+  book_expected_retail_value?: number | string | null;
+  book_diff_retail_value?: number | string | null;
+};
+
+export type AifOpeningInventoryUnknownScan = {
+  id: string;
+  scan_code: string;
+  qty: number | string;
+  first_scanned_at?: string | null;
+  last_scanned_at?: string | null;
+  last_scanned_by?: string | null;
+  resolved_variant_id?: string | null;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+};
+
+export type AifOpeningInventoryAdminDetail = {
+  ok?: true;
+  session: AifOpeningInventorySession;
+  summary: AifOpeningInventorySummary;
+  lines: AifOpeningInventoryAdminLine[];
+  unknown: AifOpeningInventoryUnknownScan[];
+  resolution?: { resolved: number; remaining: number };
+  result?: { changed: number; netDiff: number; correctionRetailValue: number };
+};
+
+export type AifOpeningInventoryShopLine = {
+  id: string;
+  countedQty: number;
+  firstScannedAt?: string | null;
+  lastScannedAt?: string | null;
+  lastScannedBy?: string | null;
+  product: AifOpeningInventoryProduct;
+};
+
+export type AifOpeningInventoryActiveResponse = {
+  ok: true;
+  active: boolean;
+  location?: { id: string; code: string; name: string };
+  session: AifOpeningInventorySession | null;
+  progress?: { countedLines: number; countedQty: number };
+  recent: AifOpeningInventoryShopLine[];
+};
+
+export function apiAifOpeningInventoryActive(location?: string) {
+  const q = new URLSearchParams();
+  if (location) q.set("location", location);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<AifOpeningInventoryActiveResponse>(`/opening-inventory/active${suffix}`);
+}
+
+export function apiAifOpeningInventoryScan(input: { location?: string; code: string; qty?: number }) {
+  return fetchAifJSON<{
+    ok: true;
+    session: AifOpeningInventorySession;
+    line: AifOpeningInventoryShopLine;
+  }>("/opening-inventory/scan", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifOpeningInventorySetLine(
+  lineId: string,
+  input: { location?: string; countedQty: number },
+) {
+  return fetchAifJSON<{ ok: true; line: AifOpeningInventoryShopLine }>(
+    `/opening-inventory/lines/${encodeURIComponent(lineId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifListOpeningInventorySessions(options?: {
+  location?: string;
+  status?: AifOpeningInventoryStatus;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.location) q.set("location", options.location);
+  if (options?.status) q.set("status", options.status);
+  if (options?.limit) q.set("limit", String(options.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ ok: true; items: AifOpeningInventorySession[] }>(`/opening-inventory/admin/sessions${suffix}`);
+}
+
+export function apiAifStartOpeningInventory(input: {
+  location: string;
+  title?: string;
+  salesTrustedFrom: string;
+  legacyRetailValue?: number | string | null;
+  note?: string | null;
+}) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>("/opening-inventory/admin/sessions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifGetOpeningInventory(id: string) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}`);
+}
+
+export function apiAifReconcileOpeningInventoryUnknown(id: string) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}/reconcile-unknown`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function apiAifCloseOpeningInventory(id: string) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}/close`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function apiAifReopenOpeningInventory(id: string) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}/reopen`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function apiAifApplyOpeningInventory(id: string) {
+  return fetchAifJSON<AifOpeningInventoryAdminDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}/apply`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function apiAifCancelOpeningInventory(id: string) {
+  return fetchAifJSON<{ ok: true; session: AifOpeningInventorySession; already?: boolean }>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function apiAifStockMovements(options?: {
   location?: string;
   variant?: string;
