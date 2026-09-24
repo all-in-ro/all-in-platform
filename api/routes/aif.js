@@ -502,9 +502,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_cash_movements_pending_idx
           ON aif_shop_cash_movements (status, movement_type, created_at DESC)`);
 
-        -- A készpénzátadás mostantól napokra / időszakra is hivatkozik.
-        -- Így nem csak azt tudjuk, hogy mennyi pénzt adtak át, hanem azt is,
-        -- hogy mely üzleti napok készpénzét zárta le az átadás.
+        // A készpénzátadás mostantól napokra / időszakra is hivatkozik.
+        // Így nem csak azt tudjuk, hogy mennyi pénzt adtak át, hanem azt is,
+        // hogy mely üzleti napok készpénzét zárta le az átadás.
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_cash_movements
           ADD COLUMN IF NOT EXISTS handover_from_date date NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_cash_movements
@@ -515,8 +515,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_cash_movements (location_id, movement_type, status, handover_to_date DESC)
           WHERE movement_type='manager_handover'`);
 
-        -- Régi, már visszaigazolt átadásoknál a kérés helyi napját tekintjük
-        -- lefedett zárónapnak. A kezdőnapot az előző visszaigazolt átadás utánra tesszük.
+        // Régi, már visszaigazolt átadásoknál a kérés helyi napját tekintjük
+        // lefedett zárónapnak. A kezdőnapot az előző visszaigazolt átadás utánra tesszük.
         await pool.query(`WITH ordered AS (
             SELECT
               id,
