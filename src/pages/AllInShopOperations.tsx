@@ -65,6 +65,7 @@ import {
   type AifShopStockOverviewResponse,
 } from "../lib/aif/api";
 
+
 export type AllInShopOperationMode = "search" | "stock" | "summary";
 
 type Props = {
