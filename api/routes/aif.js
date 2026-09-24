@@ -23622,10 +23622,299 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  async function aifActiveOpeningInventorySession(client, locationId) {
+    const table = await client.query(
+      `SELECT to_regclass('public.aif_opening_inventory_sessions') AS table_name`
+    );
+    if (!table.rows[0]?.table_name) return null;
+    const result = await client.query(
+      `SELECT id,code,status,location_id,baseline_at,counting_closed_at,started_at
+       FROM aif_opening_inventory_sessions
+       WHERE location_id=$1
+         AND status IN ('draft','counting','review')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [locationId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async function aifOpeningInventoryEffectiveMap(client, session, locationId, variantIds) {
+    const ids = Array.from(new Set((variantIds || []).map((value) => String(value || "")).filter(Boolean)));
+    if (!session || !ids.length) return new Map();
+    const result = await client.query(
+      `SELECT
+         l.id AS line_id,
+         l.variant_id,
+         l.counted_qty,
+         COALESCE(l.last_scanned_at,s.counting_closed_at,s.baseline_at) AS observation_at,
+         COALESCE((
+           SELECT sum(sm.qty_delta)
+           FROM aif_stock_movements sm
+           WHERE sm.location_id=$2
+             AND sm.variant_id=l.variant_id
+             AND sm.created_at > COALESCE(l.last_scanned_at,s.counting_closed_at,s.baseline_at)
+             AND COALESCE(sm.qty_delta,0)<>0
+             AND COALESCE(sm.source_type,'') <> 'opening_inventory'
+             AND COALESCE(sm.raw->>'reason','') NOT IN ('opening_inventory_apply','opening_inventory_live_sale_sync','opening_inventory_sale_bridge')
+               AND NOT (
+                 sm.source_type='stock_transfer'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM aif_stock_transfer_document_deletions del
+                   WHERE del.transfer_id = COALESCE(sm.raw->>'transferId', sm.raw->>'operationId', '')
+                 )
+               )
+         ),0)::numeric AS movement_after_count_qty
+       FROM aif_opening_inventory_lines l
+       JOIN aif_opening_inventory_sessions s ON s.id=l.session_id
+       WHERE l.session_id=$1
+         AND l.variant_id = ANY($3::uuid[])
+         AND l.counted_qty IS NOT NULL`,
+      [session.id, locationId, ids],
+    );
+    return new Map(result.rows.map((row) => {
+      const physicalCountedQty = aifNumber(row.counted_qty);
+      const movementAfterCountQty = aifNumber(row.movement_after_count_qty);
+      return [String(row.variant_id), {
+        lineId: String(row.line_id),
+        physicalCountedQty,
+        movementAfterCountQty,
+        effectiveQty: Math.max(0, physicalCountedQty + movementAfterCountQty),
+        observationAt: row.observation_at || null,
+      }];
+    }));
+  }
+
+  async function aifOpeningInventoryCatalogRows(client, session, location, search, limit) {
+    if (!session) return [];
+    const args = [session.id, location.id];
+    const where = [
+      `l.session_id=$1`,
+      `l.counted_qty IS NOT NULL`,
+      `COALESCE(v.status,'active')='active'`,
+      `COALESCE(m.status,'active')='active'`,
+    ];
+    let orderPrefix = "";
+    if (search) {
+      args.push(search, `%${search}%`);
+      const exact = `$${args.length - 1}`;
+      const pattern = `$${args.length}`;
+      where.push(`(
+        COALESCE(v.barcode,'') ILIKE ${pattern}
+        OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
+        OR COALESCE(m.title_ro,'') ILIKE ${pattern}
+        OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+        OR COALESCE(m.model_code,'') ILIKE ${pattern}
+        OR COALESCE(m.gender,'') ILIKE ${pattern}
+        OR COALESCE(b.name,'') ILIKE ${pattern}
+        OR COALESCE(c.name_ro,'') ILIKE ${pattern}
+        OR COALESCE(c.name_hu,'') ILIKE ${pattern}
+        OR COALESCE(subc.name_ro,'') ILIKE ${pattern}
+        OR COALESCE(subc.name_hu,'') ILIKE ${pattern}
+        OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
+        OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
+        OR COALESCE(v.color_name,'') ILIKE ${pattern}
+        OR COALESCE(v.color_code,'') ILIKE ${pattern}
+        OR COALESCE(v.size,'') ILIKE ${pattern}
+      )`);
+      orderPrefix = `CASE
+        WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
+        WHEN lower(COALESCE(v.internal_sku,''))=lower(${exact}) THEN 1
+        WHEN lower(COALESCE(sc.supplier_product_code,''))=lower(${exact}) THEN 2
+        ELSE 3
+      END,`;
+    }
+    args.push(limit);
+    const result = await client.query(
+      `SELECT
+         v.id AS variant_id,
+         v.internal_sku,
+         v.barcode,
+         v.size,
+         v.color_name,
+         v.color_code,
+         v.image_url,
+         v.sell_price,
+         m.model_code,
+         m.gender,
+         COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+         b.name AS brand_name,
+         c.name_ro AS category_name,
+         COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+         sc.supplier_product_code,
+         COALESCE(st.qty,0)::numeric AS system_qty,
+         COALESCE(st.reserved_qty,0)::numeric AS reserved_qty,
+         l.counted_qty,
+         COALESCE((
+           SELECT sum(sm.qty_delta)
+           FROM aif_stock_movements sm
+           WHERE sm.location_id=$2
+             AND sm.variant_id=l.variant_id
+             AND sm.created_at > COALESCE(l.last_scanned_at,oi.counting_closed_at,oi.baseline_at)
+             AND COALESCE(sm.qty_delta,0)<>0
+             AND COALESCE(sm.source_type,'') <> 'opening_inventory'
+             AND COALESCE(sm.raw->>'reason','') NOT IN ('opening_inventory_apply','opening_inventory_live_sale_sync','opening_inventory_sale_bridge')
+               AND NOT (
+                 sm.source_type='stock_transfer'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM aif_stock_transfer_document_deletions del
+                   WHERE del.transfer_id = COALESCE(sm.raw->>'transferId', sm.raw->>'operationId', '')
+                 )
+               )
+         ),0)::numeric AS movement_after_count_qty
+       FROM aif_opening_inventory_lines l
+       JOIN aif_opening_inventory_sessions oi ON oi.id=l.session_id
+       JOIN aif_product_variants v ON v.id=l.variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_stock st ON st.location_id=$2 AND st.variant_id=v.id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code, supplier_variant_code
+         FROM aif_variant_supplier_codes
+         WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE ${where.join(" AND ")}
+       ORDER BY ${orderPrefix} lower(COALESCE(m.title_ro,m.shopify_title,m.model_code,'')) ASC,
+                lower(COALESCE(v.color_name,'')) ASC,
+                lower(COALESCE(v.size,'')) ASC
+       LIMIT $${args.length}`,
+      args,
+    );
+
+    return result.rows.map((row) => {
+      const effectiveQty = Math.max(0, aifNumber(row.counted_qty) + aifNumber(row.movement_after_count_qty));
+      const reservedQty = aifNumber(row.reserved_qty);
+      return {
+        variantId: String(row.variant_id),
+        internalSku: row.internal_sku || null,
+        barcode: row.barcode || null,
+        productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
+        modelCode: row.model_code || null,
+        title: row.title || "Ismeretlen termék",
+        brandName: row.brand_name || null,
+        categoryName: row.category_name || null,
+        subcategoryName: row.subcategory_name || null,
+        gender: row.gender || null,
+        colorName: row.color_name || null,
+        colorCode: row.color_code || null,
+        size: row.size || null,
+        imageUrl: row.image_url || null,
+        sellPrice: aifNumber(row.sell_price),
+        qty: effectiveQty,
+        reservedQty,
+        availableQty: Math.max(0, effectiveQty - reservedQty),
+        openingInventory: true,
+        openingInventoryId: String(session.id),
+        openingInventoryCode: session.code,
+      };
+    });
+  }
+
+
+  async function aifOpeningInventoryDiscoveryCatalogRows(client, session, location, search, limit) {
+    const exact = text(search);
+    if (!session || !exact) return [];
+    const result = await client.query(
+      `SELECT DISTINCT ON (v.id)
+         v.id AS variant_id,
+         v.internal_sku,
+         v.barcode,
+         v.sn_cod,
+         v.size,
+         v.color_name,
+         v.color_code,
+         v.image_url,
+         v.sell_price,
+         m.model_code,
+         m.gender,
+         COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+         b.name AS brand_name,
+         c.name_ro AS category_name,
+         COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+         sc.supplier_product_code,
+         COALESCE(st.qty,0)::numeric AS system_qty,
+         COALESCE(st.reserved_qty,0)::numeric AS reserved_qty,
+         oil.id AS opening_line_id,
+         oil.counted_qty
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_stock st ON st.location_id=$2 AND st.variant_id=v.id
+       LEFT JOIN aif_opening_inventory_lines oil ON oil.session_id=$1 AND oil.variant_id=v.id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code, supplier_variant_code, supplier_barcode, supplier_sku
+         FROM aif_variant_supplier_codes
+         WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE COALESCE(v.status,'active')='active'
+         AND COALESCE(m.status,'active')='active'
+         AND oil.counted_qty IS NULL
+         AND COALESCE(st.qty,0) - COALESCE(st.reserved_qty,0) <= 0
+         AND (
+           lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($3))
+           OR lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($3))
+           OR lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($3))
+           OR lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($3))
+           OR EXISTS (
+             SELECT 1
+             FROM aif_variant_supplier_codes sx
+             WHERE sx.variant_id=v.id
+               AND COALESCE(sx.is_active,true)=true
+               AND (
+                 lower(btrim(COALESCE(sx.supplier_product_code,'')))=lower(btrim($3))
+                 OR lower(btrim(COALESCE(sx.supplier_variant_code,'')))=lower(btrim($3))
+                 OR lower(btrim(COALESCE(sx.supplier_barcode,'')))=lower(btrim($3))
+                 OR lower(btrim(COALESCE(sx.supplier_sku,'')))=lower(btrim($3))
+               )
+           )
+         )
+       ORDER BY v.id, sc.supplier_product_code NULLS LAST
+       LIMIT $4`,
+      [session.id, location.id, exact, limit],
+    );
+
+    return result.rows.map((row) => ({
+      variantId: String(row.variant_id),
+      internalSku: row.internal_sku || null,
+      barcode: row.barcode || null,
+      productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
+      modelCode: row.model_code || null,
+      title: row.title || "Ismeretlen termék",
+      brandName: row.brand_name || null,
+      categoryName: row.category_name || null,
+      subcategoryName: row.subcategory_name || null,
+      gender: row.gender || null,
+      colorName: row.color_name || null,
+      colorCode: row.color_code || null,
+      size: row.size || null,
+      imageUrl: row.image_url || null,
+      sellPrice: aifNumber(row.sell_price),
+      qty: aifNumber(row.system_qty),
+      reservedQty: aifNumber(row.reserved_qty),
+      availableQty: Math.max(1, aifNumber(row.system_qty) - aifNumber(row.reserved_qty)),
+      openingInventory: true,
+      openingInventoryId: String(session.id),
+      openingInventoryCode: session.code,
+      openingInventorySaleBridge: true,
+    }));
+  }
+
   router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const openingInventory = await aifActiveOpeningInventorySession(pool, location.id);
       const search = text(req.query.q || req.query.search);
       const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
       const args = [location.id];
@@ -23707,7 +23996,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         args
       );
 
-      const items = result.rows.map((row) => ({
+      let items = result.rows.map((row) => ({
         variantId: String(row.variant_id),
         internalSku: row.internal_sku || null,
         barcode: row.barcode || null,
@@ -23727,6 +24016,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         reservedQty: aifNumber(row.reserved_qty),
         availableQty: aifNumber(row.available_qty),
       }));
+
+      if (openingInventory) {
+        const [discoveryItems, openingItems] = await Promise.all([
+          aifOpeningInventoryDiscoveryCatalogRows(pool, openingInventory, location, search, limit),
+          aifOpeningInventoryCatalogRows(pool, openingInventory, location, search, limit),
+        ]);
+        const merged = new Map(items.map((item) => [String(item.variantId), item]));
+        // A fizikai kézben lévő, de még nem leltározott 0-s régi készlet pontos
+        // vonalkód/SKU beolvasásnál eladható. A valóban megszámolt sor mindig felülírja ezt.
+        for (const item of discoveryItems) merged.set(String(item.variantId), item);
+        for (const item of openingItems) merged.set(String(item.variantId), item);
+        items = Array.from(merged.values())
+          .filter((item) => aifNumber(item.availableQty) > 0)
+          .sort((a, b) => {
+            const wanted = search.toLowerCase();
+            const exactRank = (item) => {
+              if (!wanted) return 3;
+              if (String(item.barcode || "").toLowerCase() === wanted) return 0;
+              if (String(item.internalSku || "").toLowerCase() === wanted) return 1;
+              if (String(item.productCode || "").toLowerCase() === wanted) return 2;
+              return 3;
+            };
+            const rank = exactRank(a) - exactRank(b);
+            if (rank) return rank;
+            return String(a.title || "").localeCompare(String(b.title || ""), "hu");
+          })
+          .slice(0, limit);
+      }
 
       res.json({
         ok: true,
@@ -26807,30 +27124,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.json(aifShopSaleResponse(previous, location, true));
       }
 
-      // Nyitó/helyreállító leltár alatt az üzleti készletet befagyasztjuk.
-      // Egyetlen közben eladott darab is összekeverné a fizikai számolás időpillanatát.
-      const openingInventoryTable = await client.query(
-        `SELECT to_regclass('public.aif_opening_inventory_sessions') AS table_name`
-      );
-      if (openingInventoryTable.rows[0]?.table_name) {
-        const openingInventory = await client.query(
-          `SELECT id,code,status
-           FROM aif_opening_inventory_sessions
-           WHERE location_id=$1
-             AND status IN ('draft','counting','review')
-           ORDER BY created_at DESC
-           LIMIT 1`,
-          [location.id]
-        );
-        if (openingInventory.rowCount) {
-          const error = new Error("Ebben az üzletben nyitó leltár van folyamatban. Eladás csak a leltár lezárása vagy megszakítása után rögzíthető.");
-          error.statusCode = 409;
-          error.code = "opening_inventory_in_progress";
-          error.openingInventoryId = String(openingInventory.rows[0].id);
-          error.openingInventoryCode = openingInventory.rows[0].code;
-          throw error;
-        }
-      }
+      // A nyitó leltár mellett is mehet az értékesítés. A készletmódosításokat
+      // időbélyeggel rávezetjük a leltárra, ezért nem fagyasztjuk be az üzletet.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_opening_inventory_stock:${location.id}`]);
+      const openingInventory = await aifActiveOpeningInventorySession(client, location.id);
 
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
       await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
@@ -26862,6 +27159,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const variantIds = preparedInput.map((item) => item.variantId).sort();
+
+      // Nyitó leltár alatt a régi készletből fizikailag előkerülő terméket akkor is
+      // el kell tudni adni, ha a Kézdi stock-sora eddig nem létezett vagy 0 volt.
+      // A 0-s sor csak ugyanebben a tranzakcióban készül el; sikertelen eladásnál rollbackel.
+      if (openingInventory) {
+        await client.query(
+          `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+           SELECT $1,v.id,0,0,now()
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE v.id = ANY($2::uuid[])
+             AND COALESCE(v.status,'active')='active'
+             AND COALESCE(m.status,'active')='active'
+           ON CONFLICT (location_id,variant_id) DO NOTHING`,
+          [location.id, variantIds],
+        );
+      }
+
       const stockResult = await client.query(
         `SELECT
            s.location_id, s.variant_id, s.qty, s.reserved_qty,
@@ -26898,6 +27213,137 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const error = new Error(`A termék nem található az üzlet aktív készletében: ${missing?.variantId || "ismeretlen"}.`);
         error.statusCode = 400;
         throw error;
+      }
+
+      const openingEffective = openingInventory
+        ? await aifOpeningInventoryEffectiveMap(client, openingInventory, location.id, variantIds)
+        : new Map();
+
+      const openingLineState = new Map();
+      if (openingInventory) {
+        const openingLinesResult = await client.query(
+          `SELECT id,variant_id,counted_qty,last_scanned_at,auto_zeroed
+           FROM aif_opening_inventory_lines
+           WHERE session_id=$1 AND variant_id = ANY($2::uuid[])
+           FOR UPDATE`,
+          [openingInventory.id, variantIds],
+        );
+        for (const row of openingLinesResult.rows) openingLineState.set(String(row.variant_id), row);
+      }
+
+      // Ha ezt a terméket már leltározták, az eladás előtt a leltárból számolt
+      // aktuális mennyiséget tesszük a live stockba. A leltár óta történt eladás/
+      // beérkezés már benne van az effectiveQty-ban, a sync saját mozgását pedig
+      // openingInventoryId alapján kizárjuk a következő újraszámításból.
+      for (const input of preparedInput) {
+        const openingLine = openingEffective.get(input.variantId);
+        if (!openingLine) continue;
+        const stock = stockByVariant.get(input.variantId);
+        const beforeSync = aifNumber(stock.qty);
+        const reserved = aifNumber(stock.reserved_qty);
+        const effectiveQty = Math.max(0, aifNumber(openingLine.effectiveQty));
+        if (reserved > effectiveQty) {
+          const error = new Error(`${stock.title || "A termék"}: ${reserved} db foglalt, de a nyitó leltár szerint most csak ${effectiveQty} db van.`);
+          error.statusCode = 409;
+          error.code = "opening_inventory_reserved_conflict";
+          throw error;
+        }
+        if (Math.abs(beforeSync - effectiveQty) > 0.0001) {
+          await client.query(
+            `UPDATE aif_stock
+             SET qty=$3,updated_at=now()
+             WHERE location_id=$1 AND variant_id=$2`,
+            [location.id, input.variantId, effectiveQty],
+          );
+          const synced = await insertStockMovementSafe(client, {
+            movementType: "manual_adjustment",
+            sourceType: "opening_inventory",
+            sourcePrefix: "openlive",
+            fallbackSourceType: "manual_stock_edit",
+            locationId: location.id,
+            variantId: input.variantId,
+            qtyDelta: effectiveQty - beforeSync,
+            qtyBefore: beforeSync,
+            qtyAfter: effectiveQty,
+            actor: actorFrom(req),
+            raw: {
+              reason: "opening_inventory_live_sale_sync",
+              openingInventoryId: String(openingInventory.id),
+              openingInventoryCode: openingInventory.code,
+              openingInventoryLineId: openingLine.lineId,
+              physicalCountedQty: openingLine.physicalCountedQty,
+              movementAfterCountQty: openingLine.movementAfterCountQty,
+              effectiveQty,
+              observationAt: openingLine.observationAt,
+              locationCode: location.code,
+              locationName: location.name,
+            },
+          });
+          if (!synced) {
+            const error = new Error("A leltározott termék élő készletének szinkronizálása nem naplózható.");
+            error.statusCode = 500;
+            throw error;
+          }
+          stock.qty = effectiveQty;
+        }
+      }
+
+
+      // Ha a terméket még nem számolták meg, de a vevő fizikailag behozza a kasszához
+      // (pontos kódos találat), a 0-s régi rendszerkészlet nem blokkolhatja az eladást.
+      // Ilyenkor csak annyi átmeneti készletet nyitunk meg, amennyi az adott eladáshoz kell.
+      // Ez NEM lesz leltári darabszám: a bridge mozgást a nyitó leltár számításai kizárják,
+      // a valódi sale mozgás viszont időbélyeggel megmarad az auditban.
+      if (openingInventory) {
+        for (const input of preparedInput) {
+          if (openingEffective.has(input.variantId)) continue;
+          const stock = stockByVariant.get(input.variantId);
+          if (!stock) continue;
+          const beforeBridge = aifNumber(stock.qty);
+          const reserved = aifNumber(stock.reserved_qty);
+          const available = beforeBridge - reserved;
+          // Pozitív, ismert készletből soha nem gyártunk pluszt. A bridge kizárólag
+          // a régi rendszer miatt 0 / nem eladható állapotú, még nem számolt terméket menti meg.
+          if (available > 0) continue;
+
+          const bridgeQty = input.quantity - available;
+          const afterBridge = beforeBridge + bridgeQty;
+          await client.query(
+            `UPDATE aif_stock
+             SET qty=$3,updated_at=now()
+             WHERE location_id=$1 AND variant_id=$2`,
+            [location.id, input.variantId, afterBridge],
+          );
+          const lineState = openingLineState.get(input.variantId) || null;
+          const bridged = await insertStockMovementSafe(client, {
+            movementType: "manual_adjustment",
+            sourceType: "opening_inventory",
+            sourcePrefix: "opensale",
+            fallbackSourceType: "manual_stock_edit",
+            locationId: location.id,
+            variantId: input.variantId,
+            qtyDelta: bridgeQty,
+            qtyBefore: beforeBridge,
+            qtyAfter: afterBridge,
+            actor: actorFrom(req),
+            raw: {
+              reason: "opening_inventory_sale_bridge",
+              openingInventoryId: String(openingInventory.id),
+              openingInventoryCode: openingInventory.code,
+              openingInventoryLineId: lineState?.id ? String(lineState.id) : null,
+              requestedSaleQty: input.quantity,
+              bridgeQty,
+              locationCode: location.code,
+              locationName: location.name,
+            },
+          });
+          if (!bridged) {
+            const error = new Error("A nyitó leltár alatti eladás készletnyitása nem naplózható.");
+            error.statusCode = 500;
+            throw error;
+          }
+          stock.qty = afterBridge;
+        }
       }
 
       const saleLines = [];
@@ -27123,6 +27569,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             salesTvaRate: Number(saleTvaSettings?.salesTvaRate || 0),
             sellPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
             salesPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
+            openingInventoryId: openingInventory ? String(openingInventory.id) : null,
+            openingInventoryCode: openingInventory?.code || null,
           }),
         ]
       );
@@ -27205,6 +27653,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             lineTotal: line.lineTotal,
             locationCode: location.code,
             locationName: location.name,
+            openingInventoryId: openingInventory ? String(openingInventory.id) : null,
+            openingInventoryCode: openingInventory?.code || null,
           },
         });
         if (!movementLogged) {
