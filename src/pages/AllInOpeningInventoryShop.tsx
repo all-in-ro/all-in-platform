@@ -324,18 +324,20 @@ export default function AllInOpeningInventoryShop({
                       <p className="truncate text-sm">{line.product.title}</p>
                       <p className="mt-1 truncate text-[11px] text-white/48">{productMeta(line) || "–"}</p>
                     </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap">
-                      <div className="min-w-[124px] rounded-xl border border-white/14 bg-[#283446] px-3 py-2 text-center">
-                        <div className="text-[9px] uppercase tracking-[0.1em] text-white/40">Eladási ár</div>
+                    <div className="flex flex-wrap items-center justify-end gap-3 sm:flex-nowrap">
+                      <div className="min-w-[124px] rounded-xl border border-[#8ce7e2]/16 bg-[#263244]/72 px-3 py-2 text-center">
+                        <div className="text-[9px] uppercase tracking-[0.1em] text-white/38">Eladási ár</div>
                         <div className="mt-1 whitespace-nowrap text-sm text-[#d7fffd]">{line.product.sellPrice == null ? "–" : formatMoney(line.product.sellPrice)}</div>
                       </div>
-                      {editable ? (
-                        <button type="button" disabled={editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
-                      ) : null}
-                      <div className="min-w-[82px] rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/16 px-3 py-2 text-center text-lg text-[#d7fffd]">{line.countedQty} db</div>
-                      {editable ? (
-                        <button type="button" disabled={editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
-                      ) : null}
+                      <div className="flex items-center gap-2 sm:border-l sm:border-white/10 sm:pl-3">
+                        {editable ? (
+                          <button type="button" disabled={editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
+                        ) : null}
+                        <div className="min-w-[82px] rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/16 px-3 py-2 text-center text-lg text-[#d7fffd]">{line.countedQty} db</div>
+                        {editable ? (
+                          <button type="button" disabled={editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 )) : (
