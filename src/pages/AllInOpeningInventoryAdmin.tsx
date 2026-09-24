@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarDays,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Eye,
   History,
@@ -89,6 +94,429 @@ function lineStatusLabel(line: AifOpeningInventoryAdminLine, mode: InventoryMode
   if (line.status === "untracked") return mode === "recovery" ? "RÉGI / NEM NYILVÁNTARTOTT" : "TÖBBLET";
   if (line.status === "ok") return "RENDBEN";
   return "MÉG NEM SZÁMOLT";
+}
+
+
+type SmartSelectOption = { value: string; label: string };
+
+function SmartSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  disabled = false,
+  className = "",
+}: {
+  value: string;
+  options: SmartSelectOption[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((item) => item.value === value);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current || disabled) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = 8;
+    const desiredHeight = Math.min(350, 58 + Math.max(1, options.length) * 46);
+    const width = Math.min(Math.max(rect.width, 250), window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < Math.min(desiredHeight, 240) && roomAbove > roomBelow;
+
+    if (openUpward) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.min(window.innerHeight - edge, rect.bottom + gap) });
+    }
+  }, [disabled, options.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  return (
+    <div className={className}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        className={`group flex h-11 min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition disabled:cursor-not-allowed disabled:opacity-45 ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/35 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full transition ${
+              open
+                ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]"
+                : value
+                  ? "bg-[#63d8d3]"
+                  : "bg-white/28"
+            }`}
+          />
+          <span
+            title={selected?.label || placeholder}
+            className="min-w-0 flex-1 truncate"
+            style={{ color: selected?.label ? "#ffffff" : "rgba(255,255,255,0.55)" }}
+          >
+            {selected?.label || placeholder}
+          </span>
+        </span>
+        <span
+          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
+            open
+              ? "border-[#9be9e5]/48 bg-[#2a8d8b]/34 text-[#d7fffd]"
+              : "border-white/10 bg-white/[0.035] text-white/62 group-hover:border-[#7bd7d4]/25 group-hover:text-white"
+          }`}
+        >
+          <ChevronDown size={14} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          className="overflow-hidden rounded-[18px] border border-[#7bd7d4]/42 bg-[#202c3d]/[0.99] p-2 shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
+          style={{
+            position: "fixed",
+            zIndex: 900,
+            left: position.left,
+            width: position.width,
+            top: position.top,
+            bottom: position.bottom,
+            color: "#ffffff",
+          }}
+          role="listbox"
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-3 px-2 py-1.5">
+            <span className="text-[9px] uppercase tracking-[0.16em]" style={{ color: "rgba(215,255,253,0.64)" }}>
+              Válassz
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.52)" }}>
+              {options.length} lehetőség
+            </span>
+          </div>
+
+          <div className="max-h-[310px] space-y-1 overflow-y-auto pr-0.5">
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value || "__empty"}
+                  type="button"
+                  className={`group/item flex min-h-10 w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left text-sm font-normal transition ${
+                    active
+                      ? "border-[#8ce7e2]/44 bg-gradient-to-r from-[#2a8d8b] to-[#287b82] shadow-[0_8px_18px_rgba(42,141,139,0.18)]"
+                      : "border-transparent bg-[#2e3b4f] hover:border-white/10 hover:bg-[#3a4a61]"
+                  }`}
+                  style={{ color: "#ffffff" }}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={active}
+                >
+                  <span className={`h-6 w-1 shrink-0 rounded-full transition ${active ? "bg-[#bff8f5]" : "bg-white/0 group-hover/item:bg-white/18"}`} />
+                  <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>
+                    {option.label}
+                  </span>
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center">
+                    {active ? (
+                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#d8fffd] text-[#176b69] shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
+                        <Check size={17} strokeWidth={2.8} />
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+const HU_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+const HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function isoDateParts(value?: string | null) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return null;
+  return { year, month, day, date };
+}
+
+function isoFromUtcDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function huDateLabel(value?: string | null) {
+  const parsed = isoDateParts(value);
+  if (!parsed) return "Dátum választása";
+  return `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.`;
+}
+
+function HungarianDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const parsed = isoDateParts(value);
+  const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const todayIso = localDateInput();
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(336, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const estimatedHeight = 382;
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
+    if (openUpward) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = isoDateParts(value);
+    if (current) {
+      setViewYear(current.year);
+      setViewMonth(current.month - 1);
+    }
+    updatePosition();
+
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setUTCDate(gridStart.getUTCDate() + index);
+    return day;
+  });
+
+  function shiftMonth(delta: number) {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  }
+
+  function chooseDate(iso: string) {
+    onChange(iso);
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <CalendarDays size={16} className="shrink-0 text-[#8fe9e5]" />
+          <span className="truncate tracking-[0.02em]">{huDateLabel(value)}</span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          role="dialog"
+          aria-label={`${ariaLabel} naptár`}
+          className="overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl"
+          style={{
+            position: "fixed",
+            zIndex: 940,
+            left: position.left,
+            width: position.width,
+            top: position.top,
+            bottom: position.bottom,
+          }}
+        >
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button
+              type="button"
+              onClick={() => shiftMonth(-1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+              aria-label="Előző hónap"
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <div className="text-center">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p>
+              <p className="mt-0.5 text-sm font-medium text-white">{viewYear}. {HU_MONTHS[viewMonth]}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => shiftMonth(1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+              aria-label="Következő hónap"
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {HU_WEEKDAYS.map((day, index) => (
+              <div
+                key={day}
+                className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"}`}
+              >
+                {day}
+              </div>
+            ))}
+
+            {days.map((day) => {
+              const iso = isoFromUtcDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const selected = iso === value;
+              const today = iso === todayIso;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  onClick={() => chooseDate(iso)}
+                  className={`relative flex h-9 items-center justify-center rounded-lg border text-xs transition ${
+                    selected
+                      ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]"
+                      : inMonth
+                        ? weekend
+                          ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                          : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                        : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"
+                  }`}
+                >
+                  {day.getUTCDate()}
+                  {today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
+            <span className="text-[10px] text-white/40">A hét hétfővel kezdődik.</span>
+            <button
+              type="button"
+              onClick={() => chooseDate(todayIso)}
+              className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"
+            >
+              <CalendarDays size={13} /> Ma
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
@@ -346,12 +774,18 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
 
         <section className="rounded-[20px] border border-white/14 bg-[#354153] p-3 shadow-lg">
           <div className="grid gap-3 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)] lg:items-end">
-            <label className="grid gap-1.5 text-xs text-white/58">
+            <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
               Helyszín
-              <select value={location} onChange={(event) => setLocation(event.target.value)} disabled={Boolean(activeDetail)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55 disabled:opacity-55">
-                <option value="">Válassz üzletet</option>
-                {locations.map((item) => <option key={item.id} value={item.code || item.id}>{item.name}</option>)}
-              </select>
+              <SmartSelect
+                value={location}
+                onChange={setLocation}
+                disabled={Boolean(activeDetail)}
+                placeholder="Válassz üzletet"
+                options={[
+                  { value: "", label: "Válassz üzletet" },
+                  ...locations.map((item) => ({ value: item.code || item.id, label: item.name })),
+                ]}
+              />
             </label>
             <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-white/42">
               <span>{lastRefresh ? `Utolsó frissítés: ${lastRefresh.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}</span>
@@ -376,14 +810,19 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
             </div>
 
             <div className="mt-4 grid gap-3 lg:grid-cols-[230px_minmax(260px,1fr)_auto] lg:items-end">
-              <label className="grid gap-1.5 text-xs text-white/58">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Leltár típusa
-                <select value={inventoryMode} onChange={(event) => setInventoryMode(event.target.value as InventoryMode)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55">
-                  <option value="standard">Rendes leltár</option>
-                  <option value="recovery">Helyreállító leltár</option>
-                </select>
+                <SmartSelect
+                  value={inventoryMode}
+                  onChange={(value) => setInventoryMode(value as InventoryMode)}
+                  placeholder="Leltár típusa"
+                  options={[
+                    { value: "standard", label: "Rendes leltár" },
+                    { value: "recovery", label: "Helyreállító leltár" },
+                  ]}
+                />
               </label>
-              <label className="grid gap-1.5 text-xs text-white/58">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Megjegyzés
                 <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="pl. teljes üzleti leltár / cipők / szezonváltás" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
               </label>
@@ -394,11 +833,15 @@ export default function AllInOpeningInventoryAdmin({ actor = "ADMIN" }: Props) {
 
             {inventoryMode === "recovery" ? (
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1.5 text-xs text-white/58">
+                <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                   Biztos rendszeres eladások ettől
-                  <input type="date" value={salesTrustedFrom} onChange={(event) => setSalesTrustedFrom(event.target.value)} className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none focus:border-[#8ce7e2]/55" />
+                  <HungarianDatePicker
+                    value={salesTrustedFrom}
+                    onChange={setSalesTrustedFrom}
+                    ariaLabel="Biztos rendszeres eladások kezdő dátuma"
+                  />
                 </label>
-                <label className="grid gap-1.5 text-xs text-white/58">
+                <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                   Papír szerinti készletérték (RON, opcionális)
                   <input value={legacyRetailValue} onChange={(event) => setLegacyRetailValue(event.target.value.replace(/[^0-9.,]/g, ""))} inputMode="decimal" placeholder="pl. 190000" className="h-11 rounded-xl border border-white/16 bg-[#293649] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#8ce7e2]/55" />
                 </label>
