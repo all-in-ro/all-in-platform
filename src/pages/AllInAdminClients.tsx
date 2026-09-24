@@ -968,11 +968,11 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
 <meta charset="utf-8" />
 <title>${officialHtmlEscape(`Bon de consum ${doc.documentNumber}`)}</title>
 <style>
-  @page { size:A4 landscape; margin:5mm; }
+  @page { size:A4 landscape; margin:0; }
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:#fff; color:#172033; }
   body { font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .doc { width:100%; max-width:287mm; margin:0 auto; }
+  .doc { width:297mm; max-width:297mm; margin:0 auto; padding:7mm 5mm; }
   .adminCopy { break-after:page; page-break-after:always; }
   .pageBreak { break-before:page; page-break-before:always; }
   .top { display:grid; grid-template-columns:minmax(0,1fr) minmax(74mm,.86fr); gap:9mm; align-items:start; padding-bottom:4mm; border-bottom:2px solid #255f54; }
