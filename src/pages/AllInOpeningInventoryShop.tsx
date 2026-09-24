@@ -76,7 +76,7 @@ export default function AllInOpeningInventoryShop({
       setData(response);
       if (!silent) setNotice(null);
     } catch (error) {
-      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A nyitó leltár nem tölthető be." });
+      if (!silent) setNotice({ tone: "error", text: error instanceof Error ? error.message : "A leltár nem tölthető be." });
     } finally {
       if (!silent) setLoading(false);
     }
@@ -181,7 +181,7 @@ export default function AllInOpeningInventoryShop({
     return (
       <main className="grid min-h-screen place-items-center bg-[#4b5362] px-4 text-white">
         <div className="flex items-center gap-3 rounded-2xl border border-white/14 bg-[#303a4c] px-5 py-4 text-sm text-white/72">
-          <Loader2 className="animate-spin" size={18} /> Nyitó leltár betöltése…
+          <Loader2 className="animate-spin" size={18} /> Leltár betöltése…
         </div>
       </main>
     );
@@ -196,7 +196,7 @@ export default function AllInOpeningInventoryShop({
               <ClipboardCheck size={24} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">ALL IN • nyitó leltár</p>
+              <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">ALL IN • üzleti leltár</p>
               <h1 className="mt-1 text-xl font-normal sm:text-2xl">{session?.title || "Leltározás"}</h1>
               <p className="mt-1 text-xs text-white/55">{session?.location?.name || locationName || location || "Üzlet"} • {actor}</p>
             </div>
@@ -213,9 +213,9 @@ export default function AllInOpeningInventoryShop({
         {!data?.active || !session ? (
           <section className="rounded-[22px] border border-white/16 bg-[#354153] p-6 text-center shadow-lg">
             <XCircle className="mx-auto text-white/36" size={44} />
-            <h2 className="mt-3 text-xl font-normal">Nincs aktív nyitó leltár</h2>
+            <h2 className="mt-3 text-xl font-normal">Nincs aktív leltár</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-white/55">
-              A főnök még nem indított leltárt ehhez az üzlethez. Amikor elindítja, ezen az oldalon azonnal lehet csippogtatni a termékeket.
+              Ehhez az üzlethez most nincs aktív leltár. Amikor a főnök elindít egyet, ezen az oldalon lehet folytatni a számolást.
             </p>
             <button type="button" onClick={() => void load()} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#108D8B] px-4 text-sm text-white hover:bg-[#149b98]">
               <RefreshCw size={16} /> Frissítés
