@@ -5,6 +5,7 @@ import {
   Banknote,
   Barcode,
   CheckCircle2,
+  ClipboardCheck,
   Clock3,
   CreditCard,
   Landmark,
@@ -210,6 +211,15 @@ function saleErrorDialogFrom(caught: unknown): SaleErrorDialog {
   const message = caught instanceof Error
     ? caught.message
     : "Az eladás lezárása nem sikerült.";
+
+  if (code === "opening_inventory_in_progress") {
+    return {
+      title: "Leltár folyamatban",
+      message,
+      hint: "Ebben az üzletben most nyitó leltár fut. Eladást csak a leltár készletre alkalmazása vagy megszakítása után lehet rögzíteni.",
+      code,
+    };
+  }
 
   if (code === "shop_day_closed") {
     return {
@@ -511,6 +521,13 @@ export default function AllInMagazinSale({
     setAdministrationCode("");
     setAdministrationError("");
     setAdministrationAccessOpen(true);
+  }
+
+  function openOpeningInventory() {
+    try {
+      window.sessionStorage.setItem("allin:opening-inventory:location", locationCode);
+    } catch {}
+    window.location.hash = "openinginventoryshop";
   }
 
   async function unlockAdministration(rawValue = administrationCode) {
@@ -886,6 +903,13 @@ export default function AllInMagazinSale({
                   {role === "admin" ? <span className="text-white/45">• admin előnézet</span> : null}
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={openOpeningInventory}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/42 bg-[#2a8d8b]/24 px-4 text-sm text-white transition hover:border-[#9be9e5]/70 hover:bg-[#2a8d8b]/38 active:scale-[0.98]"
+              >
+                <ClipboardCheck size={18} /> Leltározás
+              </button>
               {administrationEnabled ? (
                 <button
                   type="button"
