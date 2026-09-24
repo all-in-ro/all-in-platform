@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  ClipboardCheck,
   Boxes,
   Clock3,
   LogOut,
@@ -47,6 +48,12 @@ type ActionCard = {
   description: string;
   icon: typeof ShoppingCart;
   primary?: boolean;
+};
+
+type OpeningInventoryAccess = {
+  active: boolean;
+  editable: boolean;
+  status: string | null;
 };
 
 const actions: ActionCard[] = [
@@ -220,8 +227,38 @@ export default function AllInMagazinCiuc({
   const [incomingOpen, setIncomingOpen] = useState(false);
   const [documentsOpen, setDocumentsOpen] = useState(false);
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
+  const [openingInventoryAccess, setOpeningInventoryAccess] = useState<OpeningInventoryAccess>({
+    active: false,
+    editable: false,
+    status: null,
+  });
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
+
+  const refreshOpeningInventoryAccess = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/aif/opening-inventory/active?location=${encodeURIComponent("main_warehouse")}`,
+        {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await response.json().catch(() => null);
+      const active = body?.active === true;
+      const editable = active && body?.session?.editable === true;
+      setOpeningInventoryAccess({
+        active,
+        editable,
+        status: body?.session?.status ? String(body.session.status) : null,
+      });
+    } catch {
+      // Ha az ellenőrzés hibázik, biztonságból maradjon inaktív a gomb.
+      setOpeningInventoryAccess({ active: false, editable: false, status: null });
+    }
+  }, []);
 
   const refreshReservationDeadlineAlert = useCallback(async () => {
     try {
@@ -239,6 +276,22 @@ export default function AllInMagazinCiuc({
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!administrationUnlocked) return;
+
+    void refreshOpeningInventoryAccess();
+    const timer = window.setInterval(() => {
+      void refreshOpeningInventoryAccess();
+    }, 10000);
+    const refreshOnFocus = () => void refreshOpeningInventoryAccess();
+    window.addEventListener("focus", refreshOnFocus);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
+  }, [administrationUnlocked, refreshOpeningInventoryAccess]);
 
   useEffect(() => {
     if (!administrationUnlocked) return;
@@ -272,10 +325,19 @@ export default function AllInMagazinCiuc({
     return () => window.clearTimeout(timer);
   }, [administrationExpiresAt, administrationUnlocked, role]);
 
-  const sessionLabel = useMemo(
-    () => role === "admin" ? "Admin előnézet" : "Védett adminisztráció",
-    [role],
-  );
+  const inventoryButtonTitle = openingInventoryAccess.editable
+    ? "Aktív leltár van. Megnyitható a bolti csippogtatás."
+    : openingInventoryAccess.active
+      ? "A leltár beolvasását a Főnök már lezárta."
+      : "A Leltározás akkor aktiválódik, amikor a Főnök elindítja az üzlet leltárát.";
+
+  function openOpeningInventory() {
+    if (!openingInventoryAccess.editable) return;
+    try {
+      window.sessionStorage.setItem("allin:opening-inventory:location", "main_warehouse");
+    } catch {}
+    window.location.hash = "openinginventoryshop";
+  }
 
   function openClients(mode: "search" | "new") {
     setClientsInitialMode(mode);
@@ -346,27 +408,45 @@ export default function AllInMagazinCiuc({
     <main className="min-h-screen bg-gradient-to-br from-[#626d7d] via-[#596373] to-[#505a69] p-3 text-white sm:p-4 lg:p-6">
       <div className="mx-auto max-w-[1480px] space-y-4">
         <header className="rounded-[24px] border border-white/18 bg-[#303a4c] px-4 py-4 shadow-[0_18px_48px_rgba(15,23,42,0.28)] sm:px-5">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/22 text-[#cffffd]">
-              <Store size={28} strokeWidth={1.8} />
-            </span>
-            <div className="min-w-[240px] border-l-4 border-[#2a8d8b] pl-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/65">AllInFashion • értékesítés</p>
-              <h1 className="mt-1 text-2xl tracking-tight sm:text-3xl">ÜZLET – Csíkszereda</h1>
-              <p className="mt-1 text-sm text-white/55">Magazin - Miercurea Ciuc</p>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-center">
+            <div className="flex min-w-0 items-center gap-4">
+              <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/22 text-[#cffffd]">
+                <Store size={28} strokeWidth={1.8} />
+              </span>
+              <div className="min-w-[240px] border-l-4 border-[#2a8d8b] pl-3">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/65">AllInFashion • értékesítés</p>
+                <h1 className="mt-1 text-2xl tracking-tight sm:text-3xl">ÜZLET – Csíkszereda</h1>
+                <p className="mt-1 text-sm text-white/55">Magazin - Miercurea Ciuc</p>
+              </div>
             </div>
 
-            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <div className="hidden min-w-[210px] rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2 sm:block">
-                <div className="flex items-center gap-2 text-xs text-white/55">
-                  <Clock3 size={14} />
-                  <span>{formatDateTime(now)}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-sm text-white">
-                  <UserRound size={14} className="text-[#8ee6e2]" />
-                  <span className="truncate">{actor}</span>
-                </div>
+            <div className="flex min-w-0 flex-col items-center justify-center text-center">
+              <div className="flex items-center gap-2 text-xs text-white/48">
+                <Clock3 size={14} />
+                <span>{formatDateTime(now)}</span>
               </div>
+              <div className="mt-1.5 flex max-w-[320px] items-center justify-center gap-2 text-sm text-white">
+                <UserRound size={15} className="shrink-0 text-[#8ee6e2]" />
+                <span className="truncate">{actor}</span>
+                {role === "admin" ? <span className="text-white/42">• admin előnézet</span> : null}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={openOpeningInventory}
+                disabled={!openingInventoryAccess.editable}
+                title={inventoryButtonTitle}
+                className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-normal transition ${
+                  openingInventoryAccess.editable
+                    ? "border-[#9be9e5]/48 bg-[#2a8d8b] text-white shadow-[0_10px_22px_rgba(42,141,139,0.18)] hover:bg-[#319c99] active:scale-[0.98]"
+                    : "cursor-not-allowed border-white/10 bg-white/[0.035] text-white/28"
+                }`}
+              >
+                <ClipboardCheck size={18} />
+                Leltározás
+              </button>
               <button
                 type="button"
                 onClick={returnToSale}
@@ -402,7 +482,7 @@ export default function AllInMagazinCiuc({
           <div className="flex min-w-[210px] items-center justify-between gap-3 rounded-2xl border border-white/14 bg-[#354153] px-4 py-3">
             <div>
               <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Munkamenet</p>
-              <p className="mt-1 text-sm text-white">{sessionLabel}</p>
+              <p className="mt-1 text-sm text-white">{role === "admin" ? "Admin előnézet" : "Védett adminisztráció"}</p>
             </div>
             <span className="h-3 w-3 rounded-full bg-[#37c7c2] shadow-[0_0_14px_rgba(55,199,194,0.85)]" />
           </div>
