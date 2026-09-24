@@ -1765,16 +1765,20 @@ export default function createAifOpeningInventoryRouter({
           });
         }
 
-        await client.query(
-          `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
-           VALUES ($1,$2,$3,$4,now())
-           ON CONFLICT (location_id,variant_id)
-           DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
-          [session.location_id, line.variant_id, afterQty, reserved],
-        );
-
         const delta = afterQty - beforeQty;
+
+        // Csak valódi készleteltérésnél írjuk a stock sort.
+        // Így a leltár alkalmazása nem frissíti feleslegesen több száz változatlan
+        // készletsor updated_at mezőjét, és 0 db-os sorokat sem hoz létre.
         if (delta !== 0) {
+          await client.query(
+            `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+             VALUES ($1,$2,$3,$4,now())
+             ON CONFLICT (location_id,variant_id)
+             DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+            [session.location_id, line.variant_id, afterQty, reserved],
+          );
+
           const logged = await insertStockMovementSafe(client, {
             movementType: "manual_adjustment",
             sourceType: "opening_inventory",
