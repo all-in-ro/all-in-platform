@@ -1374,6 +1374,123 @@ export default function createAifOpeningInventoryRouter({
     }
   });
 
+  router.patch("/admin/sessions/:id/lines", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSchema();
+      const session = await sessionById(client, req.params.id, { lock: true });
+      if (!session) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A leltár nem található." });
+      }
+      if (!EDITABLE_STATUSES.has(session.status)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "A leltár beolvasása le van zárva. Újranyitás után módosítható.", code: "opening_inventory_readonly" });
+      }
+
+      const input = Array.isArray(req.body?.lines) ? req.body.lines.slice(0, 500) : [];
+      if (!input.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Nincs mentendő leltársor." });
+      }
+
+      const actor = actorFrom(req);
+      let saved = 0;
+      let anyCounted = false;
+      for (const item of input) {
+        const lineId = text(item?.lineId || item?.line_id);
+        if (!lineId) continue;
+        const rawCount = item?.countedQty ?? item?.counted_qty;
+        const countedQty = rawCount === null || rawCount === undefined || rawCount === "" ? null : intOrNull(rawCount);
+        if (countedQty !== null && countedQty < 0) {
+          throw Object.assign(new Error("A talált darabszám 0 vagy nagyobb egész szám legyen."), { statusCode: 400 });
+        }
+        const note = item?.note === null || item?.note === undefined ? null : text(item.note).slice(0, 1200) || null;
+
+        const current = await client.query(
+          `SELECT id,variant_id,counted_qty,note
+           FROM aif_opening_inventory_lines
+           WHERE session_id=$1 AND id::text=$2
+           FOR UPDATE`,
+          [session.id, lineId],
+        );
+        if (!current.rowCount) continue;
+        const row = current.rows[0];
+        const before = row.counted_qty === null || row.counted_qty === undefined ? null : Number(row.counted_qty || 0);
+        const countChanged = (before === null ? countedQty !== null : countedQty === null || Number(before) !== Number(countedQty));
+        const noteChanged = String(row.note || "") !== String(note || "");
+        if (!countChanged && !noteChanged) continue;
+
+        if (countedQty === null) {
+          await client.query(
+            `UPDATE aif_opening_inventory_lines
+             SET counted_qty=NULL,note=$3,auto_zeroed=false,updated_at=now()
+             WHERE session_id=$1 AND id=$2`,
+            [session.id, row.id, note],
+          );
+        } else {
+          anyCounted = true;
+          await client.query(
+            `UPDATE aif_opening_inventory_lines
+             SET counted_qty=$3,note=$4,
+                 first_scanned_at=COALESCE(first_scanned_at,now()),
+                 last_scanned_at=now(),last_scanned_by=$5,
+                 auto_zeroed=false,updated_at=now()
+             WHERE session_id=$1 AND id=$2`,
+            [session.id, row.id, countedQty, note, actor],
+          );
+        }
+
+        if (countChanged) {
+          const beforeNumber = before === null ? 0 : Number(before || 0);
+          const afterNumber = countedQty === null ? null : Number(countedQty || 0);
+          await client.query(
+            `INSERT INTO aif_opening_inventory_scans (
+               session_id,line_id,variant_id,scan_code,event_type,qty_delta,counted_before,counted_after,actor,raw
+             ) VALUES ($1,$2,$3,NULL,'manual_set',$4,$5,$6,$7,$8::jsonb)`,
+            [
+              session.id,
+              row.id,
+              row.variant_id,
+              (afterNumber === null ? 0 : afterNumber) - beforeNumber,
+              before,
+              afterNumber,
+              actor,
+              JSON.stringify({ source: "admin_bulk", cleared: afterNumber === null }),
+            ],
+          );
+        }
+        saved += 1;
+      }
+
+      if (anyCounted) {
+        await client.query(
+          `UPDATE aif_opening_inventory_sessions
+           SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END,updated_at=now()
+           WHERE id=$1`,
+          [session.id],
+        );
+      } else {
+        await client.query(`UPDATE aif_opening_inventory_sessions SET updated_at=now() WHERE id=$1`, [session.id]);
+      }
+
+      await client.query("COMMIT");
+      const fresh = await sessionById(client, session.id);
+      const detail = await adminDetail(client, fresh);
+      return res.json({ ok: true, saved, ...detail });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A leltársorok mentése nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/admin/sessions/:id", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
     try {
