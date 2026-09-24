@@ -597,6 +597,61 @@ export default function createAifOpeningInventoryRouter({
         if (movement.qty < 0) liveOut += Math.abs(movement.qty);
       }
 
+      const archivedAudit = !ACTIVE_STATUSES.has(session.status)
+        && row.raw
+        && typeof row.raw === "object"
+        && row.raw.finalAudit
+        && typeof row.raw.finalAudit === "object"
+        ? row.raw.finalAudit
+        : null;
+
+      if (archivedAudit) {
+        const archivedCounted = archivedAudit.effectiveCountedQty === null || archivedAudit.effectiveCountedQty === undefined
+          ? null
+          : Number(archivedAudit.effectiveCountedQty || 0);
+        const archivedPhysical = archivedAudit.physicalCountedQty === null || archivedAudit.physicalCountedQty === undefined
+          ? null
+          : Number(archivedAudit.physicalCountedQty || 0);
+        const archivedProduct = archivedAudit.product && typeof archivedAudit.product === "object"
+          ? archivedAudit.product
+          : productPayload(row);
+        const decorated = {
+          ...row,
+          baseline_trusted_net_qty: Number(archivedAudit.baselineTrustedNetQty || 0),
+          baseline_known_min_qty: Number(archivedAudit.baselineKnownMinimumQty || 0),
+          physical_counted_qty: archivedPhysical,
+          live_net_qty: Number(archivedAudit.liveNetQty || 0),
+          live_in_qty: Number(archivedAudit.liveInQty || 0),
+          live_out_qty: Number(archivedAudit.liveOutQty || 0),
+          movement_after_count_qty: Number(archivedAudit.movementAfterCountQty || 0),
+          movement_after_count_count: Number(archivedAudit.movementAfterCountCount || 0),
+          trusted_net_qty: Number(archivedAudit.trustedNetQty || 0),
+          trusted_in_qty: Number(archivedAudit.trustedInQty || 0),
+          trusted_out_qty: Number(archivedAudit.trustedOutQty || 0),
+          known_min_qty: Number(archivedAudit.knownMinimumQty || 0),
+          counted_qty: archivedCounted,
+          definite_missing_qty: archivedAudit.definiteMissingQty === null || archivedAudit.definiteMissingQty === undefined
+            ? null
+            : Number(archivedAudit.definiteMissingQty || 0),
+          untracked_qty: archivedAudit.untrackedQty === null || archivedAudit.untrackedQty === undefined
+            ? null
+            : Number(archivedAudit.untrackedQty || 0),
+          system_correction_qty: archivedAudit.systemCorrectionQty === null || archivedAudit.systemCorrectionQty === undefined
+            ? null
+            : Number(archivedAudit.systemCorrectionQty || 0),
+          current_system_qty: Number(archivedAudit.currentSystemQtyAtFinal || 0),
+          current_reserved_qty: Number(archivedAudit.currentReservedQtyAtFinal || 0),
+          observation_at: archivedAudit.observationAt || null,
+          buy_price: archivedAudit.buyPriceSnapshot ?? row.buy_price,
+          sell_price: archivedAudit.sellPriceSnapshot ?? row.sell_price,
+          product: archivedProduct,
+        };
+        return {
+          ...decorated,
+          status: archivedAudit.lineStatus || adminLineStatus(decorated),
+        };
+      }
+
       const physicalCounted = row.counted_qty === null || row.counted_qty === undefined
         ? null
         : Number(row.counted_qty || 0);
@@ -742,6 +797,81 @@ export default function createAifOpeningInventoryRouter({
       summary[key] = Math.round((Number(summary[key] || 0) + Number.EPSILON) * 100) / 100;
     }
     return summary;
+  }
+
+
+  async function persistFinalAuditSnapshots(client, session, lines, {
+    finalStatus,
+    finalizedBy,
+    unknown = [],
+  } = {}) {
+    const finalizedAt = new Date().toISOString();
+    const payload = (lines || []).map((line) => ({
+      id: String(line.id),
+      audit: {
+        version: 1,
+        finalStatus: finalStatus || session.status,
+        finalizedAt,
+        finalizedBy: finalizedBy || null,
+        stockApplied: finalStatus === "applied",
+        baselineTrustedNetQty: Number(line.baseline_trusted_net_qty ?? line.trusted_net_qty ?? 0),
+        baselineKnownMinimumQty: Number(line.baseline_known_min_qty ?? line.known_min_qty ?? 0),
+        physicalCountedQty: line.physical_counted_qty === null || line.physical_counted_qty === undefined
+          ? null
+          : Number(line.physical_counted_qty || 0),
+        liveNetQty: Number(line.live_net_qty || 0),
+        liveInQty: Number(line.live_in_qty || 0),
+        liveOutQty: Number(line.live_out_qty || 0),
+        movementAfterCountQty: Number(line.movement_after_count_qty || 0),
+        movementAfterCountCount: Number(line.movement_after_count_count || 0),
+        trustedNetQty: Number(line.trusted_net_qty || 0),
+        trustedInQty: Number(line.trusted_in_qty || 0),
+        trustedOutQty: Number(line.trusted_out_qty || 0),
+        knownMinimumQty: Number(line.known_min_qty || 0),
+        effectiveCountedQty: line.counted_qty === null || line.counted_qty === undefined
+          ? null
+          : Number(line.counted_qty || 0),
+        definiteMissingQty: line.definite_missing_qty === null || line.definite_missing_qty === undefined
+          ? null
+          : Number(line.definite_missing_qty || 0),
+        untrackedQty: line.untracked_qty === null || line.untracked_qty === undefined
+          ? null
+          : Number(line.untracked_qty || 0),
+        systemCorrectionQty: line.system_correction_qty === null || line.system_correction_qty === undefined
+          ? null
+          : Number(line.system_correction_qty || 0),
+        currentSystemQtyAtFinal: Number(line.current_system_qty || 0),
+        currentReservedQtyAtFinal: Number(line.current_reserved_qty || 0),
+        observationAt: line.observation_at || null,
+        buyPriceSnapshot: numberOrNull(line.buy_price),
+        sellPriceSnapshot: numberOrNull(line.sell_price),
+        lineStatus: line.status || null,
+        product: line.product || null,
+      },
+    }));
+
+    if (payload.length) {
+      await client.query(
+        `WITH payload AS (
+           SELECT
+             NULLIF(item->>'id','')::uuid AS id,
+             item->'audit' AS audit
+           FROM jsonb_array_elements($2::jsonb) item
+         )
+         UPDATE aif_opening_inventory_lines l
+         SET raw=COALESCE(l.raw,'{}'::jsonb) || jsonb_build_object('finalAudit',payload.audit),
+             updated_at=now()
+         FROM payload
+         WHERE l.session_id=$1
+           AND l.id=payload.id`,
+        [session.id, JSON.stringify(payload)],
+      );
+    }
+
+    return {
+      finalizedAt,
+      summary: summarizeAdminLines(lines || [], unknown || []),
+    };
   }
 
   async function loadUnknown(client, sessionId) {
@@ -1097,6 +1227,7 @@ export default function createAifOpeningInventoryRouter({
       const locationInput = text(req.query.location);
       const status = openingStatus(req.query.status);
       const limit = Math.min(100, Math.max(1, Number(req.query.limit || 30)));
+      const offset = Math.max(0, Number(req.query.offset || 0));
       const args = [];
       const where = [];
       if (locationInput) {
@@ -1108,21 +1239,35 @@ export default function createAifOpeningInventoryRouter({
         where.push(`s.status=$${args.length}`);
       }
       args.push(limit);
+      const limitIndex = args.length;
+      args.push(offset);
+      const offsetIndex = args.length;
       const result = await client.query(
         `SELECT s.*,l.code AS location_code,l.name AS location_name,l.location_type,
                 count(li.id)::int AS line_count,
                 count(li.id) FILTER (WHERE li.counted_qty IS NOT NULL)::int AS counted_lines,
-                COALESCE(sum(li.counted_qty) FILTER (WHERE li.counted_qty IS NOT NULL),0)::numeric AS counted_qty
+                COALESCE(sum(li.counted_qty) FILTER (WHERE li.counted_qty IS NOT NULL),0)::numeric AS counted_qty,
+                count(*) OVER()::int AS total_count
          FROM aif_opening_inventory_sessions s
          JOIN aif_locations l ON l.id=s.location_id
          LEFT JOIN aif_opening_inventory_lines li ON li.session_id=s.id
          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
          GROUP BY s.id,l.id
          ORDER BY s.created_at DESC
-         LIMIT $${args.length}`,
+         LIMIT $${limitIndex}
+         OFFSET $${offsetIndex}`,
         args,
       );
-      return res.json({ ok: true, items: result.rows });
+      const total = Number(result.rows[0]?.total_count || 0);
+      const items = result.rows.map(({ total_count, ...row }) => row);
+      return res.json({
+        ok: true,
+        items,
+        total,
+        offset,
+        limit,
+        hasMore: offset + items.length < total,
+      });
     } catch (error) {
       return res.status(500).json({ error: error?.message || "A leltárak listája nem tölthető be." });
     } finally {
@@ -1474,6 +1619,11 @@ export default function createAifOpeningInventoryRouter({
       const lines = await loadAdminLines(client, session, { lock: true });
 
       const actor = actorFrom(req);
+      const archiveSnapshot = await persistFinalAuditSnapshots(client, session, lines, {
+        finalStatus: "applied",
+        finalizedBy: actor,
+        unknown: [],
+      });
       let changed = 0;
       let netDiff = 0;
       let correctionRetailValue = 0;
@@ -1560,6 +1710,12 @@ export default function createAifOpeningInventoryRouter({
           correctionRetailValue,
           liveMovementReconciliation: true,
           movementPolicy: "physical_count_plus_movements_after_last_count",
+          archiveSnapshot: {
+            version: 1,
+            finalizedAt: archiveSnapshot.finalizedAt,
+            status: "applied",
+            summary: archiveSnapshot.summary,
+          },
         })],
       );
       await client.query("COMMIT");
@@ -1594,11 +1750,32 @@ export default function createAifOpeningInventoryRouter({
         await client.query("ROLLBACK");
         return res.json({ ok: true, already: true, session });
       }
+
+      await syncSessionLinesFromLiveStock(client, session);
+      const [archiveLines, archiveUnknown] = await Promise.all([
+        loadAdminLines(client, session, { lock: true }),
+        loadUnknown(client, session.id),
+      ]);
+      const cancelledBy = actorFrom(req);
+      const archiveSnapshot = await persistFinalAuditSnapshots(client, session, archiveLines, {
+        finalStatus: "cancelled",
+        finalizedBy: cancelledBy,
+        unknown: archiveUnknown,
+      });
+
       await client.query(
         `UPDATE aif_opening_inventory_sessions
-         SET status='cancelled',cancelled_at=now(),cancelled_by=$2,updated_at=now()
+         SET status='cancelled',cancelled_at=now(),cancelled_by=$2,
+             raw=COALESCE(raw,'{}'::jsonb) || $3::jsonb,updated_at=now()
          WHERE id=$1`,
-        [session.id, actorFrom(req)],
+        [session.id, cancelledBy, JSON.stringify({
+          archiveSnapshot: {
+            version: 1,
+            finalizedAt: archiveSnapshot.finalizedAt,
+            status: "cancelled",
+            summary: archiveSnapshot.summary,
+          },
+        })],
       );
       await client.query("COMMIT");
       const fresh = await sessionById(client, session.id);
