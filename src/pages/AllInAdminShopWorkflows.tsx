@@ -188,6 +188,22 @@ const HU_MONTHS = [
 ] as const;
 const HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
 
+function monthLabel(value: string) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return value;
+  const month = Math.max(1, Math.min(12, Number(match[2])));
+  return `${match[1]} ${HU_MONTHS[month - 1]}`;
+}
+
+function recentMonthOptions(count = 18) {
+  const today = localIsoDate(new Date());
+  const base = new Date(`${today.slice(0, 7)}-15T12:00:00Z`);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - index, 15, 12));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  });
+}
+
 function isoDateParts(value?: string | null) {
   const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -504,6 +520,7 @@ export default function AllInAdminShopWorkflows({
   const [authorizations, setAuthorizations] = useState<Array<{ store: StoreDef; item: AifShopReturnAuthorizationInboxItem }>>([]);
   const [shiftDays, setShiftDays] = useState<Array<{ store: StoreDef; data: AifShopShiftDayOverview }>>([]);
   const [cashStores, setCashStores] = useState<Array<{ store: StoreDef; data: AifShopCashOverview }>>([]);
+  const [cashHistoryMonth, setCashHistoryMonth] = useState(() => localIsoDate(new Date()).slice(0, 7));
   const [cashActionBusyId, setCashActionBusyId] = useState<string | null>(null);
   const [shiftRepairLocationCode, setShiftRepairLocationCode] = useState<StoreDef["code"] | null>(null);
   const [returnImagePreview, setReturnImagePreview] = useState<{ src: string; title: string } | null>(null);
@@ -612,7 +629,7 @@ export default function AllInAdminShopWorkflows({
           STORES.map(async (store) => {
             const [data, cash] = await Promise.all([
               apiAifShopShiftDayOverview({ location: store.code, date }),
-              apiAifShopCashOverview({ location: store.code, limit: 120 }),
+              apiAifShopCashOverview({ location: store.code, limit: 160, month: cashHistoryMonth }),
             ]);
             return { store, data, cash };
           }),
@@ -625,7 +642,7 @@ export default function AllInAdminShopWorkflows({
     } finally {
       setLoading(false);
     }
-  }, [date, mode, open]);
+  }, [cashHistoryMonth, date, mode, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -663,6 +680,22 @@ export default function AllInAdminShopWorkflows({
     [visibleCashStores],
   );
 
+  const managerCashHistory = useMemo(
+    () => visibleCashStores
+      .flatMap(({ store, data }) => (data.managerHandoverHistory || []).map((item) => ({ store, item })))
+      .sort((a, b) => new Date(b.item.requestedAt || b.item.createdAt || 0).getTime() - new Date(a.item.requestedAt || a.item.createdAt || 0).getTime()),
+    [visibleCashStores],
+  );
+
+  const unreceivedCashDays = useMemo(
+    () => visibleCashStores.flatMap(({ store, data }) =>
+      (data.handoverPlan?.days || []).map((day) => ({ store, day, pending: day.status === "pending" })),
+    ),
+    [visibleCashStores],
+  );
+
+  const cashHistoryMonths = useMemo(() => recentMonthOptions(18), []);
+
   const reservationSummary = useMemo(() => {
     let tomorrow = 0;
     let today = 0;
@@ -694,7 +727,7 @@ export default function AllInAdminShopWorkflows({
       await apiAifConfirmShopCashMovement(id);
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás visszaigazolása nem sikerült.");
+      setError(caught instanceof Error ? caught.message : "A készpénzátadás visszaigazolása nem sikerült.");
     } finally {
       setCashActionBusyId(null);
     }
@@ -704,10 +737,10 @@ export default function AllInAdminShopWorkflows({
     setCashActionBusyId(id);
     setError("");
     try {
-      await apiAifRejectShopCashMovement(id, "A főnök nem igazolta vissza az átvételt.");
+      await apiAifRejectShopCashMovement(id, "A készpénz átvételét nem igazolták vissza.");
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás elutasítása nem sikerült.");
+      setError(caught instanceof Error ? caught.message : "A készpénzátadás elutasítása nem sikerült.");
     } finally {
       setCashActionBusyId(null);
     }
@@ -880,13 +913,25 @@ export default function AllInAdminShopWorkflows({
               })}
             </div>
             {mode === "shifts" ? (
-              <div className="min-w-[172px]">
-                <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/45">Dátum</p>
-                <HungarianDatePicker
-                  value={date}
-                  onChange={setDate}
-                  ariaLabel="Műszakátadás dátuma"
-                />
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="min-w-[172px]">
+                  <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/45">Műszak dátuma</p>
+                  <HungarianDatePicker
+                    value={date}
+                    onChange={setDate}
+                    ariaLabel="Műszakátadás dátuma"
+                  />
+                </div>
+                <label className="min-w-[172px]">
+                  <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Készpénzátadás hónapja</span>
+                  <select
+                    value={cashHistoryMonth}
+                    onChange={(event) => setCashHistoryMonth(event.target.value)}
+                    className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
+                  >
+                    {cashHistoryMonths.map((month) => <option key={month} value={month}>{monthLabel(month)}</option>)}
+                  </select>
+                </label>
               </div>
             ) : null}
           </div>
@@ -1312,8 +1357,13 @@ export default function AllInAdminShopWorkflows({
                         utolsó zárás: {data.closures?.[0]?.date || "nincs"}
                       </span>
                       {data.pendingManagerHandovers?.length ? (
-                        <span className="rounded-full border border-orange-200/28 bg-orange-500/12 px-2 py-1 text-orange-50">
-                          {data.pendingManagerHandovers.length} főnöki átvétel vár
+                        <span className="rounded-full border border-[#ffe66b]/35 bg-[#fed700]/10 px-2 py-1 text-[#fff4a5]">
+                          {data.pendingManagerHandovers.length} készpénzátadás vár
+                        </span>
+                      ) : null}
+                      {(data.handoverPlan?.days || []).length ? (
+                        <span className="rounded-full border border-white/12 bg-white/[0.04] px-2 py-1 text-white/52">
+                          {(data.handoverPlan?.days || []).length} át nem vett nap
                         </span>
                       ) : null}
                     </div>
@@ -1325,8 +1375,8 @@ export default function AllInAdminShopWorkflows({
                 <section className={`${panel} overflow-hidden border-orange-200/22`}>
                   <div className="flex items-center justify-between gap-3 border-b border-orange-200/14 bg-orange-500/[0.08] px-4 py-3">
                     <div>
-                      <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/58">Főnöki visszaigazolás</p>
-                      <h3 className="mt-1 text-base text-white">Pénzátadások, amelyek rád várnak</h3>
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/58">Készpénz átvétele</p>
+                      <h3 className="mt-1 text-base text-white">Átvételre váró készpénzátadások</h3>
                     </div>
                     <span className="rounded-full border border-orange-200/28 bg-orange-500/14 px-2.5 py-1 text-[10px] text-orange-50">{pendingBossCash.length} tétel</span>
                   </div>
@@ -1336,8 +1386,11 @@ export default function AllInAdminShopWorkflows({
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="text-[10px] uppercase tracking-[0.11em] text-orange-100/52">{store.city}</p>
-                            <p className="mt-1 text-sm text-white">{item.requestedBy} • átadás a főnöknek</p>
+                            <p className="mt-1 text-sm text-white">{item.requestedBy} • készpénzátadás</p>
                             <p className="mt-1 text-[10px] text-white/42">{formatDateTime(item.requestedAt)}{item.reference ? ` • ${item.reference}` : ""}</p>
+                            {(item.handoverFromDate || item.handoverToDate) ? (
+                              <p className="mt-1 text-[11px] text-[#fff4a5]">Időszak: {item.handoverFromDate || item.handoverToDate} → {item.handoverToDate || item.handoverFromDate} • {item.coveredDayCount || 1} nap</p>
+                            ) : null}
                             {item.note ? <p className="mt-2 text-[11px] leading-relaxed text-white/54">{item.note}</p> : null}
                           </div>
                           <p className="shrink-0 text-xl text-orange-50">{money(item.amount)}</p>
@@ -1366,6 +1419,59 @@ export default function AllInAdminShopWorkflows({
                   </div>
                 </section>
               ) : null}
+
+              <section className={`${panel} overflow-hidden border-[#ffe66b]/18`}>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303a4c] px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-[#fff4a5]/58">Készpénzátadás lefedettsége</p>
+                    <h3 className="mt-1 text-base text-white">Még át nem vett üzleti napok</h3>
+                  </div>
+                  <span className="rounded-full border border-[#ffe66b]/28 bg-[#fed700]/10 px-2.5 py-1 text-[10px] text-[#fff4a5]">{unreceivedCashDays.length} nap</span>
+                </div>
+                <div className="grid gap-3 p-3 lg:grid-cols-2">
+                  {visibleCashStores.map(({ store, data }) => {
+                    const days = data.handoverPlan?.days || [];
+                    return (
+                      <article key={`unreceived-${store.code}`} className="overflow-hidden rounded-2xl border border-white/11 bg-[#2b3749]">
+                        <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-[#303d50] px-3 py-2.5">
+                          <div>
+                            <p className="text-sm text-white">{store.city}</p>
+                            <p className="mt-0.5 text-[10px] text-white/42">
+                              {data.handoverPlan?.lastConfirmedTo
+                                ? `Utolsó átvett időszak vége: ${data.handoverPlan.lastConfirmedTo}`
+                                : "Még nincs lezárt készpénzátadás"}
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/56">{days.length} nap</span>
+                        </div>
+                        <div className="max-h-[280px] divide-y divide-white/7 overflow-y-auto">
+                          {days.map((day) => (
+                            <div key={`${store.code}-${day.date}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                              <div className="min-w-0">
+                                <p className="text-[12px] text-white">{formatDate(day.date)}</p>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  <span className={`rounded-full border px-2 py-0.5 text-[9px] ${
+                                    day.status === "pending"
+                                      ? "border-[#ffe66b]/35 bg-[#fed700]/10 text-[#fff4a5]"
+                                      : "border-white/10 bg-white/[0.04] text-white/45"
+                                  }`}>
+                                    {day.status === "pending" ? "Átvételre vár" : "Még nincs átadva"}
+                                  </span>
+                                  <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[9px] text-white/38">
+                                    {day.closed ? "Napzárás van" : "Nincs külön napzárás"}
+                                  </span>
+                                </div>
+                              </div>
+                              <p className="shrink-0 text-sm text-white">{money(day.amount)}</p>
+                            </div>
+                          ))}
+                          {!days.length ? <div className="px-3 py-7 text-center text-xs text-white/40">Nincs átadásra váró üzleti nap.</div> : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
 
               {visibleShiftDays.map(({ store, data }) => (
                 <section key={store.code} className={`${panel} overflow-hidden`}>
@@ -1456,47 +1562,93 @@ export default function AllInAdminShopWorkflows({
                 </section>
               ))}
 
+              <section className={`${panel} overflow-hidden border-[#ffe66b]/18`}>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-[#fff4a5]/58">Átvételi history</p>
+                    <h3 className="mt-1 text-base text-white">Készpénzátadások • {monthLabel(cashHistoryMonth)}</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <History size={19} className="text-[#fed700]" />
+                    <span className="rounded-full border border-[#ffe66b]/25 bg-[#fed700]/10 px-2.5 py-1 text-[10px] text-[#fff4a5]">{managerCashHistory.length} átadás</span>
+                  </div>
+                </div>
+                <div className="grid gap-2 p-3 lg:grid-cols-2">
+                  {managerCashHistory.map(({ store, item }) => {
+                    const confirmed = item.status === "confirmed";
+                    const pending = item.status === "pending";
+                    return (
+                      <article key={`${store.code}-handover-${item.id}`} className={`rounded-2xl border p-3 ${
+                        pending
+                          ? "border-[#ffe66b]/30 bg-[#fed700]/[0.07]"
+                          : confirmed
+                            ? "border-emerald-200/18 bg-emerald-500/[0.06]"
+                            : item.status === "rejected"
+                              ? "border-rose-200/18 bg-rose-500/[0.06]"
+                              : "border-white/10 bg-[#293548]"
+                      }`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-1 text-[10px] text-[#cffffd]">{store.city}</span>
+                              <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                                confirmed
+                                  ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
+                                  : pending
+                                    ? "border-[#ffe66b]/35 bg-[#fed700]/10 text-[#fff4a5]"
+                                    : item.status === "rejected"
+                                      ? "border-rose-200/24 bg-rose-500/10 text-rose-50"
+                                      : "border-white/12 bg-white/[0.04] text-white/48"
+                              }`}>
+                                {confirmed ? "Átvéve" : pending ? "Átvételre vár" : item.status === "cancelled" ? "Visszavonva" : item.status === "rejected" ? "Elutasítva" : item.status}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-white">
+                              {item.handoverFromDate || item.handoverToDate || "–"} → {item.handoverToDate || item.handoverFromDate || "–"}
+                            </p>
+                            <p className="mt-1 text-[10px] text-white/44">Átadó: {item.requestedBy} • {formatDateTime(item.requestedAt)}</p>
+                            {item.confirmedAt ? (
+                              <p className="mt-1 text-[10px] text-emerald-100/72">Átvette: {item.confirmedBy || "ADMIN"} • {formatDateTime(item.confirmedAt)}</p>
+                            ) : null}
+                            {item.note ? <p className="mt-2 text-[10px] leading-relaxed text-white/46">{item.note}</p> : null}
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xl text-white">{money(item.amount)}</p>
+                            <p className="mt-1 text-[9px] text-white/36">{item.coveredDayCount || 1} nap</p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {!managerCashHistory.length ? (
+                    <div className="lg:col-span-2 rounded-xl border border-dashed border-white/12 px-4 py-9 text-center text-sm text-white/42">
+                      {monthLabel(cashHistoryMonth)} hónapban nincs készpénzátadás.
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+
               <section className={`${panel} overflow-hidden`}>
                 <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                   <div>
                     <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Kassza auditnapló</p>
-                    <h3 className="mt-1 text-base text-white">Főnöki átvételek és bankbefizetések</h3>
+                    <h3 className="mt-1 text-base text-white">Bankbefizetések</h3>
                   </div>
-                  <History size={19} className="text-[#8ee6e2]" />
+                  <Landmark size={19} className="text-[#8ee6e2]" />
                 </div>
                 <div className="divide-y divide-white/8">
-                  {cashHistory.slice(0, 80).map(({ store, item }) => (
+                  {cashHistory.filter(({ item }) => item.type === "bank_deposit").slice(0, 80).map(({ store, item }) => (
                     <article key={`${store.code}-${item.id}`} className="p-4">
                       <div className="flex flex-wrap items-start gap-3">
-                        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
-                          item.type === "bank_deposit"
-                            ? "border-[#9be9e5]/24 bg-[#2a8d8b]/12 text-[#d7fffd]"
-                            : item.status === "pending"
-                              ? "border-orange-200/28 bg-orange-500/12 text-orange-50"
-                              : "border-emerald-200/22 bg-emerald-500/10 text-emerald-50"
-                        }`}>
-                          {item.type === "bank_deposit" ? <Landmark size={18} /> : <Banknote size={18} />}
+                        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#9be9e5]/24 bg-[#2a8d8b]/12 text-[#d7fffd]">
+                          <Landmark size={18} />
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-1 text-[10px] text-[#cffffd]">{store.city}</span>
-                            <p className="text-sm text-white">{item.type === "bank_deposit" ? "Bankbefizetés" : "Átadás a főnöknek"}</p>
-                            <span className={`rounded-full border px-2 py-1 text-[9px] ${
-                              item.status === "confirmed"
-                                ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
-                                : item.status === "pending"
-                                  ? "border-orange-200/28 bg-orange-500/12 text-orange-50"
-                                  : item.status === "rejected"
-                                    ? "border-rose-200/24 bg-rose-500/10 text-rose-50"
-                                    : "border-white/12 bg-white/[0.04] text-white/48"
-                            }`}>
-                              {item.status === "confirmed" ? "Igazolva" : item.status === "pending" ? "Várakozik" : item.status === "rejected" ? "Elutasítva" : item.status}
-                            </span>
+                            <p className="text-sm text-white">Bankbefizetés</p>
                           </div>
-                          <p className="mt-1 text-[10px] text-white/44">
-                            Rögzítette: {item.requestedBy} • {formatDateTime(item.requestedAt)}
-                            {item.confirmedBy ? ` • Visszaigazolta: ${item.confirmedBy}` : ""}
-                          </p>
+                          <p className="mt-1 text-[10px] text-white/44">Rögzítette: {item.requestedBy} • {formatDateTime(item.requestedAt)}</p>
                           {item.reference ? <p className="mt-1 text-[10px] text-[#bdf8f5]/64">Referencia: {item.reference}</p> : null}
                           {item.note ? <p className="mt-1 text-[10px] text-white/46">{item.note}</p> : null}
                         </div>
@@ -1504,8 +1656,8 @@ export default function AllInAdminShopWorkflows({
                       </div>
                     </article>
                   ))}
-                  {!cashHistory.length ? (
-                    <div className="px-4 py-10 text-center text-sm text-white/42">Még nincs főnöki készpénzátadás vagy bankbefizetés.</div>
+                  {!cashHistory.some(({ item }) => item.type === "bank_deposit") ? (
+                    <div className="px-4 py-10 text-center text-sm text-white/42">Még nincs bankbefizetés.</div>
                   ) : null}
                 </div>
               </section>
