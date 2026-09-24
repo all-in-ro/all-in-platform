@@ -3611,6 +3611,9 @@ export type AifShopCashMovement = {
   requestedAt?: string | null;
   reference?: string | null;
   note?: string | null;
+  handoverFromDate?: string | null;
+  handoverToDate?: string | null;
+  coveredDayCount?: number;
   confirmedBy?: string | null;
   confirmedAt?: string | null;
   effectiveAt?: string | null;
@@ -3619,6 +3622,24 @@ export type AifShopCashMovement = {
   cancelledBy?: string | null;
   cancelledAt?: string | null;
   createdAt?: string | null;
+};
+
+export type AifShopCashHandoverDay = {
+  date: string;
+  amount: number;
+  closed: boolean;
+  closingCash?: number | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  status: "available" | "pending" | string;
+};
+
+export type AifShopCashHandoverPlan = {
+  lastConfirmedTo?: string | null;
+  nextFrom: string;
+  today: string;
+  pending?: AifShopCashMovement | null;
+  days: AifShopCashHandoverDay[];
 };
 
 export type AifShopCashBalance = {
@@ -3639,8 +3660,11 @@ export type AifShopCashBalance = {
 export type AifShopCashOverview = {
   ok: true;
   generatedAt: string;
+  historyMonth?: string;
   location: { id: string; code: string; name: string };
   balance: AifShopCashBalance;
+  handoverPlan?: AifShopCashHandoverPlan | null;
+  managerHandoverHistory?: AifShopCashMovement[];
   pendingManagerHandovers: AifShopCashMovement[];
   movements: AifShopCashMovement[];
   closures: AifShopDayClosure[];
@@ -3736,10 +3760,11 @@ export function apiAifCancelShopShiftHandover(id: string) {
   );
 }
 
-export function apiAifShopCashOverview(options: { location: string; limit?: number }) {
+export function apiAifShopCashOverview(options: { location: string; limit?: number; month?: string }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   if (options.limit) q.set("limit", String(options.limit));
+  if (options.month) q.set("month", options.month);
   return fetchAifJSON<AifShopCashOverview>(`/shop-cash/overview?${q.toString()}`);
 }
 
@@ -3758,7 +3783,8 @@ export function apiAifCloseShopDay(input: {
 export function apiAifCreateShopCashMovement(input: {
   location: string;
   type: AifShopCashMovementType;
-  amount: number;
+  amount?: number;
+  handoverToDate?: string | null;
   reference?: string | null;
   note?: string | null;
   idempotencyKey: string;
