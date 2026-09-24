@@ -26330,8 +26330,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `WITH filtered_sales AS (
              SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
            ), payment_rows AS (
-             SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
-                    count(DISTINCT p.sale_id)::int AS transactions
+             -- Normál eladási fizetések. A későbbi kliensbefizetésből generált
+             -- sale-payment sorokat itt kizárjuk, mert azokat lent EGY fizetési
+             -- eseményként az aif_shop_customer_payments táblából számoljuk.
+             SELECT p.method,
+                    COALESCE(sum(p.amount),0)::numeric AS amount,
+                    count(DISTINCT p.sale_id)::int AS transactions,
+                    0::numeric AS customer_payment_amount,
+                    0::int AS customer_payment_transactions
              FROM aif_shop_sale_payments p
              JOIN aif_shop_sales ps ON ps.id=p.sale_id
              WHERE ps.location_id=$1
@@ -26339,19 +26345,46 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND p.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND p.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND p.method <> 'credit'
+               AND p.customer_payment_id IS NULL
                AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g'))
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
              GROUP BY p.method
+
              UNION ALL
+
+             -- Korábbi hiteles vásárlások tényleges napi rendezése.
+             -- Egy customer_payment akkor is EGY fizetési esemény, ha több
+             -- korábbi bizonylatra / terméksorra lett szétosztva.
+             SELECT cp.method,
+                    COALESCE(sum(cp.amount),0)::numeric AS amount,
+                    count(*)::int AS transactions,
+                    COALESCE(sum(cp.amount),0)::numeric AS customer_payment_amount,
+                    count(*)::int AS customer_payment_transactions
+             FROM aif_shop_customer_payments cp
+             WHERE cp.location_id=$1
+               AND cp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND cp.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+             GROUP BY cp.method
+
+             UNION ALL
+
              SELECT 'credit'::text AS method,
                     COALESCE(sum(fs.balance_due),0)::numeric AS amount,
-                    count(*) FILTER (WHERE fs.balance_due > 0)::int AS transactions
+                    count(*) FILTER (WHERE fs.balance_due > 0)::int AS transactions,
+                    0::numeric AS customer_payment_amount,
+                    0::int AS customer_payment_transactions
              FROM filtered_sales fs
              WHERE fs.balance_due > 0
+
              UNION ALL
+
              SELECT es.method,
                     COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
-                    count(*)::int AS transactions
+                    count(*)::int AS transactions,
+                    0::numeric AS customer_payment_amount,
+                    0::int AS customer_payment_transactions
              FROM aif_shop_exchange_settlements es
              JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
              WHERE es.location_id=$1
@@ -26361,7 +26394,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
              GROUP BY es.method
            )
-           SELECT method, sum(amount)::numeric AS amount, sum(transactions)::int AS transactions
+           SELECT
+             method,
+             sum(amount)::numeric AS amount,
+             sum(transactions)::int AS transactions,
+             sum(customer_payment_amount)::numeric AS customer_payment_amount,
+             sum(customer_payment_transactions)::int AS customer_payment_transactions
            FROM payment_rows
            GROUP BY method
            ORDER BY amount DESC`,
@@ -26993,7 +27031,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         label: aifPaymentMethodLabel(row.method),
         amount: aifNumber(row.amount),
         transactions: aifNumber(row.transactions),
+        customerPaymentAmount: aifNumber(row.customer_payment_amount),
+        customerPaymentTransactions: aifNumber(row.customer_payment_transactions),
       }));
+      const customerPaymentTotal = aifRoundMoney(
+        payments.reduce((sum, item) => sum + aifNumber(item.customerPaymentAmount), 0)
+      );
+      const collectedTotal = aifRoundMoney(
+        payments
+          .filter((item) => item.method !== 'credit')
+          .reduce((sum, item) => sum + aifNumber(item.amount), 0)
+      );
 
       res.json({
         ok: true,
@@ -27002,7 +27050,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         employee,
         location: { id: String(location.id), code: location.code, name: location.name },
         summary: {
+          // revenue = az adott napon létrejött eladások forgalma (átlagkosár alapja).
+          // collectedTotal = az adott napon ténylegesen befolyt pénz, beleértve a
+          // korábbi tartozások aznapi rendezését is.
           revenue,
+          salesRevenue: revenue,
+          collectedTotal,
+          customerPaymentTotal,
           salesBeforeDiscount: aifRoundMoney(aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount)),
           transactions,
           itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold),
