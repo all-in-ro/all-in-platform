@@ -1280,7 +1280,7 @@ export default function AllInInventory() {
   const [linePageSize, setLinePageSize] = useState<20 | 50 | 100>(20);
   const [linePage, setLinePage] = useState(1);
   const [recentScannedLineIds, setRecentScannedLineIds] = useState<string[]>([]);
-  const [inventoryMode, setInventoryMode] = useState<InventoryMode>("recovery");
+  const [inventoryMode, setInventoryMode] = useState<InventoryMode>("standard");
   const [salesTrustedFrom, setSalesTrustedFrom] = useState(localDateInput());
   const [legacyRetailValue, setLegacyRetailValue] = useState("");
   const [openingDetail, setOpeningDetail] = useState<OpeningInventoryDetail | null>(null);
@@ -1366,8 +1366,7 @@ export default function AllInInventory() {
       if (!silent) setMessage(null);
 
       const open = mappedSessions.find((item) => !["committed", "cancelled"].includes(item.status)) || null;
-      const hasApplied = mappedSessions.some((item) => item.status === "committed");
-      if (!open) setInventoryMode(hasApplied ? "standard" : "recovery");
+      if (!open) setInventoryMode("standard");
 
       const current = activeRef.current;
       if (open && current?.item.id !== open.id) {
@@ -2621,7 +2620,7 @@ export default function AllInInventory() {
             <label className={label}>Üzlet / helyszín
               <CompactSelect
                 value={location}
-                onChange={(next) => { setLocation(next); setActive(null); setOpeningDetail(null); setDrafts({}); setDirtyLineIds([]); dirtyLineIdsRef.current.clear(); }}
+                onChange={(next) => { setLocation(next); setInventoryMode("standard"); setActive(null); setOpeningDetail(null); setDrafts({}); setDirtyLineIds([]); dirtyLineIdsRef.current.clear(); }}
                 disabled={Boolean(active && !activeFinal)}
                 placeholder="Válassz üzletet"
                 options={locations.map((loc) => ({ value: loc.id, label: loc.name }))}
