@@ -858,12 +858,34 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   const lines = detail.lines || [];
   const generated = new Date().toLocaleDateString("ro-RO", { timeZone: "Europe/Bucharest" });
 
+  const lineMarkup = (line: BonConsumDocumentLine) => {
+    const purchaseUnit = numberValue(line.purchaseUnitPrice);
+    const retailGrossUnit = numberValue(line.listUnitPrice);
+    const rate = Number(line.salesTvaRate);
+    const hasValidTva = Number.isFinite(rate) && rate >= 0;
+    if (!hasValidTva) return { unit: null as number | null, value: null as number | null };
+    const retailNetUnit = retailGrossUnit / (1 + rate / 100);
+    const rawUnit = retailNetUnit - purchaseUnit;
+    const unit = Math.round((rawUnit + Number.EPSILON) * 100) / 100;
+    const value = Math.round((unit * numberValue(line.quantity) + Number.EPSILON) * 100) / 100;
+    return { unit, value };
+  };
+
+  const markupValues = lines.map((line) => lineMarkup(line));
+  const hasUnknownMarkup = markupValues.some((row) => row.value === null);
+  const markupTotal = markupValues.reduce((sum, row) => sum + numberValue(row.value), 0);
+  const vatRates = Array.from(new Set(lines
+    .map((line) => Number(line.salesTvaRate))
+    .filter((rate) => Number.isFinite(rate) && rate >= 0)
+    .map((rate) => Number(rate))))
+    .sort((a, b) => a - b);
+  const vatSummary = vatRates.length
+    ? vatRates.map((rate) => `${officialNumber(rate, Number.isInteger(rate) ? 0 : 2)}%`).join(" / ")
+    : "-";
+
   const adminRows = lines.map((line, index) => {
     const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
-    const tva = line.salesTvaRate === null || line.salesTvaRate === undefined
-      ? "-"
-      : `${officialNumber(line.salesTvaRate, Number.isInteger(Number(line.salesTvaRate)) ? 0 : 2)}%`;
-    const source = [line.sourceSaleNumber, line.sourceSoldAt ? formatDate(line.sourceSoldAt) : ""].filter(Boolean).join(" • ");
+    const markup = lineMarkup(line);
     return `<tr>
       <td class="center">${index + 1}</td>
       <td>
@@ -876,43 +898,15 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
       <td class="center">buc.</td>
       <td class="qty">${officialNumber(line.quantity, 0)}</td>
       <td class="money">${officialNumber(line.purchaseUnitPrice)}</td>
-      <td class="money">${officialNumber(line.listUnitPrice)}</td>
-      <td class="money">${officialNumber(line.actualUnitPrice)}</td>
-      <td class="center">${officialHtmlEscape(tva)}</td>
       <td class="money">${officialNumber(line.purchaseValue)}</td>
+      <td class="money">${markup.unit === null ? "-" : officialNumber(markup.unit)}</td>
+      <td class="money">${markup.value === null ? "-" : officialNumber(markup.value)}</td>
+      <td class="money">${officialNumber(line.listUnitPrice)}</td>
       <td class="money strongValue">${officialNumber(line.retailValue)}</td>
-      <td class="money">${officialNumber(line.actualSaleValue)}</td>
-      <td class="money">${officialNumber(line.discountValue)}</td>
-      <td class="source">${officialHtmlEscape(source || "-")}</td>
     </tr>`;
   }).join("");
 
-  const signingRows = lines.map((line, index) => {
-    const variant = [line.brandName, line.colorName, line.size].filter(Boolean).join(" • ");
-    const tva = line.salesTvaRate === null || line.salesTvaRate === undefined
-      ? "-"
-      : `${officialNumber(line.salesTvaRate, Number.isInteger(Number(line.salesTvaRate)) ? 0 : 2)}%`;
-    const source = [line.sourceSaleNumber, line.sourceSoldAt ? formatDate(line.sourceSoldAt) : ""].filter(Boolean).join(" • ");
-    return `<tr>
-      <td class="center">${index + 1}</td>
-      <td>
-        <strong>${officialHtmlEscape(line.productTitle || "Produs")}</strong>
-        <div class="muted">${officialHtmlEscape(variant || "-")}</div>
-      </td>
-      <td class="code">${officialHtmlEscape(line.productCode || "-")}</td>
-      <td class="code">${officialHtmlEscape(line.snCod || "-")}</td>
-      <td class="code">${officialHtmlEscape(line.barcode || "-")}</td>
-      <td class="center">buc.</td>
-      <td class="qty">${officialNumber(line.quantity, 0)}</td>
-      <td class="money">${officialNumber(line.listUnitPrice)}</td>
-      <td class="money">${officialNumber(line.actualUnitPrice)}</td>
-      <td class="center">${officialHtmlEscape(tva)}</td>
-      <td class="money strongValue">${officialNumber(line.retailValue)}</td>
-      <td class="money">${officialNumber(line.actualSaleValue)}</td>
-      <td class="money">${officialNumber(line.discountValue)}</td>
-      <td class="source">${officialHtmlEscape(source || "-")}</td>
-    </tr>`;
-  }).join("");
+  const signingRows = adminRows;
 
   const renderTop = () => `
     <div class="top">
@@ -1008,37 +1002,32 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
   .code { font-family:"Courier New",monospace; text-align:center; font-size:6.6px; }
   .source { font-size:6.5px; color:#435164; }
 
-  .adminTable th:nth-child(1),.adminTable td:nth-child(1){width:5mm}
-  .adminTable th:nth-child(2),.adminTable td:nth-child(2){width:41mm}
-  .adminTable th:nth-child(3),.adminTable td:nth-child(3){width:18mm}
-  .adminTable th:nth-child(4),.adminTable td:nth-child(4){width:14mm}
-  .adminTable th:nth-child(5),.adminTable td:nth-child(5){width:23mm}
-  .adminTable th:nth-child(6),.adminTable td:nth-child(6){width:8mm}
-  .adminTable th:nth-child(7),.adminTable td:nth-child(7){width:9mm}
-  .adminTable th:nth-child(8),.adminTable td:nth-child(8){width:18mm}
-  .adminTable th:nth-child(9),.adminTable td:nth-child(9){width:18mm}
-  .adminTable th:nth-child(10),.adminTable td:nth-child(10){width:18mm}
-  .adminTable th:nth-child(11),.adminTable td:nth-child(11){width:9mm}
-  .adminTable th:nth-child(12),.adminTable td:nth-child(12){width:19mm}
-  .adminTable th:nth-child(13),.adminTable td:nth-child(13){width:20mm}
-  .adminTable th:nth-child(14),.adminTable td:nth-child(14){width:19mm}
-  .adminTable th:nth-child(15),.adminTable td:nth-child(15){width:16mm}
-  .adminTable th:nth-child(16),.adminTable td:nth-child(16){width:28mm}
-
+  .adminTable th:nth-child(1),.adminTable td:nth-child(1),
   .signingTable th:nth-child(1),.signingTable td:nth-child(1){width:5mm}
-  .signingTable th:nth-child(2),.signingTable td:nth-child(2){width:48mm}
+  .adminTable th:nth-child(2),.adminTable td:nth-child(2),
+  .signingTable th:nth-child(2),.signingTable td:nth-child(2){width:42mm}
+  .adminTable th:nth-child(3),.adminTable td:nth-child(3),
   .signingTable th:nth-child(3),.signingTable td:nth-child(3){width:20mm}
-  .signingTable th:nth-child(4),.signingTable td:nth-child(4){width:15mm}
+  .adminTable th:nth-child(4),.adminTable td:nth-child(4),
+  .signingTable th:nth-child(4),.signingTable td:nth-child(4){width:16mm}
+  .adminTable th:nth-child(5),.adminTable td:nth-child(5),
   .signingTable th:nth-child(5),.signingTable td:nth-child(5){width:25mm}
+  .adminTable th:nth-child(6),.adminTable td:nth-child(6),
   .signingTable th:nth-child(6),.signingTable td:nth-child(6){width:8mm}
-  .signingTable th:nth-child(7),.signingTable td:nth-child(7){width:10mm}
-  .signingTable th:nth-child(8),.signingTable td:nth-child(8){width:22mm}
-  .signingTable th:nth-child(9),.signingTable td:nth-child(9){width:22mm}
-  .signingTable th:nth-child(10),.signingTable td:nth-child(10){width:10mm}
-  .signingTable th:nth-child(11),.signingTable td:nth-child(11){width:23mm}
-  .signingTable th:nth-child(12),.signingTable td:nth-child(12){width:22mm}
-  .signingTable th:nth-child(13),.signingTable td:nth-child(13){width:18mm}
-  .signingTable th:nth-child(14),.signingTable td:nth-child(14){width:31mm}
+  .adminTable th:nth-child(7),.adminTable td:nth-child(7),
+  .signingTable th:nth-child(7),.signingTable td:nth-child(7){width:9mm}
+  .adminTable th:nth-child(8),.adminTable td:nth-child(8),
+  .signingTable th:nth-child(8),.signingTable td:nth-child(8){width:19mm}
+  .adminTable th:nth-child(9),.adminTable td:nth-child(9),
+  .signingTable th:nth-child(9),.signingTable td:nth-child(9){width:19mm}
+  .adminTable th:nth-child(10),.adminTable td:nth-child(10),
+  .signingTable th:nth-child(10),.signingTable td:nth-child(10){width:18mm}
+  .adminTable th:nth-child(11),.adminTable td:nth-child(11),
+  .signingTable th:nth-child(11),.signingTable td:nth-child(11){width:19mm}
+  .adminTable th:nth-child(12),.adminTable td:nth-child(12),
+  .signingTable th:nth-child(12),.signingTable td:nth-child(12){width:19mm}
+  .adminTable th:nth-child(13),.adminTable td:nth-child(13),
+  .signingTable th:nth-child(13),.signingTable td:nth-child(13){width:20mm}
 
   tfoot td { background:#eef4f2; border-top:2px solid #255f54; font-weight:700; }
   .totalLabel { text-align:right; color:#183d36; letter-spacing:.07em; }
@@ -1070,30 +1059,30 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
     <thead>
       <tr>
         <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
-        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. RON</th><th>P.U. vânzare listă RON</th><th>P.U. vânzare efectiv RON</th>
-        <th>TVA</th><th>Val. achiz. RON</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. fără TVA RON</th><th>Val. achiz. RON</th>
+        <th>Adaos / U.M. RON</th><th>Val. adaos RON</th><th>Preț amănunt RON</th><th>Val. amănunt RON</th>
       </tr>
     </thead>
-    <tbody>${adminRows || `<tr><td colspan="16" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tbody>${adminRows || `<tr><td colspan="13" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
     <tfoot>
       <tr>
         <td colspan="6" class="totalLabel">TOTAL</td>
         <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
-        <td colspan="4"></td>
-        <td class="money">${officialNumber(doc.purchaseTotal)}</td>
-        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
-        <td class="money">${officialNumber(doc.actualSaleTotal)}</td>
-        <td class="money">${officialNumber(doc.discountTotal)}</td>
         <td></td>
+        <td class="money">${officialNumber(doc.purchaseTotal)}</td>
+        <td></td>
+        <td class="money">${hasUnknownMarkup ? "-" : officialNumber(markupTotal)}</td>
+        <td></td>
+        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
       </tr>
     </tfoot>
   </table>
 
   <div class="summary">
     <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
-    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare adaos</span><strong>${hasUnknownMarkup ? "-" : `${officialNumber(markupTotal)} RON`}</strong></div>
+    <div class="summaryBox retail"><span>Valoare amănunt</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Cota TVA</span><strong>${officialHtmlEscape(vatSummary)}</strong></div>
   </div>
 
   ${renderSignatures()}
@@ -1109,28 +1098,30 @@ function buildOfficialBonConsumHtml(detail: BonConsumDocumentDetail) {
     <thead>
       <tr>
         <th>Nr.</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>S/N/COD</th><th>Cod de bare</th>
-        <th>U.M.</th><th>Cant.</th><th>P.U. vânzare listă RON</th><th>P.U. vânzare efectiv RON</th>
-        <th>TVA</th><th>Val. vânzare listă RON</th><th>Val. efectivă RON</th><th>Reducere RON</th><th>Document sursă</th>
+        <th>U.M.</th><th>Cant.</th><th>P.U. achiz. fără TVA RON</th><th>Val. achiz. RON</th>
+        <th>Adaos / U.M. RON</th><th>Val. adaos RON</th><th>Preț amănunt RON</th><th>Val. amănunt RON</th>
       </tr>
     </thead>
-    <tbody>${signingRows || `<tr><td colspan="14" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
+    <tbody>${signingRows || `<tr><td colspan="13" style="padding:8mm;text-align:center;">Nu există poziții.</td></tr>`}</tbody>
     <tfoot>
       <tr>
         <td colspan="6" class="totalLabel">TOTAL</td>
         <td class="qty">${officialNumber(doc.totalQty, 0)}</td>
-        <td colspan="3"></td>
-        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
-        <td class="money">${officialNumber(doc.actualSaleTotal)}</td>
-        <td class="money">${officialNumber(doc.discountTotal)}</td>
         <td></td>
+        <td class="money">${officialNumber(doc.purchaseTotal)}</td>
+        <td></td>
+        <td class="money">${hasUnknownMarkup ? "-" : officialNumber(markupTotal)}</td>
+        <td></td>
+        <td class="money retailTotal">${officialNumber(doc.retailTotal)}</td>
       </tr>
     </tfoot>
   </table>
 
-  <div class="summary signingSummary">
-    <div class="summaryBox retail"><span>Valoare completă de vânzare</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Valoare efectivă a vânzării</span><strong>${officialNumber(doc.actualSaleTotal)} RON</strong></div>
-    <div class="summaryBox"><span>Reducere acordată</span><strong>${officialNumber(doc.discountTotal)} RON</strong></div>
+  <div class="summary">
+    <div class="summaryBox"><span>Valoare de achiziție</span><strong>${officialNumber(doc.purchaseTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Valoare adaos</span><strong>${hasUnknownMarkup ? "-" : `${officialNumber(markupTotal)} RON`}</strong></div>
+    <div class="summaryBox retail"><span>Valoare amănunt</span><strong>${officialNumber(doc.retailTotal)} RON</strong></div>
+    <div class="summaryBox"><span>Cota TVA</span><strong>${officialHtmlEscape(vatSummary)}</strong></div>
   </div>
 
   ${renderSignatures()}
