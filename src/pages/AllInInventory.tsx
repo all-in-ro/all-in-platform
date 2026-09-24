@@ -1173,20 +1173,61 @@ function printOpeningReport(detail: OpeningInventoryDetail) {
 }
 
 
-function StatCard({ label, value, hint, icon, tone = "neutral" }: { label: string; value: ReactNode; hint?: ReactNode; icon?: ReactNode; tone?: "neutral" | "green" | "red" | "blue" }) {
-  const toneClass = tone === "green" ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/12" : tone === "red" ? "border-red-300/35 bg-red-500/10" : tone === "blue" ? "border-sky-300/30 bg-sky-500/10" : "border-white/18 bg-white/[0.06]";
-  return (
-    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+function StatCard({
+  label,
+  value,
+  hint,
+  icon,
+  tone = "neutral",
+  onClick,
+  active = false,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  icon?: ReactNode;
+  tone?: "neutral" | "green" | "red" | "blue";
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  const toneClass = tone === "green"
+    ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/12"
+    : tone === "red"
+      ? active
+        ? "border-[#ff6b78] bg-[#e3132c] shadow-[0_10px_26px_rgba(227,19,44,0.34)] ring-1 ring-[#ff8a94]/30"
+        : "border-[#ff5a68] bg-[#d81028] shadow-[0_8px_22px_rgba(216,16,40,0.24)] hover:bg-[#e3132c] hover:border-[#ff7682]"
+      : tone === "blue"
+        ? "border-sky-300/30 bg-sky-500/10"
+        : "border-white/18 bg-white/[0.06]";
+
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs text-white/62">{label}</div>
+          <div className={tone === "red" ? "text-xs text-white/84" : "text-xs text-white/62"}>{label}</div>
           <div className="mt-2 text-2xl font-semibold leading-none text-white">{value}</div>
         </div>
-        {icon ? <div className="rounded-xl border border-white/16 bg-white/[0.08] p-2 text-white/78">{icon}</div> : null}
+        {icon ? <div className={`rounded-xl border p-2 ${tone === "red" ? "border-white/26 bg-white/[0.12] text-white" : "border-white/16 bg-white/[0.08] text-white/78"}`}>{icon}</div> : null}
       </div>
-      {hint ? <div className="mt-2 text-xs text-white/58">{hint}</div> : null}
-    </div>
+      {hint ? <div className={tone === "red" ? "mt-2 text-xs text-white/78" : "mt-2 text-xs text-white/58"}>{hint}</div> : null}
+      {onClick ? <div className="mt-2 text-[10px] uppercase tracking-[0.08em] text-white/68">{active ? "Szűrés aktív · kattints a kikapcsoláshoz" : "Kattints a hiányzó termékekhez"}</div> : null}
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        className={`w-full rounded-2xl border p-4 text-left transition-all focus:outline-none focus:ring-2 focus:ring-[#ff8a94]/45 ${toneClass}`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={`rounded-2xl border p-4 ${toneClass}`}>{content}</div>;
 }
 
 function HoverZoomImage({ src, title }: { src?: string | null; title: string }) {
@@ -2824,7 +2865,19 @@ export default function AllInInventory() {
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-7">
               <StatCard label={currentInventoryMode === "recovery" ? "Igazolható minimum" : "Rendszer szerint"} value={formatQty(openingDetail?.summary.known_min_qty ?? activeStats.expected)} hint={`${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<ClipboardList size={18} />} tone="blue" />
               <StatCard label="Leltár szerint most" value={formatQty(openingDetail?.summary.counted_qty ?? activeStats.counted)} hint={`${formatQty(openingDetail?.summary.counted_lines ?? activeStats.countedLines)} / ${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
-              <StatCard label={currentInventoryMode === "recovery" ? "Biztos hiány" : "Hiány"} value={formatQty(openingDetail?.summary.definite_missing_qty ?? activeStats.missing)} hint={`${formatMoney(openingDetail?.summary.definite_missing_retail_value ?? activeStats.missingSell)} RON`} icon={<AlertTriangle size={18} />} tone="red" />
+              <StatCard
+                label={currentInventoryMode === "recovery" ? "Biztos hiány" : "Hiány"}
+                value={formatQty(openingDetail?.summary.definite_missing_qty ?? activeStats.missing)}
+                hint={`${formatMoney(openingDetail?.summary.definite_missing_retail_value ?? activeStats.missingSell)} RON`}
+                icon={<AlertTriangle size={18} />}
+                tone="red"
+                active={lineFilter === "missing"}
+                onClick={() => {
+                  setLineFilter((current) => current === "missing" ? "all" : "missing");
+                  setLinePage(1);
+                  window.setTimeout(() => inventoryLinesTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                }}
+              />
               <StatCard label={currentInventoryMode === "recovery" ? "Régi / nem nyilvántartott" : "Többlet"} value={formatQty(openingDetail?.summary.untracked_qty ?? activeStats.extra)} hint={`${formatMoney(openingDetail?.summary.untracked_retail_value ?? activeStats.extraSell)} RON`} icon={<PackageCheck size={18} />} tone="green" />
               <StatCard label="Közbeni mozgás" value={`${n(openingDetail?.summary.live_net_qty) > 0 ? "+" : ""}${formatQty(openingDetail?.summary.live_net_qty || 0)}`} hint={`be ${formatQty(openingDetail?.summary.live_in_qty || 0)} · ki ${formatQty(openingDetail?.summary.live_out_qty || 0)}`} icon={<SlidersHorizontal size={18} />} />
               <StatCard label="Készletkorrekció" value={`${n(openingDetail?.summary.system_correction_qty) > 0 ? "+" : ""}${formatQty(openingDetail?.summary.system_correction_qty || 0)}`} hint={`${formatMoney(openingDetail?.summary.system_correction_retail_value || 0)} RON`} icon={<SlidersHorizontal size={18} />} tone={n(openingDetail?.summary.system_correction_qty) < 0 ? "red" : n(openingDetail?.summary.system_correction_qty) > 0 ? "green" : "neutral"} />
