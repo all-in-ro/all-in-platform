@@ -212,14 +212,6 @@ function saleErrorDialogFrom(caught: unknown): SaleErrorDialog {
     ? caught.message
     : "Az eladás lezárása nem sikerült.";
 
-  if (code === "opening_inventory_in_progress") {
-    return {
-      title: "Leltár folyamatban",
-      message,
-      hint: "Ebben az üzletben most nyitó leltár fut. Eladást csak a leltár készletre alkalmazása vagy megszakítása után lehet rögzíteni.",
-      code,
-    };
-  }
 
   if (code === "shop_day_closed") {
     return {
@@ -618,7 +610,8 @@ export default function AllInMagazinSale({
 
   function addToCart(item: AifShopSaleCatalogItem) {
     const available = numberValue(item.availableQty);
-    if (available <= 0) {
+    const openingSaleBridge = item.openingInventorySaleBridge === true;
+    if (available <= 0 && !openingSaleBridge) {
       setError("Ebből a termékből nincs eladható készlet ebben az üzletben.");
       return;
     }
@@ -628,7 +621,7 @@ export default function AllInMagazinSale({
       const id = catalogIdentity(item);
       const existing = current.find((line) => catalogIdentity(line) === id);
       if (existing) {
-        if (existing.quantity >= available) {
+        if (!openingSaleBridge && existing.quantity >= available) {
           setError(`Legfeljebb ${available} db adható a kosárhoz.`);
           return current;
         }
@@ -644,8 +637,11 @@ export default function AllInMagazinSale({
     invalidateRequestKey();
     setCart((current) => current.flatMap((line) => {
       if (catalogIdentity(line) !== variantId) return [line];
-      const maximum = Math.max(0, numberValue(line.availableQty));
       if (nextQuantity <= 0) return [];
+      if (line.openingInventorySaleBridge === true) {
+        return [{ ...line, quantity: Math.min(9999, nextQuantity) }];
+      }
+      const maximum = Math.max(0, numberValue(line.availableQty));
       return [{ ...line, quantity: Math.min(maximum, nextQuantity) }];
     }));
   }
@@ -1022,7 +1018,7 @@ export default function AllInMagazinSale({
                           {productCode(item)}
                         </span>
                         <span className="rounded-full border border-[#7bd7d4]/28 bg-[#2a8d8b]/20 px-2 py-1 text-[10px] text-[#d7fffd]">
-                          {numberValue(item.availableQty)} db
+                          {item.openingInventorySaleBridge ? "Nyitó leltár • eladható" : `${numberValue(item.availableQty)} db`}
                         </span>
                       </span>
                       <span className="mt-2 block text-lg text-[#d7fffd]">{formatMoney(numberValue(item.sellPrice))}</span>
