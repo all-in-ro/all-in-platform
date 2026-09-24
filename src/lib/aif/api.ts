@@ -1281,7 +1281,18 @@ export type AifOpeningInventoryAdminLine = {
   trusted_in_qty: number | string;
   trusted_out_qty: number | string;
   known_min_qty: number | string;
+  baseline_known_min_qty?: number | string | null;
+  baseline_trusted_net_qty?: number | string | null;
   counted_qty?: number | string | null;
+  physical_counted_qty?: number | string | null;
+  live_net_qty?: number | string | null;
+  live_in_qty?: number | string | null;
+  live_out_qty?: number | string | null;
+  movement_after_count_qty?: number | string | null;
+  movement_after_count_count?: number | string | null;
+  current_system_qty?: number | string | null;
+  current_reserved_qty?: number | string | null;
+  observation_at?: string | null;
   definite_missing_qty?: number | string | null;
   untracked_qty?: number | string | null;
   system_correction_qty?: number | string | null;
@@ -1313,6 +1324,10 @@ export type AifOpeningInventorySummary = {
   definite_missing_retail_value: number | string;
   untracked_retail_value: number | string;
   system_correction_retail_value: number | string;
+  live_net_qty?: number | string;
+  live_in_qty?: number | string;
+  live_out_qty?: number | string;
+  live_movement_lines?: number | string;
   unknown_rows: number | string;
   unknown_qty: number | string;
   legacy_retail_value?: number | string | null;
@@ -3174,6 +3189,10 @@ export type AifShopSaleCatalogItem = {
   qty: number;
   reservedQty: number;
   availableQty: number;
+  openingInventory?: boolean;
+  openingInventoryId?: string | null;
+  openingInventoryCode?: string | null;
+  openingInventorySaleBridge?: boolean;
 };
 
 export type AifShopSaleCatalogResponse = {
