@@ -2570,7 +2570,7 @@ export default function AllInShopOperations({
                     </div>
                   </div>
                   <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.14]">
-                    {visibleDailyProductLines.map((item) => {
+                    {visibleDailyProductLines.map((item, itemIndex) => {
                       const settlement = String(item.recordType || "") === "payment_settlement";
                       const paymentStatus = String(item.paymentStatus || "").toLowerCase();
                       const unpaid = !settlement && (
@@ -2617,7 +2617,7 @@ export default function AllInShopOperations({
                       return (
                         <div
                           key={`${item.recordType || "sale"}-${item.lineId || item.key}-${item.saleId || ""}`}
-                          className={`group relative grid min-h-[108px] grid-cols-[78px_minmax(0,1fr)_260px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
+                          className={`group relative grid min-h-[108px] grid-cols-[36px_78px_minmax(0,1fr)_260px] items-center gap-4 border-t border-white/[0.10] px-4 py-3.5 first:border-t-0 transition ${
                             settlement
                               ? "bg-[#334b5c] shadow-[inset_4px_0_0_#4fb8b2] hover:bg-[#39576a]"
                               : unpaid
@@ -2628,6 +2628,14 @@ export default function AllInShopOperations({
                           {unpaid ? (
                             <span className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-[#E21C2A]" aria-hidden="true" />
                           ) : null}
+
+                          <div
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/12 bg-black/10 text-[16px] tabular-nums text-white/72"
+                            title={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
+                            aria-label={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
+                          >
+                            {visibleDailyProductLines.length - itemIndex}
+                          </div>
 
                           <ProductImage src={item.imageUrl} title={item.title} compact />
 
