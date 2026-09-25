@@ -315,6 +315,10 @@ const CASH_HISTORY_MONTHS = [
   "január", "február", "március", "április", "május", "június",
   "július", "augusztus", "szeptember", "október", "november", "december",
 ] as const;
+const CASH_HISTORY_MONTHS_SHORT = [
+  "jan", "feb", "márc", "ápr", "máj", "jún",
+  "júl", "aug", "szept", "okt", "nov", "dec",
+] as const;
 
 function monthLabel(value: string) {
   const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
@@ -327,12 +331,14 @@ function validHistoryMonth(value?: string | null) {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
 }
 
-function historyMonthName(value: string) {
-  const match = String(value || "").match(/^\d{4}-(\d{2})$/);
-  if (!match) return value;
-  const month = Math.max(1, Math.min(12, Number(match[1])));
-  return CASH_HISTORY_MONTHS[month - 1];
+function historyMonthFromDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = date.toLocaleDateString("en-CA", { timeZone: "Europe/Bucharest" });
+  return local.slice(0, 7);
 }
+
 
 function formatTime(value?: string | null) {
   if (!value) return "–";
@@ -1052,18 +1058,47 @@ export default function AllInShopOperations({
     : (shiftData?.dayClosure || null);
   const pendingBossHandover = (cashData?.pendingManagerHandovers || [])[0] || null;
   const cashHandoverPlan = cashData?.handoverPlan || null;
-  const selectedCashHandoverDay = (cashHandoverPlan?.days || []).find((day) => day.date === cashHandoverToDate) || null;
-  const cashHandoverHistory = cashData?.managerHandoverHistory || (cashData?.movements || []).filter((item) => item.type === "manager_handover");
+  const cashHandoverDays = useMemo(() => {
+    const serverDays = cashHandoverPlan?.days || [];
+    const hasUsableServerDay = serverDays.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+    if (hasUsableServerDay || currentCashBalance <= 0) return serverDays;
+    return [{
+      date: todayIso(),
+      amount: currentCashBalance,
+      closed: Boolean(currentDayClosure),
+      closingCash: currentDayClosure ? numberValue(currentDayClosure.countedCash) : null,
+      closedAt: currentDayClosure?.closedAt || null,
+      closedBy: currentDayClosure?.actor || null,
+      status: "available",
+    }];
+  }, [cashHandoverPlan?.days, currentCashBalance, currentDayClosure]);
+  const selectedCashHandoverDay = cashHandoverDays.find((day) => day.date === cashHandoverToDate) || null;
+  const cashHandoverHistory = useMemo(() => {
+    const serverHistory = cashData?.managerHandoverHistory || [];
+    if (serverHistory.length) return serverHistory;
+    return (cashData?.movements || []).filter(
+      (item) => item.type === "manager_handover" && historyMonthFromDateTime(item.requestedAt) === cashHistoryMonth,
+    );
+  }, [cashData?.managerHandoverHistory, cashData?.movements, cashHistoryMonth]);
   const cashHistoryAvailableMonths = useMemo(() => {
     const months = new Set<string>();
     for (const month of cashData?.handoverHistoryMonths || []) {
+      if (validHistoryMonth(month)) months.add(month);
+    }
+    for (const item of cashData?.movements || []) {
+      if (item.type !== "manager_handover") continue;
+      const month = historyMonthFromDateTime(item.requestedAt);
       if (validHistoryMonth(month)) months.add(month);
     }
     const currentMonth = todayIso().slice(0, 7);
     months.add(currentMonth);
     if (validHistoryMonth(cashHistoryMonth)) months.add(cashHistoryMonth);
     return Array.from(months).sort((a, b) => b.localeCompare(a));
-  }, [cashData?.handoverHistoryMonths, cashHistoryMonth]);
+  }, [cashData?.handoverHistoryMonths, cashData?.movements, cashHistoryMonth]);
+  const cashHistoryAvailableMonthSet = useMemo(
+    () => new Set(cashHistoryAvailableMonths),
+    [cashHistoryAvailableMonths],
+  );
   const cashHistorySelectedYear = Number(cashHistoryMonth.slice(0, 4)) || Number(todayIso().slice(0, 4));
   const cashHistoryYears = useMemo(
     () => Array.from(new Set(cashHistoryAvailableMonths.map((month) => Number(month.slice(0, 4)))))
@@ -1071,10 +1106,11 @@ export default function AllInShopOperations({
       .sort((a, b) => b - a),
     [cashHistoryAvailableMonths],
   );
-  const cashHistoryMonthsForYear = useMemo(
-    () => cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === cashHistorySelectedYear),
-    [cashHistoryAvailableMonths, cashHistorySelectedYear],
-  );
+  const cashHistoryYearIndex = cashHistoryYears.indexOf(cashHistorySelectedYear);
+  const cashHistoryNewerYear = cashHistoryYearIndex > 0 ? cashHistoryYears[cashHistoryYearIndex - 1] : null;
+  const cashHistoryOlderYear = cashHistoryYearIndex >= 0 && cashHistoryYearIndex < cashHistoryYears.length - 1
+    ? cashHistoryYears[cashHistoryYearIndex + 1]
+    : null;
   const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
   const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
     ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
@@ -1089,6 +1125,22 @@ export default function AllInShopOperations({
     () => applyProductFilters(stockItems, productFilters),
     [productFilters, stockItems],
   );
+
+  function selectCashHistoryPeriod(month: string) {
+    if (!validHistoryMonth(month)) return;
+    setCashHistoryMonth(month);
+    void loadCashContext(month);
+  }
+
+  function selectCashHistoryYear(year: number) {
+    if (!Number.isFinite(year)) return;
+    const sameMonth = `${year}-${cashHistoryMonth.slice(5, 7)}`;
+    const candidates = cashHistoryAvailableMonths
+      .filter((month) => Number(month.slice(0, 4)) === year)
+      .sort((a, b) => b.localeCompare(a));
+    const next = candidates.includes(sameMonth) ? sameMonth : candidates[0];
+    if (next) selectCashHistoryPeriod(next);
+  }
 
   function toggleProductFilter(key: ProductFilterKey, value: string) {
     setProductFilters((current) => {
@@ -1417,12 +1469,15 @@ export default function AllInShopOperations({
     setDayCloseOpen(true);
   }
 
-  function selectCashMovementType(type: AifShopCashMovementType, plan = cashHandoverPlan) {
+  function selectCashMovementType(
+    type: AifShopCashMovementType,
+    days = cashHandoverDays,
+  ) {
     setCashMoveType(type);
     setCashMoveAmount("");
     setCashMoveReference("");
     if (type === "manager_handover") {
-      const selectableDays = (plan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      const selectableDays = (days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
       setCashHandoverToDate(selectableDays[selectableDays.length - 1]?.date || "");
     } else {
       setCashHandoverToDate("");
@@ -1434,18 +1489,38 @@ export default function AllInShopOperations({
     setCashMoveNote("");
 
     if (type === "manager_handover") {
-      let plan = cashHandoverPlan;
-      const hasSelectableDay = (plan?.days || []).some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-      if (!hasSelectableDay) {
-        const refreshed = await loadCashContext(cashHistoryMonth);
-        plan = refreshed?.handoverPlan || null;
-      }
-      const selectableDays = (plan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-      if (!selectableDays.length) {
-        setError("A rendszer nem talált átadható készpénzes napot. Frissítsd az oldalt; ha a kassza pozitív marad, az Admin naplóban ellenőrizd az utolsó átvételt.");
+      if (pendingBossHandover) {
+        setError("Már van átvételre váró készpénzátadás. Előbb azt kell átvenni vagy visszavonni.");
         return;
       }
-      selectCashMovementType(type, plan);
+
+      let days = cashHandoverDays;
+      const hasSelectableDay = days.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      if (!hasSelectableDay) {
+        const refreshed = await loadCashContext(cashHistoryMonth);
+        const refreshedDays = refreshed?.handoverPlan?.days || [];
+        const refreshedHasDay = refreshedDays.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+        days = refreshedHasDay
+          ? refreshedDays
+          : currentCashBalance > 0
+            ? [{
+                date: todayIso(),
+                amount: currentCashBalance,
+                closed: Boolean(currentDayClosure),
+                closingCash: currentDayClosure ? numberValue(currentDayClosure.countedCash) : null,
+                closedAt: currentDayClosure?.closedAt || null,
+                closedBy: currentDayClosure?.actor || null,
+                status: "available",
+              }]
+            : [];
+      }
+
+      if (!days.some((day) => day.status !== "pending" && numberValue(day.amount) > 0)) {
+        setError("Nincs átadható készpénz a kasszában.");
+        return;
+      }
+
+      selectCashMovementType(type, days);
       setCashMoveOpen(true);
       return;
     }
@@ -2033,41 +2108,59 @@ export default function AllInShopOperations({
                   <div className="flex items-center gap-3">
                     <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#ffe66b]/55 bg-[#fed700] text-[#243044]"><History size={20} /></span>
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Saját átadási előzmények</p>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Üzleti átadási előzmények</p>
                       <h3 className="mt-1 text-lg text-white">Készpénzátadások</h3>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-end gap-2">
-                    <label>
-                      <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/42">Év</span>
-                      <select
-                        value={cashHistorySelectedYear}
-                        onChange={(event) => {
-                          const year = Number(event.target.value);
-                          const candidates = cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === year);
-                          const next = candidates[0] || `${year}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-                          setCashHistoryMonth(next);
-                          void loadCashContext(next);
-                        }}
-                        className="h-10 min-w-[92px] rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
+                  <div className="w-full rounded-2xl border border-[#ffe66b]/18 bg-[#273243] p-2.5 sm:w-auto sm:min-w-[430px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        disabled={!cashHistoryOlderYear}
+                        onClick={() => cashHistoryOlderYear && selectCashHistoryYear(cashHistoryOlderYear)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                        aria-label="Régebbi év"
                       >
-                        {cashHistoryYears.map((year) => <option key={year} value={year}>{year}</option>)}
-                      </select>
-                    </label>
-                    <label>
-                      <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/42">Hónap</span>
-                      <select
-                        value={cashHistoryMonth}
-                        onChange={(event) => {
-                          const month = event.target.value;
-                          setCashHistoryMonth(month);
-                          void loadCashContext(month);
-                        }}
-                        className="h-10 min-w-[132px] rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
+                        <ChevronLeft size={16} />
+                      </button>
+                      <div className="text-center">
+                        <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Átadási history</p>
+                        <p className="mt-0.5 text-sm text-white">{cashHistorySelectedYear}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!cashHistoryNewerYear}
+                        onClick={() => cashHistoryNewerYear && selectCashHistoryYear(cashHistoryNewerYear)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                        aria-label="Újabb év"
                       >
-                        {cashHistoryMonthsForYear.map((month) => <option key={month} value={month}>{historyMonthName(month)}</option>)}
-                      </select>
-                    </label>
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                    <div className="mt-2 grid grid-cols-6 gap-1">
+                      {CASH_HISTORY_MONTHS.map((_, index) => {
+                        const month = `${cashHistorySelectedYear}-${String(index + 1).padStart(2, "0")}`;
+                        const enabled = cashHistoryAvailableMonthSet.has(month);
+                        const selected = cashHistoryMonth === month;
+                        return (
+                          <button
+                            key={month}
+                            type="button"
+                            disabled={!enabled}
+                            onClick={() => selectCashHistoryPeriod(month)}
+                            className={`h-8 rounded-lg border px-1 text-[10px] transition ${
+                              selected
+                                ? "border-[#ffe66b] bg-[#fed700] text-[#243044]"
+                                : enabled
+                                  ? "border-white/10 bg-white/[0.04] text-white/68 hover:border-[#ffe66b]/30 hover:bg-[#fed700]/10 hover:text-white"
+                                  : "border-transparent bg-transparent text-white/18"
+                            } disabled:cursor-default`}
+                          >
+                            {CASH_HISTORY_MONTHS_SHORT[index]}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -2102,6 +2195,8 @@ export default function AllInShopOperations({
                               </span>
                             </div>
                             <p className="mt-2 text-[11px] text-white/58">
+                              Átadó: <span className="text-white/82">{movement.requestedBy || "–"}</span>
+                              {" • "}
                               Rögzítve: {movement.requestedAt ? formatExactDateTime(movement.requestedAt) : "–"}
                             </p>
                             {movement.confirmedAt ? (
@@ -2861,7 +2956,7 @@ export default function AllInShopOperations({
                       <div className="rounded-[22px] border border-[#ffe66b]/42 bg-[#2a3445] p-4">
                         <p className="text-[10px] uppercase tracking-[0.13em] text-[#fff4a5]/68">Átadási időszak</p>
                         <p className="mt-2 text-xl text-white">
-                          {cashHandoverPlan?.nextFrom || "–"} → {cashHandoverToDate || "válassz napot"}
+                          {cashHandoverPlan?.nextFrom || cashHandoverDays[0]?.date || "–"} → {cashHandoverToDate || "válassz napot"}
                         </p>
                         <p className="mt-2 text-xs leading-relaxed text-white/50">
                           Az előző átvett készpénz után csak a még le nem fedett üzleti napok választhatók.
@@ -2896,11 +2991,11 @@ export default function AllInShopOperations({
                           <h4 className="mt-1 text-base text-white">Válaszd ki a zárónapot</h4>
                         </div>
                         <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/52">
-                          {(cashHandoverPlan?.days || []).length} nap
+                          {cashHandoverDays.length} nap
                         </span>
                       </div>
                       <div className="grid max-h-[320px] gap-2 overflow-y-auto p-3 sm:grid-cols-2">
-                        {(cashHandoverPlan?.days || []).map((day) => {
+                        {cashHandoverDays.map((day) => {
                           const selected = day.date === cashHandoverToDate;
                           const blocked = day.status === "pending" || numberValue(day.amount) <= 0;
                           return (
@@ -2930,7 +3025,7 @@ export default function AllInShopOperations({
                             </button>
                           );
                         })}
-                        {!cashLoading && !(cashHandoverPlan?.days || []).length ? (
+                        {!cashLoading && !cashHandoverDays.length ? (
                           <div className="sm:col-span-2 rounded-xl border border-dashed border-white/12 px-4 py-7 text-center text-sm text-white/42">
                             Nincs még átadható készpénzes időszak.
                           </div>
