@@ -186,6 +186,10 @@ const HU_MONTHS = [
   "január", "február", "március", "április", "május", "június",
   "július", "augusztus", "szeptember", "október", "november", "december",
 ] as const;
+const HU_MONTHS_SHORT = [
+  "jan", "feb", "márc", "ápr", "máj", "jún",
+  "júl", "aug", "szept", "okt", "nov", "dec",
+] as const;
 const HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
 
 function monthLabel(value: string) {
@@ -199,12 +203,14 @@ function validHistoryMonth(value?: string | null) {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
 }
 
-function historyMonthName(value: string) {
-  const match = String(value || "").match(/^\d{4}-(\d{2})$/);
-  if (!match) return value;
-  const month = Math.max(1, Math.min(12, Number(match[1])));
-  return HU_MONTHS[month - 1];
+function historyMonthFromDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = date.toLocaleDateString("en-CA", { timeZone: "Europe/Bucharest" });
+  return local.slice(0, 7);
 }
+
 
 function isoDateParts(value?: string | null) {
   const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -684,9 +690,17 @@ export default function AllInAdminShopWorkflows({
 
   const managerCashHistory = useMemo(
     () => visibleCashStores
-      .flatMap(({ store, data }) => (data.managerHandoverHistory || []).map((item) => ({ store, item })))
+      .flatMap(({ store, data }) => {
+        const serverHistory = data.managerHandoverHistory || [];
+        const history = serverHistory.length
+          ? serverHistory
+          : (data.movements || []).filter(
+              (item) => item.type === "manager_handover" && historyMonthFromDateTime(item.requestedAt) === cashHistoryMonth,
+            );
+        return history.map((item) => ({ store, item }));
+      })
       .sort((a, b) => new Date(b.item.requestedAt || b.item.createdAt || 0).getTime() - new Date(a.item.requestedAt || a.item.createdAt || 0).getTime()),
-    [visibleCashStores],
+    [cashHistoryMonth, visibleCashStores],
   );
 
   const unreceivedCashDays = useMemo(
@@ -702,12 +716,21 @@ export default function AllInAdminShopWorkflows({
       for (const month of data.handoverHistoryMonths || []) {
         if (validHistoryMonth(month)) months.add(month);
       }
+      for (const item of data.movements || []) {
+        if (item.type !== "manager_handover") continue;
+        const month = historyMonthFromDateTime(item.requestedAt);
+        if (validHistoryMonth(month)) months.add(month);
+      }
     }
     const currentMonth = localIsoDate(new Date()).slice(0, 7);
     months.add(currentMonth);
     if (validHistoryMonth(cashHistoryMonth)) months.add(cashHistoryMonth);
     return Array.from(months).sort((a, b) => b.localeCompare(a));
   }, [cashHistoryMonth, visibleCashStores]);
+  const cashHistoryAvailableMonthSet = useMemo(
+    () => new Set(cashHistoryAvailableMonths),
+    [cashHistoryAvailableMonths],
+  );
   const cashHistorySelectedYear = Number(cashHistoryMonth.slice(0, 4)) || Number(localIsoDate(new Date()).slice(0, 4));
   const cashHistoryYears = useMemo(
     () => Array.from(new Set(cashHistoryAvailableMonths.map((month) => Number(month.slice(0, 4)))))
@@ -715,10 +738,21 @@ export default function AllInAdminShopWorkflows({
       .sort((a, b) => b - a),
     [cashHistoryAvailableMonths],
   );
-  const cashHistoryMonthsForYear = useMemo(
-    () => cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === cashHistorySelectedYear),
-    [cashHistoryAvailableMonths, cashHistorySelectedYear],
-  );
+  const cashHistoryYearIndex = cashHistoryYears.indexOf(cashHistorySelectedYear);
+  const cashHistoryNewerYear = cashHistoryYearIndex > 0 ? cashHistoryYears[cashHistoryYearIndex - 1] : null;
+  const cashHistoryOlderYear = cashHistoryYearIndex >= 0 && cashHistoryYearIndex < cashHistoryYears.length - 1
+    ? cashHistoryYears[cashHistoryYearIndex + 1]
+    : null;
+
+  function selectCashHistoryYear(year: number) {
+    if (!Number.isFinite(year)) return;
+    const sameMonth = `${year}-${cashHistoryMonth.slice(5, 7)}`;
+    const candidates = cashHistoryAvailableMonths
+      .filter((month) => Number(month.slice(0, 4)) === year)
+      .sort((a, b) => b.localeCompare(a));
+    const next = candidates.includes(sameMonth) ? sameMonth : candidates[0];
+    if (next) setCashHistoryMonth(next);
+  }
 
   const reservationSummary = useMemo(() => {
     let tomorrow = 0;
@@ -946,31 +980,55 @@ export default function AllInAdminShopWorkflows({
                     ariaLabel="Műszakátadás dátuma"
                   />
                 </div>
-                <div className="flex items-end gap-2">
-                  <label className="min-w-[96px]">
-                    <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Átadás éve</span>
-                    <select
-                      value={cashHistorySelectedYear}
-                      onChange={(event) => {
-                        const year = Number(event.target.value);
-                        const candidates = cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === year);
-                        setCashHistoryMonth(candidates[0] || `${year}-${localIsoDate(new Date()).slice(5, 7)}`);
-                      }}
-                      className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
+                <div className="min-w-[430px] rounded-2xl border border-[#ffe66b]/16 bg-[#293548] p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      disabled={!cashHistoryOlderYear}
+                      onClick={() => cashHistoryOlderYear && selectCashHistoryYear(cashHistoryOlderYear)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                      aria-label="Régebbi év"
                     >
-                      {cashHistoryYears.map((year) => <option key={year} value={year}>{year}</option>)}
-                    </select>
-                  </label>
-                  <label className="min-w-[138px]">
-                    <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Hónap</span>
-                    <select
-                      value={cashHistoryMonth}
-                      onChange={(event) => setCashHistoryMonth(event.target.value)}
-                      className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
+                      <ChevronLeft size={16} />
+                    </button>
+                    <div className="text-center">
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Készpénzátadások</p>
+                      <p className="mt-0.5 text-sm text-white">{cashHistorySelectedYear}</p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!cashHistoryNewerYear}
+                      onClick={() => cashHistoryNewerYear && selectCashHistoryYear(cashHistoryNewerYear)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                      aria-label="Újabb év"
                     >
-                      {cashHistoryMonthsForYear.map((month) => <option key={month} value={month}>{historyMonthName(month)}</option>)}
-                    </select>
-                  </label>
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                  <div className="mt-2 grid grid-cols-6 gap-1">
+                    {HU_MONTHS.map((_, index) => {
+                      const month = `${cashHistorySelectedYear}-${String(index + 1).padStart(2, "0")}`;
+                      const enabled = cashHistoryAvailableMonthSet.has(month);
+                      const selected = cashHistoryMonth === month;
+                      return (
+                        <button
+                          key={month}
+                          type="button"
+                          disabled={!enabled}
+                          onClick={() => setCashHistoryMonth(month)}
+                          className={`h-8 rounded-lg border px-1 text-[10px] transition ${
+                            selected
+                              ? "border-[#ffe66b] bg-[#fed700] text-[#243044]"
+                              : enabled
+                                ? "border-white/10 bg-white/[0.04] text-white/68 hover:border-[#ffe66b]/30 hover:bg-[#fed700]/10 hover:text-white"
+                                : "border-transparent bg-transparent text-white/18"
+                          } disabled:cursor-default`}
+                        >
+                          {HU_MONTHS_SHORT[index]}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             ) : null}
