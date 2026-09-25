@@ -560,6 +560,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               OR handover_from_date IS NULL
               OR covered_day_count IS NULL
             )`);
+        await pool.query(`UPDATE aif_shop_cash_movements
+          SET raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object('handoverPeriodInferredLegacy', true)
+          WHERE movement_type='manager_handover'
+            AND status='confirmed'
+            AND NOT (COALESCE(raw,'{}'::jsonb) ? 'handoverPeriodExplicit')
+            AND NOT (COALESCE(raw,'{}'::jsonb) ? 'handoverToDate')
+            AND NOT (COALESCE(raw,'{}'::jsonb) ? 'handover_to_date')`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_return_authorizations (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -20550,19 +20557,110 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return { amount, balance, delayedConfirmed: delayed, at };
   }
 
-  async function aifShopCashHandoverPlan(client, { locationId }) {
-    const today = aifBucharestIsoDate();
+  async function aifShopCashHandoverActivityStart(client, locationId, fallbackDate) {
+    const earliest = await client.query(
+      `SELECT min(work_date)::text AS work_date
+       FROM (
+         SELECT c.work_date
+         FROM aif_shop_day_closures c
+         WHERE c.location_id=$1
 
-    const [lastConfirmedResult, pendingResult] = await Promise.all([
+         UNION ALL
+
+         SELECT (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
+         FROM aif_shop_sale_payments p
+         JOIN aif_shop_sales s ON s.id=p.sale_id
+         WHERE s.location_id=$1
+           AND s.status='completed'
+           AND p.method='cash'
+           AND p.customer_payment_id IS NULL
+
+         UNION ALL
+
+         SELECT (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
+         FROM aif_shop_customer_payments cp
+         WHERE cp.location_id=$1
+           AND cp.method='cash'
+
+         UNION ALL
+
+         SELECT (es.created_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
+         FROM aif_shop_exchange_settlements es
+         JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+         WHERE es.location_id=$1
+           AND es.method='cash'
+       ) activity`,
+      [locationId]
+    );
+    return String(earliest.rows[0]?.work_date || fallbackDate).slice(0, 10);
+  }
+
+  async function aifShopCashConfirmedHandoverDates(client, locationId) {
+    const result = await client.query(
+      `SELECT DISTINCT work_date::text AS work_date
+       FROM (
+         SELECT COALESCE(
+           NULLIF(m.raw->>'handoverToDate','')::date,
+           NULLIF(m.raw->>'handover_to_date','')::date,
+           (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date
+         ) AS work_date
+         FROM aif_shop_cash_movements m
+         WHERE m.location_id=$1
+           AND m.movement_type='manager_handover'
+           AND m.status='confirmed'
+       ) x
+       WHERE work_date IS NOT NULL
+       ORDER BY work_date DESC
+       LIMIT 120`,
+      [locationId]
+    );
+    return result.rows.map((row) => String(row.work_date).slice(0, 10)).filter(Boolean);
+  }
+
+  async function aifShopCashLastExplicitHandoverTo(client, locationId) {
+    const result = await client.query(
+      `SELECT handover_to_date::text AS handover_to_date
+       FROM aif_shop_cash_movements
+       WHERE location_id=$1
+         AND movement_type='manager_handover'
+         AND status='confirmed'
+         AND handover_to_date IS NOT NULL
+         AND (
+           COALESCE(raw->>'handoverPeriodExplicit','')='true'
+           OR NULLIF(raw->>'handoverToDate','') IS NOT NULL
+           OR NULLIF(raw->>'handover_to_date','') IS NOT NULL
+         )
+       ORDER BY handover_to_date DESC, COALESCE(confirmed_at,effective_at,requested_at) DESC, id DESC
+       LIMIT 1`,
+      [locationId]
+    );
+    return result.rowCount ? String(result.rows[0].handover_to_date).slice(0, 10) : null;
+  }
+
+  async function aifShopCashHandoverPlan(client, { locationId, afterDate = null }) {
+    const today = aifBucharestIsoDate();
+    const requestedAfterDate = afterDate ? cleanAifDocumentDate(afterDate) : null;
+    if (afterDate && !requestedAfterDate) {
+      const error = new Error('Érvénytelen utolsó készpénzátadási nap.');
+      error.statusCode = 400;
+      error.code = 'shop_cash_handover_invalid_after_date';
+      throw error;
+    }
+    if (requestedAfterDate && requestedAfterDate >= today) {
+      const error = new Error('Az utolsó átadott napnak a mai nap előtt kell lennie.');
+      error.statusCode = 400;
+      error.code = 'shop_cash_handover_after_date_not_past';
+      throw error;
+    }
+
+    const [lastConfirmedResult, pendingResult, confirmedHandoverDates, lastExplicitTo] = await Promise.all([
       client.query(
         `SELECT *
          FROM aif_shop_cash_movements
          WHERE location_id=$1
            AND movement_type='manager_handover'
            AND status='confirmed'
-         ORDER BY COALESCE(handover_to_date,(requested_at AT TIME ZONE 'Europe/Bucharest')::date) DESC,
-                  COALESCE(confirmed_at,effective_at,requested_at) DESC,
-                  id DESC
+         ORDER BY COALESCE(confirmed_at,effective_at,requested_at) DESC, id DESC
          LIMIT 1`,
         [locationId]
       ),
@@ -20576,54 +20674,36 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LIMIT 1`,
         [locationId]
       ),
+      aifShopCashConfirmedHandoverDates(client, locationId),
+      aifShopCashLastExplicitHandoverTo(client, locationId),
     ]);
 
     const lastConfirmed = lastConfirmedResult.rows[0] || null;
     const pending = pendingResult.rows[0] || null;
     const lastConfirmedTo = lastConfirmed
-      ? String(lastConfirmed.handover_to_date || aifBucharestIsoDate(lastConfirmed.requested_at)).slice(0, 10)
+      ? String(
+          lastConfirmed.raw?.handoverToDate
+          || lastConfirmed.raw?.handover_to_date
+          || lastConfirmed.handover_to_date
+          || aifBucharestIsoDate(lastConfirmed.requested_at)
+        ).slice(0, 10)
       : null;
 
-    let periodFrom = lastConfirmedTo ? aifShiftIsoDate(lastConfirmedTo, 1) : null;
-
-    if (!periodFrom) {
-      const earliest = await client.query(
-        `SELECT min(work_date)::text AS work_date
-         FROM (
-           SELECT c.work_date
-           FROM aif_shop_day_closures c
-           WHERE c.location_id=$1
-
-           UNION ALL
-
-           SELECT (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
-           FROM aif_shop_sale_payments p
-           JOIN aif_shop_sales s ON s.id=p.sale_id
-           WHERE s.location_id=$1
-             AND s.status='completed'
-             AND p.method='cash'
-             AND p.customer_payment_id IS NULL
-
-           UNION ALL
-
-           SELECT (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
-           FROM aif_shop_customer_payments cp
-           WHERE cp.location_id=$1
-             AND cp.method='cash'
-
-           UNION ALL
-
-           SELECT (es.created_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date
-           FROM aif_shop_exchange_settlements es
-           JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
-           WHERE es.location_id=$1
-             AND es.method='cash'
-         ) activity`,
-        [locationId]
-      );
-      periodFrom = String(earliest.rows[0]?.work_date || today).slice(0, 10);
+    // A régi pénzátadások időszaka nem volt tárolva. Emiatt az eladó kézzel
+    // kijelölheti az utolsó ténylegesen átadott napot. Az első új, explicit
+    // időszakos átadás után viszont annál korábbra már nem engedünk visszamenni.
+    if (requestedAfterDate && lastExplicitTo && requestedAfterDate < lastExplicitTo) {
+      const error = new Error(`A ${lastExplicitTo} napig terjedő időszak már korábban át lett adva.`);
+      error.statusCode = 409;
+      error.code = 'shop_cash_handover_after_date_before_explicit_period';
+      throw error;
     }
 
+    const activityStart = await aifShopCashHandoverActivityStart(client, locationId, today);
+    const inferredAfterDate = lastExplicitTo || lastConfirmedTo || aifShiftIsoDate(activityStart, -1);
+    const selectedAfterDate = requestedAfterDate || inferredAfterDate;
+    let periodFrom = aifShiftIsoDate(selectedAfterDate, 1);
+    if (periodFrom < activityStart) periodFrom = activityStart;
     if (periodFrom > today) periodFrom = today;
 
     const closuresResult = await client.query(
@@ -20650,8 +20730,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let guard = 0;
     while (cursor <= today && guard < 1500) {
       const closure = closuresByDate.get(cursor) || null;
-      // Lezárt napnál a megszámolt záró kassza az elsődleges igazság.
-      // Nyitott / nem lezárt napnál a pénzmozgásokból számoljuk vissza a kasszát.
       const calc = closure
         ? { amount: aifRoundMoney(closure.counted_cash) }
         : await aifShopCashManagerAmountAtDate(client, { locationId, workDate: cursor });
@@ -20663,7 +20741,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
         closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
         closedBy: closure?.actor || null,
-        status: pendingCovered ? "pending" : "available",
+        status: pendingCovered ? 'pending' : 'available',
       });
       cursor = aifShiftIsoDate(cursor, 1);
       guard += 1;
@@ -20671,6 +20749,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     return {
       lastConfirmedTo,
+      lastExplicitTo,
+      suggestedAfterDate: inferredAfterDate,
+      selectedAfterDate,
+      earliestActivityDate: activityStart,
+      confirmedHandoverDates,
       nextFrom: periodFrom,
       today,
       pending: pending ? aifCashMovementResponse(pending) : null,
@@ -20678,49 +20761,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function aifShopCashHandoverPlanFallback(client, { locationId, currentBalance }) {
+  async function aifShopCashHandoverPlanFallback(client, { locationId, currentBalance, afterDate = null }) {
     const today = aifBucharestIsoDate();
-    const [lastConfirmedResult, pendingResult] = await Promise.all([
-      client.query(
-        `SELECT *
-         FROM aif_shop_cash_movements
-         WHERE location_id=$1
-           AND movement_type='manager_handover'
-           AND status='confirmed'
-         ORDER BY COALESCE(handover_to_date,(requested_at AT TIME ZONE 'Europe/Bucharest')::date) DESC,
-                  COALESCE(confirmed_at,effective_at,requested_at) DESC, id DESC
-         LIMIT 1`,
-        [locationId]
-      ),
-      client.query(
-        `SELECT *
-         FROM aif_shop_cash_movements
-         WHERE location_id=$1
-           AND movement_type='manager_handover'
-           AND status='pending'
-         ORDER BY requested_at DESC, id DESC
-         LIMIT 1`,
-        [locationId]
-      ),
+    const requestedAfterDate = afterDate ? cleanAifDocumentDate(afterDate) : null;
+    const [confirmedHandoverDates, lastExplicitTo] = await Promise.all([
+      aifShopCashConfirmedHandoverDates(client, locationId).catch(() => []),
+      aifShopCashLastExplicitHandoverTo(client, locationId).catch(() => null),
     ]);
-
-    const lastConfirmed = lastConfirmedResult.rows[0] || null;
-    const pending = pendingResult.rows[0] || null;
-    const lastConfirmedTo = lastConfirmed
-      ? String(lastConfirmed.handover_to_date || aifBucharestIsoDate(lastConfirmed.requested_at)).slice(0, 10)
-      : null;
-    let periodFrom = lastConfirmedTo ? aifShiftIsoDate(lastConfirmedTo, 1) : today;
-
-    if (!lastConfirmedTo) {
-      const firstClosure = await client.query(
-        `SELECT min(work_date)::text AS work_date
-         FROM aif_shop_day_closures
-         WHERE location_id=$1`,
-        [locationId]
-      );
-      if (firstClosure.rows[0]?.work_date) periodFrom = String(firstClosure.rows[0].work_date).slice(0, 10);
-    }
+    const activityStart = await aifShopCashHandoverActivityStart(client, locationId, today).catch(() => today);
+    const suggestedAfterDate = lastExplicitTo || confirmedHandoverDates[0] || aifShiftIsoDate(activityStart, -1);
+    const selectedAfterDate = requestedAfterDate || suggestedAfterDate;
+    let periodFrom = aifShiftIsoDate(selectedAfterDate, 1);
+    if (periodFrom < activityStart) periodFrom = activityStart;
     if (periodFrom > today) periodFrom = today;
+
+    const pendingResult = await client.query(
+      `SELECT *
+       FROM aif_shop_cash_movements
+       WHERE location_id=$1
+         AND movement_type='manager_handover'
+         AND status='pending'
+       ORDER BY requested_at DESC, id DESC
+       LIMIT 1`,
+      [locationId]
+    );
+    const pending = pendingResult.rows[0] || null;
 
     const closureRows = await client.query(
       `SELECT work_date::text AS work_date, counted_cash, closed_at, actor
@@ -20730,7 +20795,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        ORDER BY work_date ASC`,
       [locationId, periodFrom, today]
     );
-
+    const closuresByDate = new Map(closureRows.rows.map((row) => [String(row.work_date).slice(0, 10), row]));
     const pendingFrom = pending
       ? String(pending.handover_from_date || pending.raw?.handoverFromDate || periodFrom).slice(0, 10)
       : null;
@@ -20738,40 +20803,48 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ? String(pending.handover_to_date || pending.raw?.handoverToDate || aifBucharestIsoDate(pending.requested_at)).slice(0, 10)
       : null;
 
-    const byDate = new Map();
-    for (const row of closureRows.rows || []) {
-      const date = String(row.work_date).slice(0, 10);
-      const pendingCovered = Boolean(pending && pendingFrom && pendingTo && date >= pendingFrom && date <= pendingTo);
-      byDate.set(date, {
-        date,
-        amount: Math.max(0, aifRoundMoney(row.counted_cash)),
-        closed: true,
-        closingCash: aifRoundMoney(row.counted_cash),
-        closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : null,
-        closedBy: row.actor || null,
+    const days = [];
+    let cursor = periodFrom;
+    let guard = 0;
+    while (cursor <= today && guard < 1500) {
+      const closure = closuresByDate.get(cursor) || null;
+      let amount = 0;
+      if (closure) {
+        amount = Math.max(0, aifRoundMoney(closure.counted_cash));
+      } else if (cursor === today) {
+        amount = Math.max(0, aifRoundMoney(currentBalance?.availableCash));
+      } else {
+        try {
+          amount = (await aifShopCashManagerAmountAtDate(client, { locationId, workDate: cursor })).amount;
+        } catch {
+          amount = 0;
+        }
+      }
+      const pendingCovered = Boolean(pending && pendingFrom && pendingTo && cursor >= pendingFrom && cursor <= pendingTo);
+      days.push({
+        date: cursor,
+        amount,
+        closed: Boolean(closure),
+        closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
+        closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
+        closedBy: closure?.actor || null,
         status: pendingCovered ? 'pending' : 'available',
       });
+      cursor = aifShiftIsoDate(cursor, 1);
+      guard += 1;
     }
 
-    const currentAmount = Math.max(0, aifRoundMoney(currentBalance?.availableCash));
-    const todayPending = Boolean(pending && pendingFrom && pendingTo && today >= pendingFrom && today <= pendingTo);
-    const todayExisting = byDate.get(today) || null;
-    byDate.set(today, {
-      date: today,
-      amount: currentAmount,
-      closed: Boolean(todayExisting?.closed),
-      closingCash: todayExisting?.closingCash ?? null,
-      closedAt: todayExisting?.closedAt ?? null,
-      closedBy: todayExisting?.closedBy ?? null,
-      status: todayPending ? 'pending' : 'available',
-    });
-
     return {
-      lastConfirmedTo,
+      lastConfirmedTo: confirmedHandoverDates[0] || null,
+      lastExplicitTo,
+      suggestedAfterDate,
+      selectedAfterDate,
+      earliestActivityDate: activityStart,
+      confirmedHandoverDates,
       nextFrom: periodFrom,
       today,
       pending: pending ? aifCashMovementResponse(pending) : null,
-      days: Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date)),
+      days,
       fallback: true,
     };
   }
@@ -25598,6 +25671,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const now = new Date();
       const today = aifBucharestIsoDate(now);
       const requestedMonth = text(req.query.month);
+      const requestedHandoverAfterDate = text(req.query.handoverAfterDate || req.query.handover_after_date || req.query.afterDate);
+      const handoverAfterDate = requestedHandoverAfterDate ? cleanAifDocumentDate(requestedHandoverAfterDate) : null;
       const historyMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth) ? requestedMonth : today.slice(0, 7);
       const historyStart = `${historyMonth}-01`;
       const [balance, movementsResult, closuresResult, todayClosureResult, managerHistoryResult, managerHistoryMonthsResult] = await Promise.all([
@@ -25655,15 +25730,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       let handoverPlan = null;
       try {
-        handoverPlan = await aifShopCashHandoverPlan(pool, { locationId: location.id });
+        handoverPlan = await aifShopCashHandoverPlan(pool, { locationId: location.id, afterDate: handoverAfterDate });
       } catch (planError) {
         console.error('AIF shop cash handover plan warning; using fallback', planError);
         try {
-          handoverPlan = await aifShopCashHandoverPlanFallback(pool, { locationId: location.id, currentBalance: balance });
+          handoverPlan = await aifShopCashHandoverPlanFallback(pool, { locationId: location.id, currentBalance: balance, afterDate: handoverAfterDate });
         } catch (fallbackError) {
           console.error('AIF shop cash handover fallback warning; using current cash only', fallbackError);
           handoverPlan = {
             lastConfirmedTo: null,
+            lastExplicitTo: null,
+            suggestedAfterDate: handoverAfterDate || aifShiftIsoDate(today, -1),
+            selectedAfterDate: handoverAfterDate || aifShiftIsoDate(today, -1),
+            earliestActivityDate: today,
+            confirmedHandoverDates: [],
             nextFrom: today,
             today,
             pending: null,
@@ -26004,6 +26084,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ? "bank_deposit"
         : "";
     const amountRaw = toMoney(body.amount);
+    const handoverAfterDateInput = text(body.handoverAfterDate || body.handover_after_date || body.lastHandoverDate || body.last_handover_date);
     const handoverToDateInput = text(body.handoverToDate || body.handover_to_date || body.throughDate || body.through_date);
     const reference = emptyToNull(body.reference || body.referenceNumber || body.reference_number);
     const note = emptyToNull(body.note);
@@ -26015,6 +26096,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     if (movementType === "bank_deposit" && !reference) {
       return res.status(400).json({ error: "Bankbefizetésnél a referencia / bizonylatszám kötelező." });
+    }
+    if (movementType === "manager_handover" && !cleanAifDocumentDate(handoverAfterDateInput)) {
+      return res.status(400).json({ error: "Válaszd ki az utolsó ténylegesen átadott napot.", code: "shop_cash_handover_after_date_required" });
     }
     if (movementType === "manager_handover" && !cleanAifDocumentDate(handoverToDateInput)) {
       return res.status(400).json({ error: "Válaszd ki, melyik üzleti napig adod át a készpénzt.", code: "shop_cash_handover_date_required" });
@@ -26068,7 +26152,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         let plan = null;
         try {
-          plan = await aifShopCashHandoverPlan(client, { locationId: location.id });
+          plan = await aifShopCashHandoverPlan(client, { locationId: location.id, afterDate: handoverAfterDateInput });
         } catch (planError) {
           console.error('AIF create cash handover plan warning; using fallback', planError);
           const currentBalanceForFallback = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
@@ -26076,13 +26160,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             plan = await aifShopCashHandoverPlanFallback(client, {
               locationId: location.id,
               currentBalance: currentBalanceForFallback,
+              afterDate: handoverAfterDateInput,
             });
           } catch (fallbackError) {
             console.error('AIF create cash handover fallback warning; using current day only', fallbackError);
             const today = aifBucharestIsoDate();
+            const selectedAfterDate = cleanAifDocumentDate(handoverAfterDateInput) || aifShiftIsoDate(today, -1);
             plan = {
               lastConfirmedTo: null,
-              nextFrom: today,
+              lastExplicitTo: null,
+              suggestedAfterDate: selectedAfterDate,
+              selectedAfterDate,
+              earliestActivityDate: today,
+              confirmedHandoverDates: [],
+              nextFrom: aifShiftIsoDate(selectedAfterDate, 1),
               today,
               pending: null,
               days: [{
@@ -26126,6 +26217,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         handoverToDate = requestedToDate;
         coveredDayCount = aifInclusiveDayCount(handoverFromDate, handoverToDate);
         handoverSnapshot = {
+          handoverPeriodExplicit: true,
+          handoverAfterDate: cleanAifDocumentDate(handoverAfterDateInput),
           handoverFromDate,
           handoverToDate,
           coveredDayCount,
