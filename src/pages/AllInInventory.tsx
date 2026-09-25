@@ -1879,7 +1879,7 @@ export default function AllInInventory() {
       kind: "checkpoint",
       tone: "green",
       title: "Eddigi készletre vezetés",
-      description: "A tegnapi és mai, ebben a Helyreállító leltárban eddig ténylegesen megszámolt tételek együtt bekerülnek az üzlet készletébe. A leltár NYITVA MARAD, a még nem számolt sorokhoz és az ismeretlen kódokhoz nem nyúlunk.",
+      description: "A tegnapi és mai, ebben a Helyreállító leltárban eddig ténylegesen megszámolt tételek együtt bekerülnek az üzlet készletébe. Ez a napi felvezetés csak NÖVELHET készletet, csökkenteni nem fog. A leltár NYITVA MARAD, a még nem számolt sorokhoz és az ismeretlen kódokhoz nem nyúlunk.",
       confirmLabel: "Eddigi készletre vezetés",
       details: [
         `Leltár: ${active.item.title}`,
@@ -1888,6 +1888,7 @@ export default function AllInInventory() {
         `Eddig talált mennyiség: ${formatQty(activeStats.counted)} db`,
         `Még nem számolt sor: ${formatQty(Math.max(0, activeStats.lines - activeStats.countedLines))}`,
         `Ellenőrzendő kód: ${formatQty(unresolvedUnknown.length)}`,
+        "Napi checkpoint: készletcsökkentés TILOS; hiányt csak a teljes végleges lezárás rendez.",
       ],
     });
   }
@@ -2977,7 +2978,7 @@ export default function AllInInventory() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-[10px] uppercase tracking-[0.12em] text-[#bff8f5]/70">Többnapos helyreállítás</div>
-                    <div className="mt-1">Az <span className="text-white">Eddigi készletre vezetés</span> a tegnapi és mai összes eddig számolt tételt együtt készletre teszi, a leltár pedig folytatható marad.</div>
+                    <div className="mt-1">Az <span className="text-white">Eddigi készletre vezetés</span> a tegnapi és mai összes eddig számolt tételt együtt kezeli, de napi checkpointként csak készletet növelhet. A még nem számolt Avizos tételekhez nem nyúl, és hiányt nem ír le. A leltár folytatható marad.</div>
                   </div>
                   <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}>
                     <PackageCheck size={15} /> Eddigi készletre vezetés
