@@ -15,6 +15,7 @@ import {
   History,
   Landmark,
   Loader2,
+  Printer,
   Trash2,
   ZoomIn,
   RefreshCw,
@@ -84,6 +85,15 @@ function money(value: unknown) {
 
 function integer(value: unknown) {
   return Math.round(numberValue(value)).toLocaleString("ro-RO");
+}
+
+function escapePrintHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function localIsoDate(date: Date) {
@@ -512,6 +522,161 @@ function differenceTone(item: AifShopExchangeHistoryItem) {
 
 function storeByCode(code: string) {
   return STORES.find((store) => store.code === code) || STORES[0];
+}
+
+function printCashHandoverReceipt(store: StoreDef, item: any) {
+  const fromDate = String(item?.handoverFromDate || item?.handoverToDate || "").trim();
+  const toDate = String(item?.handoverToDate || item?.handoverFromDate || "").trim();
+  const coveredDays = Math.max(1, Math.round(numberValue(item?.coveredDayCount || 1)));
+  const requestedBy = String(item?.requestedBy || "–").trim() || "–";
+  const confirmedBy = String(item?.confirmedBy || "").trim();
+  const status = String(item?.status || "").toLowerCase();
+  const statusLabel =
+    status === "confirmed" ? "ÁTVÉVE" :
+    status === "pending" ? "ÁTVÉTELRE VÁR" :
+    status === "rejected" ? "ELUTASÍTVA" :
+    status === "cancelled" ? "VISSZAVONVA" :
+    String(item?.status || "–").toUpperCase();
+  const periodText = fromDate && toDate
+    ? (fromDate === toDate ? formatDate(fromDate) : `${formatDate(fromDate)} – ${formatDate(toDate)}`)
+    : "Nincs megadva";
+  const requestedAtText = item?.requestedAt ? formatDateTime(item.requestedAt) : "–";
+  const confirmedAtText = item?.confirmedAt ? formatDateTime(item.confirmedAt) : "–";
+  const amountText = money(item?.amount);
+  const reference = String(item?.reference || "").trim();
+  const note = String(item?.note || "").trim();
+  const recordId = String(item?.id || "").trim();
+
+  const popup = window.open("", "_blank", "width=1100,height=850");
+  if (!popup) {
+    window.alert("A böngésző letiltotta a nyomtatási ablakot. Engedélyezd a felugró ablakokat ehhez az oldalhoz.");
+    return;
+  }
+
+  popup.document.open();
+  popup.document.write(`<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8" />
+<title>Készpénz átadás-átvételi jegyzőkönyv</title>
+<style>
+  @page { size: A4 portrait; margin: 10mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #17202d; font-family: Arial, Helvetica, sans-serif; }
+  body { font-size: 11px; }
+  .sheet { width: 100%; border: 1px solid #9aa4b2; padding: 8mm; }
+  .top { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 5mm; border-bottom: 2px solid #354153; }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
+  .sub { margin-top: 3px; font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: #697586; }
+  .docid { text-align: right; font-size: 9px; color: #586476; line-height: 1.5; }
+  h1 { margin: 7mm 0 1.5mm; text-align: center; font-size: 19px; letter-spacing: .03em; }
+  .lead { margin: 0 0 6mm; text-align: center; color: #5f6b7a; font-size: 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+  .box { border: 1px solid #c3cad4; min-height: 17mm; padding: 3mm; border-radius: 2mm; }
+  .label { font-size: 8px; text-transform: uppercase; letter-spacing: .10em; color: #778292; margin-bottom: 1.5mm; }
+  .value { font-size: 12px; line-height: 1.35; }
+  .amount { margin: 5mm 0; border: 2px solid #354153; padding: 4mm; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+  .amount .value { font-size: 24px; font-weight: 700; white-space: nowrap; }
+  .statement { margin-top: 6mm; border-top: 1px solid #c3cad4; border-bottom: 1px solid #c3cad4; padding: 4mm 0; line-height: 1.65; font-size: 10px; }
+  .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 17mm; }
+  .sig { text-align: center; }
+  .sigline { border-top: 1px solid #354153; padding-top: 2mm; font-size: 9px; }
+  .signame { margin-bottom: 13mm; min-height: 5mm; font-size: 11px; }
+  .footer { margin-top: 9mm; padding-top: 3mm; border-top: 1px solid #d5dbe3; display: flex; justify-content: space-between; gap: 20px; font-size: 8px; color: #7b8593; }
+  .status { font-weight: 700; letter-spacing: .08em; }
+  @media print {
+    .sheet { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+  <main class="sheet">
+    <div class="top">
+      <div>
+        <div class="brand">ALLINFASHION</div>
+        <div class="sub">Belső pénztári bizonylat</div>
+      </div>
+      <div class="docid">
+        ${recordId ? `Rendszerazonosító: ${escapePrintHtml(recordId)}<br>` : ""}
+        Nyomtatva: ${escapePrintHtml(new Date().toLocaleString("hu-HU", { timeZone: "Europe/Bucharest" }))}
+      </div>
+    </div>
+
+    <h1>KÉSZPÉNZ ÁTADÁS-ÁTVÉTELI JEGYZŐKÖNYV</h1>
+    <p class="lead">A rendszerben rögzített üzleti készpénzátadás belső igazolása</p>
+
+    <section class="grid">
+      <div class="box">
+        <div class="label">Üzlet</div>
+        <div class="value">${escapePrintHtml(store.city)}<br>${escapePrintHtml(store.name)}</div>
+      </div>
+      <div class="box">
+        <div class="label">Átadási időszak</div>
+        <div class="value">${escapePrintHtml(periodText)}<br>${coveredDays} nap</div>
+      </div>
+      <div class="box">
+        <div class="label">Átadó / eladó</div>
+        <div class="value">${escapePrintHtml(requestedBy)}<br><span style="font-size:10px;color:#697586">${escapePrintHtml(requestedAtText)}</span></div>
+      </div>
+      <div class="box">
+        <div class="label">Átvevő</div>
+        <div class="value">${escapePrintHtml(confirmedBy || "________________________")}<br><span style="font-size:10px;color:#697586">${escapePrintHtml(confirmedAtText)}</span></div>
+      </div>
+    </section>
+
+    <section class="amount">
+      <div>
+        <div class="label">Átadott készpénz</div>
+        <div class="status">${escapePrintHtml(statusLabel)}</div>
+      </div>
+      <div class="value">${escapePrintHtml(amountText)}</div>
+    </section>
+
+    <section class="grid">
+      <div class="box">
+        <div class="label">Referencia</div>
+        <div class="value">${escapePrintHtml(reference || "–")}</div>
+      </div>
+      <div class="box">
+        <div class="label">Megjegyzés</div>
+        <div class="value">${escapePrintHtml(note || "–")}</div>
+      </div>
+    </section>
+
+    <div class="statement">
+      Alulírottak igazoljuk, hogy a fenti időszakra vonatkozó,
+      <strong>${escapePrintHtml(amountText)}</strong> összegű készpénz átadása és átvétele
+      a jelen jegyzőkönyv szerint megtörtént. A felek az összeget ellenőrizték, és aláírásukkal
+      igazolják az átadás-átvételt.
+    </div>
+
+    <section class="signatures">
+      <div class="sig">
+        <div class="signame">${escapePrintHtml(requestedBy)}</div>
+        <div class="sigline">Átadó / eladó aláírása</div>
+      </div>
+      <div class="sig">
+        <div class="signame">${escapePrintHtml(confirmedBy || "")}</div>
+        <div class="sigline">Átvevő aláírása</div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <span>Belső készpénz átadás-átvételi bizonylat</span>
+      <span>${escapePrintHtml(store.city)} • ${escapePrintHtml(amountText)}</span>
+    </div>
+  </main>
+<script>
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      window.focus();
+      window.print();
+    }, 120);
+  });
+</script>
+</body>
+</html>`);
+  popup.document.close();
 }
 
 export default function AllInAdminShopWorkflows({
@@ -1491,7 +1656,16 @@ export default function AllInAdminShopWorkflows({
                             ) : null}
                             {item.note ? <p className="mt-2 text-[11px] leading-relaxed text-white/54">{item.note}</p> : null}
                           </div>
-                          <p className="shrink-0 text-xl text-orange-50">{money(item.amount)}</p>
+                          <div className="flex shrink-0 flex-col items-end gap-2">
+                            <p className="text-xl text-orange-50">{money(item.amount)}</p>
+                            <button
+                              type="button"
+                              onClick={() => printCashHandoverReceipt(store, item)}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/18 bg-white/[0.06] px-2.5 text-[10px] text-white transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10"
+                            >
+                              <Printer size={13} /> PDF
+                            </button>
+                          </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           <button
@@ -1710,9 +1884,18 @@ export default function AllInAdminShopWorkflows({
                             ) : null}
                             {item.note ? <p className="mt-2 text-[10px] leading-relaxed text-white/46">{item.note}</p> : null}
                           </div>
-                          <div className="shrink-0 text-right">
-                            <p className="text-xl text-white">{money(item.amount)}</p>
-                            <p className="mt-1 text-[9px] text-white/36">{item.coveredDayCount || 1} nap</p>
+                          <div className="flex shrink-0 flex-col items-end gap-2 text-right">
+                            <div>
+                              <p className="text-xl text-white">{money(item.amount)}</p>
+                              <p className="mt-1 text-[9px] text-white/36">{item.coveredDayCount || 1} nap</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => printCashHandoverReceipt(store, item)}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/16 bg-white/[0.055] px-2.5 text-[10px] text-white transition hover:border-[#ffe66b]/32 hover:bg-[#fed700]/10"
+                            >
+                              <Printer size={13} /> PDF
+                            </button>
                           </div>
                         </div>
                       </article>
