@@ -20730,9 +20730,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let guard = 0;
     while (cursor <= today && guard < 1500) {
       const closure = closuresByDate.get(cursor) || null;
-      const calc = closure
-        ? { amount: aifRoundMoney(closure.counted_cash) }
-        : await aifShopCashManagerAmountAtDate(client, { locationId, workDate: cursor });
+      // Az átadható összeg mindig a kiválasztott nap végére számolt TÉNYLEGESEN
+      // még bent maradt készpénz. A napzárás counted_cash értékét csak
+      // referenciaként mutatjuk, mert egy később visszaigazolt, korábbi napokra
+      // vonatkozó készpénzátadás után abból le kell vonni a már átadott összeget.
+      // Példa: 23-ig átadva 3 620,22 RON, 24-i záró kassza 4 517,00 RON
+      // -> 24-ig újonnan átadható: 896,78 RON.
+      const calc = await aifShopCashManagerAmountAtDate(client, { locationId, workDate: cursor });
       const pendingCovered = Boolean(pending && pendingFrom && pendingTo && cursor >= pendingFrom && cursor <= pendingTo);
       days.push({
         date: cursor,
