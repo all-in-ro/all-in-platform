@@ -1177,6 +1177,7 @@ export default function createAifOpeningInventoryRouter({
          cl.system_qty_before,
          cl.system_qty_after,
          cl.qty_delta,
+         cl.raw,
          cl.checkpoint_id,
          cp.checkpoint_no,
          cp.applied_at,
@@ -1205,32 +1206,71 @@ export default function createAifOpeningInventoryRouter({
   function recoveryCheckpointTargetQty({ line, previous, currentSystemQty }) {
     const physicalNow = recoveryCheckpointPhysicalQty(line);
     if (physicalNow === null || !Number.isFinite(physicalNow) || physicalNow < 0) {
-      return { physicalNow, targetQty: null, newlyCountedDelta: null, mode: null };
-    }
-
-    // Első készletre vezetés ennél a sornál: az eddigi helyreállító leltár
-    // teljes, mozgásokkal korrigált eredményét tekintjük aktuális készletnek.
-    if (!previous) {
-      const effective = Number(line.counted_qty || 0);
       return {
         physicalNow,
-        targetQty: effective,
-        newlyCountedDelta: physicalNow,
-        mode: "first_recovery_checkpoint",
+        targetQty: null,
+        newlyCountedDelta: null,
+        recoveryAddedNow: null,
+        cumulativeRecoveryAddedQty: null,
+        recoveryBaselineSystemQty: null,
+        recoveryBaselineLiveInQty: null,
+        recoveryBaselineMovementAdjustmentQty: null,
+        adjustedPhysicalNow: null,
+        systemCoverageQty: null,
+        mode: null,
       };
     }
 
-    // Ha ezt a terméket már egyszer készletre vezettük, a későbbi eladásokat /
-    // mozgásokat a jelenlegi rendszerkészlet már tartalmazza. Ezért csak az azóta
-    // újonnan megszámolt (vagy kézzel korrigált) fizikai különbséget adjuk hozzá.
-    // Így egy tegnap felvezetett 5 db-ból ma eladott 1 db nem ugrik vissza 5-re.
-    const previousPhysical = Number(previous.physical_counted_qty || 0);
-    const newlyCountedDelta = physicalNow - previousPhysical;
+    const previousRaw = previous?.raw && typeof previous.raw === "object" ? previous.raw : {};
+    const currentLiveInQty = Math.max(0, Number(line?.live_in_qty || 0));
+
+    // Ha az első checkpoint előtt a már megszámolt termékből közben eladtak / érkezett,
+    // a raw physical_counted_qty önmagában már nem az aktuális fizikai készlet. Az első
+    // checkpointkor rögzítjük ezt az egyszeri korrekciót, és később is ugyanazzal a
+    // bázissal számolunk. Így egy első checkpoint előtti eladás sem töltődik vissza.
+    const recoveryBaselineMovementAdjustmentQty = previous
+      ? Number(previousRaw.recoveryBaselineMovementAdjustmentQty || 0)
+      : Number(line?.counted_qty || 0) - physicalNow;
+    const adjustedPhysicalNow = Math.max(0, physicalNow + recoveryBaselineMovementAdjustmentQty);
+
+    // A napi helyreállító checkpoint SZÁNDÉKOSAN NEM CSÖKKENT készletet.
+    // Az első checkpoint idején már rendszerben levő készletet lefedettnek tekintjük.
+    // A később érkező pozitív készletmozgások (pl. új Aviz / beérkezés) ezt a fedezetet
+    // tovább növelik, így ugyanazt az árut nem adjuk hozzá még egyszer csak azért,
+    // mert később fizikailag is megszámolták.
+    const recoveryBaselineSystemQty = previous
+      ? Math.max(0, Number(previousRaw.recoveryBaselineSystemQty ?? previous.system_qty_before ?? 0))
+      : Math.max(0, Number(currentSystemQty || 0));
+    const recoveryBaselineLiveInQty = previous
+      ? Math.max(0, Number(previousRaw.recoveryBaselineLiveInQty ?? currentLiveInQty))
+      : currentLiveInQty;
+    const positiveLiveInSinceBaseline = Math.max(0, currentLiveInQty - recoveryBaselineLiveInQty);
+    const systemCoverageQty = recoveryBaselineSystemQty + positiveLiveInSinceBaseline;
+
+    // Ennyi fizikai darab van az eredeti rendszerkészleten / későbbi beérkezéseken
+    // felül. Csak ennek a KORÁBBAN MÉG NEM FELVEZETETT pozitív része írható készletre.
+    const cumulativeRecoveryAddedQty = Math.max(0, adjustedPhysicalNow - systemCoverageQty);
+    const previousCumulativeRecoveryAddedQty = previous
+      ? Math.max(0, Number(
+          previousRaw.cumulativeRecoveryAddedQty
+          ?? Math.max(0, Number(previous.physical_counted_qty || 0) - recoveryBaselineSystemQty)
+        ))
+      : 0;
+    const recoveryAddedNow = Math.max(0, cumulativeRecoveryAddedQty - previousCumulativeRecoveryAddedQty);
+    const targetQty = Math.max(0, Number(currentSystemQty || 0)) + recoveryAddedNow;
+
     return {
       physicalNow,
-      targetQty: Number(currentSystemQty || 0) + newlyCountedDelta,
-      newlyCountedDelta,
-      mode: "incremental_recovery_checkpoint",
+      targetQty,
+      newlyCountedDelta: previous ? physicalNow - Number(previous.physical_counted_qty || 0) : physicalNow,
+      recoveryAddedNow,
+      cumulativeRecoveryAddedQty,
+      recoveryBaselineSystemQty,
+      recoveryBaselineLiveInQty,
+      recoveryBaselineMovementAdjustmentQty,
+      adjustedPhysicalNow,
+      systemCoverageQty,
+      mode: previous ? "incremental_recovery_checkpoint_add_only" : "first_recovery_checkpoint_add_only",
     };
   }
 
@@ -2199,7 +2239,15 @@ export default function createAifOpeningInventoryRouter({
               physicalCountedQty: Number(target.physicalNow || 0),
               previousCheckpointPhysicalQty: previous ? Number(previous.physical_counted_qty || 0) : null,
               newlyCountedDelta: target.newlyCountedDelta,
+              recoveryAddedNow: target.recoveryAddedNow,
+              cumulativeRecoveryAddedQty: target.cumulativeRecoveryAddedQty,
+              recoveryBaselineSystemQty: target.recoveryBaselineSystemQty,
+              recoveryBaselineLiveInQty: target.recoveryBaselineLiveInQty,
+              recoveryBaselineMovementAdjustmentQty: target.recoveryBaselineMovementAdjustmentQty,
+              adjustedPhysicalCountedQty: target.adjustedPhysicalNow,
+              systemCoverageQty: target.systemCoverageQty,
               checkpointMode: target.mode,
+              stockDecreaseAllowed: false,
               currentSystemQtyBeforeApply: beforeQty,
               currentSystemQtyAfterApply: afterQty,
               locationCode: session.location_code,
@@ -2239,6 +2287,14 @@ export default function createAifOpeningInventoryRouter({
               previousCheckpointNo: previous?.checkpoint_no ?? null,
               previousPhysicalCountedQty: previous ? Number(previous.physical_counted_qty || 0) : null,
               newlyCountedDelta: target.newlyCountedDelta,
+              recoveryAddedNow: target.recoveryAddedNow,
+              cumulativeRecoveryAddedQty: target.cumulativeRecoveryAddedQty,
+              recoveryBaselineSystemQty: target.recoveryBaselineSystemQty,
+              recoveryBaselineLiveInQty: target.recoveryBaselineLiveInQty,
+              recoveryBaselineMovementAdjustmentQty: target.recoveryBaselineMovementAdjustmentQty,
+              adjustedPhysicalCountedQty: target.adjustedPhysicalNow,
+              systemCoverageQty: target.systemCoverageQty,
+              stockDecreaseAllowed: false,
               firstScannedAt: line.first_scanned_at || null,
               lastScannedAt: line.last_scanned_at || null,
               lastScannedBy: line.last_scanned_by || null,
@@ -2510,10 +2566,14 @@ export default function createAifOpeningInventoryRouter({
         const beforeQty = Number(stock.rows[0]?.qty || 0);
         const reserved = Number(stock.rows[0]?.reserved_qty || 0);
         const previousCheckpoint = recoveryCheckpointByLine.get(String(line.id)) || null;
-        const recoveryTarget = previousCheckpoint
-          ? recoveryCheckpointTargetQty({ line, previous: previousCheckpoint, currentSystemQty: beforeQty })
+        const newlyCountedSinceCheckpoint = previousCheckpoint
+          ? Number(line.physical_counted_qty || 0) - Number(previousCheckpoint.physical_counted_qty || 0)
           : null;
-        const afterQty = recoveryTarget ? Number(recoveryTarget.targetQty) : Number(line.counted_qty || 0);
+
+        // A VÉGLEGES alkalmazás már teljes leltár: itt szabad lefelé is korrigálni.
+        // A korábbi napi recovery checkpointok csak ideiglenes, növelő készletre vezetések.
+        // Ezért a végleges cél mindig a teljes, mozgásokkal korrigált leltári mennyiség.
+        const afterQty = Number(line.counted_qty || 0);
         if (!Number.isFinite(afterQty) || afterQty < 0) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: `Érvénytelen talált darabszám: ${line.title_ro || line.variant_id}` });
@@ -2567,7 +2627,7 @@ export default function createAifOpeningInventoryRouter({
               physicalCountedQty: Number(line.physical_counted_qty || 0),
               previousRecoveryCheckpointId: previousCheckpoint?.checkpoint_id ? String(previousCheckpoint.checkpoint_id) : null,
               previousRecoveryCheckpointPhysicalQty: previousCheckpoint ? Number(previousCheckpoint.physical_counted_qty || 0) : null,
-              newlyCountedSinceCheckpoint: recoveryTarget?.newlyCountedDelta ?? null,
+              newlyCountedSinceCheckpoint,
               movementAfterCountQty: Number(line.movement_after_count_qty || 0),
               effectiveCountedQty: afterQty,
               countedQty: afterQty,
@@ -2595,7 +2655,7 @@ export default function createAifOpeningInventoryRouter({
           netDiff,
           correctionRetailValue,
           liveMovementReconciliation: true,
-          movementPolicy: "checkpoint_aware_recovery_or_physical_count_plus_movements_after_last_count",
+          movementPolicy: "final_full_reconciliation_after_optional_add_only_recovery_checkpoints",
           archiveSnapshot: {
             version: 1,
             finalizedAt: archiveSnapshot.finalizedAt,
