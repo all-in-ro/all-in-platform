@@ -7,6 +7,7 @@ import {
   Banknote,
   Barcode,
   Boxes,
+  CalendarDays,
   Check,
   CheckCircle2,
   CircleDollarSign,
@@ -308,6 +309,44 @@ function formatDate(value: string) {
     day: "2-digit",
     weekday: "short",
     timeZone: "UTC",
+  });
+}
+
+const CASH_CALENDAR_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function cashCalendarMonthLabel(monthKey: string) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return monthKey;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12));
+  return date.toLocaleDateString("hu-HU", { year: "numeric", month: "long", timeZone: "UTC" });
+}
+
+function shiftCashCalendarMonth(monthKey: string, amount: number) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  const base = match
+    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12))
+    : new Date(`${todayIso()}T12:00:00Z`);
+  base.setUTCMonth(base.getUTCMonth() + amount);
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function cashCalendarGrid(monthKey: string) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  const year = match ? Number(match[1]) : Number(todayIso().slice(0, 4));
+  const month = match ? Number(match[2]) : Number(todayIso().slice(5, 7));
+  const first = new Date(Date.UTC(year, month - 1, 1, 12));
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const start = new Date(first);
+  start.setUTCDate(first.getUTCDate() - mondayOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(start);
+    day.setUTCDate(start.getUTCDate() + index);
+    const iso = day.toISOString().slice(0, 10);
+    return {
+      iso,
+      day: day.getUTCDate(),
+      inMonth: day.getUTCMonth() === month - 1,
+    };
   });
 }
 
@@ -1005,6 +1044,8 @@ export default function AllInShopOperations({
   const [cashMoveAmount, setCashMoveAmount] = useState("");
   const [cashHandoverAfterDate, setCashHandoverAfterDate] = useState("");
   const [cashHandoverToDate, setCashHandoverToDate] = useState("");
+  const [cashCalendarMode, setCashCalendarMode] = useState<"anchor" | "to" | null>(null);
+  const [cashCalendarMonth, setCashCalendarMonth] = useState(() => todayIso().slice(0, 7));
   const [cashHistoryMonth, setCashHistoryMonth] = useState(() => todayIso().slice(0, 7));
   const [cashMoveReference, setCashMoveReference] = useState("");
   const [cashMoveNote, setCashMoveNote] = useState("");
@@ -1075,6 +1116,10 @@ export default function AllInShopOperations({
     }];
   }, [cashHandoverAfterDate, cashHandoverPlan?.days, currentCashBalance, currentDayClosure]);
   const selectedCashHandoverDay = cashHandoverDays.find((day) => day.date === cashHandoverToDate) || null;
+  const cashHandoverDayMap = useMemo(
+    () => new Map(cashHandoverDays.map((day) => [day.date, day])),
+    [cashHandoverDays],
+  );
   const cashHandoverHistory = useMemo(() => {
     const serverHistory = cashData?.managerHandoverHistory || [];
     if (serverHistory.length) return serverHistory;
@@ -1417,6 +1462,31 @@ export default function AllInShopOperations({
     }
   }
 
+  function openCashCalendar(mode: "anchor" | "to") {
+    setError("");
+    const focusDate = mode === "anchor"
+      ? (cashHandoverAfterDate || cashHandoverPlan?.selectedAfterDate || cashHandoverPlan?.suggestedAfterDate || todayIso())
+      : (cashHandoverToDate || cashHandoverDays[cashHandoverDays.length - 1]?.date || todayIso());
+    setCashCalendarMonth(String(focusDate || todayIso()).slice(0, 7));
+    setCashCalendarMode(mode);
+  }
+
+  async function chooseCashCalendarDate(date: string) {
+    if (cashCalendarMode === "anchor") {
+      if (date >= todayIso()) return;
+      await changeCashHandoverAfterDate(date);
+      setCashCalendarMode(null);
+      return;
+    }
+
+    if (cashCalendarMode === "to") {
+      const day = cashHandoverDayMap.get(date);
+      if (!day || date <= cashHandoverAfterDate || day.status === "pending") return;
+      setCashHandoverToDate(date);
+      setCashCalendarMode(null);
+    }
+  }
+
   async function createCashMovement() {
     const bankAmount = Number(String(cashMoveAmount || "").replace(",", "."));
 
@@ -1465,6 +1535,7 @@ export default function AllInShopOperations({
           : `${formatMoney(response.item.amount)} bankbefizetés rögzítve (${response.item.reference || "referencia nélkül"}).`,
       );
       setCashMoveOpen(false);
+      setCashCalendarMode(null);
       setCashMoveAmount("");
       setCashHandoverAfterDate("");
       setCashHandoverToDate("");
@@ -1523,6 +1594,7 @@ export default function AllInShopOperations({
 
   async function openCashMovement(type: AifShopCashMovementType) {
     setError("");
+    setCashCalendarMode(null);
     setCashMoveNote("");
 
     if (type === "manager_handover") {
@@ -1632,6 +1704,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (cashCalendarMode) {
+          setCashCalendarMode(null);
+          return;
+        }
         if (customerQuickId) {
           closeCustomerQuickView();
           return;
@@ -1665,7 +1741,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
+  }, [cashCalendarMode, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2983,114 +3059,87 @@ export default function AllInShopOperations({
                 {cashMoveType === "manager_handover" ? (
                   <div className="mt-4 space-y-4">
                     <div className="grid gap-3 lg:grid-cols-[1.05fr_0.95fr]">
-                      <div className="rounded-[22px] border border-[#ffe66b]/42 bg-[#2a3445] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#fff4a5]/68">Utolsó tényleges készpénzátadás</p>
-                        <div className="mt-2 flex flex-wrap items-end gap-2">
-                          <label className="min-w-[210px] flex-1">
-                            <span className="mb-1.5 block text-[10px] text-white/46">Ezt a napot már átadottnak tekintjük</span>
-                            <input
-                              type="date"
-                              value={cashHandoverAfterDate}
-                              max={shiftIsoDate(todayIso(), -1)}
-                              onChange={(event) => void changeCashHandoverAfterDate(event.target.value)}
-                              className="h-12 w-full rounded-xl border border-[#ffe66b]/38 bg-[#273243] px-3 text-base text-white outline-none [color-scheme:dark] focus:border-[#fed700] focus:ring-2 focus:ring-[#fed700]/20"
-                            />
-                          </label>
-                        </div>
-                        {(cashHandoverPlan?.confirmedHandoverDates || []).length ? (
-                          <div className="mt-3">
-                            <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Korábbi rögzített átadási napok</p>
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {(cashHandoverPlan?.confirmedHandoverDates || []).slice(0, 8).map((date) => (
-                                <button
-                                  key={date}
-                                  type="button"
-                                  onClick={() => void changeCashHandoverAfterDate(date)}
-                                  className={`h-8 rounded-lg border px-2.5 text-[11px] transition ${
-                                    cashHandoverAfterDate === date
-                                      ? "border-[#fed700] bg-[#fed700] text-[#243044]"
-                                      : "border-white/12 bg-white/[0.04] text-white/65 hover:border-[#fed700]/45"
-                                  }`}
-                                >
-                                  {formatDate(date)}
-                                </button>
-                              ))}
-                            </div>
+                      <div className="rounded-[22px] border border-[#ffe66b]/36 bg-[#2a3445] p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Átadási időszak</p>
+                            <h4 className="mt-1 text-lg text-white">
+                              {cashHandoverAfterDate ? shiftIsoDate(cashHandoverAfterDate, 1) : "–"} → {cashHandoverToDate || "válassz napot"}
+                            </h4>
                           </div>
-                        ) : null}
-                        <div className="mt-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
-                          <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Most átadandó időszak</p>
-                          <p className="mt-1 text-base text-white">
-                            {cashHandoverAfterDate ? shiftIsoDate(cashHandoverAfterDate, 1) : "–"} → {cashHandoverToDate || "válassz zárónapot"}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="rounded-[22px] border border-[#ffe66b]/55 bg-[#fed700] p-4 text-[#243044] shadow-[0_12px_28px_rgba(254,215,0,0.15)]">
-                        <p className="text-[10px] uppercase tracking-[0.13em] opacity-65">Átadandó készpénz</p>
-                        <p className="mt-2 text-4xl tracking-tight">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
-                        <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
-                          <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
-                            {selectedCashHandoverDay?.closed ? "Napzárással ellenőrizve" : "Rendszer szerinti érték"}
+                          <span className="rounded-xl border border-red-300/45 bg-red-600/18 px-3 py-2 text-[11px] text-red-50">
+                            Utolsó átvett nap: {cashHandoverAfterDate ? formatDate(cashHandoverAfterDate) : "nincs"}
                           </span>
-                          {selectedCashHandoverDay?.closingCash != null ? (
-                            <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
-                              Záró kassza: {formatMoney(selectedCashHandoverDay.closingCash)}
-                            </span>
-                          ) : null}
                         </div>
-                      </div>
-                    </div>
 
-                    <section className="overflow-hidden rounded-[22px] border border-white/12 bg-[#374357]">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
-                        <div>
-                          <p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Átadás eddig a napig</p>
-                          <h4 className="mt-1 text-base text-white">Válaszd ki a zárónapot</h4>
-                        </div>
-                        <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/52">
-                          {cashHandoverDays.length} nap
-                        </span>
-                      </div>
-                      <div className="grid max-h-[320px] gap-2 overflow-y-auto p-3 sm:grid-cols-2">
-                        {cashHandoverDays.map((day) => {
-                          const selected = day.date === cashHandoverToDate;
-                          const blocked = day.status === "pending";
-                          return (
-                            <button
-                              key={day.date}
-                              type="button"
-                              disabled={blocked}
-                              onClick={() => setCashHandoverToDate(day.date)}
-                              className={`flex min-h-[76px] items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 text-left transition ${
-                                selected
-                                  ? "border-[#ffe66b] bg-[#fed700] text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.16)]"
-                                  : blocked
-                                    ? "border-white/8 bg-black/[0.07] text-white/32"
-                                    : "border-white/12 bg-[#293548] text-white hover:border-[#ffe66b]/40 hover:bg-[#313e52]"
-                              }`}
-                            >
-                              <span className="min-w-0">
-                                <span className="block text-sm">{formatDate(day.date)}</span>
-                                <span className={`mt-1 block text-[10px] ${selected ? "text-[#243044]/65" : "text-white/42"}`}>
-                                  {day.status === "pending" ? "Már átvételre vár" : day.closed ? "Napzárás rögzítve" : "Nincs külön napzárás"}
+                        <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
+                          <button
+                            type="button"
+                            onClick={() => openCashCalendar("to")}
+                            className="flex min-h-[72px] items-center justify-between gap-3 rounded-2xl border-2 border-[#fed700] bg-[#293548] px-4 text-left text-white shadow-[0_8px_22px_rgba(254,215,0,0.10)] transition hover:bg-[#313e52] active:scale-[0.99]"
+                          >
+                            <span className="flex items-center gap-3">
+                              <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#fed700]/60 bg-[#fed700]/12 text-[#fed700]">
+                                <CalendarDays size={20} />
+                              </span>
+                              <span>
+                                <span className="block text-[10px] uppercase tracking-[0.12em] text-white/42">Készpénz átadása eddig</span>
+                                <span className="mt-1 block text-base text-white">
+                                  {cashHandoverToDate ? formatDate(cashHandoverToDate) : "Válassz zárónapot"}
                                 </span>
                               </span>
-                              <span className="shrink-0 text-right">
-                                <span className="block text-base">{formatMoney(day.amount)}</span>
-                                <span className={`mt-1 block text-[9px] ${selected ? "text-[#243044]/55" : "text-white/35"}`}>{day.closed ? "záró készpénz" : "eddig átadható"}</span>
-                              </span>
-                            </button>
-                          );
-                        })}
-                        {!cashLoading && !cashHandoverDays.length ? (
-                          <div className="sm:col-span-2 rounded-xl border border-dashed border-white/12 px-4 py-7 text-center text-sm text-white/42">
-                            Nincs még átadható készpénzes időszak.
-                          </div>
-                        ) : null}
-                      </div>
-                    </section>
+                            </span>
+                            <ChevronRight size={20} className="text-[#fed700]" />
+                          </button>
 
+                          <button
+                            type="button"
+                            onClick={() => openCashCalendar("anchor")}
+                            className="min-h-[72px] rounded-2xl border border-white/12 bg-white/[0.04] px-4 text-left text-[11px] text-white/58 transition hover:border-red-300/35 hover:bg-red-500/[0.06]"
+                          >
+                            <span className="block text-[9px] uppercase tracking-[0.1em] text-white/36">Csak javításhoz</span>
+                            <span className="mt-1 block">Utolsó átvett nap módosítása</span>
+                          </button>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px]">
+                          <span className="inline-flex items-center gap-1.5 text-red-100/72">
+                            <span className="h-3 w-3 rounded-full border border-red-300 bg-red-600" /> már átadott nap
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-[#fff2a5]/78">
+                            <span className="h-3 w-3 rounded-full border-2 border-[#fed700]" /> még átadható nap
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className={`rounded-[22px] border p-4 shadow-[0_12px_28px_rgba(254,215,0,0.15)] ${
+                        selectedCashHandoverDay
+                          ? "border-[#ffe66b]/55 bg-[#fed700] text-[#243044]"
+                          : "border-[#ffe66b]/26 bg-[#4a4527] text-white"
+                      }`}>
+                        <p className={`text-[10px] uppercase tracking-[0.13em] ${selectedCashHandoverDay ? "opacity-65" : "text-white/45"}`}>Átadandó készpénz</p>
+                        <p className="mt-2 text-4xl tracking-tight">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
+                        {selectedCashHandoverDay ? (
+                          <>
+                            <p className="mt-2 text-sm">
+                              {formatDate(selectedCashHandoverDay.date)} napi állapot
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                              <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
+                                {selectedCashHandoverDay.closed ? "Napzárással ellenőrizve" : "Rendszer szerinti érték"}
+                              </span>
+                              {selectedCashHandoverDay.closingCash != null ? (
+                                <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
+                                  Záró kassza: {formatMoney(selectedCashHandoverDay.closingCash)}
+                                </span>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="mt-3 text-xs leading-relaxed text-white/55">A naptárban kattints egy sárga karikás napra. Az adott nap záró készpénze azonnal itt jelenik meg.</p>
+                        )}
+                      </div>
+                    </div>
                     <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
                       <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megjegyzés • opcionális</span>
                       <textarea value={cashMoveNote} onChange={(event) => setCashMoveNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#fed700]" placeholder="Pl. boríték azonosító, megjegyzés…" />
@@ -3151,6 +3200,152 @@ export default function AllInShopOperations({
                   {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Készpénzátadás rögzítése" : "Bankbefizetés rögzítése"}
                 </button>
               </footer>
+            </section>
+          </div>,
+          document.body,
+        ) : null}
+
+
+        {cashCalendarMode ? createPortal(
+          <div
+            className="fixed inset-0 z-[520] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md sm:p-5"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) setCashCalendarMode(null);
+            }}
+          >
+            <section className="w-full max-w-[720px] overflow-hidden rounded-[28px] border border-[#fed700]/50 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.72)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#2b3749] px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#fed700]/55 bg-[#fed700] text-[#243044]">
+                    <CalendarDays size={23} />
+                  </span>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.15em] text-white/42">Készpénzátadás dátuma</p>
+                    <h3 className="mt-1 text-xl text-white">
+                      {cashCalendarMode === "anchor" ? "Utolsó átvett nap javítása" : "Meddig adod át a készpénzt?"}
+                    </h3>
+                    <p className="mt-1 text-xs text-white/48">
+                      {cashCalendarMode === "anchor"
+                        ? "Ezt csak akkor módosítsd, ha a régi átadási előzmény hibás."
+                        : "Piros: már átadva • sárga karika: még átadható"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCashCalendarMode(null)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1]"
+                  aria-label="Naptár bezárása"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="p-4 sm:p-5">
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#293548] px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current, -1))}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10"
+                    aria-label="Előző hónap"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <div className="text-center">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Hónap</p>
+                    <p className="mt-1 text-base text-white">{cashCalendarMonthLabel(cashCalendarMonth)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current, 1))}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10"
+                    aria-label="Következő hónap"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+
+                <div className="mt-4 grid grid-cols-7 gap-1.5">
+                  {CASH_CALENDAR_WEEKDAYS.map((weekday) => (
+                    <div key={weekday} className="py-1.5 text-center text-[10px] uppercase tracking-[0.08em] text-white/38">
+                      {weekday}
+                    </div>
+                  ))}
+
+                  {cashCalendarGrid(cashCalendarMonth).map((cell) => {
+                    const earliest = cashHandoverPlan?.earliestActivityDate || "";
+                    const anchor = cashHandoverAfterDate || "";
+                    const dayData = cashHandoverDayMap.get(cell.iso) || null;
+                    const beforeActivity = Boolean(earliest && cell.iso < earliest);
+                    const future = cell.iso > todayIso();
+                    const handedOver = Boolean(anchor && cell.iso <= anchor && !beforeActivity);
+                    const pending = dayData?.status === "pending";
+                    const available = Boolean(dayData && !pending && cell.iso > anchor && !future);
+                    const selected = cell.iso === cashHandoverToDate;
+                    const anchorSelected = cashCalendarMode === "anchor" && cell.iso === anchor;
+                    const disabled = cashCalendarMode === "anchor"
+                      ? (future || cell.iso >= todayIso() || beforeActivity)
+                      : (!available);
+
+                    return (
+                      <button
+                        key={cell.iso}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => void chooseCashCalendarDate(cell.iso)}
+                        title={
+                          handedOver
+                            ? `${formatDate(cell.iso)} • már átadva`
+                            : available
+                              ? `${formatDate(cell.iso)} • ${formatMoney(dayData?.amount || 0)}`
+                              : pending
+                                ? `${formatDate(cell.iso)} • átvételre vár`
+                                : formatDate(cell.iso)
+                        }
+                        className={`relative flex h-[62px] flex-col items-center justify-center rounded-2xl border text-sm transition ${
+                          !cell.inMonth
+                            ? "border-transparent bg-transparent text-white/20"
+                            : selected
+                              ? "border-[#fff0a0] bg-[#fed700] text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.20)]"
+                              : anchorSelected
+                                ? "border-red-200 bg-red-600 text-white ring-2 ring-red-200/50"
+                                : handedOver
+                                  ? "border-red-400/70 bg-red-600/78 text-white"
+                                  : pending
+                                    ? "border-orange-300/45 bg-orange-500/16 text-orange-50"
+                                    : available
+                                      ? "border-2 border-[#fed700] bg-[#293548] text-white hover:bg-[#3a4557] hover:shadow-[0_7px_18px_rgba(254,215,0,0.12)]"
+                                      : "border-white/6 bg-white/[0.02] text-white/24"
+                        } ${disabled ? "cursor-default" : "active:scale-[0.97]"}`}
+                      >
+                        <span className="text-base tabular-nums">{cell.day}</span>
+                        {cell.inMonth && handedOver ? <span className="mt-0.5 text-[8px] uppercase tracking-[0.04em] text-red-50/85">átadva</span> : null}
+                        {cell.inMonth && available ? (
+                          <span className={`mt-0.5 max-w-full truncate px-1 text-[8px] ${selected ? "text-[#243044]/65" : "text-[#fff3a3]/72"}`}>
+                            {formatMoney(dayData?.amount || 0)}
+                          </span>
+                        ) : null}
+                        {cell.inMonth && pending ? <span className="mt-0.5 text-[8px] text-orange-100/75">vár</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-xl border border-red-300/24 bg-red-600/10 px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-red-100/60">Már átadva</p>
+                    <p className="mt-1 text-sm text-white">{cashHandoverAfterDate ? `eddig: ${formatDate(cashHandoverAfterDate)}` : "nincs adat"}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#fed700]/28 bg-[#fed700]/[0.07] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-[#fff2a5]/60">Kijelölve</p>
+                    <p className="mt-1 text-sm text-white">{cashHandoverToDate ? formatDate(cashHandoverToDate) : "nincs"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Összeg</p>
+                    <p className="mt-1 text-sm text-white">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
+                  </div>
+                </div>
+              </div>
             </section>
           </div>,
           document.body,
