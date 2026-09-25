@@ -209,6 +209,50 @@ export default function createAifOpeningInventoryRouter({
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_unknown_session_idx
           ON aif_opening_inventory_unknown_scans (session_id, resolved_at, last_scanned_at DESC)`);
+
+        // Helyreállító leltárnál többnapos számlálás közben is készletre vezethetjük
+        // az addig biztosan megszámolt tételeket anélkül, hogy a leltárt lezárnánk.
+        // A checkpointok külön auditot kapnak, így a tegnapi + mai rész együtt,
+        // visszakövethetően kerülhet készletre.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_opening_inventory_checkpoints (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          session_id uuid NOT NULL REFERENCES aif_opening_inventory_sessions(id) ON DELETE CASCADE,
+          checkpoint_no integer NOT NULL,
+          applied_at timestamptz NOT NULL DEFAULT now(),
+          applied_by text NULL,
+          counted_line_count integer NOT NULL DEFAULT 0,
+          changed_line_count integer NOT NULL DEFAULT 0,
+          counted_qty numeric NOT NULL DEFAULT 0,
+          net_diff numeric NOT NULL DEFAULT 0,
+          correction_retail_value numeric(16,2) NOT NULL DEFAULT 0,
+          unknown_rows integer NOT NULL DEFAULT 0,
+          unknown_qty numeric NOT NULL DEFAULT 0,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (session_id, checkpoint_no)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_checkpoints_session_idx
+          ON aif_opening_inventory_checkpoints (session_id, applied_at DESC)`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_opening_inventory_checkpoint_lines (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          checkpoint_id uuid NOT NULL REFERENCES aif_opening_inventory_checkpoints(id) ON DELETE CASCADE,
+          session_id uuid NOT NULL REFERENCES aif_opening_inventory_sessions(id) ON DELETE CASCADE,
+          line_id uuid NOT NULL REFERENCES aif_opening_inventory_lines(id) ON DELETE CASCADE,
+          variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+          physical_counted_qty numeric NOT NULL,
+          system_qty_before numeric NOT NULL,
+          system_qty_after numeric NOT NULL,
+          qty_delta numeric NOT NULL,
+          reserved_qty numeric NOT NULL DEFAULT 0,
+          sell_price numeric NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (checkpoint_id, line_id)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_checkpoint_lines_session_line_idx
+          ON aif_opening_inventory_checkpoint_lines (session_id, line_id, created_at DESC)`);
+
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_movements_lookup_idx
           ON aif_stock_movements (location_id, variant_id, created_at)`);
         return true;
@@ -1124,6 +1168,72 @@ export default function createAifOpeningInventoryRouter({
     return result.rows;
   }
 
+  async function loadLatestRecoveryCheckpointLines(client, sessionId) {
+    const result = await client.query(
+      `SELECT DISTINCT ON (cl.line_id)
+         cl.line_id,
+         cl.variant_id,
+         cl.physical_counted_qty,
+         cl.system_qty_before,
+         cl.system_qty_after,
+         cl.qty_delta,
+         cl.checkpoint_id,
+         cp.checkpoint_no,
+         cp.applied_at,
+         cp.applied_by
+       FROM aif_opening_inventory_checkpoint_lines cl
+       JOIN aif_opening_inventory_checkpoints cp ON cp.id=cl.checkpoint_id
+       WHERE cl.session_id=$1
+       ORDER BY cl.line_id, cp.applied_at DESC, cp.checkpoint_no DESC, cl.created_at DESC`,
+      [sessionId],
+    );
+    const byLine = new Map();
+    for (const row of result.rows) byLine.set(String(row.line_id), row);
+    return byLine;
+  }
+
+  function recoveryCheckpointPhysicalQty(line) {
+    if (line?.physical_counted_qty !== null && line?.physical_counted_qty !== undefined) {
+      return Number(line.physical_counted_qty || 0);
+    }
+    if (line?.counted_qty !== null && line?.counted_qty !== undefined) {
+      return Number(line.counted_qty || 0);
+    }
+    return null;
+  }
+
+  function recoveryCheckpointTargetQty({ line, previous, currentSystemQty }) {
+    const physicalNow = recoveryCheckpointPhysicalQty(line);
+    if (physicalNow === null || !Number.isFinite(physicalNow) || physicalNow < 0) {
+      return { physicalNow, targetQty: null, newlyCountedDelta: null, mode: null };
+    }
+
+    // Első készletre vezetés ennél a sornál: az eddigi helyreállító leltár
+    // teljes, mozgásokkal korrigált eredményét tekintjük aktuális készletnek.
+    if (!previous) {
+      const effective = Number(line.counted_qty || 0);
+      return {
+        physicalNow,
+        targetQty: effective,
+        newlyCountedDelta: physicalNow,
+        mode: "first_recovery_checkpoint",
+      };
+    }
+
+    // Ha ezt a terméket már egyszer készletre vezettük, a későbbi eladásokat /
+    // mozgásokat a jelenlegi rendszerkészlet már tartalmazza. Ezért csak az azóta
+    // újonnan megszámolt (vagy kézzel korrigált) fizikai különbséget adjuk hozzá.
+    // Így egy tegnap felvezetett 5 db-ból ma eladott 1 db nem ugrik vissza 5-re.
+    const previousPhysical = Number(previous.physical_counted_qty || 0);
+    const newlyCountedDelta = physicalNow - previousPhysical;
+    return {
+      physicalNow,
+      targetQty: Number(currentSystemQty || 0) + newlyCountedDelta,
+      newlyCountedDelta,
+      mode: "incremental_recovery_checkpoint",
+    };
+  }
+
   async function adminDetail(client, session) {
     if (session && ACTIVE_STATUSES.has(session.status)) {
       await syncSessionLinesFromLiveStock(client, session);
@@ -1910,6 +2020,316 @@ export default function createAifOpeningInventoryRouter({
     }
   });
 
+  router.post("/admin/sessions/:id/recovery-checkpoint", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSchema();
+
+      const session = await sessionById(client, req.params.id, { lock: true });
+      if (!session) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A leltár nem található." });
+      }
+      if (String(session.inventory_mode || "").toLowerCase() !== "recovery") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: "Részleges készletre vezetés csak Helyreállító leltárnál használható.",
+          code: "opening_inventory_recovery_checkpoint_only",
+        });
+      }
+      if (!EDITABLE_STATUSES.has(session.status)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: "A részleges készletre vezetéshez a Helyreállító leltárnak számlálás alatt kell lennie.",
+          code: "opening_inventory_recovery_checkpoint_readonly",
+        });
+      }
+
+      const actor = actorFrom(req);
+
+      // Ugyanaz a lokációs lock, mint a végleges alkalmazásnál. Így készletre
+      // vezetés közben nem tud egy bolti eladás félúton közénk futni.
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+        [`aif_opening_inventory_stock:${session.location_id}`],
+      );
+
+      await syncSessionLinesFromLiveStock(client, session);
+
+      // A már létező készletsorokat lezárjuk a tranzakció végéig.
+      await client.query(
+        `SELECT variant_id
+         FROM aif_stock
+         WHERE location_id=$1
+         ORDER BY variant_id
+         FOR UPDATE`,
+        [session.location_id],
+      );
+
+      const lines = await loadAdminLines(client, session, { lock: true });
+
+      // Csak valóban megszámolt sor kerülhet részlegesen készletre.
+      // A tegnapi és mai sorok ugyanabban a sessionben vannak, ezért dátumszűrés
+      // szándékosan NINCS: minden eddig ténylegesen számolt sor bekerül.
+      const countedLines = lines.filter((line) => (
+        line.physical_counted_qty !== null &&
+        line.physical_counted_qty !== undefined &&
+        !line.auto_zeroed
+      ));
+
+      if (!countedLines.length) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: "Még nincs készletre vezethető, ténylegesen megszámolt tétel.",
+          code: "opening_inventory_recovery_checkpoint_empty",
+        });
+      }
+
+      const previousByLine = await loadLatestRecoveryCheckpointLines(client, session.id);
+
+      const checkpointNoResult = await client.query(
+        `SELECT COALESCE(max(checkpoint_no),0)::int + 1 AS next_no
+         FROM aif_opening_inventory_checkpoints
+         WHERE session_id=$1`,
+        [session.id],
+      );
+      const checkpointNo = Number(checkpointNoResult.rows[0]?.next_no || 1);
+
+      const unknown = await client.query(
+        `SELECT count(*)::int AS c,COALESCE(sum(qty),0)::numeric AS qty
+         FROM aif_opening_inventory_unknown_scans
+         WHERE session_id=$1 AND resolved_at IS NULL AND qty>0`,
+        [session.id],
+      );
+      const unknownRows = Number(unknown.rows[0]?.c || 0);
+      const unknownQty = Number(unknown.rows[0]?.qty || 0);
+
+      const checkpointInsert = await client.query(
+        `INSERT INTO aif_opening_inventory_checkpoints (
+           session_id,checkpoint_no,applied_by,counted_line_count,changed_line_count,
+           counted_qty,net_diff,correction_retail_value,unknown_rows,unknown_qty,raw
+         ) VALUES ($1,$2,$3,$4,0,$5,0,0,$6,$7,$8::jsonb)
+         RETURNING *`,
+        [
+          session.id,
+          checkpointNo,
+          actor,
+          countedLines.length,
+          countedLines.reduce((sum, line) => sum + Number(line.physical_counted_qty || 0), 0),
+          unknownRows,
+          unknownQty,
+          JSON.stringify({
+            type: "recovery_partial_stock_apply",
+            includesAllCountedSoFar: true,
+            keepsSessionOpen: true,
+            uncountedLinesUntouched: true,
+            unknownScansIgnoredForStockApply: true,
+          }),
+        ],
+      );
+      const checkpoint = checkpointInsert.rows[0];
+
+      let changed = 0;
+      let netDiff = 0;
+      let correctionRetailValue = 0;
+      let unchanged = 0;
+
+      for (const line of countedLines) {
+        const stock = await client.query(
+          `SELECT qty,reserved_qty
+           FROM aif_stock
+           WHERE location_id=$1 AND variant_id=$2
+           FOR UPDATE`,
+          [session.location_id, line.variant_id],
+        );
+        const beforeQty = Number(stock.rows[0]?.qty || 0);
+        const reserved = Number(stock.rows[0]?.reserved_qty || 0);
+        const previous = previousByLine.get(String(line.id)) || null;
+        const target = recoveryCheckpointTargetQty({
+          line,
+          previous,
+          currentSystemQty: beforeQty,
+        });
+        const afterQty = Number(target.targetQty);
+
+        if (!Number.isFinite(afterQty) || afterQty < 0) {
+          throw Object.assign(
+            new Error(`${line.title_ro || "Egy termék"}: a részleges készletre vezetés negatív készletet eredményezne. Ellenőrizd ezt a sort.`),
+            { statusCode: 409, code: "opening_inventory_recovery_checkpoint_negative_stock" },
+          );
+        }
+        if (reserved > afterQty) {
+          throw Object.assign(
+            new Error(`${line.title_ro || "Egy termék"}: ${reserved} db foglalt, de a részleges leltár után csak ${afterQty} db lenne készleten.`),
+            { statusCode: 409, code: "opening_inventory_reserved_conflict" },
+          );
+        }
+
+        const delta = afterQty - beforeQty;
+
+        if (delta !== 0) {
+          await client.query(
+            `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+             VALUES ($1,$2,$3,$4,now())
+             ON CONFLICT (location_id,variant_id)
+             DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+            [session.location_id, line.variant_id, afterQty, reserved],
+          );
+
+          const logged = await insertStockMovementSafe(client, {
+            movementType: "manual_adjustment",
+            sourceType: "opening_inventory",
+            sourcePrefix: "openinvcp",
+            fallbackSourceType: "manual_stock_edit",
+            sourceId: String(checkpoint.id),
+            locationId: session.location_id,
+            variantId: line.variant_id,
+            qtyDelta: delta,
+            qtyBefore: beforeQty,
+            qtyAfter: afterQty,
+            actor,
+            raw: {
+              reason: "opening_inventory_recovery_checkpoint_apply",
+              recoveryCheckpointId: String(checkpoint.id),
+              recoveryCheckpointNo: checkpointNo,
+              openingInventoryId: String(session.id),
+              openingInventoryCode: session.code,
+              openingInventoryLineId: String(line.id),
+              physicalCountedQty: Number(target.physicalNow || 0),
+              previousCheckpointPhysicalQty: previous ? Number(previous.physical_counted_qty || 0) : null,
+              newlyCountedDelta: target.newlyCountedDelta,
+              checkpointMode: target.mode,
+              currentSystemQtyBeforeApply: beforeQty,
+              currentSystemQtyAfterApply: afterQty,
+              locationCode: session.location_code,
+              locationName: session.location_name,
+              sellPriceSnapshot: numberOrNull(line.sell_price),
+            },
+          });
+          if (!logged) {
+            throw Object.assign(new Error("A részleges készletkorrekció egyik sora nem naplózható."), { statusCode: 500 });
+          }
+          changed += 1;
+          netDiff += delta;
+          correctionRetailValue += delta * Number(line.sell_price || 0);
+        } else {
+          unchanged += 1;
+        }
+
+        await client.query(
+          `INSERT INTO aif_opening_inventory_checkpoint_lines (
+             checkpoint_id,session_id,line_id,variant_id,physical_counted_qty,
+             system_qty_before,system_qty_after,qty_delta,reserved_qty,sell_price,raw
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+          [
+            checkpoint.id,
+            session.id,
+            line.id,
+            line.variant_id,
+            Number(target.physicalNow || 0),
+            beforeQty,
+            afterQty,
+            delta,
+            reserved,
+            numberOrNull(line.sell_price),
+            JSON.stringify({
+              checkpointMode: target.mode,
+              previousCheckpointId: previous?.checkpoint_id ? String(previous.checkpoint_id) : null,
+              previousCheckpointNo: previous?.checkpoint_no ?? null,
+              previousPhysicalCountedQty: previous ? Number(previous.physical_counted_qty || 0) : null,
+              newlyCountedDelta: target.newlyCountedDelta,
+              firstScannedAt: line.first_scanned_at || null,
+              lastScannedAt: line.last_scanned_at || null,
+              lastScannedBy: line.last_scanned_by || null,
+              product: line.product || productPayload(line),
+            }),
+          ],
+        );
+      }
+
+      correctionRetailValue = Math.round((correctionRetailValue + Number.EPSILON) * 100) / 100;
+
+      await client.query(
+        `UPDATE aif_opening_inventory_checkpoints
+         SET changed_line_count=$2,net_diff=$3,correction_retail_value=$4,
+             raw=COALESCE(raw,'{}'::jsonb) || $5::jsonb
+         WHERE id=$1`,
+        [
+          checkpoint.id,
+          changed,
+          netDiff,
+          correctionRetailValue,
+          JSON.stringify({ unchangedLineCount: unchanged }),
+        ],
+      );
+
+      // A session NYITVA MARAD. Sem counted_qty-t, sem a tegnapi adatokat,
+      // sem a még nem számolt sorokat nem töröljük / nullázzuk.
+      await client.query(
+        `UPDATE aif_opening_inventory_sessions
+         SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END,
+             raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object(
+               'lastRecoveryCheckpoint',
+               $2::jsonb
+             ),
+             updated_at=now()
+         WHERE id=$1`,
+        [
+          session.id,
+          JSON.stringify({
+            id: String(checkpoint.id),
+            checkpointNo,
+            appliedAt: checkpoint.applied_at,
+            appliedBy: actor,
+            countedLineCount: countedLines.length,
+            changedLineCount: changed,
+            unchangedLineCount: unchanged,
+            countedQty: countedLines.reduce((sum, line) => sum + Number(line.physical_counted_qty || 0), 0),
+            netDiff,
+            correctionRetailValue,
+            unknownRows,
+            unknownQty,
+            includesAllCountedSoFar: true,
+          }),
+        ],
+      );
+
+      await client.query("COMMIT");
+
+      const fresh = await sessionById(client, session.id);
+      const detail = await adminDetail(client, fresh);
+      return res.json({
+        ok: true,
+        checkpoint: {
+          id: String(checkpoint.id),
+          checkpointNo,
+          countedLineCount: countedLines.length,
+          changedLineCount: changed,
+          unchangedLineCount: unchanged,
+          countedQty: countedLines.reduce((sum, line) => sum + Number(line.physical_counted_qty || 0), 0),
+          netDiff,
+          correctionRetailValue,
+          unknownRows,
+          unknownQty,
+          sessionContinues: true,
+          includesAllCountedSoFar: true,
+        },
+        ...detail,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF recovery inventory checkpoint failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az eddig megszámolt készlet részleges felvezetése nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.post("/admin/sessions/:id/close", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -2075,6 +2495,10 @@ export default function createAifOpeningInventoryRouter({
         finalizedBy: actor,
         unknown: [],
       });
+      const recoveryCheckpointByLine = String(session.inventory_mode || "").toLowerCase() === "recovery"
+        ? await loadLatestRecoveryCheckpointLines(client, session.id)
+        : new Map();
+
       let changed = 0;
       let netDiff = 0;
       let correctionRetailValue = 0;
@@ -2085,7 +2509,11 @@ export default function createAifOpeningInventoryRouter({
         );
         const beforeQty = Number(stock.rows[0]?.qty || 0);
         const reserved = Number(stock.rows[0]?.reserved_qty || 0);
-        const afterQty = Number(line.counted_qty || 0);
+        const previousCheckpoint = recoveryCheckpointByLine.get(String(line.id)) || null;
+        const recoveryTarget = previousCheckpoint
+          ? recoveryCheckpointTargetQty({ line, previous: previousCheckpoint, currentSystemQty: beforeQty })
+          : null;
+        const afterQty = recoveryTarget ? Number(recoveryTarget.targetQty) : Number(line.counted_qty || 0);
         if (!Number.isFinite(afterQty) || afterQty < 0) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: `Érvénytelen talált darabszám: ${line.title_ro || line.variant_id}` });
@@ -2137,6 +2565,9 @@ export default function createAifOpeningInventoryRouter({
               baselineKnownMinimumQty: Number(line.baseline_known_min_qty || 0),
               knownMinimumQty: Number(line.known_min_qty || 0),
               physicalCountedQty: Number(line.physical_counted_qty || 0),
+              previousRecoveryCheckpointId: previousCheckpoint?.checkpoint_id ? String(previousCheckpoint.checkpoint_id) : null,
+              previousRecoveryCheckpointPhysicalQty: previousCheckpoint ? Number(previousCheckpoint.physical_counted_qty || 0) : null,
+              newlyCountedSinceCheckpoint: recoveryTarget?.newlyCountedDelta ?? null,
               movementAfterCountQty: Number(line.movement_after_count_qty || 0),
               effectiveCountedQty: afterQty,
               countedQty: afterQty,
@@ -2164,7 +2595,7 @@ export default function createAifOpeningInventoryRouter({
           netDiff,
           correctionRetailValue,
           liveMovementReconciliation: true,
-          movementPolicy: "physical_count_plus_movements_after_last_count",
+          movementPolicy: "checkpoint_aware_recovery_or_physical_count_plus_movements_after_last_count",
           archiveSnapshot: {
             version: 1,
             finalizedAt: archiveSnapshot.finalizedAt,
