@@ -25600,9 +25600,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const requestedMonth = text(req.query.month);
       const historyMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth) ? requestedMonth : today.slice(0, 7);
       const historyStart = `${historyMonth}-01`;
-      const sessionActor = actorFrom(req);
-      const restrictHistoryToActor = normCode(req.session?.role) === "shop";
-
       const [balance, movementsResult, closuresResult, todayClosureResult, managerHistoryResult, managerHistoryMonthsResult] = await Promise.all([
         aifShopCashBalanceAt(pool, { locationId: location.id, at: now }),
         pool.query(
@@ -25638,33 +25635,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            JOIN aif_locations l ON l.id=m.location_id
            WHERE m.location_id=$1
              AND m.movement_type='manager_handover'
-             AND COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date) >= $2::date
-             AND COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date) < ($2::date + interval '1 month')
-             AND (
-               $3::boolean=false
-               OR lower(regexp_replace(btrim(COALESCE(m.requested_by,'')), '[[:space:]]+', ' ', 'g'))
-                  = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))
-             )
-           ORDER BY COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date) DESC,
-                    m.requested_at DESC,
-                    m.id DESC`,
-          [location.id, historyStart, restrictHistoryToActor, sessionActor]
+             AND (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date >= $2::date
+             AND (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date < ($2::date + interval '1 month')
+           ORDER BY m.requested_at DESC, m.id DESC`,
+          [location.id, historyStart]
         ),
         pool.query(
           `SELECT DISTINCT to_char(
-             COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date),
+             (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date,
              'YYYY-MM'
            ) AS month
            FROM aif_shop_cash_movements m
            WHERE m.location_id=$1
              AND m.movement_type='manager_handover'
-             AND (
-               $2::boolean=false
-               OR lower(regexp_replace(btrim(COALESCE(m.requested_by,'')), '[[:space:]]+', ' ', 'g'))
-                  = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
-             )
            ORDER BY month DESC`,
-          [location.id, restrictHistoryToActor, sessionActor]
+          [location.id]
         ),
       ]);
 
@@ -25672,8 +25657,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       try {
         handoverPlan = await aifShopCashHandoverPlan(pool, { locationId: location.id });
       } catch (planError) {
-        console.error('AIF shop cash handover plan warning; using closure fallback', planError);
-        handoverPlan = await aifShopCashHandoverPlanFallback(pool, { locationId: location.id, currentBalance: balance });
+        console.error('AIF shop cash handover plan warning; using fallback', planError);
+        try {
+          handoverPlan = await aifShopCashHandoverPlanFallback(pool, { locationId: location.id, currentBalance: balance });
+        } catch (fallbackError) {
+          console.error('AIF shop cash handover fallback warning; using current cash only', fallbackError);
+          handoverPlan = {
+            lastConfirmedTo: null,
+            nextFrom: today,
+            today,
+            pending: null,
+            days: [{
+              date: today,
+              amount: Math.max(0, aifRoundMoney(balance?.availableCash)),
+              closed: Boolean(todayClosureResult.rowCount),
+              closingCash: todayClosureResult.rowCount ? aifRoundMoney(todayClosureResult.rows[0]?.counted_cash) : null,
+              closedAt: todayClosureResult.rowCount && todayClosureResult.rows[0]?.closed_at
+                ? new Date(todayClosureResult.rows[0].closed_at).toISOString()
+                : null,
+              closedBy: todayClosureResult.rowCount ? (todayClosureResult.rows[0]?.actor || null) : null,
+              status: 'available',
+            }],
+            fallback: true,
+            degraded: true,
+          };
+        }
       }
 
       const movements = movementsResult.rows.map(aifCashMovementResponse);
@@ -26058,7 +26066,39 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           throw error;
         }
 
-        const plan = await aifShopCashHandoverPlan(client, { locationId: location.id });
+        let plan = null;
+        try {
+          plan = await aifShopCashHandoverPlan(client, { locationId: location.id });
+        } catch (planError) {
+          console.error('AIF create cash handover plan warning; using fallback', planError);
+          const currentBalanceForFallback = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
+          try {
+            plan = await aifShopCashHandoverPlanFallback(client, {
+              locationId: location.id,
+              currentBalance: currentBalanceForFallback,
+            });
+          } catch (fallbackError) {
+            console.error('AIF create cash handover fallback warning; using current day only', fallbackError);
+            const today = aifBucharestIsoDate();
+            plan = {
+              lastConfirmedTo: null,
+              nextFrom: today,
+              today,
+              pending: null,
+              days: [{
+                date: today,
+                amount: Math.max(0, aifRoundMoney(currentBalanceForFallback.availableCash)),
+                closed: false,
+                closingCash: null,
+                closedAt: null,
+                closedBy: null,
+                status: 'available',
+              }],
+              fallback: true,
+              degraded: true,
+            };
+          }
+        }
         const requestedToDate = cleanAifDocumentDate(handoverToDateInput);
         const selectedDay = (plan.days || []).find((day) => day.date === requestedToDate);
         if (!selectedDay || requestedToDate < plan.nextFrom || requestedToDate > plan.today) {
