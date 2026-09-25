@@ -265,6 +265,12 @@ export default function createAifOpeningInventoryRouter({
     return ((10 - (sum % 10)) % 10) === checkDigit;
   }
 
+  function isOpeningInventoryRecoveryPrefix(value) {
+    // Rövid kódtöredékből nem keresünk automatikus folytatást.
+    // Ez hosszkorlát, nem EAN/UPC-követelmény: belső numerikus kód is lehet.
+    return /^[0-9]{10,64}$/.test(String(value || ""));
+  }
+
   function openingInventoryCodeCandidates(rawCode) {
     const original = text(rawCode).replace(/[\r\n\t]+/g, "").trim();
     const candidates = [];
@@ -279,11 +285,16 @@ export default function createAifOpeningInventoryRouter({
     add(original, null);
     if (!original) return { original, candidates };
 
-    // Csak GTIN-ként is érvényes számsort javítunk automatikusan. Így egy valódi
-    // alfanumerikus SKU-t nem alakítunk át véletlenül másik termék vonalkódjává.
+    // Az eredeti kód mindig előbb kap pontos keresést. A numerikus kódok
+    // ismert szeparátorait csak alternatív kereséshez távolítjuk el; a belső
+    // AllIn-kódoktól nem követelünk GTIN-ellenőrző számjegyet. Alfanumerikus
+    // SKU-t nem bontunk szét, vezető nullákat nem törlünk.
     const numericNoiseOnly = /^[0-9\s.,;:_+\-\/\\]+$/.test(original);
     const digitsOnly = numericNoiseOnly ? original.replace(/\D/g, "") : "";
-    if (digitsOnly && digitsOnly !== original && isValidOpeningInventoryGtin(digitsOnly)) {
+    if (
+      digitsOnly && digitsOnly !== original &&
+      (isOpeningInventoryRecoveryPrefix(digitsOnly) || isValidOpeningInventoryGtin(digitsOnly))
+    ) {
       add(digitsOnly, "non_numeric_noise_removed");
     }
 
@@ -294,7 +305,10 @@ export default function createAifOpeningInventoryRouter({
         const half = numericBase.length / 2;
         const left = numericBase.slice(0, half);
         const right = numericBase.slice(half);
-        if (left === right && isValidOpeningInventoryGtin(left)) {
+        if (
+          left === right &&
+          (isOpeningInventoryRecoveryPrefix(left) || isValidOpeningInventoryGtin(left))
+        ) {
           add(left, "duplicate_scan_collapsed");
         }
       }
@@ -370,12 +384,62 @@ export default function createAifOpeningInventoryRouter({
     return Array.from(byVariant.values());
   }
 
+  async function queryVariantsByOpeningInventoryPrefix(client, values) {
+    const prefixes = Array.from(new Set((values || []).filter(isOpeningInventoryRecoveryPrefix)));
+    if (!prefixes.length) return [];
+
+    const result = await client.query(
+      `WITH scan_prefixes AS (
+         SELECT unnest($1::text[]) AS prefix
+       )
+       SELECT
+         v.id AS variant_id,
+         v.internal_sku, v.barcode, v.sn_cod, v.size,
+         v.color_code, v.color_name, v.color_hex, v.image_url,
+         v.buy_price, v.sell_price,
+         m.model_code, m.title_ro, m.shopify_title,
+         b.name AS brand_name, b.code AS brand_code,
+         cat.name_ro AS category_name,
+         sc.supplier_product_code, sc.supplier_barcode, sc.supplier_sku,
+         matched.prefix AS matched_prefix,
+         matched.full_code AS matched_code,
+         matched.code_type AS matched_code_type
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories cat ON cat.id=m.category_id
+       LEFT JOIN aif_variant_supplier_codes sc
+         ON sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+       JOIN LATERAL (
+         SELECT p.prefix, c.code_type, c.priority, btrim(c.code) AS full_code
+         FROM (VALUES
+           ('barcode', v.barcode, 1),
+           ('internal_sku', v.internal_sku, 2),
+           ('sn_cod', v.sn_cod, 3),
+           ('model_code', m.model_code, 4),
+           ('supplier_barcode', sc.supplier_barcode, 5),
+           ('supplier_sku', sc.supplier_sku, 6),
+           ('supplier_product_code', sc.supplier_product_code, 7)
+         ) AS c(code_type, code, priority)
+         JOIN scan_prefixes p
+           ON char_length(btrim(c.code))=char_length(p.prefix)+1
+          AND left(btrim(c.code),char_length(p.prefix))=p.prefix
+         WHERE btrim(c.code) ~ '^[0-9]+$'
+       ) matched ON true
+       WHERE COALESCE(v.status,'active') <> 'archived'
+       ORDER BY v.id, matched.prefix, matched.priority, matched.full_code,
+                sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST`,
+      [prefixes],
+    );
+    return result.rows;
+  }
+
   async function findVariantByCode(client, rawCode) {
     const { original, candidates } = openingInventoryCodeCandidates(rawCode);
-    if (!original) return { code: original, matchedCode: null, normalization: null, matches: [], candidatesTried: [] };
+    if (!original) return { code: original, matchedCode: null, normalization: null, matches: [], candidatesTried: [], prefixesTried: [] };
 
-    // Az eredeti kód mindig elsőbbséget élvez. Ha pontos találat van, semmilyen
-    // normalizálás nem írhatja felül vagy teheti kétértelművé.
+    // Pontos találatot sem normalizálás, sem hosszabb kód nem írhat felül.
+    // Több pontos találat továbbra is ütközés, nem választható ki közülük egy.
     const exactMatches = await queryVariantsByOpeningInventoryCode(client, original);
     if (exactMatches.length) {
       return {
@@ -384,24 +448,64 @@ export default function createAifOpeningInventoryRouter({
         normalization: null,
         matches: exactMatches,
         candidatesTried: [original],
+        prefixesTried: [],
       };
     }
 
     const normalizedMatches = new Map();
     const matchedCandidates = [];
     const candidatesTried = [original];
-    for (const candidate of candidates.slice(1)) {
-      candidatesTried.push(candidate.code);
-      const matches = await queryVariantsByOpeningInventoryCode(client, candidate.code);
-      if (!matches.length) continue;
-      matchedCandidates.push({
-        code: candidate.code,
-        reason: candidate.reason,
-        variantIds: matches.map((item) => String(item.variant_id)),
-      });
-      for (const row of matches) {
-        if (!normalizedMatches.has(String(row.variant_id))) normalizedMatches.set(String(row.variant_id), row);
+    const triedCodes = new Set(candidatesTried);
+    const prefixes = new Set();
+    if (isOpeningInventoryRecoveryPrefix(original)) prefixes.add(original);
+
+    const rememberMatch = (row, candidate) => {
+      const variantId = String(row.variant_id);
+      if (!normalizedMatches.has(variantId)) normalizedMatches.set(variantId, row);
+      let entry = matchedCandidates.find((item) =>
+        item.code === candidate.code && item.reason === candidate.reason &&
+        item.prefix === candidate.prefix && item.codeType === candidate.codeType,
+      );
+      if (!entry) {
+        entry = { ...candidate, variantIds: [] };
+        matchedCandidates.push(entry);
       }
+      if (!entry.variantIds.includes(variantId)) entry.variantIds.push(variantId);
+    };
+
+    for (const candidate of candidates.slice(1)) {
+      if (!triedCodes.has(candidate.code)) {
+        triedCodes.add(candidate.code);
+        candidatesTried.push(candidate.code);
+      }
+      const matches = await queryVariantsByOpeningInventoryCode(client, candidate.code);
+      if (matches.length) {
+        for (const row of matches) rememberMatch(row, candidate);
+      } else if (
+        ["non_numeric_noise_removed", "duplicate_scan_collapsed"].includes(candidate.reason) &&
+        isOpeningInventoryRecoveryPrefix(candidate.code)
+      ) {
+        prefixes.add(candidate.code);
+      }
+    }
+
+    // A hiányzó utolsó karaktert NEM számoljuk ki. Csak ténylegesen tárolt,
+    // pontosan egy számjeggyel hosszabb kódokat kérünk le az adatbázisból.
+    // Minden kódmező és normalizált találat együtt vesz részt az ütközésvizsgálatban.
+    const prefixesTried = Array.from(prefixes);
+    const extendedMatches = await queryVariantsByOpeningInventoryPrefix(client, prefixesTried);
+    for (const row of extendedMatches) {
+      const matchedCode = String(row.matched_code || "");
+      if (!triedCodes.has(matchedCode)) {
+        triedCodes.add(matchedCode);
+        candidatesTried.push(matchedCode);
+      }
+      rememberMatch(row, {
+        code: matchedCode,
+        reason: "database_unique_one_character_extension",
+        prefix: row.matched_prefix,
+        codeType: row.matched_code_type,
+      });
     }
 
     const matches = Array.from(normalizedMatches.values());
@@ -411,11 +515,16 @@ export default function createAifOpeningInventoryRouter({
       return {
         code: original,
         matchedCode: winner?.code || null,
-        normalization: winner
-          ? { reason: winner.reason, originalCode: original, matchedCode: winner.code }
-          : null,
+        normalization: winner ? {
+          reason: winner.reason,
+          originalCode: original,
+          matchedCode: winner.code,
+          ...(winner.prefix ? { matchedPrefix: winner.prefix, matchedCodeType: winner.codeType } : {}),
+          matchedCandidates,
+        } : null,
         matches,
         candidatesTried,
+        prefixesTried,
       };
     }
 
@@ -427,6 +536,7 @@ export default function createAifOpeningInventoryRouter({
         : null,
       matches,
       candidatesTried,
+      prefixesTried,
     };
   }
 
@@ -1101,16 +1211,29 @@ export default function createAifOpeningInventoryRouter({
     }));
   }
 
-  async function recordUnknown(client, session, code, qty, actor) {
+  async function recordUnknown(client, session, code, qty, actor, match = null) {
     const result = await client.query(
       `INSERT INTO aif_opening_inventory_unknown_scans (
          session_id, scan_code, qty, first_scanned_at, last_scanned_at, last_scanned_by, raw
        ) VALUES ($1,$2,$3,now(),now(),$4,$5::jsonb)
        ON CONFLICT (session_id, scan_code)
-       DO UPDATE SET qty=aif_opening_inventory_unknown_scans.qty + EXCLUDED.qty,
+       DO UPDATE SET qty=CASE WHEN aif_opening_inventory_unknown_scans.resolved_at IS NOT NULL
+                              THEN EXCLUDED.qty
+                              ELSE aif_opening_inventory_unknown_scans.qty + EXCLUDED.qty END,
+                     first_scanned_at=CASE WHEN aif_opening_inventory_unknown_scans.resolved_at IS NOT NULL
+                                           THEN EXCLUDED.first_scanned_at
+                                           ELSE aif_opening_inventory_unknown_scans.first_scanned_at END,
+                     raw=(COALESCE(aif_opening_inventory_unknown_scans.raw,'{}'::jsonb) - 'identificationReview') || EXCLUDED.raw,
                      last_scanned_at=now(), last_scanned_by=$4, updated_at=now(), resolved_at=NULL, resolved_variant_id=NULL, resolved_by=NULL
        RETURNING *`,
-      [session.id, code, qty, actor, JSON.stringify({ reason: "unmatched_scan" })],
+      [session.id, code, qty, actor, JSON.stringify({
+        reason: match?.matches?.length > 1 ? "barcode_conflict" : "unmatched_scan",
+        originalScanCode: code,
+        matchedCode: match?.matchedCode || null,
+        normalization: match?.normalization || null,
+        candidatesTried: match?.candidatesTried || [code],
+        prefixesTried: match?.prefixesTried || [],
+      })],
     );
     return result.rows[0];
   }
@@ -1164,7 +1287,7 @@ export default function createAifOpeningInventoryRouter({
         return res.status(400).json({ error: "Olvass be egy érvényes bárkódot vagy termékkódot." });
       }
       if (matched.matches.length === 0) {
-        const unknown = await recordUnknown(client, session, matched.code, qty, actor);
+        const unknown = await recordUnknown(client, session, matched.code, qty, actor, matched);
         await client.query(
           `UPDATE aif_opening_inventory_sessions SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END, updated_at=now() WHERE id=$1`,
           [session.id],
@@ -1178,7 +1301,7 @@ export default function createAifOpeningInventoryRouter({
         });
       }
       if (matched.matches.length > 1) {
-        const unknown = await recordUnknown(client, session, matched.code, qty, actor);
+        const unknown = await recordUnknown(client, session, matched.code, qty, actor, matched);
         await client.query("COMMIT");
         return res.status(409).json({
           error: `A ${matched.code} kód több termékhez tartozik. Nem számoltam bele automatikusan, a főnöknek megjelöltem ellenőrzésre.`,
@@ -1213,6 +1336,7 @@ export default function createAifOpeningInventoryRouter({
           matchedCode: matched.matchedCode || matched.code,
           normalization: matched.normalization || null,
           candidatesTried: matched.candidatesTried || [matched.code],
+          prefixesTried: matched.prefixesTried || [],
         })],
       );
       await client.query(
@@ -1663,7 +1787,13 @@ export default function createAifOpeningInventoryRouter({
       );
       let resolved = 0;
       let remaining = 0;
+      const reviewItems = [];
+      const identified = [];
+      const unknownCountByVariant = new Map();
       const actor = actorFrom(req);
+
+      // Előbb az egész csomagot azonosítjuk, hogy ugyanazon termék különböző
+      // hibás kódjai ne számolódjanak be egymás után észrevétlenül.
       for (const unknown of unknowns.rows) {
         const match = await findVariantByCode(client, unknown.scan_code);
         if (match.matches.length !== 1) {
@@ -1671,6 +1801,60 @@ export default function createAifOpeningInventoryRouter({
           continue;
         }
         const variant = match.matches[0];
+        const variantId = String(variant.variant_id);
+        identified.push({ unknown, match, variant });
+        unknownCountByVariant.set(variantId, (unknownCountByVariant.get(variantId) || 0) + 1);
+      }
+
+      for (const { unknown, match, variant } of identified) {
+        const existing = await client.query(
+          `SELECT id,counted_qty,last_scanned_at
+           FROM aif_opening_inventory_lines
+           WHERE session_id=$1 AND variant_id=$2 FOR UPDATE`,
+          [session.id, variant.variant_id],
+        );
+        const existingLine = existing.rows[0] || null;
+        const unknownQty = Number(unknown.qty || 0);
+        const reasons = [];
+        if (existingLine && ((existingLine.counted_qty !== null && existingLine.counted_qty !== undefined) || existingLine.last_scanned_at)) {
+          reasons.push("variant_already_counted_or_manually_reviewed");
+        }
+        if (unknownQty !== 1) reasons.push("unknown_quantity_requires_physical_confirmation");
+        if ((unknownCountByVariant.get(String(variant.variant_id)) || 0) > 1) {
+          reasons.push("multiple_unknown_codes_for_same_variant");
+        }
+
+        // Az egyedi kódtalálat nem bizonyítja a darabszámot: az unknown.qty
+        // ismételt próbálkozásokat is tartalmazhat. Ezeket nem töröljük,
+        // nem jelöljük rendezettnek, és nem adjuk hozzá automatikusan.
+        if (reasons.length) {
+          const review = {
+            unknownScanId: String(unknown.id),
+            originalScanCode: unknown.scan_code,
+            matchedCode: match.matchedCode || match.code,
+            variantId: String(variant.variant_id),
+            product: productPayload(variant),
+            unknownQty,
+            existingCountedQty: existingLine?.counted_qty === null || existingLine?.counted_qty === undefined
+              ? null : Number(existingLine.counted_qty),
+            reasons,
+            normalization: match.normalization || null,
+            candidatesTried: match.candidatesTried || [match.code],
+            prefixesTried: match.prefixesTried || [],
+            identifiedBy: actor,
+            identifiedAt: new Date().toISOString(),
+          };
+          await client.query(
+            `UPDATE aif_opening_inventory_unknown_scans
+             SET raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object('identificationReview',$2::jsonb),updated_at=now()
+             WHERE id=$1 AND session_id=$3 AND resolved_at IS NULL`,
+            [unknown.id, JSON.stringify(review), session.id],
+          );
+          reviewItems.push(review);
+          remaining += 1;
+          continue;
+        }
+
         const line = await ensureDynamicLine(client, session, variant);
         const before = line.counted_qty === null || line.counted_qty === undefined ? 0 : Number(line.counted_qty || 0);
         const qty = Number(unknown.qty || 0);
@@ -1692,6 +1876,8 @@ export default function createAifOpeningInventoryRouter({
           matchedCode: match.matchedCode || match.code,
           normalization: match.normalization || null,
           candidatesTried: match.candidatesTried || [match.code],
+          prefixesTried: match.prefixesTried || [],
+          quantityPolicy: "single_unknown_scan_for_uncounted_variant",
         })],
         );
         await client.query(
@@ -1707,7 +1893,14 @@ export default function createAifOpeningInventoryRouter({
       await client.query("COMMIT");
       const fresh = await sessionById(client, session.id);
       const detail = await adminDetail(client, fresh);
-      return res.json({ ok: true, resolution: { resolved, remaining }, ...detail });
+      return res.json({
+        ok: true,
+        resolution: { resolved, remaining, reviewRequired: reviewItems.length, reviewItems },
+        warning: reviewItems.length
+          ? `${reviewItems.length} kódot azonosítottam, de a darabszám ellenőrzendő: korábbi beolvasás vagy ismételt próbálkozás is lehet. Ezeket nem adtam hozzá automatikusan.`
+          : null,
+        ...detail,
+      });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       const status = Number(error?.statusCode || 500);
