@@ -529,7 +529,11 @@ function printCashHandoverReceipt(store: StoreDef, item: any) {
   const toDate = String(item?.handoverToDate || item?.handoverFromDate || "").trim();
   const coveredDays = Math.max(1, Math.round(numberValue(item?.coveredDayCount || 1)));
   const requestedBy = String(item?.requestedBy || "–").trim() || "–";
-  const confirmedBy = String(item?.confirmedBy || "").trim();
+  const confirmedByRaw = String(item?.confirmedBy || "").trim();
+  const confirmedBy =
+    !confirmedByRaw || confirmedByRaw.toUpperCase() === "ADMIN"
+      ? "Kerekes Zsolt"
+      : confirmedByRaw;
   const status = String(item?.status || "").toLowerCase();
   const statusLabel =
     status === "confirmed" ? "ÁTVÉVE" :
