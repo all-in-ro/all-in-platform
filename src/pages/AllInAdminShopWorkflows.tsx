@@ -54,7 +54,6 @@ type Props = {
   onClose: () => void;
 };
 
-
 type StoreDef = {
   code: "main_warehouse" | "magazin_targu_secuiesc";
   city: string;
@@ -196,13 +195,15 @@ function monthLabel(value: string) {
   return `${match[1]} ${HU_MONTHS[month - 1]}`;
 }
 
-function recentMonthOptions(count = 18) {
-  const today = localIsoDate(new Date());
-  const base = new Date(`${today.slice(0, 7)}-15T12:00:00Z`);
-  return Array.from({ length: count }, (_, index) => {
-    const date = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - index, 15, 12));
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-  });
+function validHistoryMonth(value?: string | null) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
+}
+
+function historyMonthName(value: string) {
+  const match = String(value || "").match(/^\d{4}-(\d{2})$/);
+  if (!match) return value;
+  const month = Math.max(1, Math.min(12, Number(match[1])));
+  return HU_MONTHS[month - 1];
 }
 
 function isoDateParts(value?: string | null) {
@@ -695,7 +696,29 @@ export default function AllInAdminShopWorkflows({
     [visibleCashStores],
   );
 
-  const cashHistoryMonths = useMemo(() => recentMonthOptions(18), []);
+  const cashHistoryAvailableMonths = useMemo(() => {
+    const months = new Set<string>();
+    for (const { data } of visibleCashStores) {
+      for (const month of data.handoverHistoryMonths || []) {
+        if (validHistoryMonth(month)) months.add(month);
+      }
+    }
+    const currentMonth = localIsoDate(new Date()).slice(0, 7);
+    months.add(currentMonth);
+    if (validHistoryMonth(cashHistoryMonth)) months.add(cashHistoryMonth);
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [cashHistoryMonth, visibleCashStores]);
+  const cashHistorySelectedYear = Number(cashHistoryMonth.slice(0, 4)) || Number(localIsoDate(new Date()).slice(0, 4));
+  const cashHistoryYears = useMemo(
+    () => Array.from(new Set(cashHistoryAvailableMonths.map((month) => Number(month.slice(0, 4)))))
+      .filter((year) => Number.isFinite(year))
+      .sort((a, b) => b - a),
+    [cashHistoryAvailableMonths],
+  );
+  const cashHistoryMonthsForYear = useMemo(
+    () => cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === cashHistorySelectedYear),
+    [cashHistoryAvailableMonths, cashHistorySelectedYear],
+  );
 
   const reservationSummary = useMemo(() => {
     let tomorrow = 0;
@@ -923,16 +946,32 @@ export default function AllInAdminShopWorkflows({
                     ariaLabel="Műszakátadás dátuma"
                   />
                 </div>
-                <label className="min-w-[172px]">
-                  <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Készpénzátadás hónapja</span>
-                  <select
-                    value={cashHistoryMonth}
-                    onChange={(event) => setCashHistoryMonth(event.target.value)}
-                    className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
-                  >
-                    {cashHistoryMonths.map((month) => <option key={month} value={month}>{monthLabel(month)}</option>)}
-                  </select>
-                </label>
+                <div className="flex items-end gap-2">
+                  <label className="min-w-[96px]">
+                    <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Átadás éve</span>
+                    <select
+                      value={cashHistorySelectedYear}
+                      onChange={(event) => {
+                        const year = Number(event.target.value);
+                        const candidates = cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === year);
+                        setCashHistoryMonth(candidates[0] || `${year}-${localIsoDate(new Date()).slice(5, 7)}`);
+                      }}
+                      className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
+                    >
+                      {cashHistoryYears.map((year) => <option key={year} value={year}>{year}</option>)}
+                    </select>
+                  </label>
+                  <label className="min-w-[138px]">
+                    <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/45">Hónap</span>
+                    <select
+                      value={cashHistoryMonth}
+                      onChange={(event) => setCashHistoryMonth(event.target.value)}
+                      className="h-11 w-full rounded-[13px] border border-white/18 bg-[#293548] px-3 text-sm text-white outline-none transition focus:border-[#fed700]"
+                    >
+                      {cashHistoryMonthsForYear.map((month) => <option key={month} value={month}>{historyMonthName(month)}</option>)}
+                    </select>
+                  </label>
+                </div>
               </div>
             ) : null}
           </div>
