@@ -24,7 +24,6 @@ export type AifCategory = {
   is_active: boolean;
 };
 
-
 export type AifLocation = {
   id: string;
   code: string;
@@ -3666,6 +3665,7 @@ export type AifShopCashOverview = {
   balance: AifShopCashBalance;
   handoverPlan?: AifShopCashHandoverPlan | null;
   managerHandoverHistory?: AifShopCashMovement[];
+  handoverHistoryMonths?: string[];
   pendingManagerHandovers: AifShopCashMovement[];
   movements: AifShopCashMovement[];
   closures: AifShopDayClosure[];
