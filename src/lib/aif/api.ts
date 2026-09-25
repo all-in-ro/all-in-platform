@@ -3636,6 +3636,11 @@ export type AifShopCashHandoverDay = {
 
 export type AifShopCashHandoverPlan = {
   lastConfirmedTo?: string | null;
+  lastExplicitTo?: string | null;
+  suggestedAfterDate?: string | null;
+  selectedAfterDate?: string | null;
+  earliestActivityDate?: string | null;
+  confirmedHandoverDates?: string[];
   nextFrom: string;
   today: string;
   pending?: AifShopCashMovement | null;
@@ -3761,11 +3766,12 @@ export function apiAifCancelShopShiftHandover(id: string) {
   );
 }
 
-export function apiAifShopCashOverview(options: { location: string; limit?: number; month?: string }) {
+export function apiAifShopCashOverview(options: { location: string; limit?: number; month?: string; handoverAfterDate?: string | null }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   if (options.limit) q.set("limit", String(options.limit));
   if (options.month) q.set("month", options.month);
+  if (options.handoverAfterDate) q.set("handoverAfterDate", options.handoverAfterDate);
   return fetchAifJSON<AifShopCashOverview>(`/shop-cash/overview?${q.toString()}`);
 }
 
@@ -3785,6 +3791,7 @@ export function apiAifCreateShopCashMovement(input: {
   location: string;
   type: AifShopCashMovementType;
   amount?: number;
+  handoverAfterDate?: string | null;
   handoverToDate?: string | null;
   reference?: string | null;
   note?: string | null;
