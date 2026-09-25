@@ -1003,6 +1003,7 @@ export default function AllInShopOperations({
   const [cashMoveOpen, setCashMoveOpen] = useState(false);
   const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
   const [cashMoveAmount, setCashMoveAmount] = useState("");
+  const [cashHandoverAfterDate, setCashHandoverAfterDate] = useState("");
   const [cashHandoverToDate, setCashHandoverToDate] = useState("");
   const [cashHistoryMonth, setCashHistoryMonth] = useState(() => todayIso().slice(0, 7));
   const [cashMoveReference, setCashMoveReference] = useState("");
@@ -1060,6 +1061,7 @@ export default function AllInShopOperations({
   const cashHandoverPlan = cashData?.handoverPlan || null;
   const cashHandoverDays = useMemo(() => {
     const serverDays = cashHandoverPlan?.days || [];
+    if (cashHandoverAfterDate) return serverDays;
     const hasUsableServerDay = serverDays.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
     if (hasUsableServerDay || currentCashBalance <= 0) return serverDays;
     return [{
@@ -1071,7 +1073,7 @@ export default function AllInShopOperations({
       closedBy: currentDayClosure?.actor || null,
       status: "available",
     }];
-  }, [cashHandoverPlan?.days, currentCashBalance, currentDayClosure]);
+  }, [cashHandoverAfterDate, cashHandoverPlan?.days, currentCashBalance, currentDayClosure]);
   const selectedCashHandoverDay = cashHandoverDays.find((day) => day.date === cashHandoverToDate) || null;
   const cashHandoverHistory = useMemo(() => {
     const serverHistory = cashData?.managerHandoverHistory || [];
@@ -1244,10 +1246,15 @@ export default function AllInShopOperations({
     }
   }
 
-  async function loadCashContext(month = cashHistoryMonth) {
+  async function loadCashContext(month = cashHistoryMonth, handoverAfterDate = cashHandoverAfterDate) {
     setCashLoading(true);
     try {
-      const response = await apiAifShopCashOverview({ location: locationCode, limit: 160, month });
+      const response = await apiAifShopCashOverview({
+        location: locationCode,
+        limit: 160,
+        month,
+        handoverAfterDate: handoverAfterDate || undefined,
+      });
       setCashData(response);
       return response;
     } catch (caught) {
@@ -1259,8 +1266,8 @@ export default function AllInShopOperations({
     }
   }
 
-  async function refreshSummaryPage(date = summaryDate, month = cashHistoryMonth) {
-    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext(month)]);
+  async function refreshSummaryPage(date = summaryDate, month = cashHistoryMonth, handoverAfterDate = cashHandoverAfterDate) {
+    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext(month, handoverAfterDate)]);
   }
 
 
@@ -1392,10 +1399,32 @@ export default function AllInShopOperations({
     }
   }
 
+  async function changeCashHandoverAfterDate(value: string) {
+    const safe = String(value || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(safe)) return;
+    if (safe >= todayIso()) {
+      setError("Az utolsó átadott napnak a mai nap előtt kell lennie.");
+      return;
+    }
+    setError("");
+    setCashHandoverAfterDate(safe);
+    setCashHandoverToDate("");
+    const refreshed = await loadCashContext(cashHistoryMonth, safe);
+    if (!refreshed) return;
+    const days = refreshed.handoverPlan?.days || [];
+    if (!days.length) {
+      setError("A kiválasztott utolsó átadási nap után nincs átadható üzleti nap.");
+    }
+  }
+
   async function createCashMovement() {
     const bankAmount = Number(String(cashMoveAmount || "").replace(",", "."));
 
     if (cashMoveType === "manager_handover") {
+      if (!cashHandoverAfterDate) {
+        setError("Válaszd ki az utolsó ténylegesen átadott napot.");
+        return;
+      }
       if (!selectedCashHandoverDay || !cashHandoverToDate) {
         setError("Válaszd ki, melyik napig adod át a készpénzt.");
         return;
@@ -1422,6 +1451,7 @@ export default function AllInShopOperations({
         location: locationCode,
         type: cashMoveType,
         amount: cashMoveType === "bank_deposit" ? bankAmount : undefined,
+        handoverAfterDate: cashMoveType === "manager_handover" ? cashHandoverAfterDate : null,
         handoverToDate: cashMoveType === "manager_handover" ? cashHandoverToDate : null,
         reference: cashMoveType === "bank_deposit" ? (cashMoveReference.trim() || null) : null,
         note: cashMoveNote.trim() || null,
@@ -1436,6 +1466,7 @@ export default function AllInShopOperations({
       );
       setCashMoveOpen(false);
       setCashMoveAmount("");
+      setCashHandoverAfterDate("");
       setCashHandoverToDate("");
       setCashMoveReference("");
       setCashMoveNote("");
@@ -1477,9 +1508,15 @@ export default function AllInShopOperations({
     setCashMoveAmount("");
     setCashMoveReference("");
     if (type === "manager_handover") {
-      const selectableDays = (days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-      setCashHandoverToDate(selectableDays[selectableDays.length - 1]?.date || "");
+      const suggested = cashHandoverAfterDate
+        || cashHandoverPlan?.selectedAfterDate
+        || cashHandoverPlan?.suggestedAfterDate
+        || cashHandoverPlan?.lastConfirmedTo
+        || shiftIsoDate(todayIso(), -1);
+      setCashHandoverAfterDate(suggested);
+      setCashHandoverToDate("");
     } else {
+      setCashHandoverAfterDate("");
       setCashHandoverToDate("");
     }
   }
@@ -1493,35 +1530,28 @@ export default function AllInShopOperations({
         setError("Már van átvételre váró készpénzátadás. Előbb azt kell átvenni vagy visszavonni.");
         return;
       }
-
-      let days = cashHandoverDays;
-      const hasSelectableDay = days.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-      if (!hasSelectableDay) {
-        const refreshed = await loadCashContext(cashHistoryMonth);
-        const refreshedDays = refreshed?.handoverPlan?.days || [];
-        const refreshedHasDay = refreshedDays.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-        days = refreshedHasDay
-          ? refreshedDays
-          : currentCashBalance > 0
-            ? [{
-                date: todayIso(),
-                amount: currentCashBalance,
-                closed: Boolean(currentDayClosure),
-                closingCash: currentDayClosure ? numberValue(currentDayClosure.countedCash) : null,
-                closedAt: currentDayClosure?.closedAt || null,
-                closedBy: currentDayClosure?.actor || null,
-                status: "available",
-              }]
-            : [];
-      }
-
-      if (!days.some((day) => day.status !== "pending" && numberValue(day.amount) > 0)) {
+      if (currentCashBalance <= 0) {
         setError("Nincs átadható készpénz a kasszában.");
         return;
       }
 
-      selectCashMovementType(type, days);
+      let response = cashData;
+      if (!response?.handoverPlan) response = await loadCashContext(cashHistoryMonth, "");
+      const suggested = response?.handoverPlan?.selectedAfterDate
+        || response?.handoverPlan?.suggestedAfterDate
+        || response?.handoverPlan?.lastConfirmedTo
+        || shiftIsoDate(todayIso(), -1);
+
+      setCashMoveType(type);
+      setCashMoveAmount("");
+      setCashMoveReference("");
+      setCashHandoverAfterDate(suggested);
+      setCashHandoverToDate("");
       setCashMoveOpen(true);
+
+      // A popup azonnal megnyílik, majd a kiválasztott utolsó átadási naphoz
+      // tartozó naplista frissül. Így a felület nem "gondolkodik" helyettünk.
+      if (suggested) void loadCashContext(cashHistoryMonth, suggested);
       return;
     }
 
@@ -2954,18 +2984,46 @@ export default function AllInShopOperations({
                   <div className="mt-4 space-y-4">
                     <div className="grid gap-3 lg:grid-cols-[1.05fr_0.95fr]">
                       <div className="rounded-[22px] border border-[#ffe66b]/42 bg-[#2a3445] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#fff4a5]/68">Átadási időszak</p>
-                        <p className="mt-2 text-xl text-white">
-                          {cashHandoverPlan?.nextFrom || cashHandoverDays[0]?.date || "–"} → {cashHandoverToDate || "válassz napot"}
-                        </p>
-                        <p className="mt-2 text-xs leading-relaxed text-white/50">
-                          Az előző átvett készpénz után csak a még le nem fedett üzleti napok választhatók.
-                        </p>
-                        {cashHandoverPlan?.lastConfirmedTo ? (
-                          <p className="mt-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[11px] text-white/58">
-                            Utolsó átvett időszak vége: <span className="text-white">{cashHandoverPlan.lastConfirmedTo}</span>
-                          </p>
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-[#fff4a5]/68">Utolsó tényleges készpénzátadás</p>
+                        <div className="mt-2 flex flex-wrap items-end gap-2">
+                          <label className="min-w-[210px] flex-1">
+                            <span className="mb-1.5 block text-[10px] text-white/46">Ezt a napot már átadottnak tekintjük</span>
+                            <input
+                              type="date"
+                              value={cashHandoverAfterDate}
+                              max={shiftIsoDate(todayIso(), -1)}
+                              onChange={(event) => void changeCashHandoverAfterDate(event.target.value)}
+                              className="h-12 w-full rounded-xl border border-[#ffe66b]/38 bg-[#273243] px-3 text-base text-white outline-none [color-scheme:dark] focus:border-[#fed700] focus:ring-2 focus:ring-[#fed700]/20"
+                            />
+                          </label>
+                        </div>
+                        {(cashHandoverPlan?.confirmedHandoverDates || []).length ? (
+                          <div className="mt-3">
+                            <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Korábbi rögzített átadási napok</p>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {(cashHandoverPlan?.confirmedHandoverDates || []).slice(0, 8).map((date) => (
+                                <button
+                                  key={date}
+                                  type="button"
+                                  onClick={() => void changeCashHandoverAfterDate(date)}
+                                  className={`h-8 rounded-lg border px-2.5 text-[11px] transition ${
+                                    cashHandoverAfterDate === date
+                                      ? "border-[#fed700] bg-[#fed700] text-[#243044]"
+                                      : "border-white/12 bg-white/[0.04] text-white/65 hover:border-[#fed700]/45"
+                                  }`}
+                                >
+                                  {formatDate(date)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         ) : null}
+                        <div className="mt-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                          <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Most átadandó időszak</p>
+                          <p className="mt-1 text-base text-white">
+                            {cashHandoverAfterDate ? shiftIsoDate(cashHandoverAfterDate, 1) : "–"} → {cashHandoverToDate || "válassz zárónapot"}
+                          </p>
+                        </div>
                       </div>
 
                       <div className="rounded-[22px] border border-[#ffe66b]/55 bg-[#fed700] p-4 text-[#243044] shadow-[0_12px_28px_rgba(254,215,0,0.15)]">
@@ -2997,7 +3055,7 @@ export default function AllInShopOperations({
                       <div className="grid max-h-[320px] gap-2 overflow-y-auto p-3 sm:grid-cols-2">
                         {cashHandoverDays.map((day) => {
                           const selected = day.date === cashHandoverToDate;
-                          const blocked = day.status === "pending" || numberValue(day.amount) <= 0;
+                          const blocked = day.status === "pending";
                           return (
                             <button
                               key={day.date}
@@ -3020,7 +3078,7 @@ export default function AllInShopOperations({
                               </span>
                               <span className="shrink-0 text-right">
                                 <span className="block text-base">{formatMoney(day.amount)}</span>
-                                <span className={`mt-1 block text-[9px] ${selected ? "text-[#243044]/55" : "text-white/35"}`}>eddig átadható</span>
+                                <span className={`mt-1 block text-[9px] ${selected ? "text-[#243044]/55" : "text-white/35"}`}>{day.closed ? "záró készpénz" : "eddig átadható"}</span>
                               </span>
                             </button>
                           );
@@ -3079,7 +3137,7 @@ export default function AllInShopOperations({
                   disabled={
                     cashMoveSaving ||
                     (cashMoveType === "manager_handover"
-                      ? !selectedCashHandoverDay || numberValue(selectedCashHandoverDay.amount) <= 0
+                      ? !cashHandoverAfterDate || !selectedCashHandoverDay || numberValue(selectedCashHandoverDay.amount) <= 0
                       : !cashMoveAmount.trim() || !cashMoveReference.trim())
                   }
                   onClick={() => void createCashMovement()}
