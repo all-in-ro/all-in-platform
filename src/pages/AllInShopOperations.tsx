@@ -1098,7 +1098,12 @@ export default function AllInShopOperations({
   const currentDayClosure = summaryIsToday
     ? (shiftData?.dayClosure || cashData?.todayClosure || null)
     : (shiftData?.dayClosure || null);
-  const pendingBossHandover = (cashData?.pendingManagerHandovers || [])[0] || null;
+  const pendingBossHandovers = cashData?.pendingManagerHandovers || [];
+  const pendingBossHandoverTotal = pendingBossHandovers.reduce(
+    (sum, item) => sum + numberValue(item.amount),
+    0,
+  );
+  const availableCashForNewHandover = Math.max(0, currentCashBalance - pendingBossHandoverTotal);
   const cashHandoverPlan = cashData?.handoverPlan || null;
   const cashHandoverDays = useMemo(() => {
     const serverDays = cashHandoverPlan?.days || [];
@@ -1541,7 +1546,7 @@ export default function AllInShopOperations({
       setCashHandoverToDate("");
       setCashMoveReference("");
       setCashMoveNote("");
-      await refreshSummaryPage(summaryDate, cashHistoryMonth);
+      await refreshSummaryPage(summaryDate, cashHistoryMonth, "");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A kasszamozgás rögzítése nem sikerült.");
     } finally {
@@ -1555,7 +1560,7 @@ export default function AllInShopOperations({
     try {
       await apiAifCancelShopCashMovement(id);
       setHandoverNotice("Az átvételre váró készpénzátadást visszavontad.");
-      await refreshSummaryPage(summaryDate);
+      await refreshSummaryPage(summaryDate, cashHistoryMonth, "");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A pénzátadás visszavonása nem sikerült.");
     } finally {
@@ -1598,12 +1603,12 @@ export default function AllInShopOperations({
     setCashMoveNote("");
 
     if (type === "manager_handover") {
-      if (pendingBossHandover) {
-        setError("Már van átvételre váró készpénzátadás. Előbb azt kell átvenni vagy visszavonni.");
-        return;
-      }
-      if (currentCashBalance <= 0) {
-        setError("Nincs átadható készpénz a kasszában.");
+      if (availableCashForNewHandover <= 0) {
+        setError(
+          pendingBossHandovers.length
+            ? "A kassza még szabadon átadható része 0 RON. A teljes fennmaradó összeg már átvételre vár."
+            : "Nincs átadható készpénz a kasszában.",
+        );
         return;
       }
 
@@ -2084,27 +2089,41 @@ export default function AllInShopOperations({
                     </div>
                   ) : null}
 
-                  {pendingBossHandover ? (
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-orange-200/30 bg-orange-500/10 px-4 py-3">
-                      <div className="flex items-start gap-3">
-                        <Clock3 className="mt-0.5 shrink-0 text-orange-100" size={18} />
-                        <div>
-                          <p className="text-sm text-orange-50">Készpénzátadás átvételre vár: {formatMoney(pendingBossHandover.amount)}</p>
-                          <p className="mt-1 text-xs text-white/48">{pendingBossHandover.requestedBy} rögzítette • {formatTime(pendingBossHandover.requestedAt)}</p>
-                          {(pendingBossHandover.handoverFromDate || pendingBossHandover.handoverToDate) ? (
-                            <p className="mt-1 text-[11px] text-[#fff4a5]/78">Időszak: {pendingBossHandover.handoverFromDate || pendingBossHandover.handoverToDate} → {pendingBossHandover.handoverToDate || pendingBossHandover.handoverFromDate}</p>
-                          ) : null}
+                  {pendingBossHandovers.length ? (
+                    <div className="mb-3 space-y-2">
+                      {pendingBossHandovers.map((pendingHandover, index) => (
+                        <div
+                          key={pendingHandover.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-orange-200/30 bg-orange-500/10 px-4 py-3"
+                        >
+                          <div className="flex items-start gap-3">
+                            <Clock3 className="mt-0.5 shrink-0 text-orange-100" size={18} />
+                            <div>
+                              <p className="text-sm text-orange-50">
+                                {pendingBossHandovers.length > 1 ? `${index + 1}. ` : ""}
+                                Készpénzátadás átvételre vár: {formatMoney(pendingHandover.amount)}
+                              </p>
+                              <p className="mt-1 text-xs text-white/48">
+                                {pendingHandover.requestedBy} rögzítette • {formatTime(pendingHandover.requestedAt)}
+                              </p>
+                              {(pendingHandover.handoverFromDate || pendingHandover.handoverToDate) ? (
+                                <p className="mt-1 text-[11px] text-[#fff4a5]/78">
+                                  Időszak: {pendingHandover.handoverFromDate || pendingHandover.handoverToDate} → {pendingHandover.handoverToDate || pendingHandover.handoverFromDate}
+                                </p>
+                              ) : null}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void cancelCashMovement(pendingHandover.id)}
+                            disabled={cashCancelBusyId === pendingHandover.id}
+                            className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-orange-200/24 bg-orange-300/10 px-3 text-xs text-orange-50 hover:bg-orange-300/16 disabled:opacity-45"
+                          >
+                            {cashCancelBusyId === pendingHandover.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
+                            Visszavonás
+                          </button>
                         </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void cancelCashMovement(pendingBossHandover.id)}
-                        disabled={cashCancelBusyId === pendingBossHandover.id}
-                        className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-orange-200/24 bg-orange-300/10 px-3 text-xs text-orange-50 hover:bg-orange-300/16 disabled:opacity-45"
-                      >
-                        {cashCancelBusyId === pendingBossHandover.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
-                        Visszavonás
-                      </button>
+                      ))}
                     </div>
                   ) : null}
 
@@ -2130,7 +2149,7 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={() => void openCashMovement("manager_handover")}
-                            disabled={Boolean(pendingBossHandover) || currentCashBalance <= 0 || cashLoading}
+                            disabled={availableCashForNewHandover <= 0 || cashLoading}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <WalletCards size={17} /> Készpénz átadása
