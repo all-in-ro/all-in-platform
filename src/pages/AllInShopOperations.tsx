@@ -65,7 +65,6 @@ import {
   type AifShopStockOverviewResponse,
 } from "../lib/aif/api";
 
-
 export type AllInShopOperationMode = "search" | "stock" | "summary";
 
 type Props = {
@@ -324,12 +323,15 @@ function monthLabel(value: string) {
   return `${match[1]} ${CASH_HISTORY_MONTHS[month - 1]}`;
 }
 
-function recentMonthOptions(count = 18) {
-  const now = new Date(`${todayIso().slice(0, 7)}-15T12:00:00Z`);
-  return Array.from({ length: count }, (_, index) => {
-    const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - index, 15, 12));
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-  });
+function validHistoryMonth(value?: string | null) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
+}
+
+function historyMonthName(value: string) {
+  const match = String(value || "").match(/^\d{4}-(\d{2})$/);
+  if (!match) return value;
+  const month = Math.max(1, Math.min(12, Number(match[1])));
+  return CASH_HISTORY_MONTHS[month - 1];
 }
 
 function formatTime(value?: string | null) {
@@ -1051,8 +1053,28 @@ export default function AllInShopOperations({
   const pendingBossHandover = (cashData?.pendingManagerHandovers || [])[0] || null;
   const cashHandoverPlan = cashData?.handoverPlan || null;
   const selectedCashHandoverDay = (cashHandoverPlan?.days || []).find((day) => day.date === cashHandoverToDate) || null;
-  const cashHistoryMonths = useMemo(() => recentMonthOptions(18), []);
   const cashHandoverHistory = cashData?.managerHandoverHistory || (cashData?.movements || []).filter((item) => item.type === "manager_handover");
+  const cashHistoryAvailableMonths = useMemo(() => {
+    const months = new Set<string>();
+    for (const month of cashData?.handoverHistoryMonths || []) {
+      if (validHistoryMonth(month)) months.add(month);
+    }
+    const currentMonth = todayIso().slice(0, 7);
+    months.add(currentMonth);
+    if (validHistoryMonth(cashHistoryMonth)) months.add(cashHistoryMonth);
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [cashData?.handoverHistoryMonths, cashHistoryMonth]);
+  const cashHistorySelectedYear = Number(cashHistoryMonth.slice(0, 4)) || Number(todayIso().slice(0, 4));
+  const cashHistoryYears = useMemo(
+    () => Array.from(new Set(cashHistoryAvailableMonths.map((month) => Number(month.slice(0, 4)))))
+      .filter((year) => Number.isFinite(year))
+      .sort((a, b) => b - a),
+    [cashHistoryAvailableMonths],
+  );
+  const cashHistoryMonthsForYear = useMemo(
+    () => cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === cashHistorySelectedYear),
+    [cashHistoryAvailableMonths, cashHistorySelectedYear],
+  );
   const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
   const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
     ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
@@ -1175,9 +1197,11 @@ export default function AllInShopOperations({
     try {
       const response = await apiAifShopCashOverview({ location: locationCode, limit: 160, month });
       setCashData(response);
+      return response;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A kassza naplója nem tölthető be.");
       setCashData(null);
+      return null;
     } finally {
       setCashLoading(false);
     }
@@ -1393,21 +1417,39 @@ export default function AllInShopOperations({
     setDayCloseOpen(true);
   }
 
-  function selectCashMovementType(type: AifShopCashMovementType) {
+  function selectCashMovementType(type: AifShopCashMovementType, plan = cashHandoverPlan) {
     setCashMoveType(type);
     setCashMoveAmount("");
     setCashMoveReference("");
     if (type === "manager_handover") {
-      const selectableDays = (cashHandoverPlan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      const selectableDays = (plan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
       setCashHandoverToDate(selectableDays[selectableDays.length - 1]?.date || "");
     } else {
       setCashHandoverToDate("");
     }
   }
 
-  function openCashMovement(type: AifShopCashMovementType) {
+  async function openCashMovement(type: AifShopCashMovementType) {
     setError("");
     setCashMoveNote("");
+
+    if (type === "manager_handover") {
+      let plan = cashHandoverPlan;
+      const hasSelectableDay = (plan?.days || []).some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      if (!hasSelectableDay) {
+        const refreshed = await loadCashContext(cashHistoryMonth);
+        plan = refreshed?.handoverPlan || null;
+      }
+      const selectableDays = (plan?.days || []).filter((day) => day.status !== "pending" && numberValue(day.amount) > 0);
+      if (!selectableDays.length) {
+        setError("A rendszer nem talált átadható készpénzes napot. Frissítsd az oldalt; ha a kassza pozitív marad, az Admin naplóban ellenőrizd az utolsó átvételt.");
+        return;
+      }
+      selectCashMovementType(type, plan);
+      setCashMoveOpen(true);
+      return;
+    }
+
     selectCashMovementType(type);
     setCashMoveOpen(true);
   }
@@ -1906,15 +1948,15 @@ export default function AllInShopOperations({
                         <div className="mt-3 grid gap-2 sm:grid-cols-3">
                           <button
                             type="button"
-                            onClick={() => openCashMovement("manager_handover")}
-                            disabled={Boolean(pendingBossHandover) || !(cashHandoverPlan?.days || []).some((day) => day.status !== "pending" && numberValue(day.amount) > 0)}
+                            onClick={() => void openCashMovement("manager_handover")}
+                            disabled={Boolean(pendingBossHandover) || currentCashBalance <= 0 || cashLoading}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <WalletCards size={17} /> Készpénz átadása
                           </button>
                           <button
                             type="button"
-                            onClick={() => openCashMovement("bank_deposit")}
+                            onClick={() => void openCashMovement("bank_deposit")}
                             disabled={currentCashBalance <= 0}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/34 bg-[#2a8d8b]/18 px-3 text-sm text-[#d7fffd] hover:bg-[#2a8d8b]/28 disabled:cursor-not-allowed disabled:opacity-40"
                           >
@@ -1995,20 +2037,38 @@ export default function AllInShopOperations({
                       <h3 className="mt-1 text-lg text-white">Készpénzátadások</h3>
                     </div>
                   </div>
-                  <label className="flex items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-[0.1em] text-white/42">Hónap</span>
-                    <select
-                      value={cashHistoryMonth}
-                      onChange={(event) => {
-                        const month = event.target.value;
-                        setCashHistoryMonth(month);
-                        void loadCashContext(month);
-                      }}
-                      className="h-10 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
-                    >
-                      {cashHistoryMonths.map((month) => <option key={month} value={month}>{monthLabel(month)}</option>)}
-                    </select>
-                  </label>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label>
+                      <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/42">Év</span>
+                      <select
+                        value={cashHistorySelectedYear}
+                        onChange={(event) => {
+                          const year = Number(event.target.value);
+                          const candidates = cashHistoryAvailableMonths.filter((month) => Number(month.slice(0, 4)) === year);
+                          const next = candidates[0] || `${year}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+                          setCashHistoryMonth(next);
+                          void loadCashContext(next);
+                        }}
+                        className="h-10 min-w-[92px] rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
+                      >
+                        {cashHistoryYears.map((year) => <option key={year} value={year}>{year}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-[9px] uppercase tracking-[0.1em] text-white/42">Hónap</span>
+                      <select
+                        value={cashHistoryMonth}
+                        onChange={(event) => {
+                          const month = event.target.value;
+                          setCashHistoryMonth(month);
+                          void loadCashContext(month);
+                        }}
+                        className="h-10 min-w-[132px] rounded-xl border border-white/16 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#fed700]"
+                      >
+                        {cashHistoryMonthsForYear.map((month) => <option key={month} value={month}>{historyMonthName(month)}</option>)}
+                      </select>
+                    </label>
+                  </div>
                 </div>
 
                 <div className="grid gap-2 p-3 lg:grid-cols-2">
