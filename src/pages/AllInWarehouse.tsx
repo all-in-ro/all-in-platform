@@ -4188,7 +4188,10 @@ function isWarehouseVisibleInMainList(it: InventoryItem) {
 
 function activationRequiredMissingFields(it: Partial<InventoryItem> | Record<string, any>) {
   const out: string[] = [];
-  if (!String((it as any).image_url || (it as any).imageUrl || "").trim()) out.push("kép");
+  // A termékkép fontos katalógusadat, de nem blokkolhatja az üzleti használatot.
+  // Helyreállító leltárnál egy fizikailag meglévő termék akkor is legyen aktiválható
+  // és eladható, ha a fotó csak később érkezik meg. A hiányzó képet továbbra is
+  // sárga figyelmeztetéssel jelezzük a Raktárban, csak az aktiválást nem tiltjuk miatta.
   if (!visibleWarehouseBarcode(it)) out.push("vonalkód");
   if (!String((it as any).title_ro || (it as any).titleRo || "").trim()) out.push("terméknév");
   if (!String((it as any).size || "").trim()) out.push("méret");
@@ -4200,7 +4203,8 @@ function activationRequiredMissingFields(it: Partial<InventoryItem> | Record<str
 }
 
 function hasMissingData(it: InventoryItem) {
-  return activationRequiredMissingFields(it).length > 0 || needsWarehouseActivation(it);
+  const imageMissing = !String((it as any).image_url || (it as any).imageUrl || "").trim();
+  return imageMissing || activationRequiredMissingFields(it).length > 0 || needsWarehouseActivation(it);
 }
 
 function missingLabels(it: InventoryItem) {
@@ -17334,7 +17338,7 @@ export default function AllInWarehouse() {
                       />
                       <label className={label}>Shopify cím<input className={input} value={edit.shopifyTitle} onChange={(e) => setEdit((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
                       <div className="md:col-span-3 rounded-xl border border-[#7bd7d4]/24 bg-[#203f49] px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]">
-                        A Raktárba csak ez a konkrét méret/szín kerül át, amikor a Variáns állapotot Aktívra teszed. Első aktiváláskor a modell többi méretét és színét a rendszer Inaktívként hagyja. Aktiváláshoz valódi vonalkód és kép is kötelező; a termékkód nem számít vonalkódnak.
+                        A Raktárba csak ez a konkrét méret/szín kerül át, amikor a Variáns állapotot Aktívra teszed. Első aktiváláskor a modell többi méretét és színét a rendszer Inaktívként hagyja. A kép hiánya nem blokkolja az aktiválást, de hiányzó adatként továbbra is jelezzük. Aktiváláshoz valódi vonalkód szükséges; a termékkód nem számít vonalkódnak.
                       </div>
                     </div>
                   </section>
