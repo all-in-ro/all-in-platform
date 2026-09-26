@@ -11638,15 +11638,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
       if (activatingVariant) {
         const nextBarcodeForActivation = body.barcode !== undefined ? assignedBarcodeValue(body.barcode) : emptyToNull(current.rows[0].barcode);
-        const nextImageForActivation = body.imageUrl !== undefined || body.image_url !== undefined
-          ? emptyToNull(body.imageUrl ?? body.image_url)
-          : emptyToNull(current.rows[0].image_url);
+        // A kép hiánya figyelmeztetés marad a raktári felületen, de nem blokkolhatja
+        // az aktiválást. Helyreállító leltár közben a fizikailag meglévő áru akkor is
+        // eladható kell legyen, ha a termékfotó csak később kerül pótlásra.
         const nextTitleForActivation = body.titleRo !== undefined || body.title_ro !== undefined
           ? text(body.titleRo ?? body.title_ro)
           : text(current.rows[0].title_ro);
         const nextSizeForActivation = body.size !== undefined ? text(body.size) : text(current.rows[0].size);
         const activationMissing = [];
-        if (!nextImageForActivation) activationMissing.push("kép");
         if (!nextBarcodeForActivation) activationMissing.push("vonalkód");
         if (!nextTitleForActivation) activationMissing.push("terméknév");
         if (!nextSizeForActivation) activationMissing.push("méret");
