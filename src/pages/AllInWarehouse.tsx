@@ -208,6 +208,26 @@ function mergeInventoryItems(baseItems: InventoryItem[], extraItems: InventoryIt
   return Array.from(map.values()).slice(-600);
 }
 
+// A nagy, külön szerverről betöltött munkalistákat (pl. Inaktív termékek) nem
+// szabad a fenti 600 soros keresési/fókusz cache-en átengedni. Ha a háttérben
+// közben befejeződik a normál raktárlista betöltése, az átfedő variánsok Map-beli
+// helye a régi marad, a slice(-600) pedig képes kidobni pont azokat a sorokat,
+// amelyeken a felhasználó dolgozik. Ez a teljes merge nem vág le egyetlen sort sem.
+function mergeInventoryItemsComplete(baseItems: InventoryItem[], extraItems: InventoryItem[]) {
+  const map = new Map<string, InventoryItem>();
+  for (const item of baseItems) {
+    const id = selectedVariantIdFromItem(item);
+    if (id) map.set(id, { ...item, variant_id: id });
+  }
+  for (const item of extraItems) {
+    const id = selectedVariantIdFromItem(item);
+    if (!id) continue;
+    const previous = map.get(id);
+    map.set(id, { ...(previous || {}), ...item, variant_id: id } as InventoryItem);
+  }
+  return Array.from(map.values());
+}
+
 
 type InventoryItem = {
   variant_id: string;
@@ -6804,6 +6824,10 @@ function overviewOpenByDefault() {
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
+  // Az inaktív munkalista külön állapotban él. Nem a rövid életű katalogus-keresési
+  // cache része, így egy háttérben befejeződő normál inventory refresh nem tudja
+  // pár másodperc múlva eltüntetni a felhasználó alól a teljes munkalistát.
+  const [inactiveProductsItems, setInactiveProductsItems] = useState<InventoryItem[]>([]);
   const [inactiveProductsBusy, setInactiveProductsBusy] = useState(false);
   const [activationBlockMissing, setActivationBlockMissing] = useState<string[] | null>(null);
   const [catalogSearchBusy, setCatalogSearchBusy] = useState(false);
@@ -7134,11 +7158,22 @@ export default function AllInWarehouse() {
     const baseWithCatalog = catalogItems.length
       ? mergeInventoryItems(baseItems, catalogItems).filter((item) => !isArchivedInventoryItem(item))
       : baseItems;
+
+    // Az Inaktív termékek szűrő saját, teljes szerveres munkalistája külön kerül
+    // hozzáfűzésre, VÁGÁS NÉLKÜL. A normál inventory adatait tesszük másodiknak,
+    // hogy átfedésnél a frissebb készlet/státusz felülírhassa a cache-elt sort.
+    const inactiveItems = stockFilter === "inactive"
+      ? inactiveProductsItems.filter((item) => !isArchivedInventoryItem(item))
+      : [];
+    const baseWithInactive = inactiveItems.length
+      ? mergeInventoryItemsComplete(inactiveItems, baseWithCatalog).filter((item) => !isArchivedInventoryItem(item))
+      : baseWithCatalog;
+
     const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
     return focusedItems.length
-      ? mergeInventoryItems(baseWithCatalog, focusedItems).filter((item) => !isArchivedInventoryItem(item))
-      : baseWithCatalog;
-  }, [items, catalogSearchItems, incomingFocusItems]);
+      ? mergeInventoryItems(baseWithInactive, focusedItems).filter((item) => !isArchivedInventoryItem(item))
+      : baseWithInactive;
+  }, [items, catalogSearchItems, inactiveProductsItems, stockFilter, incomingFocusItems]);
 
   const duplicateSkuGroups = useMemo(() => {
     const groups = new Map<string, { sku: string; items: InventoryItem[] }>();
@@ -7311,6 +7346,14 @@ export default function AllInWarehouse() {
     if (!id) return;
 
     setItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    setCatalogSearchItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    setInactiveProductsItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    if (warehouseInactiveProductsCache) {
+      warehouseInactiveProductsCache = {
+        ...warehouseInactiveProductsCache,
+        items: warehouseInactiveProductsCache.items.filter((item) => selectedVariantIdFromItem(item) !== id),
+      };
+    }
     setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
     setPersistedSelectedItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
     setStockRows((current) => current.filter((row) => String(row.variant_id || "") !== id));
@@ -9100,12 +9143,23 @@ export default function AllInWarehouse() {
     void apiInactiveWarehouseProducts(controller.signal)
       .then((rows) => {
         if (controller.signal.aborted) return;
-        mergeWarehouseCatalogSearchItems(rows);
-        setMessage(`Inaktív termékek betöltve: ${rows.length.toLocaleString("hu-HU")} nem archivált variáns, készlettől függetlenül.`);
+        const normalizedRows = (rows || [])
+          .map((item) => {
+            const id = selectedVariantIdFromItem(item);
+            return id ? { ...item, variant_id: id } : null;
+          })
+          .filter((item): item is InventoryItem => Boolean(item && !isArchivedInventoryItem(item)));
+        // Fontos: NEM tesszük a catalogSearchItems 600 soros cache-ébe. Az volt a
+        // versenyhelyzet forrása: a háttérben befejeződő normál inventory betöltés
+        // után az inaktív munkalista sorai egyszerűen kiestek a levágott merge-ből.
+        setInactiveProductsItems(normalizedRows);
+        setMessage(`Inaktív termékek betöltve: ${normalizedRows.length.toLocaleString("hu-HU")} nem archivált variáns, készlettől függetlenül.`);
       })
       .catch((error: any) => {
         if (controller.signal.aborted || error?.name === "AbortError") return;
-        setMessage(error?.message || "Az inaktív termékek betöltése nem sikerült.");
+        // Hiba esetén a már betöltött lista maradjon a képernyőn. Munka közben
+        // nem tüntetjük el a sorokat csak azért, mert egy háttérkérés nyafogott.
+        setMessage(error?.message || "Az inaktív termékek frissítése nem sikerült. A már betöltött lista megmaradt.");
       })
       .finally(() => {
         if (!controller.signal.aborted) setInactiveProductsBusy(false);
@@ -13319,6 +13373,14 @@ export default function AllInWarehouse() {
         return item;
       });
       setItems(updateSavedRows);
+      setCatalogSearchItems(updateSavedRows);
+      setInactiveProductsItems(updateSavedRows);
+      if (warehouseInactiveProductsCache) {
+        warehouseInactiveProductsCache = {
+          ...warehouseInactiveProductsCache,
+          items: updateSavedRows(warehouseInactiveProductsCache.items),
+        };
+      }
       setIncomingFocusItems(updateSavedRows);
 
       if (priceHistoryEntry && historyTarget && String(historyTarget.variant_id || (historyTarget as any).id || "") === detailId) {
