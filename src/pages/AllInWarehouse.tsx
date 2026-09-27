@@ -17672,7 +17672,7 @@ export default function AllInWarehouse() {
           ) : null}
           {activationTodoCount > 0 ? (
             <button
-              className="rounded-xl border border-amber-200/28 bg-amber-500/14 px-4 py-3 text-left text-sm text-amber-50 shadow-xl transition hover:bg-amber-500/20"
+              className="rounded-xl border border-[#ffe48a] bg-[#f8cb2e] px-4 py-3 text-left text-sm font-medium text-[#273244] shadow-[0_14px_32px_rgba(248,203,46,.30)] transition hover:bg-[#ffd84a]"
               type="button"
               onClick={showActivationTodoList}
               title="Aktiválandó készletes variánsok megnyitása"
