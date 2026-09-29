@@ -3884,7 +3884,7 @@ export function apiAifShopReservations(options: {
 
 export function apiAifCreateShopReservation(input: {
   location: string;
-  customerId: string;
+  customerId?: string | null;
   expiresOn: string;
   note?: string | null;
   lines: Array<{ variantId: string; quantity: number }>;
@@ -3928,6 +3928,7 @@ export function apiAifFulfillShopReservation(
   input: {
     location: string;
     paymentMethod: AifShopSalePaymentMethod;
+    customerId?: string | null;
     note?: string | null;
     idempotencyKey: string;
   },
