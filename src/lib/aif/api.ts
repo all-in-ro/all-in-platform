@@ -3993,6 +3993,8 @@ export type AifShopIncomingHistoryItem = {
   receivedAt?: string | null;
   receivedBy?: string | null;
   qty: number;
+  lineValue: number;
+  currencyCode: string;
   stockApplied: boolean;
   document: {
     id: string;
@@ -4000,6 +4002,8 @@ export type AifShopIncomingHistoryItem = {
     sourceName: string;
     targetName: string;
     createdAt?: string | null;
+    totalValue: number;
+    currencyCode: string;
     inventoryMode: string;
   };
   product: {
