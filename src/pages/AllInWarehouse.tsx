@@ -203,7 +203,16 @@ function mergeInventoryItems(baseItems: InventoryItem[], extraItems: InventoryIt
   }
   for (const item of extraItems) {
     const id = selectedVariantIdFromItem(item);
-    if (id && !map.has(id)) map.set(id, { ...item, variant_id: id });
+    if (!id) continue;
+
+    // A külön keresett / fókuszált találat mindig elsőbbséget kapjon a háttérben
+    // később beérkező normál raktárlistával szemben. Ha ugyanaz a variáns már bent
+    // van, töröljük és a lista végére tesszük vissza a frissebb találatot. Így a
+    // slice(-600) nem tudja pár másodperc múlva kidobni pont azt a terméket,
+    // amelyre a felhasználó rákeresett.
+    const previous = map.get(id);
+    if (previous) map.delete(id);
+    map.set(id, { ...(previous || {}), ...item, variant_id: id } as InventoryItem);
   }
   return Array.from(map.values()).slice(-600);
 }
