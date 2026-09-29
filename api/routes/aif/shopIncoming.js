@@ -156,7 +156,10 @@ export default function createAifShopIncomingRouter({
       const result = await pool.query(
         `SELECT r.id,r.received_at,r.actor,r.qty,r.stock_applied,
                 d.id AS document_id,d.document_number,d.from_location_summary,d.to_location_summary,d.created_at AS document_created_at,d.raw AS document_raw,
-                dl.id AS line_id,dl.variant_id,dl.line_no,dl.product_title,dl.product_code,dl.barcode,dl.brand_name,dl.color_name,dl.size,dl.image_url
+                d.total_value AS document_total_value,d.currency_code AS document_currency_code,
+                dl.id AS line_id,dl.variant_id,dl.line_no,dl.product_title,dl.product_code,dl.barcode,dl.brand_name,dl.color_name,dl.size,dl.image_url,
+                COALESCE(dl.line_total, CASE WHEN dl.unit_price IS NOT NULL THEN dl.qty::numeric * dl.unit_price::numeric ELSE 0 END) AS line_total,
+                COALESCE(NULLIF(dl.currency_code,''),NULLIF(d.currency_code,''),'RON') AS line_currency_code
          FROM aif_shop_transfer_receipts r
          JOIN aif_stock_transfer_documents d ON d.id=r.document_id
          JOIN aif_stock_transfer_document_lines dl ON dl.id=r.document_line_id
@@ -169,6 +172,8 @@ export default function createAifShopIncomingRouter({
         receivedAt: row.received_at ? new Date(row.received_at).toISOString() : null,
         receivedBy: row.actor || null,
         qty: aifNumber(row.qty),
+        lineValue: Math.round((aifNumber(row.line_total) + Number.EPSILON) * 100) / 100,
+        currencyCode: text(row.line_currency_code || row.document_currency_code || "RON").toUpperCase() || "RON",
         stockApplied: row.stock_applied === true,
         document: {
           id: String(row.document_id),
@@ -176,6 +181,8 @@ export default function createAifShopIncomingRouter({
           sourceName: row.from_location_summary || "–",
           targetName: row.to_location_summary || "–",
           createdAt: row.document_created_at ? new Date(row.document_created_at).toISOString() : null,
+          totalValue: Math.round((aifNumber(row.document_total_value) + Number.EPSILON) * 100) / 100,
+          currencyCode: text(row.document_currency_code || "RON").toUpperCase() || "RON",
           inventoryMode: inventoryMode(row.document_raw),
         },
         product: {
