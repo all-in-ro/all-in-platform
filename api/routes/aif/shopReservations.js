@@ -28,7 +28,7 @@ export default function createAifShopReservationsRouter({
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           reservation_number text NOT NULL UNIQUE,
           location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
-          customer_id uuid NOT NULL REFERENCES aif_shop_customers(id) ON DELETE RESTRICT,
+          customer_id uuid NULL REFERENCES aif_shop_customers(id) ON DELETE RESTRICT,
           status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','fulfilled','released','cancelled')),
           expires_on date NOT NULL,
           customer_name text NULL,
@@ -44,6 +44,9 @@ export default function createAifShopReservationsRouter({
           fulfilled_at timestamptz NULL,
           released_at timestamptz NULL
         )`);
+        // A félretétel önmagában nem hitelügylet, ezért kliens nélkül is rögzíthető.
+        // A meglévő production táblán is feloldjuk a régi NOT NULL korlátozást.
+        await pool.query(`ALTER TABLE aif_shop_reservations ALTER COLUMN customer_id DROP NOT NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_reservations_location_status_idx
           ON aif_shop_reservations (location_id,status,expires_on,created_at DESC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_reservations_customer_idx
@@ -225,7 +228,6 @@ export default function createAifShopReservationsRouter({
     const customerId = text(body.customerId || body.customer_id);
     const expiresOn = isoDate(body.expiresOn || body.expires_on || body.expiryDate || body.expiry_date);
     const linesInput = Array.isArray(body.lines) ? body.lines : [];
-    if (!customerId) return res.status(400).json({ error: "Kliens kiválasztása kötelező." });
     if (!expiresOn) return res.status(400).json({ error: "Érvényes lejárati dátum szükséges." });
     if (!linesInput.length) return res.status(400).json({ error: "Nincs félreteendő termék." });
 
@@ -235,12 +237,18 @@ export default function createAifShopReservationsRouter({
       await ensureSchema();
       const location = await aifResolveShopLocation(req, client, body.location);
       const actor = actorFrom(req);
-      const customerResult = await client.query(
-        `SELECT * FROM aif_shop_customers WHERE id::text=$1 AND location_id=$2 AND is_active=true FOR UPDATE`,
-        [customerId, location.id],
-      );
-      if (!customerResult.rowCount) throw Object.assign(new Error("A kliens ebben az üzletben nem található vagy inaktív."), { statusCode: 400 });
-      const customer = customerResult.rows[0];
+
+      // Félretételnél a kliens opcionális. Ha választottak klienst, ugyanúgy
+      // ellenőrizzük, mint korábban; ha nem, anonim félretétel készül.
+      let customer = null;
+      if (customerId) {
+        const customerResult = await client.query(
+          `SELECT * FROM aif_shop_customers WHERE id::text=$1 AND location_id=$2 AND is_active=true FOR UPDATE`,
+          [customerId, location.id],
+        );
+        if (!customerResult.rowCount) throw Object.assign(new Error("A kliens ebben az üzletben nem található vagy inaktív."), { statusCode: 400 });
+        customer = customerResult.rows[0];
+      }
 
       const grouped = new Map();
       for (const input of linesInput) {
@@ -286,7 +294,17 @@ export default function createAifShopReservationsRouter({
         `INSERT INTO aif_shop_reservations (
            reservation_number,location_id,customer_id,status,expires_on,customer_name,customer_phone,created_by,note,raw
          ) VALUES ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9::jsonb) RETURNING *`,
-        [reservationNumber, location.id, customer.id, expiresOn, customer.full_name, customer.phone, actor, text(body.note) || null, JSON.stringify({ source: "shop_reserved_module" })],
+        [
+          reservationNumber,
+          location.id,
+          customer?.id || null,
+          expiresOn,
+          customer?.full_name || null,
+          customer?.phone || null,
+          actor,
+          text(body.note) || null,
+          JSON.stringify({ source: "shop_reserved_module", anonymous: !customer }),
+        ],
       );
       const reservation = header.rows[0];
       let lineNo = 1;
@@ -307,7 +325,7 @@ export default function createAifShopReservationsRouter({
       }
       await client.query(
         `INSERT INTO aif_shop_reservation_events (reservation_id,event_type,actor,payload) VALUES ($1,'created',$2,$3::jsonb)`,
-        [reservation.id, actor, JSON.stringify({ expiresOn, customerId: String(customer.id), lineCount: variantIds.length })],
+        [reservation.id, actor, JSON.stringify({ expiresOn, customerId: customer ? String(customer.id) : null, anonymous: !customer, lineCount: variantIds.length })],
       );
       await client.query("COMMIT");
       const items = await listRows(location.id, ` AND r.id=$2`, [reservation.id]);
@@ -467,6 +485,39 @@ export default function createAifShopReservationsRouter({
       const linesResult = await client.query(`SELECT * FROM aif_shop_reservation_lines WHERE reservation_id=$1 ORDER BY line_no FOR UPDATE`, [reservation.id]);
       if (!linesResult.rowCount) throw Object.assign(new Error("A félretételhez nincs termék."), { statusCode: 409 });
 
+      const isCredit = method === "credit";
+      const requestedCustomerId = text(body.customerId || body.customer_id);
+      let saleCustomerId = reservation.customer_id ? String(reservation.customer_id) : "";
+      let saleCustomerName = reservation.customer_name || null;
+      let saleCustomerPhone = reservation.customer_phone || null;
+
+      // Anonim félretételnél csak akkor kérünk klienst, amikor valóban hitelbe
+      // viszik el. A kiválasztott kliens ekkor rákerül a félretételre is, hogy az
+      // előzmény és a tartozás ugyanahhoz az emberhez kapcsolódjon.
+      if (!saleCustomerId && requestedCustomerId) {
+        const customerResult = await client.query(
+          `SELECT * FROM aif_shop_customers WHERE id::text=$1 AND location_id=$2 AND is_active=true FOR UPDATE`,
+          [requestedCustomerId, location.id],
+        );
+        if (!customerResult.rowCount) {
+          throw Object.assign(new Error("A kiválasztott kliens ebben az üzletben nem található vagy inaktív."), { statusCode: 400, code: "reservation_customer_invalid" });
+        }
+        const customer = customerResult.rows[0];
+        saleCustomerId = String(customer.id);
+        saleCustomerName = customer.full_name || null;
+        saleCustomerPhone = customer.phone || null;
+        await client.query(
+          `UPDATE aif_shop_reservations
+           SET customer_id=$2,customer_name=$3,customer_phone=$4,updated_at=now()
+           WHERE id=$1`,
+          [reservation.id, customer.id, saleCustomerName, saleCustomerPhone],
+        );
+      }
+
+      if (isCredit && !saleCustomerId) {
+        throw Object.assign(new Error("Hitelre történő eladáshoz kliens kiválasztása kötelező."), { statusCode: 400, code: "credit_customer_required" });
+      }
+
       const variantIds = linesResult.rows.map((line) => String(line.variant_id)).sort();
       const stocks = await client.query(
         `SELECT s.location_id,s.variant_id,s.qty,s.reserved_qty,v.buy_price
@@ -488,14 +539,13 @@ export default function createAifShopReservationsRouter({
       }
 
       const saleActor = text(reservation.created_by) || cashier;
-      const isCredit = method === "credit";
       const saleNumber = await aifAllocateShopSaleNumber(client, location);
       const saleInsert = await client.query(
         `INSERT INTO aif_shop_sales (
            sale_number,location_id,customer_id,status,sale_type,payment_status,actor,sold_at,
            subtotal,discount_total,total,paid_total,balance_due,currency_code,customer_name,customer_phone,note,client_request_id,raw
          ) VALUES ($1,$2,$3,'completed',$4,$5,$6,now(),$7,0,$7,$8,$9,'RON',$10,$11,$12,$13,$14::jsonb) RETURNING *`,
-        [saleNumber, location.id, reservation.customer_id, isCredit ? "credit" : "sale", isCredit ? "credit" : "paid", saleActor, subtotal, isCredit ? 0 : subtotal, isCredit ? subtotal : 0, reservation.customer_name, reservation.customer_phone, text(body.note) || reservation.note || null, idempotencyKey, JSON.stringify({ source: "shop_reservation", reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, attributedTo: saleActor, fulfilledBy: cashier, paymentMethod: method })],
+        [saleNumber, location.id, saleCustomerId || null, isCredit ? "credit" : "sale", isCredit ? "credit" : "paid", saleActor, subtotal, isCredit ? 0 : subtotal, isCredit ? subtotal : 0, saleCustomerName, saleCustomerPhone, text(body.note) || reservation.note || null, idempotencyKey, JSON.stringify({ source: "shop_reservation", reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, attributedTo: saleActor, fulfilledBy: cashier, paymentMethod: method, customerId: saleCustomerId || null })],
       );
       const sale = saleInsert.rows[0];
 
@@ -552,7 +602,7 @@ export default function createAifShopReservationsRouter({
       );
       await client.query(
         `INSERT INTO aif_shop_reservation_events (reservation_id,event_type,actor,payload) VALUES ($1,'fulfilled',$2,$3::jsonb)`,
-        [reservation.id, cashier, JSON.stringify({ saleId: String(sale.id), saleNumber, saleAttributedTo: saleActor, paymentMethod: method, total: subtotal })],
+        [reservation.id, cashier, JSON.stringify({ saleId: String(sale.id), saleNumber, saleAttributedTo: saleActor, paymentMethod: method, customerId: saleCustomerId || null, total: subtotal })],
       );
       const completed = await aifLoadShopSaleResult(client, sale.id);
       await client.query("COMMIT");
