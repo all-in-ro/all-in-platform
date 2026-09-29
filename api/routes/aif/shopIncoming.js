@@ -71,6 +71,8 @@ export default function createAifShopIncomingRouter({
       receivedCount,
       lineCount: lines.length,
       totalQty: lines.reduce((sum, line) => sum + aifNumber(line.qty), 0),
+      totalValue: Math.round((aifNumber(row.total_value) + Number.EPSILON) * 100) / 100,
+      currencyCode: text(row.currency_code || "RON").toUpperCase() || "RON",
       lines,
     };
   }
