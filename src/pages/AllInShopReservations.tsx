@@ -97,6 +97,10 @@ function exactMatch(item: AifShopSaleCatalogItem, query: string) {
   return [item.barcode, item.internalSku, item.productCode].filter(Boolean).some((value) => String(value).trim().toLowerCase() === wanted);
 }
 
+function reservationCustomerName(item?: AifShopReservation | null) {
+  return String(item?.customer?.name || "").trim() || "Név nélkül félretéve";
+}
+
 export default function AllInShopReservations({ open, actor, locationCode, locationName, onClose }: Props) {
   const [mode, setMode] = useState<ViewMode>("active");
   const [items, setItems] = useState<AifShopReservation[]>([]);
@@ -120,6 +124,10 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
   const [releaseBusy, setReleaseBusy] = useState(false);
   const [fulfillTarget, setFulfillTarget] = useState<AifShopReservation | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<AifShopSalePaymentMethod>("cash");
+  const [fulfillCustomerQuery, setFulfillCustomerQuery] = useState("");
+  const [fulfillCustomers, setFulfillCustomers] = useState<AifShopCustomer[]>([]);
+  const [fulfillCustomer, setFulfillCustomer] = useState<AifShopCustomer | null>(null);
+  const [fulfillCustomerLoading, setFulfillCustomerLoading] = useState(false);
   const [fulfillBusy, setFulfillBusy] = useState(false);
   const [clock, setClock] = useState(Date.now());
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -276,8 +284,21 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
     }
   }
 
+  async function searchFulfillCustomers(value = fulfillCustomerQuery) {
+    setFulfillCustomerLoading(true);
+    setError("");
+    try {
+      const response = await apiAifListShopCustomers({ location: locationCode, search: value.trim(), limit: 60 });
+      setFulfillCustomers(response.items || []);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A klienslista nem tölthető be.");
+    } finally {
+      setFulfillCustomerLoading(false);
+    }
+  }
+
   async function saveReservation() {
-    if (!selectedCustomer) return setError("Válassz klienst a félretételhez.");
+
     if (!draftLines.length) return setError("Adj hozzá legalább egy terméket.");
     if (!expiresOn) return setError("Add meg, meddig tartjuk félre.");
     setSaving(true);
@@ -285,12 +306,14 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
     try {
       const response = await apiAifCreateShopReservation({
         location: locationCode,
-        customerId: selectedCustomer.id,
+        customerId: selectedCustomer?.id || null,
         expiresOn,
         note: note.trim() || null,
         lines: draftLines.map((line) => ({ variantId: line.variantId, quantity: line.quantity })),
       });
-      setSuccess(`${response.item.reservationNumber} félretétel rögzítve ${selectedCustomer.fullName} részére.`);
+      setSuccess(selectedCustomer
+        ? `${response.item.reservationNumber} félretétel rögzítve ${selectedCustomer.fullName} részére.`
+        : `${response.item.reservationNumber} félretétel rögzítve név nélkül.`);
       setMode("active");
       await loadActive();
     } catch (caught) {
@@ -318,6 +341,11 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
 
   async function fulfillReservation() {
     if (!fulfillTarget) return;
+    const existingCustomerId = String(fulfillTarget.customer?.id || "").trim();
+    const creditCustomerId = existingCustomerId || String(fulfillCustomer?.id || "").trim();
+    if (paymentMethod === "credit" && !creditCustomerId) {
+      return setError("Hitelre történő eladáshoz válassz klienst.");
+    }
     setFulfillBusy(true);
     setError("");
     if (!requestKeyRef.current) requestKeyRef.current = createRequestKey("reservation-sale");
@@ -325,11 +353,15 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
       const result = await apiAifFulfillShopReservation(fulfillTarget.id, {
         location: locationCode,
         paymentMethod,
+        customerId: paymentMethod === "credit" ? creditCustomerId : null,
         idempotencyKey: requestKeyRef.current,
       });
       setSuccess(`${result.saleNumber} eladás rögzítve • ${result.attributedTo || fulfillTarget.createdBy || actor} nevére.`);
       requestKeyRef.current = "";
       setFulfillTarget(null);
+      setFulfillCustomer(null);
+      setFulfillCustomerQuery("");
+      setFulfillCustomers([]);
       await loadActive();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A félretett termék eladása nem sikerült.");
@@ -379,9 +411,9 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
               </div>
 
               <aside className="space-y-3">
-                <div className="rounded-[24px] border border-white/14 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">2. Kliens</p>{selectedCustomer ? <div className="mt-3 flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 p-3"><UserRound className="text-[#8ee6e2]" /><div className="min-w-0 flex-1"><p className="truncate">{selectedCustomer.fullName}</p><p className="text-xs text-white/50">{selectedCustomer.phone || "–"}</p></div><button onClick={() => setSelectedCustomer(null)} className="grid h-9 w-9 place-items-center rounded-xl border border-white/14"><X size={15} /></button></div> : <><div className="mt-3 grid grid-cols-[1fr_auto] gap-2"><input value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchCustomers(e.currentTarget.value); }} placeholder="Név vagy telefonszám" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 outline-none focus:border-[#72d8d4]" /><button onClick={() => void searchCustomers()} className="grid h-12 w-12 place-items-center rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]">{customerLoading ? <Loader2 className="animate-spin" size={17} /> : <Search size={17} />}</button></div><div className="mt-2 max-h-[230px] space-y-1 overflow-y-auto">{customers.map((customer) => <button key={customer.id} onClick={() => setSelectedCustomer(customer)} className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-[#293548] px-3 py-2 text-left hover:border-[#72d8d4]/35"><UserRound size={15} className="text-[#8ee6e2]" /><span className="min-w-0"><span className="block truncate text-sm">{customer.fullName}</span><span className="block text-[11px] text-white/45">{customer.phone || "–"}</span></span></button>)}</div></>}</div>
+                <div className="rounded-[24px] border border-white/14 bg-[#374357] p-4"><div className="flex items-center justify-between gap-2"><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">2. Kliens <span className="text-[#8ee6e2]">• opcionális</span></p>{!selectedCustomer ? <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] text-white/45">Név nélkül is menthető</span> : null}</div><p className="mt-2 text-xs leading-relaxed text-white/48">Félretételhez nem kötelező. Csak hitelre történő eladásnál kell klienst választani.</p>{selectedCustomer ? <div className="mt-3 flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 p-3"><UserRound className="text-[#8ee6e2]" /><div className="min-w-0 flex-1"><p className="truncate">{selectedCustomer.fullName}</p><p className="text-xs text-white/50">{selectedCustomer.phone || "–"}</p></div><button onClick={() => setSelectedCustomer(null)} className="grid h-9 w-9 place-items-center rounded-xl border border-white/14"><X size={15} /></button></div> : <><div className="mt-3 grid grid-cols-[1fr_auto] gap-2"><input value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchCustomers(e.currentTarget.value); }} placeholder="Név vagy telefonszám" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 outline-none focus:border-[#72d8d4]" /><button onClick={() => void searchCustomers()} className="grid h-12 w-12 place-items-center rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]">{customerLoading ? <Loader2 className="animate-spin" size={17} /> : <Search size={17} />}</button></div><div className="mt-2 max-h-[230px] space-y-1 overflow-y-auto">{customers.map((customer) => <button key={customer.id} onClick={() => setSelectedCustomer(customer)} className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-[#293548] px-3 py-2 text-left hover:border-[#72d8d4]/35"><UserRound size={15} className="text-[#8ee6e2]" /><span className="min-w-0"><span className="block truncate text-sm">{customer.fullName}</span><span className="block text-[11px] text-white/45">{customer.phone || "–"}</span></span></button>)}</div></>}</div>
                 <div className="rounded-[24px] border border-white/14 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">3. Meddig tartjuk?</p><label className="mt-3 block"><span className="mb-1.5 block text-xs text-white/50">Lejárat dátuma</span><input type="date" min={today} value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="h-12 w-full rounded-xl border border-white/16 bg-[#273243] px-3 outline-none focus:border-[#72d8d4]" /></label><label className="mt-3 block"><span className="mb-1.5 block text-xs text-white/50">Megjegyzés</span><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} className="w-full resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 outline-none focus:border-[#72d8d4]" placeholder="Pl. délután jön érte…" /></label><div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs leading-relaxed text-[#d7fffd]/75">A lejárat napján pirosra vált, de a rendszer nem teszi vissza automatikusan készletre. A félretett darab addig nem eladható másnak.</div></div>
-                <button type="button" onClick={() => void saveReservation()} disabled={saving || !selectedCustomer || !draftLines.length} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-base disabled:opacity-45">{saving ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} Félretétel rögzítése</button>
+                <button type="button" onClick={() => void saveReservation()} disabled={saving || !draftLines.length || !expiresOn} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-base disabled:opacity-45">{saving ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} Félretétel rögzítése</button>
               </aside>
             </div>
           ) : mode === "history" ? (
@@ -389,14 +421,79 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
           ) : loading ? (
             <div className="py-20 text-center text-white/50"><Loader2 className="mx-auto animate-spin" /></div>
           ) : (
-            <ReservationGrid reservations={shownItems} today={today} onFulfill={(item) => { requestKeyRef.current = ""; setPaymentMethod("cash"); setFulfillTarget(item); }} onRelease={setReleaseTarget} />
+            <ReservationGrid reservations={shownItems} today={today} onFulfill={(item) => { requestKeyRef.current = ""; setPaymentMethod("cash"); setFulfillCustomer(null); setFulfillCustomerQuery(""); setFulfillCustomers([]); setFulfillTarget(item); }} onRelease={setReleaseTarget} />
           )}
         </div>
       </section>
 
-      {releaseTarget ? <div className="fixed inset-0 z-[270] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm"><section className="w-full max-w-[520px] overflow-hidden rounded-[26px] border border-rose-300/35 bg-[#303a4c] text-white"><header className="border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4"><h3 className="text-xl">Vissza a szabad készletbe?</h3><p className="mt-1 text-xs text-white/50">{releaseTarget.reservationNumber} • {releaseTarget.customer.name}</p></header><div className="p-5 text-sm text-white/70">A termékek újra eladhatók lesznek. A félretétel előzménye megmarad.</div><footer className="flex justify-end gap-2 border-t border-white/12 px-5 py-4"><button disabled={releaseBusy} onClick={() => setReleaseTarget(null)} className="h-11 rounded-xl border border-white/16 px-4">Mégse</button><button disabled={releaseBusy} onClick={() => void releaseReservation()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-600 px-5">{releaseBusy ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />} Vissza készletre</button></footer></section></div> : null}
+      {releaseTarget ? <div className="fixed inset-0 z-[270] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm"><section className="w-full max-w-[520px] overflow-hidden rounded-[26px] border border-rose-300/35 bg-[#303a4c] text-white"><header className="border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4"><h3 className="text-xl">Vissza a szabad készletbe?</h3><p className="mt-1 text-xs text-white/50">{releaseTarget.reservationNumber} • {reservationCustomerName(releaseTarget)}</p></header><div className="p-5 text-sm text-white/70">A termékek újra eladhatók lesznek. A félretétel előzménye megmarad.</div><footer className="flex justify-end gap-2 border-t border-white/12 px-5 py-4"><button disabled={releaseBusy} onClick={() => setReleaseTarget(null)} className="h-11 rounded-xl border border-white/16 px-4">Mégse</button><button disabled={releaseBusy} onClick={() => void releaseReservation()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-600 px-5">{releaseBusy ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />} Vissza készletre</button></footer></section></div> : null}
 
-      {fulfillTarget ? <div className="fixed inset-0 z-[270] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm"><section className="w-full max-w-[600px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white"><header className="border-b border-white/12 bg-gradient-to-r from-[#1f5557] to-[#2a8d8b] px-5 py-4"><p className="text-[10px] uppercase tracking-[0.15em] text-white/60">Félretett termék átvétele</p><h3 className="mt-1 text-xl">{fulfillTarget.customer.name}</h3><p className="mt-1 text-sm text-white/70">{fulfillTarget.totalQty} db • {formatMoney(fulfillTarget.totalValue)}</p></header><div className="p-5"><div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 p-3 text-sm"><p>Az eladás <strong>{fulfillTarget.createdBy || actor}</strong> nevére kerül.</p><p className="mt-1 text-xs text-white/55">A fizetést most {actor} kezeli; a kassza az ő műszakában jelenik meg.</p></div><p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-white/45">Fizetési mód</p><div className="mt-2 grid grid-cols-2 gap-2">{PAYMENT_OPTIONS.map((option) => { const Icon=option.icon; const active=paymentMethod===option.method; return <button key={option.method} onClick={() => { setPaymentMethod(option.method); requestKeyRef.current=""; }} className={`min-h-14 rounded-2xl border p-3 text-left ${active ? "border-[#9be9e5]/55 bg-[#2a8d8b]" : "border-white/14 bg-[#293548]"}`}><span className="flex items-center gap-2 text-sm"><Icon size={17} />{option.label}</span></button>; })}</div></div><footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4"><button disabled={fulfillBusy} onClick={() => setFulfillTarget(null)} className="h-11 rounded-xl border border-white/16 px-4">Mégse</button><button disabled={fulfillBusy} onClick={() => void fulfillReservation()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5">{fulfillBusy ? <Loader2 className="animate-spin" size={17} /> : <CheckCircle2 size={17} />} Eladás lezárása</button></footer></section></div> : null}
+      {fulfillTarget ? (
+        <div className="fixed inset-0 z-[270] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-[640px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white">
+            <header className="border-b border-white/12 bg-gradient-to-r from-[#1f5557] to-[#2a8d8b] px-5 py-4">
+              <p className="text-[10px] uppercase tracking-[0.15em] text-white/60">Félretett termék átvétele</p>
+              <h3 className="mt-1 text-xl">{reservationCustomerName(fulfillTarget)}</h3>
+              <p className="mt-1 text-sm text-white/70">{fulfillTarget.totalQty} db • {formatMoney(fulfillTarget.totalValue)}</p>
+            </header>
+            <div className="max-h-[70vh] overflow-y-auto p-5">
+              <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 p-3 text-sm">
+                <p>Az eladás <strong>{fulfillTarget.createdBy || actor}</strong> nevére kerül.</p>
+                <p className="mt-1 text-xs text-white/55">A fizetést most {actor} kezeli; a kassza az ő műszakában jelenik meg.</p>
+              </div>
+              <p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-white/45">Fizetési mód</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {PAYMENT_OPTIONS.map((option) => {
+                  const Icon = option.icon;
+                  const active = paymentMethod === option.method;
+                  return <button key={option.method} onClick={() => { setPaymentMethod(option.method); requestKeyRef.current = ""; setError(""); }} className={`min-h-14 rounded-2xl border p-3 text-left ${active ? "border-[#9be9e5]/55 bg-[#2a8d8b]" : "border-white/14 bg-[#293548]"}`}><span className="flex items-center gap-2 text-sm"><Icon size={17} />{option.label}</span></button>;
+                })}
+              </div>
+
+              {paymentMethod === "credit" ? (
+                String(fulfillTarget.customer?.id || "").trim() ? (
+                  <div className="mt-4 rounded-2xl border border-emerald-300/25 bg-emerald-500/10 p-3">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-emerald-100/60">Hitelhez kapcsolt kliens</p>
+                    <p className="mt-1 text-sm text-emerald-50">{reservationCustomerName(fulfillTarget)}</p>
+                    <p className="mt-0.5 text-xs text-emerald-100/55">{fulfillTarget.customer.phone || "Telefonszám nélkül"}</p>
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-[#f8cb2e]/40 bg-[#f8cb2e]/10 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="mt-0.5 shrink-0 text-[#f8cb2e]" size={19} />
+                      <div>
+                        <p className="text-sm font-medium text-[#fff3b0]">Hitelhez kliens szükséges</p>
+                        <p className="mt-1 text-xs leading-relaxed text-white/55">A félretétel maradhat név nélküli. Klienst csak most, a hiteles eladás lezárásakor kell kiválasztani.</p>
+                      </div>
+                    </div>
+                    {fulfillCustomer ? (
+                      <div className="mt-3 flex items-center gap-3 rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 p-3">
+                        <UserRound className="text-[#8ee6e2]" size={18} />
+                        <div className="min-w-0 flex-1"><p className="truncate text-sm">{fulfillCustomer.fullName}</p><p className="text-xs text-white/50">{fulfillCustomer.phone || "–"}</p></div>
+                        <button type="button" onClick={() => setFulfillCustomer(null)} className="grid h-9 w-9 place-items-center rounded-xl border border-white/14"><X size={15} /></button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                          <input value={fulfillCustomerQuery} onChange={(e) => setFulfillCustomerQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchFulfillCustomers(e.currentTarget.value); }} placeholder="Kliens neve vagy telefonszáma" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 outline-none focus:border-[#72d8d4]" />
+                          <button type="button" onClick={() => void searchFulfillCustomers()} className="grid h-12 w-12 place-items-center rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]">{fulfillCustomerLoading ? <Loader2 className="animate-spin" size={17} /> : <Search size={17} />}</button>
+                        </div>
+                        <div className="mt-2 max-h-[180px] space-y-1 overflow-y-auto">
+                          {fulfillCustomers.map((customer) => <button key={customer.id} type="button" onClick={() => setFulfillCustomer(customer)} className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-[#293548] px-3 py-2 text-left hover:border-[#72d8d4]/35"><UserRound size={15} className="text-[#8ee6e2]" /><span className="min-w-0"><span className="block truncate text-sm">{customer.fullName}</span><span className="block text-[11px] text-white/45">{customer.phone || "–"}</span></span></button>)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )
+              ) : null}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button disabled={fulfillBusy} onClick={() => { setFulfillTarget(null); setFulfillCustomer(null); setFulfillCustomerQuery(""); setFulfillCustomers([]); }} className="h-11 rounded-xl border border-white/16 px-4">Mégse</button>
+              <button disabled={fulfillBusy || (paymentMethod === "credit" && !String(fulfillTarget.customer?.id || fulfillCustomer?.id || "").trim())} onClick={() => void fulfillReservation()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 disabled:cursor-not-allowed disabled:opacity-45">{fulfillBusy ? <Loader2 className="animate-spin" size={17} /> : <CheckCircle2 size={17} />} Eladás lezárása</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>,
     document.body,
   );
@@ -406,6 +503,6 @@ function ReservationGrid({ reservations, today, history = false, onFulfill, onRe
   if (!reservations.length) return <div className="flex min-h-[360px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/14 bg-black/5 text-center text-white/42"><PackageSearch size={40} /><p className="mt-3 text-base">Nincs megjeleníthető félretétel.</p></div>;
   return <div className="grid gap-3 lg:grid-cols-2">{reservations.map((item) => {
     const expired = item.status === "active" && Boolean(item.expiresOn && item.expiresOn <= today);
-    return <article key={item.id} className={`overflow-hidden rounded-[24px] border ${expired ? "border-rose-300/55 bg-[#4a313d]" : "border-white/14 bg-[#374357]"}`}><div className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 ${expired ? "border-rose-200/20 bg-rose-500/10" : "border-white/10 bg-[#303b4e]"}`}><div><p className="text-sm">{item.reservationNumber}</p><p className="mt-1 flex flex-wrap gap-2 text-[11px] text-white/48"><span className="inline-flex items-center gap-1"><UserRound size={12} />{item.customer.name}</span><span>{item.customer.phone || "–"}</span><span>Felvette: {item.createdBy || "–"}</span></p></div><span className={`inline-flex items-center rounded-xl border ${expired ? "gap-2.5 border-rose-100/85 bg-[#e11d35] px-4 py-2.5 text-sm font-bold tracking-[0.04em] text-white shadow-[0_8px_22px_rgba(190,18,60,0.42)] ring-1 ring-white/18" : "gap-1 rounded-full border-[#7bd7d4]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]"}`}><CalendarDays size={expired ? 18 : 12} strokeWidth={expired ? 2.5 : 2} />{expired ? <><span>{item.expiresOn === today ? "MA LEJÁR" : "LEJÁRT"}</span><span className="h-5 w-px bg-white/35" /><span className="whitespace-nowrap text-[13px] font-semibold tracking-normal text-white">{formatDateOnly(item.expiresOn)}</span></> : item.status === "active" ? `Lejár: ${formatDateOnly(item.expiresOn)}` : item.status}</span></div><div className="space-y-2 p-3">{item.lines.map((line) => <div key={line.id} className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-[11px] text-white/48">{[line.colorName,line.size,line.productCode].filter(Boolean).join(" • ")}</p></div><div className="text-right"><p className="text-lg text-[#d7fffd]">{line.quantity} db</p><p className="text-xs text-white/48">{formatMoney(line.unitPrice)}</p></div></div>)}</div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-black/5 px-4 py-3"><div><p className="text-[10px] text-white/42">{formatDateTime(item.createdAt)}</p><p className="mt-1 text-base text-[#d7fffd]">{item.totalQty} db • {formatMoney(item.totalValue)}</p></div>{!history && item.status === "active" ? <div className="flex gap-2"><button onClick={() => onRelease?.(item)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-3 text-xs"><Trash2 size={14} /> Vissza készletre</button><button onClick={() => onFulfill?.(item)} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-xs ${expired ? "border-rose-200/55 bg-rose-600" : "border-[#9be9e5]/45 bg-[#2a8d8b]"}`}><CheckCircle2 size={14} /> Átvétel / eladás</button></div> : null}</div></article>;
+    return <article key={item.id} className={`overflow-hidden rounded-[24px] border ${expired ? "border-rose-300/55 bg-[#4a313d]" : "border-white/14 bg-[#374357]"}`}><div className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 ${expired ? "border-rose-200/20 bg-rose-500/10" : "border-white/10 bg-[#303b4e]"}`}><div><p className="text-sm">{item.reservationNumber}</p><p className="mt-1 flex flex-wrap gap-2 text-[11px] text-white/48"><span className="inline-flex items-center gap-1"><UserRound size={12} />{reservationCustomerName(item)}</span>{item.customer.phone ? <span>{item.customer.phone}</span> : null}<span>Felvette: {item.createdBy || "–"}</span></p></div><span className={`inline-flex items-center rounded-xl border ${expired ? "gap-2.5 border-rose-100/85 bg-[#e11d35] px-4 py-2.5 text-sm font-bold tracking-[0.04em] text-white shadow-[0_8px_22px_rgba(190,18,60,0.42)] ring-1 ring-white/18" : "gap-1 rounded-full border-[#7bd7d4]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]"}`}><CalendarDays size={expired ? 18 : 12} strokeWidth={expired ? 2.5 : 2} />{expired ? <><span>{item.expiresOn === today ? "MA LEJÁR" : "LEJÁRT"}</span><span className="h-5 w-px bg-white/35" /><span className="whitespace-nowrap text-[13px] font-semibold tracking-normal text-white">{formatDateOnly(item.expiresOn)}</span></> : item.status === "active" ? `Lejár: ${formatDateOnly(item.expiresOn)}` : item.status}</span></div><div className="space-y-2 p-3">{item.lines.map((line) => <div key={line.id} className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-[11px] text-white/48">{[line.colorName,line.size,line.productCode].filter(Boolean).join(" • ")}</p></div><div className="text-right"><p className="text-lg text-[#d7fffd]">{line.quantity} db</p><p className="text-xs text-white/48">{formatMoney(line.unitPrice)}</p></div></div>)}</div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-black/5 px-4 py-3"><div><p className="text-[10px] text-white/42">{formatDateTime(item.createdAt)}</p><p className="mt-1 text-base text-[#d7fffd]">{item.totalQty} db • {formatMoney(item.totalValue)}</p></div>{!history && item.status === "active" ? <div className="flex gap-2"><button onClick={() => onRelease?.(item)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-3 text-xs"><Trash2 size={14} /> Vissza készletre</button><button onClick={() => onFulfill?.(item)} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-xs ${expired ? "border-rose-200/55 bg-rose-600" : "border-[#9be9e5]/45 bg-[#2a8d8b]"}`}><CheckCircle2 size={14} /> Átvétel / eladás</button></div> : null}</div></article>;
   })}</div>;
 }
