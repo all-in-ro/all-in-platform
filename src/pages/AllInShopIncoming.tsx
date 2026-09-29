@@ -133,6 +133,13 @@ function formatDateTime(value?: string | null) {
   return date.toLocaleString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatMoney(value?: number | string | null, currency = "RON") {
+  const amount = Number(String(value ?? 0).replace(",", "."));
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  const code = String(currency || "RON").trim().toUpperCase() || "RON";
+  return `${new Intl.NumberFormat("hu-HU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(safeAmount)} ${code}`;
+}
+
 function localDateKey(value?: string | null) {
   if (!value) return "ismeretlen";
   const date = new Date(value);
@@ -418,10 +425,12 @@ function IncomingDocument({
               {document.receivedCount}/{document.lineCount} tétel átvéve
             </span>
             <span className="block text-[11px] text-white/42">{document.totalQty} db az Avizon</span>
+            <span className="mt-0.5 block text-[11px] font-medium text-[#f8cb2e]">Összérték: {formatMoney(document.totalValue, document.currencyCode)}</span>
           </span>
 
           <span className="rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1.5 text-[11px] text-[#d7fffd] sm:hidden">
-            {document.receivedCount}/{document.lineCount} • {document.totalQty} db
+            <span className="block">{document.receivedCount}/{document.lineCount} • {document.totalQty} db</span>
+            <span className="mt-0.5 block text-[10px] font-medium text-[#f8cb2e]">{formatMoney(document.totalValue, document.currencyCode)}</span>
           </span>
 
           <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition ${expanded ? "border-[#9be9e5]/42 bg-[#2a8d8b] text-white" : "border-white/14 bg-black/10 text-white/62"}`}>
