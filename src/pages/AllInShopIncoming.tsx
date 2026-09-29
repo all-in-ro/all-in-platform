@@ -164,6 +164,12 @@ function receivedByLabel(value?: string | null) {
   return raw;
 }
 
+function historyGroupMoney(rows: AifShopIncomingHistoryItem[]) {
+  const currencies = Array.from(new Set(rows.map((row) => String(row.currencyCode || "RON").trim().toUpperCase() || "RON")));
+  const total = rows.reduce((sum, row) => sum + Number(row.lineValue || 0), 0);
+  return { total, currency: currencies.length === 1 ? currencies[0] : "RON", mixed: currencies.length > 1 };
+}
+
 export default function AllInShopIncoming({ open, actor, locationCode, locationName, onClose }: Props) {
   const [mode, setMode] = useState<Mode>("waiting");
   const [items, setItems] = useState<AifShopIncomingDocument[]>([]);
@@ -314,9 +320,7 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
                   {groupedHistory.map(([date, rows]) => {
                     const expanded = expandedHistoryDate === date;
                     const totalQty = rows.reduce((sum, row) => sum + row.qty, 0);
-                    const dailyValue = rows.reduce((sum, row) => sum + Number(row.lineValue || 0), 0);
-                    const currencies = Array.from(new Set(rows.map((row) => String(row.currencyCode || "RON").toUpperCase())));
-                    const dailyCurrency = currencies.length === 1 ? currencies[0] : "RON";
+                    const money = historyGroupMoney(rows);
                     return (
                       <section key={date} className="overflow-hidden rounded-[24px] border border-white/14 bg-[#374357]">
                         <button
@@ -324,17 +328,27 @@ export default function AllInShopIncoming({ open, actor, locationCode, locationN
                           onClick={() => setExpandedHistoryDate((current) => current === date ? null : date)}
                           className={`flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition ${expanded ? "border-b border-white/10 bg-[#303b4e]" : "bg-[#303b4e] hover:bg-[#37465c]"}`}
                         >
-                          <span className="flex min-w-0 items-center gap-3">
+                          <span className="flex min-w-0 flex-1 items-center gap-3 pr-2">
                             <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#8ee6e2]"><CalendarDays size={18} /></span>
                             <span className="min-w-0">
                               <span className="block text-base text-white">{prettyDate(date)}</span>
                               <span className="mt-1 block text-[11px] text-white/45">Kattints a napi átvétel részleteihez</span>
                             </span>
                           </span>
-                          <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#d7fffd]">{totalQty} db • {rows.length} tétel</span>
-                            <span className="rounded-full border border-[#f8cb2e]/45 bg-[#f8cb2e]/12 px-2.5 py-1 text-[10px] font-semibold text-[#f8cb2e]">Érték: {formatMoney(dailyValue, dailyCurrency)}</span>
-                            <ChevronDown size={18} className={`text-white/55 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                          <span className="flex shrink-0 items-center gap-2.5 sm:gap-3">
+                            <span className="hidden min-w-[150px] rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-4 py-2.5 text-right sm:block">
+                              <span className="block text-[9px] uppercase tracking-[0.12em] text-white/38">Mennyiség</span>
+                              <span className="mt-0.5 block text-[14px] font-semibold text-[#d7fffd]">{totalQty} db • {rows.length} tétel</span>
+                            </span>
+                            <span className="min-w-[180px] rounded-2xl border border-[#f8cb2e]/55 bg-[#f8cb2e]/12 px-4 py-2.5 text-right shadow-[inset_0_0_0_1px_rgba(248,203,46,0.06)] sm:min-w-[205px]">
+                              <span className="block text-[9px] uppercase tracking-[0.12em] text-[#f8cb2e]/72">Eladási érték</span>
+                              <span className="mt-0.5 block text-[16px] font-bold text-[#f8cb2e] sm:text-[18px]">
+                                {money.mixed ? "Vegyes pénznem" : formatMoney(money.total, money.currency)}
+                              </span>
+                            </span>
+                            <span className="rounded-xl border border-white/10 bg-black/10 p-2">
+                              <ChevronDown size={20} className={`text-white/65 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                            </span>
                           </span>
                         </button>
                         {expanded ? <div className="space-y-2 p-3">{rows.map((row) => <HistoryRow key={row.id} item={row} />)}</div> : null}
@@ -533,14 +547,14 @@ function HistoryRow({ item }: { item: AifShopIncomingHistoryItem }) {
       </span>
       <div className="min-w-0">
         <p className="truncate text-sm">{item.product.title}</p>
-        <p className="mt-1 text-[11px] text-white/48">{[item.product.brandName, item.product.colorName, item.product.size, item.product.productCode].filter(Boolean).join(" • ")}</p>
+        <p className="mt-1 text-[11px] text-white/48">{[item.product.brandName,item.product.colorName,item.product.size,item.product.productCode].filter(Boolean).join(" • ")}</p>
         <p className="mt-1 text-[11px] text-[#d7fffd]">{item.document.documentNumber} • {item.document.sourceName} → {item.document.targetName}</p>
-        <p className="mt-1 text-[10px] text-white/42">Aviz összérték: <span className="font-medium text-[#f8cb2e]">{formatMoney(item.document.totalValue, item.document.currencyCode)}</span></p>
+        <p className="mt-1 text-[10px] text-white/42">Aviz összértéke: <span className="font-medium text-[#f8cb2e]">{formatMoney(item.document.totalValue, item.document.currencyCode)}</span></p>
       </div>
       <div className="text-right">
         <p className="text-lg text-[#d7fffd]">{item.qty} db</p>
-        <p className="mt-0.5 text-xs font-semibold text-[#f8cb2e]">{formatMoney(item.lineValue, item.currencyCode)}</p>
-        <p className="mt-1 text-[11px] text-white/45">{formatDateTime(item.receivedAt)}</p>
+        <p className="mt-0.5 text-sm font-semibold text-[#f8cb2e]">{formatMoney(item.lineValue, item.currencyCode)}</p>
+        <p className="text-[11px] text-white/45">{formatDateTime(item.receivedAt)}</p>
         <p className="mt-1 text-[10px] text-white/42">{receivedByLabel(item.receivedBy)}</p>
       </div>
     </div>
