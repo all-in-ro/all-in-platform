@@ -3983,6 +3983,8 @@ export type AifShopIncomingDocument = {
   receivedCount: number;
   lineCount: number;
   totalQty: number;
+  totalValue: number;
+  currencyCode: string;
   lines: AifShopIncomingLine[];
 };
 
