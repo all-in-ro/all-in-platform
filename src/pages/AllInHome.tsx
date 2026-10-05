@@ -268,23 +268,23 @@ function MainMenuButton({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-[#b60e21] bg-gradient-to-r from-[#b60e21] via-[#c9142b] to-[#97101d] text-white shadow-[0_9px_24px_rgba(182,14,33,0.32)] hover:from-[#c9142b] hover:to-[#a80d20]"
+      ? "border-[#b60e21] bg-gradient-to-r from-[#b60e21] via-[#c9142b] to-[#a91020] text-white hover:from-[#c9142b] hover:to-[#b60e21]"
       : tone === "warning"
-        ? "border-[#f6ca3c] bg-gradient-to-r from-[#f1a313] via-[#e8890f] to-[#c9670a] !text-white shadow-[0_9px_24px_rgba(232,137,15,0.34)] hover:from-[#f7b21b] hover:via-[#ed9412] hover:to-[#d2730b]"
+        ? "border-[#f6ca3c] bg-gradient-to-r from-[#ee9d10] via-[#e5890f] to-[#d7770c] !text-white hover:from-[#f2a817] hover:via-[#e99413] hover:to-[#de8010]"
         : tone === "accent"
           ? "border-[#7bd7d4]/55 bg-gradient-to-r from-[#247f7c] to-[#2c6674] hover:brightness-110"
           : "border-white/30 bg-[#354153] hover:border-white/45 hover:bg-[#3c485b]";
 
   const iconToneClass =
     tone === "warning"
-      ? "border-white/35 bg-black/15 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.05)]"
+      ? "border-white/30 bg-black/14 text-white"
       : tone === "danger"
         ? "border-white/30 bg-black/14 text-white"
         : "border-white/18 bg-black/10";
 
   const badgeToneClass =
     tone === "warning"
-      ? "border-white/45 bg-[#8e4308]/42 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.05)]"
+      ? "border-white/38 bg-[#8e4308]/36 text-white"
       : tone === "danger"
         ? "border-white/38 bg-black/14 text-white"
         : "border-white/28 bg-black/10 text-white";
