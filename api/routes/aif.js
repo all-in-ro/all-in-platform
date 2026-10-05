@@ -7125,12 +7125,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   // Legacy/import compatibility: if an incoming row has an exact, unique barcode that already
   // belongs to the same brand + size + normalized color, we may use that EXISTING variant for
   // stock even when the old model_code is a historical placeholder and therefore differs from the
-  // new supplier model code. In this mode the product identity is deliberately preserved:
+  // new supplier model code. In this mode the physical product identity is deliberately preserved:
   // - model_id / model_code are NOT changed
   // - internal_sku is NOT changed
-  // - existing product/supplier code is NOT overwritten and no new supplier-code mapping is created
   // - barcode / color identity fields are NOT rewritten
-  // The incoming supplier product code stays on the import row for audit/history only.
+  // - the old supplier/product-code rows are NOT overwritten
+  // - the incoming supplier product code is attached as a NEW/current supplier-code mapping
+  //   (or refreshed if that exact mapping already exists), so the old code remains searchable/history.
   async function findLegacyBarcodeStockTarget(client, { normalized, supplierCode }) {
     const barcode = emptyToNull(normalized?.barcode);
     const size = text(normalized?.size);
@@ -7142,10 +7143,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       `SELECT
          v.id, v.model_id, v.barcode, v.size, v.color_code, v.color_name, v.status,
          m.model_code, m.status AS model_status, m.brand_id,
-         b.code AS brand_code, b.name AS brand_name
+         b.code AS brand_code, b.name AS brand_name,
+         current_sc.supplier_product_code AS previous_supplier_product_code
        FROM aif_product_variants v
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN LATERAL (
+         SELECT sc.supplier_product_code
+         FROM aif_variant_supplier_codes sc
+         WHERE sc.variant_id=v.id
+           AND COALESCE(sc.is_active,true)=true
+           AND NULLIF(btrim(COALESCE(sc.supplier_product_code,'')),'') IS NOT NULL
+         ORDER BY sc.updated_at DESC NULLS LAST,
+                  sc.created_at DESC NULLS LAST,
+                  sc.id::text DESC
+         LIMIT 1
+       ) current_sc ON true
        WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
        ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
                 v.created_at ASC,
@@ -7369,15 +7382,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         let variantId;
         if (legacyBarcodeTarget) {
           // Exact barcode + same brand/size/color, but legacy model identity differs.
-          // Stock goes to the existing product. Incoming product code is audit-only and MUST NOT
-          // become the warehouse product code, so we intentionally skip upsertSupplierCode here.
+          // Stock goes to the existing physical variant. The old product-code mapping is preserved,
+          // while the incoming supplier product code is added/refreshed as the current mapping.
           variantId = await refreshLegacyBarcodeStockTarget(client, {
             owner: legacyBarcodeTarget,
+            normalized,
+          });
+          await upsertSupplierCode(client, {
+            variantId,
+            supplierId: batch.supplier_id,
             normalized,
           });
           normalized.legacyBarcodeStockMatch = true;
           normalized.legacyBarcodeMatchedVariantId = String(variantId);
           normalized.legacyBarcodeIncomingProductCode = normalized.supplierProductCode || null;
+          normalized.legacyBarcodePreviousSupplierProductCode = legacyBarcodeTarget.previous_supplier_product_code || null;
+          normalized.legacyBarcodeCurrentSupplierProductCode = normalized.supplierProductCode || null;
+          normalized.legacyBarcodeSupplierCodeHistoryPreserved = true;
           normalized.legacyBarcodeExistingModelCode = legacyBarcodeTarget.model_code || null;
         } else {
           const modelId = await upsertModel(client, {
@@ -11673,12 +11694,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const supplierCodes = await pool.query(
         `SELECT sc.id, sc.supplier_id, sc.supplier_product_code, sc.supplier_variant_code,
                 sc.supplier_color_code, sc.supplier_color_name, sc.supplier_size,
-                sc.supplier_barcode, sc.supplier_sku, sc.is_active,
+                sc.supplier_barcode, sc.supplier_sku, sc.is_active, sc.created_at, sc.updated_at,
                 s.name AS supplier_name
          FROM aif_variant_supplier_codes sc
          JOIN aif_suppliers s ON s.id=sc.supplier_id
          WHERE sc.variant_id=$1
-         ORDER BY sc.is_active DESC, s.name ASC`,
+         ORDER BY COALESCE(sc.is_active,true) DESC,
+                  sc.updated_at DESC NULLS LAST,
+                  sc.created_at DESC NULLS LAST,
+                  sc.id::text DESC`,
         [variantId]
       );
 
