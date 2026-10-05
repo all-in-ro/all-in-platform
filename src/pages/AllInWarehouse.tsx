@@ -4597,9 +4597,20 @@ async function copyWarehouseCodeToClipboard(value: string) {
   }
 }
 
+function supplierCodeRowsFromDetail(d: DetailResponse | null | undefined) {
+  const rows = Array.isArray(d?.supplierCodes) ? d!.supplierCodes.filter((row: any) => row && typeof row === "object") : [];
+  return rows.slice().sort((a: any, b: any) => {
+    const activeDiff = Number(b?.is_active !== false) - Number(a?.is_active !== false);
+    if (activeDiff) return activeDiff;
+    const updatedDiff = dateTimeMs(b?.updated_at || b?.created_at) - dateTimeMs(a?.updated_at || a?.created_at);
+    if (updatedDiff) return updatedDiff;
+    return String(b?.id || "").localeCompare(String(a?.id || ""), "hu", { numeric: true, sensitivity: "base" });
+  });
+}
+
 function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
   const item = (d?.item || {}) as Record<string, any>;
-  const supplierRows = Array.isArray(d?.supplierCodes) ? d!.supplierCodes : [];
+  const supplierRows = supplierCodeRowsFromDetail(d);
   const active = supplierRows.find((row: any) => row && row.is_active !== false && String(row.supplier_product_code || "").trim());
   const anyRow = supplierRows.find((row: any) => row && String(row.supplier_product_code || "").trim());
   return firstWarehouseText(
@@ -4609,6 +4620,31 @@ function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
     anyRow?.supplier_product_code,
     item.model_code && String(item.model_code).includes(":") ? String(item.model_code).split(":").pop() : ""
   );
+}
+
+function previousSupplierProductCodesFromDetail(d: DetailResponse | null | undefined, currentCode?: unknown) {
+  const item = (d?.item || {}) as Record<string, any>;
+  const attrs = item.attributes && typeof item.attributes === "object" && !Array.isArray(item.attributes)
+    ? item.attributes as Record<string, any>
+    : {};
+  const currentKey = normalizeSearch(firstWarehouseText(currentCode, supplierProductCodeFromDetail(d)));
+  const seen = new Set<string>();
+  const history: string[] = [];
+  const add = (value: unknown) => {
+    const code = String(value || "").trim();
+    const key = normalizeSearch(code);
+    if (!code || !key || key === currentKey || seen.has(key)) return;
+    seen.add(key);
+    history.push(code);
+  };
+
+  for (const row of supplierCodeRowsFromDetail(d)) add(row?.supplier_product_code);
+  add(attrs.legacyProductCode);
+  add(attrs.legacy_product_code);
+  add(attrs.legacyOriginalProductCode);
+  add(attrs.legacy_original_product_code);
+
+  return history;
 }
 
 function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók", buttonClassName = "", wrapperClassName = "" }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean; buttonLabel?: React.ReactNode; buttonClassName?: string; wrapperClassName?: string }) {
@@ -17248,8 +17284,25 @@ export default function AllInWarehouse() {
                     <input className={input} value={edit.imageUrl} onChange={(e) => setEdit((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
                   </label>
                   <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
-                    <p>Belső azonosító: {detail.item?.internal_sku || "-"}</p>
-                    <p className="mt-1">Termékkód: {edit.supplierProductCode || "nincs megadva"}</p>
+                    <p><span className="text-white/48">Aktuális termékkód:</span> <span className="font-mono text-[#d7fffd]">{edit.supplierProductCode || "nincs megadva"}</span></p>
+                    {(() => {
+                      const previousCodes = previousSupplierProductCodesFromDetail(detail, edit.supplierProductCode);
+                      return (
+                        <div className="mt-2 border-t border-white/10 pt-2">
+                          <p className="text-[10px] uppercase tracking-[0.08em] text-white/42">Korábbi termékkódok</p>
+                          {previousCodes.length ? (
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {previousCodes.map((code) => (
+                                <span key={code} className="max-w-full break-all rounded-lg border border-amber-200/22 bg-amber-500/10 px-2 py-1 font-mono text-[10px] leading-snug text-amber-50" title={code}>{code}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[11px] text-white/38">Nincs külön történeti termékkód.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <p className="mt-2"><span className="text-white/48">Belső azonosító:</span> <span className="font-mono text-white/78">{detail.item?.internal_sku || "-"}</span></p>
                     <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
                     <p className="mt-1">S/N/COD: {edit.snCod || "nincs megadva"}</p>
                     <p className="mt-1">Vámtarifa kód: {edit.customsTariffCode || "nincs megadva"}</p>
