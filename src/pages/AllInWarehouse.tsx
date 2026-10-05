@@ -4567,21 +4567,22 @@ function compareWarehouseVariantsInsideSameProductCode(a: InventoryItem, b: Inve
     sensitivity: "base",
   });
 
-  // Ugyanazon AKTUÁLIS termékkódon belül a méret az elsődleges rendezési kulcs.
-  // Ez szándékosan megelőzi a nyers színkódot, mert a legacy importok ugyanarra a
-  // tényleges színre különböző technikai értéket őrizhetnek (pl. NEGRU vs 890).
-  // A felületen mindkettő lehet fekete, ezért a nyers színkód nem törheti szét az
-  // XS, S, M, L, XL, XXL... sorrendet.
+  // Ugyanazon AKTUÁLIS termékkódon belül először a TÉNYLEGES / MEGJELENÍTETT színt
+  // tartjuk egyben, és csak azon belül rendezzük a méreteket. Így a helyes sorrend:
+  // piros S, M, L, XL..., majd kék S, M, L, XL... és NEM piros S, kék S, piros M...
+  // A nyers beszállítói színkódot (pl. NEGRU vs 890) nem használjuk elsődleges
+  // csoportosításra, mert ugyanazt a valós színt több történeti kód is jelölheti.
+  const aColor = displayColorName((a as any).color_name, (a as any).color_code);
+  const bColor = displayColorName((b as any).color_name, (b as any).color_code);
+  const byColor = compareText(normalizeSearch(aColor), normalizeSearch(bColor));
+  if (byColor !== 0) return byColor;
+
+  // Egy színcsoporton belül emberi méretsorrend: XXXS, XXS, XS, S, M, L, XL,
+  // XXL... illetve numerikus méreteknél 36, 37, 38, 39... .
   const bySize = compareWarehouseSizeLabels(a.size, b.size);
   if (bySize !== 0) return bySize;
 
-  // Azonos méretnél csak másodlagosan rendezzünk szín szerint, lehetőleg a
-  // felhasználónak megjelenített / normalizált színnévvel.
-  const aColor = displayColorName((a as any).color_name, (a as any).color_code);
-  const bColor = displayColorName((b as any).color_name, (b as any).color_code);
-  const byColor = compareText(aColor, bColor);
-  if (byColor !== 0) return byColor;
-
+  // Csak teljes egyezésnél legyen technikai stabilizáló kulcs.
   return compareText(a.variant_id, b.variant_id);
 }
 
@@ -9333,9 +9334,9 @@ export default function AllInWarehouse() {
     out.sort((a, b) => {
       // Bármilyen globális rendezés legyen kiválasztva (bejövő dátum, készlet, érték stb.),
       // ugyanazon aktuális termékkód variánsainak belső sorrendje mindig stabil maradjon:
-      // színcsoporton belül XS, S, M, L, XL, XXL... illetve numerikus méretsorrend.
-      // Ez akadályozza meg az olyan listát, mint XS, L, S, XXL csak azért, mert a sorok
-      // külön időpontban kerültek be vagy frissültek.
+      // előbb egy normalizált szín teljes méretsora (XS, S, M, L, XL, XXL...), majd a
+      // következő szín teljes méretsora. Így nem keveredik össze a piros S, kék S,
+      // piros M, kék M mintázat, és a legacy technikai színkód sem töri szét a csoportot.
       const insideSameProductCode = compareWarehouseVariantsInsideSameProductCode(a, b);
       if (insideSameProductCode !== 0) return insideSameProductCode;
 
