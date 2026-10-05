@@ -268,12 +268,31 @@ function MainMenuButton({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-[#b60e21] bg-[#b60e21] hover:bg-[#9f0c1d]"
+      ? "border-[#b60e21] bg-gradient-to-r from-[#b60e21] via-[#c9142b] to-[#97101d] text-white shadow-[0_9px_24px_rgba(182,14,33,0.32)] hover:from-[#c9142b] hover:to-[#a80d20]"
       : tone === "warning"
-        ? "border-[#f6ca3c] bg-[#f6ca3c] !text-[#2b2300] hover:bg-[#efd04f]"
+        ? "border-[#f6ca3c] bg-gradient-to-r from-[#f1a313] via-[#e8890f] to-[#c9670a] !text-white shadow-[0_9px_24px_rgba(232,137,15,0.34)] hover:from-[#f7b21b] hover:via-[#ed9412] hover:to-[#d2730b]"
         : tone === "accent"
           ? "border-[#7bd7d4]/55 bg-gradient-to-r from-[#247f7c] to-[#2c6674] hover:brightness-110"
           : "border-white/30 bg-[#354153] hover:border-white/45 hover:bg-[#3c485b]";
+
+  const iconToneClass =
+    tone === "warning"
+      ? "border-white/35 bg-black/15 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.05)]"
+      : tone === "danger"
+        ? "border-white/30 bg-black/14 text-white"
+        : "border-white/18 bg-black/10";
+
+  const badgeToneClass =
+    tone === "warning"
+      ? "border-white/45 bg-[#8e4308]/42 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.05)]"
+      : tone === "danger"
+        ? "border-white/38 bg-black/14 text-white"
+        : "border-white/28 bg-black/10 text-white";
+
+  const arrowToneClass =
+    tone === "warning" || tone === "danger"
+      ? "text-white/85 group-hover:text-white"
+      : "text-white/55 group-hover:text-white";
 
   return (
     <button
@@ -281,16 +300,16 @@ function MainMenuButton({
       onClick={() => navigate(hash)}
       type="button"
     >
-      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/18 bg-black/10">
+      <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${iconToneClass}`}>
         <Icon className="h-4 w-4" />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm uppercase tracking-[0.045em]">{label}</span>
       {badge ? (
-        <span className="rounded-full border border-white/28 bg-black/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.05em]">
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.05em] ${badgeToneClass}`}>
           {badge}
         </span>
       ) : null}
-      <ChevronRight className="h-4 w-4 shrink-0 text-white/55 transition group-hover:translate-x-0.5 group-hover:text-white" />
+      <ChevronRight className={`h-4 w-4 shrink-0 transition group-hover:translate-x-0.5 ${arrowToneClass}`} />
     </button>
   );
 }
