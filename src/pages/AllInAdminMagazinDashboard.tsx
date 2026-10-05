@@ -2045,13 +2045,14 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Eladott termékek és fizetési események</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-[10px] text-white/50">
-                {eventLogSales.length} sor
+                {integer(summary?.itemsSold)} db eladva • {eventLogSales.length} sor
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] border-collapse text-xs">
+              <table className="w-full min-w-[1230px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
+                    <th className="w-[54px] min-w-[54px] px-2 py-3 text-center">#</th>
                     <th className="px-3 py-3 text-left">Termék</th>
                     <th className="whitespace-nowrap px-3 py-3 text-left">Időpont</th>
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
@@ -2067,9 +2068,12 @@ export default function AllInAdminMagazinDashboard({
                   </tr>
                 </thead>
                 <tbody>
-                  {eventLogSales.map((sale) => {
+                  {eventLogSales.map((sale, index) => {
                     const settlement = isPaymentSettlement(sale);
                     const settlementMeta = settlementInfo(sale);
+                    const reverseRowNumber = settlement
+                      ? null
+                      : eventLogSales.slice(index).filter((item) => !isPaymentSettlement(item)).length;
                     return (
                     <tr
                       key={sale.lineId}
@@ -2079,6 +2083,25 @@ export default function AllInAdminMagazinDashboard({
                           : "border-white/8 hover:bg-white/[0.035]"
                       }`}
                     >
+                      <td className="w-[54px] min-w-[54px] px-2 py-3 text-center align-middle">
+                        {reverseRowNumber !== null ? (
+                          <span
+                            className="inline-flex h-8 min-w-8 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/14 px-2 text-[12px] font-medium tabular-nums text-[#d7fffd]"
+                            title={`${reverseRowNumber}. eladott terméksor`}
+                            aria-label={`${reverseRowNumber}. eladott terméksor`}
+                          >
+                            {reverseRowNumber}
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex h-8 min-w-8 items-center justify-center rounded-xl border border-[#9bc8ff]/30 bg-[#3978b9]/14 px-2 text-[9px] text-[#d9ecff]"
+                            title="Fizetési esemény, nem új termékeladás"
+                            aria-label="Fizetési esemény"
+                          >
+                            FIZ
+                          </span>
+                        )}
+                      </td>
                       <td className="min-w-[300px] px-3 py-3">
                         <div className="flex items-start gap-3">
                           <ProductThumb
