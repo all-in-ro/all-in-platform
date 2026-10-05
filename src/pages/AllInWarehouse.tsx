@@ -4537,23 +4537,41 @@ function compareWarehouseVariantPresentation(a: InventoryItem, b: InventoryItem)
   const byTitle = compareText(a.title_ro || a.shopify_title, b.title_ro || b.shopify_title);
   if (byTitle !== 0) return byTitle;
 
+  // A raktár vizuális rendjének elsődleges termékazonosítója az AKTUÁLIS termékkód.
+  // Ugyanazon termékkód variánsai így biztosan egymás mellett maradnak.
+  const byProductCode = compareText(itemProductCode(a), itemProductCode(b));
+  if (byProductCode !== 0) return byProductCode;
+
   const byFamily = compareText(warehouseProductFamilyCode(a), warehouseProductFamilyCode(b));
   if (byFamily !== 0) return byFamily;
 
-  // Azonos termékcsaládnál előbb egy szín összes mérete jön, és csak utána
-  // a következő színkód. Így a 069 és 601 sorok nem váltogatják egymást.
+  // Azonos termékkódon belül előbb egy szín összes mérete jön, majd a következő szín.
+  // A méretsorrend nem ABC: XXXS, XXS, XS, S, M, L, XL, XXL... illetve a numerikus
+  // méreteknél valódi számsorrend (36, 37, 38, 39...), nem szöveges rendezés.
   const byColorCode = compareText(warehouseVariantColorSortKey(a), warehouseVariantColorSortKey(b));
   if (byColorCode !== 0) return byColorCode;
 
-  const aSizeRank = warehouseVariantSizeSortRank(a.size);
-  const bSizeRank = warehouseVariantSizeSortRank(b.size);
-  if (aSizeRank !== bSizeRank) return aSizeRank - bSizeRank;
-
-  const bySize = compareText(a.size, b.size);
+  const bySize = compareWarehouseSizeLabels(a.size, b.size);
   if (bySize !== 0) return bySize;
 
-  const byProductCode = compareText(itemProductCode(a), itemProductCode(b));
-  if (byProductCode !== 0) return byProductCode;
+  return compareText(a.variant_id, b.variant_id);
+}
+
+function compareWarehouseVariantsInsideSameProductCode(a: InventoryItem, b: InventoryItem) {
+  const aCode = normalizeSearch(itemProductCode(a));
+  const bCode = normalizeSearch(itemProductCode(b));
+  if (!aCode || aCode !== bCode) return 0;
+
+  const compareText = (left: unknown, right: unknown) => String(left || "").localeCompare(String(right || ""), "hu", {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  const byColor = compareText(warehouseVariantColorSortKey(a), warehouseVariantColorSortKey(b));
+  if (byColor !== 0) return byColor;
+
+  const bySize = compareWarehouseSizeLabels(a.size, b.size);
+  if (bySize !== 0) return bySize;
 
   return compareText(a.variant_id, b.variant_id);
 }
@@ -9304,6 +9322,14 @@ export default function AllInWarehouse() {
     if (stockFilter === "inactive") out = out.filter(needsWarehouseActivation);
     if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
     out.sort((a, b) => {
+      // Bármilyen globális rendezés legyen kiválasztva (bejövő dátum, készlet, érték stb.),
+      // ugyanazon aktuális termékkód variánsainak belső sorrendje mindig stabil maradjon:
+      // színcsoporton belül XS, S, M, L, XL, XXL... illetve numerikus méretsorrend.
+      // Ez akadályozza meg az olyan listát, mint XS, L, S, XXL csak azért, mert a sorok
+      // külön időpontban kerültek be vagy frissültek.
+      const insideSameProductCode = compareWarehouseVariantsInsideSameProductCode(a, b);
+      if (insideSameProductCode !== 0) return insideSameProductCode;
+
       const effectiveSortMode = shopifyFilter === "recent_mapped" ? "shopify_connected_desc" : sortMode;
       if (effectiveSortMode === "incoming_desc") {
         if (incomingFocus?.mode === "activation") {
