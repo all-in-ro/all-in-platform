@@ -7123,15 +7123,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
   // Legacy/import compatibility: if an incoming row has an exact, unique barcode that already
-  // belongs to the same brand + size + normalized color, we may use that EXISTING variant for
-  // stock even when the old model_code is a historical placeholder and therefore differs from the
-  // new supplier model code. In this mode the physical product identity is deliberately preserved:
-  // - model_id / model_code are NOT changed
+  // belongs to the same brand + size + normalized color, we keep the EXISTING physical variant
+  // even when its old model_code is a historical placeholder. The current import then normalizes
+  // that variant onto the canonical/current model instead of leaving the old "legacy" model title.
+  //
+  // Preserved identity/history:
   // - internal_sku is NOT changed
-  // - barcode / color identity fields are NOT rewritten
-  // - the old supplier/product-code rows are NOT overwritten
-  // - the incoming supplier product code is attached as a NEW/current supplier-code mapping
-  //   (or refreshed if that exact mapping already exists), so the old code remains searchable/history.
+  // - barcode is NOT changed
+  // - color/size identity is NOT rewritten
+  // - old supplier/product-code rows are NOT overwritten
+  // - old model information is appended to variant.attributes.legacyModelHistory
+  //
+  // Current data:
+  // - model_id is moved to the canonical/current model (created/updated through upsertModel)
+  // - incoming supplier product code becomes the newest/current supplier-code mapping
+  // - current receipt prices / image / S/N/COD are refreshed as before
   async function findLegacyBarcodeStockTarget(client, { normalized, supplierCode }) {
     const barcode = emptyToNull(normalized?.barcode);
     const size = text(normalized?.size);
@@ -7141,8 +7147,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const result = await client.query(
       `SELECT
-         v.id, v.model_id, v.barcode, v.size, v.color_code, v.color_name, v.status,
-         m.model_code, m.status AS model_status, m.brand_id,
+         v.id, v.model_id, v.barcode, v.size, v.color_code, v.color_name, v.status, v.attributes,
+         m.model_code, m.title_ro AS model_title_ro, m.status AS model_status, m.brand_id,
          b.code AS brand_code, b.name AS brand_name,
          current_sc.supplier_product_code AS previous_supplier_product_code
        FROM aif_product_variants v
@@ -7207,43 +7213,176 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return owner;
   }
 
-  async function refreshLegacyBarcodeStockTarget(client, { owner, normalized }) {
-    const snCod = emptyToNull(normalized?.snCod ?? normalized?.sn_cod);
-    const variantAttributesJson = variantAttributesJsonFromNormalized(normalized || {});
+  async function findLegacyCanonicalVariantCollision(client, { targetModelId, owner, normalized }) {
+    const size = text(normalized?.size || owner?.size || "");
+    if (!size) return null;
 
-    // Refresh commercial/current receipt data, but do not rewrite product identity.
+    const candidates = await client.query(
+      `SELECT id, barcode, size, color_code, color_name, internal_sku
+       FROM aif_product_variants
+       WHERE model_id=$1
+         AND id<>$2
+         AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
+       ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
+                created_at ASC,
+                id::text ASC`,
+      [targetModelId, owner.id, size]
+    );
+
+    const incomingCode = normCode(normalized?.colorCode || normalized?.supplierColorCode || "");
+    const incomingName = normCode(normalized?.colorName || "");
+    const ownerCode = normCode(owner?.color_code || "");
+    const ownerName = normCode(owner?.color_name || "");
+
+    for (const candidate of candidates.rows || []) {
+      const candidateCode = normCode(candidate?.color_code || "");
+      const candidateName = normCode(candidate?.color_name || "");
+      const codeMatches =
+        Boolean(candidateCode && incomingCode && candidateCode === incomingCode) ||
+        Boolean(candidateCode && ownerCode && candidateCode === ownerCode);
+      const nameMatches =
+        Boolean(candidateName && incomingName && candidateName === incomingName) ||
+        Boolean(candidateName && ownerName && candidateName === ownerName);
+      if (codeMatches || nameMatches) return candidate;
+    }
+
+    return null;
+  }
+
+  async function refreshLegacyBarcodeStockTarget(client, { owner, normalized, supplierCode }) {
+    const oldModelId = owner.model_id;
+    const oldModelCode = owner.model_code || null;
+    const oldModelTitle = owner.model_title_ro || null;
+
+    // upsertModel gives us the same canonical model that a brand-new/current import row would use.
+    // It also refreshes the model name/description/category/product type with the current import data.
+    const targetModelId = await upsertModel(client, {
+      supplierCode,
+      normalized,
+      createStatus: "active",
+      updateStatus: "active",
+    });
+
+    const targetModelRes = await client.query(
+      `SELECT id, model_code, title_ro
+       FROM aif_product_models
+       WHERE id=$1
+       LIMIT 1`,
+      [targetModelId]
+    );
+    const targetModel = targetModelRes.rows[0] || {
+      id: targetModelId,
+      model_code: null,
+      title_ro: normalized?.titleRo || null,
+    };
+
+    if (String(targetModelId) !== String(oldModelId)) {
+      const collision = await findLegacyCanonicalVariantCollision(client, {
+        targetModelId,
+        owner,
+        normalized,
+      });
+
+      if (collision) {
+        const error = new Error(
+          `A vonalkód alapján megtalált régi variáns nem tehető át automatikusan az aktuális modell alá, mert ott már létezik ugyanilyen méret/szín variáns (${collision.internal_sku || collision.barcode || collision.id}).`
+        );
+        error.statusCode = 409;
+        error.code = "legacy_barcode_canonical_model_collision";
+        error.barcode = owner?.barcode || normalized?.barcode || null;
+        error.conflictVariantId = String(collision.id);
+        error.targetModelId = String(targetModelId);
+        throw error;
+      }
+    }
+
+    const snCod = emptyToNull(normalized?.snCod ?? normalized?.sn_cod);
+    const incomingAttributes = variantAttributesFromNormalized(normalized || {});
+    const existingAttributes = owner?.attributes && typeof owner.attributes === "object" && !Array.isArray(owner.attributes)
+      ? owner.attributes
+      : {};
+    const legacyModelHistory = Array.isArray(existingAttributes.legacyModelHistory)
+      ? [...existingAttributes.legacyModelHistory]
+      : [];
+
+    if (String(targetModelId) !== String(oldModelId)) {
+      const oldEntry = {
+        modelId: oldModelId ? String(oldModelId) : null,
+        modelCode: oldModelCode,
+        titleRo: oldModelTitle,
+      };
+      const alreadyRemembered = legacyModelHistory.some((entry) =>
+        entry &&
+        (
+          (oldEntry.modelId && String(entry.modelId || "") === oldEntry.modelId) ||
+          (oldEntry.modelCode && normCode(entry.modelCode || "") === normCode(oldEntry.modelCode))
+        )
+      );
+      if (!alreadyRemembered) legacyModelHistory.push(oldEntry);
+    }
+
+    const attributesToMerge = {
+      ...incomingAttributes,
+      ...(legacyModelHistory.length ? { legacyModelHistory } : {}),
+      ...(oldModelCode && !existingAttributes.legacyModelCode ? { legacyModelCode: oldModelCode } : {}),
+      ...(oldModelTitle && !existingAttributes.legacyModelTitle ? { legacyModelTitle: oldModelTitle } : {}),
+      canonicalModelId: String(targetModelId),
+      canonicalModelCode: targetModel.model_code || null,
+    };
+
+    // Refresh commercial/current receipt data and normalize the model relation.
+    // internal_sku / barcode / color / size stay untouched.
     await client.query(
       `UPDATE aif_product_variants SET
-         sn_cod=COALESCE($2, sn_cod),
-         buy_price=COALESCE($3, buy_price),
-         sell_price=COALESCE($4, sell_price),
-         compare_at_price=COALESCE($5, compare_at_price),
-         weight_grams=COALESCE($6, weight_grams),
-         image_url=COALESCE($7, image_url),
-         attributes=COALESCE(attributes,'{}'::jsonb) || $8::jsonb,
+         model_id=$2,
+         sn_cod=COALESCE($3, sn_cod),
+         buy_price=COALESCE($4, buy_price),
+         sell_price=COALESCE($5, sell_price),
+         compare_at_price=COALESCE($6, compare_at_price),
+         weight_grams=COALESCE($7, weight_grams),
+         image_url=COALESCE($8, image_url),
+         attributes=COALESCE(attributes,'{}'::jsonb) || $9::jsonb,
          status='active',
          updated_at=now()
        WHERE id=$1`,
       [
         owner.id,
+        targetModelId,
         snCod,
         normalized?.buyPrice ?? null,
         normalized?.sellPrice ?? null,
         normalized?.compareAtPrice ?? null,
         normalized?.weightGrams ?? null,
         normalized?.imageUrl ?? null,
-        variantAttributesJson,
+        JSON.stringify(attributesToMerge),
       ]
     );
 
-    await client.query(
-      `UPDATE aif_product_models
-       SET status='active', updated_at=now()
-       WHERE id=$1`,
-      [owner.model_id]
-    );
+    // If a one-variant legacy model became empty, archive it instead of leaving another zombie
+    // in the model table. Shared old buckets (e.g. fundango:ah) remain active while variants use them.
+    if (String(targetModelId) !== String(oldModelId)) {
+      await client.query(
+        `UPDATE aif_product_models m
+         SET status='archived', updated_at=now()
+         WHERE m.id=$1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM aif_product_variants v
+             WHERE v.model_id=m.id
+           )`,
+        [oldModelId]
+      );
+    }
 
-    return owner.id;
+    return {
+      variantId: owner.id,
+      oldModelId,
+      oldModelCode,
+      oldModelTitle,
+      targetModelId,
+      targetModelCode: targetModel.model_code || null,
+      targetModelTitle: targetModel.title_ro || normalized?.titleRo || null,
+    };
   }
 
   async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
@@ -7384,10 +7523,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           // Exact barcode + same brand/size/color, but legacy model identity differs.
           // Stock goes to the existing physical variant. The old product-code mapping is preserved,
           // while the incoming supplier product code is added/refreshed as the current mapping.
-          variantId = await refreshLegacyBarcodeStockTarget(client, {
+          const legacyNormalization = await refreshLegacyBarcodeStockTarget(client, {
             owner: legacyBarcodeTarget,
             normalized,
+            supplierCode: batch.supplier_code,
           });
+          variantId = legacyNormalization.variantId;
           await upsertSupplierCode(client, {
             variantId,
             supplierId: batch.supplier_id,
@@ -7399,7 +7540,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.legacyBarcodePreviousSupplierProductCode = legacyBarcodeTarget.previous_supplier_product_code || null;
           normalized.legacyBarcodeCurrentSupplierProductCode = normalized.supplierProductCode || null;
           normalized.legacyBarcodeSupplierCodeHistoryPreserved = true;
-          normalized.legacyBarcodeExistingModelCode = legacyBarcodeTarget.model_code || null;
+          normalized.legacyBarcodeExistingModelCode = legacyNormalization.oldModelCode || legacyBarcodeTarget.model_code || null;
+          normalized.legacyBarcodeExistingModelId = legacyNormalization.oldModelId ? String(legacyNormalization.oldModelId) : null;
+          normalized.legacyBarcodeCanonicalModelId = legacyNormalization.targetModelId ? String(legacyNormalization.targetModelId) : null;
+          normalized.legacyBarcodeCanonicalModelCode = legacyNormalization.targetModelCode || null;
+          normalized.legacyBarcodeCanonicalModelTitle = legacyNormalization.targetModelTitle || normalized.titleRo || null;
+          normalized.legacyBarcodeModelNormalized = String(legacyNormalization.targetModelId || "") !== String(legacyNormalization.oldModelId || "");
         } else {
           const modelId = await upsertModel(client, {
             supplierCode: batch.supplier_code,
