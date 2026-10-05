@@ -17283,30 +17283,60 @@ export default function AllInWarehouse() {
                   <label className={label}>Kép URL
                     <input className={input} value={edit.imageUrl} onChange={(e) => setEdit((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
                   </label>
-                  <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
-                    <p><span className="text-white/48">Aktuális termékkód:</span> <span className="font-mono text-[#d7fffd]">{edit.supplierProductCode || "nincs megadva"}</span></p>
+                  <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+                    <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
+                      <div className="text-[9px] uppercase tracking-[0.14em] text-[#bfe9e6]/72">Aktuális termékkód</div>
+                      <div className="mt-1 break-words font-mono text-[13px] leading-snug text-[#e8fffd]" title={edit.supplierProductCode || ""}>
+                        {edit.supplierProductCode || "Nincs megadva"}
+                      </div>
+                    </div>
+
                     {(() => {
                       const previousCodes = previousSupplierProductCodesFromDetail(detail, edit.supplierProductCode);
                       return (
-                        <div className="mt-2 border-t border-white/10 pt-2">
-                          <p className="text-[10px] uppercase tracking-[0.08em] text-white/42">Korábbi termékkódok</p>
+                        <div className="rounded-xl border border-amber-200/24 bg-amber-500/[0.07] px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] uppercase tracking-[0.14em] text-amber-100/70">Korábbi termékkódok</span>
+                            {previousCodes.length ? (
+                              <span className="rounded-full border border-amber-200/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] tabular-nums text-amber-50/75">{previousCodes.length}</span>
+                            ) : null}
+                          </div>
                           {previousCodes.length ? (
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <div className="mt-2 space-y-1.5">
                               {previousCodes.map((code) => (
-                                <span key={code} className="max-w-full break-all rounded-lg border border-amber-200/22 bg-amber-500/10 px-2 py-1 font-mono text-[10px] leading-snug text-amber-50" title={code}>{code}</span>
+                                <div
+                                  key={code}
+                                  className="rounded-lg border border-amber-100/14 bg-black/12 px-2.5 py-2 font-mono text-[11px] leading-[1.35] text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
+                                  title={code}
+                                >
+                                  <span className="break-words">{code}</span>
+                                </div>
                               ))}
                             </div>
                           ) : (
-                            <p className="mt-1 text-[11px] text-white/38">Nincs külön történeti termékkód.</p>
+                            <p className="mt-1.5 text-[11px] leading-snug text-white/42">Nincs külön történeti termékkód.</p>
                           )}
                         </div>
                       );
                     })()}
-                    <p className="mt-2"><span className="text-white/48">Belső azonosító:</span> <span className="font-mono text-white/78">{detail.item?.internal_sku || "-"}</span></p>
-                    <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
-                    <p className="mt-1">S/N/COD: {edit.snCod || "nincs megadva"}</p>
-                    <p className="mt-1">Vámtarifa kód: {edit.customsTariffCode || "nincs megadva"}</p>
-                    <p className="mt-1">Utolsó módosítás: {dateShort(detail.item?.updated_at)}</p>
+
+                    <div className="overflow-hidden rounded-xl border border-white/12 bg-black/10">
+                      <div className="border-b border-white/10 bg-white/[0.035] px-3 py-2 text-[9px] uppercase tracking-[0.14em] text-white/42">Technikai azonosítók</div>
+                      {[
+                        { label: "Belső azonosító", value: detail.item?.internal_sku || "-", mono: true },
+                        { label: "Vonalkód / SKU", value: edit.barcode || "nincs megadva", mono: true },
+                        { label: "S/N/COD", value: edit.snCod || "nincs megadva", mono: true },
+                        { label: "Vámtarifa kód", value: edit.customsTariffCode || "nincs megadva", mono: true },
+                        { label: "Utolsó módosítás", value: dateShort(detail.item?.updated_at), mono: false },
+                      ].map((row, index) => (
+                        <div key={row.label} className={`px-3 py-2 ${index ? "border-t border-white/[0.07]" : ""}`}>
+                          <div className="text-[9px] leading-none text-white/38">{row.label}</div>
+                          <div className={`${row.mono ? "font-mono" : ""} mt-1 break-words text-[11px] leading-snug text-white/78`} title={String(row.value || "")}>
+                            {row.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
