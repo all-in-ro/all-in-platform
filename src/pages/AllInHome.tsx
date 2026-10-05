@@ -317,6 +317,7 @@ function MainMenuButton({
 export default function AllInHome(props: { onLogout?: () => void }) {
   const [openGroup, setOpenGroup] = useState<GroupKey | null>(null);
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
+  const [carsSoonDays, setCarsSoonDays] = useState<number | null>(null);
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [reservationAlert, setReservationAlert] = useState({ overdue: 0, today: 0, tomorrow: 0 });
@@ -329,7 +330,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         const data = await fetchJson(`${API}/cars`);
         const rows = (Array.isArray(data) ? data : data?.rows || []) as CarRow[];
         let hasExpired = false;
-        let hasSoon = false;
+        let minSoonDays: number | null = null;
 
         for (const car of rows) {
           const values = [
@@ -341,13 +342,22 @@ export default function AllInHome(props: { onLogout?: () => void }) {
           ];
 
           if (values.some((days) => days != null && days < 0)) hasExpired = true;
-          if (values.some((days) => days != null && days >= 0 && days <= 5)) hasSoon = true;
-          if (hasExpired) break;
+
+          for (const days of values) {
+            if (days == null || days < 0 || days > 5) continue;
+            minSoonDays = minSoonDays == null ? days : Math.min(minSoonDays, days);
+          }
         }
 
-        if (alive) setCarsLevel(hasExpired ? "expired" : hasSoon ? "soon" : "ok");
+        if (alive) {
+          setCarsLevel(hasExpired ? "expired" : minSoonDays != null ? "soon" : "ok");
+          setCarsSoonDays(minSoonDays);
+        }
       } catch {
-        if (alive) setCarsLevel("ok");
+        if (alive) {
+          setCarsLevel("ok");
+          setCarsSoonDays(null);
+        }
       }
     })();
 
@@ -430,7 +440,11 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   };
 
   const carTone = carsLevel === "expired" ? "danger" : carsLevel === "soon" ? "warning" : "normal";
-  const carBadge = carsLevel === "expired" ? "Lejárt" : carsLevel === "soon" ? "5 napon belül" : undefined;
+  const carBadge = carsLevel === "expired"
+    ? "Lejárt"
+    : carsLevel === "soon" && carsSoonDays != null
+      ? (carsSoonDays === 0 ? "Ma lejár" : `${carsSoonDays} nap`)
+      : undefined;
   const reservationTone =
     reservationAlert.overdue > 0 || reservationAlert.today > 0 || reservationAlert.tomorrow > 0
       ? "warning"
