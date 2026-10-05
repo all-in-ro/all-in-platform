@@ -53,9 +53,25 @@ export default function createCarsRouter(ctx) {
 
   const router = express.Router();
 
+  let parkingSchemaPromise = null;
+  const ensureParkingSchema = () => {
+    if (!parkingSchemaPromise) {
+      parkingSchemaPromise = pool.query(`
+        alter table cars
+          add column if not exists parking_start date,
+          add column if not exists parking_months integer
+      `).catch((error) => {
+        parkingSchemaPromise = null;
+        throw error;
+      });
+    }
+    return parkingSchemaPromise;
+  };
+
   // GET /api/cars
   router.get("/", requireAuthed, async (_req, res) => {
     try {
+      await ensureParkingSchema();
       const r = await pool.query(
         `
         select
@@ -71,6 +87,8 @@ export default function createCarsRouter(ctx) {
           casco_months,
           rovinieta_start,
           rovinieta_months,
+          parking_start,
+          parking_months,
           vin,
           civ,
           color,
@@ -94,6 +112,7 @@ export default function createCarsRouter(ctx) {
   // POST /api/cars
   router.post("/", requireAdminOrSecret, async (req, res) => {
     try {
+      await ensureParkingSchema();
       const b = req.body || {};
       const itp = normalizeItpValidity(b);
 
@@ -109,6 +128,8 @@ export default function createCarsRouter(ctx) {
         "casco_months",
         "rovinieta_start",
         "rovinieta_months",
+        "parking_start",
+        "parking_months",
         "vin",
         "civ",
         "color",
@@ -131,6 +152,8 @@ export default function createCarsRouter(ctx) {
         normInt(b.casco_months),
         normDate(b.rovinieta_start),
         normInt(b.rovinieta_months),
+        normDate(b.parking_start),
+        normInt(b.parking_months),
         normText(b.vin),
         normText(b.civ),
         normText(b.color),
@@ -173,6 +196,7 @@ export default function createCarsRouter(ctx) {
     }
 
     try {
+      await ensureParkingSchema();
       const itp = ("itp_years" in b || "itp_months" in b) ? normalizeItpValidity(b) : null;
 
       const map = {
@@ -187,6 +211,8 @@ export default function createCarsRouter(ctx) {
         casco_months: () => normInt(b.casco_months),
         rovinieta_start: () => normDate(b.rovinieta_start),
         rovinieta_months: () => normInt(b.rovinieta_months),
+        parking_start: () => normDate(b.parking_start),
+        parking_months: () => normInt(b.parking_months),
         vin: () => normText(b.vin),
         civ: () => normText(b.civ),
         color: () => normText(b.color),
