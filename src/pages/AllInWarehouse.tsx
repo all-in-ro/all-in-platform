@@ -2843,6 +2843,13 @@ function WarehouseInvoiceDetailModal({
   onClose: () => void;
   onReload: () => void;
 }) {
+  const [invoiceRowNumberDescending, setInvoiceRowNumberDescending] = useState(true);
+
+  useEffect(() => {
+    if (!option) return;
+    setInvoiceRowNumberDescending(true);
+  }, [option?.value]);
+
   useEffect(() => {
     if (!option) return;
     const previousOverflow = document.body.style.overflow;
@@ -3022,12 +3029,12 @@ function WarehouseInvoiceDetailModal({
             <div className="overflow-x-auto">
               <table className="min-w-[1050px] w-full text-left text-xs">
                 <thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48">
-                  <tr><th className="px-2 py-2">#</th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Szín</th><th className="px-2 py-2">Méret</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2 text-right">Vételár</th><th className="px-2 py-2 text-right">Eladási ár</th><th className="px-2 py-2">Állapot</th></tr>
+                  <tr><th className="w-[52px] px-2 py-2 text-center"><button type="button" className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/70 transition hover:bg-white/10 hover:text-white" onClick={() => setInvoiceRowNumberDescending((current) => !current)} title={invoiceRowNumberDescending ? "Kattintás: 1 → 39 számozás" : "Kattintás: 39 → 1 számozás"} aria-label="Számlasorok számozási irányának megfordítása"># {invoiceRowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}</button></th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Szín</th><th className="px-2 py-2">Méret</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2 text-right">Vételár</th><th className="px-2 py-2 text-right">Eladási ár</th><th className="px-2 py-2">Állapot</th></tr>
                 </thead>
                 <tbody>
                   {productRows.map((row, index) => (
                     <tr key={row.key} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]">
-                      <td className="px-2 py-2 text-white/45">{index + 1}</td>
+                      <td className="px-2 py-2 text-center font-medium tabular-nums text-[#d7fffd]">{invoiceRowNumberDescending ? productRows.length - index : index + 1}</td>
                       <td className="px-2 py-2">{row.imageUrl ? <img src={row.imageUrl} alt="" className="h-11 w-11 rounded-lg border border-white/12 bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/30"><ImagePlus size={16} /></span>}</td>
                       <td className="px-2 py-2"><p className="max-w-[250px] truncate text-white">{row.title}</p><p className="mt-0.5 max-w-[250px] truncate text-[10px] text-[#cffffd]/70">{row.productCode}</p></td>
                       <td className="px-2 py-2"><p className="max-w-[180px] truncate">{row.brand}</p><p className="mt-0.5 max-w-[180px] truncate text-[10px] text-white/42">{row.category}</p></td>
@@ -6936,6 +6943,8 @@ export default function AllInWarehouse() {
   const [invoiceDetailRows, setInvoiceDetailRows] = useState<WarehouseReceptionDetail[]>([]);
   const [invoiceDetailBusy, setInvoiceDetailBusy] = useState(false);
   const [invoiceDetailError, setInvoiceDetailError] = useState("");
+  const [invoiceFilterStats, setInvoiceFilterStats] = useState<{ value: string; rowCount: number; totalQty: number } | null>(null);
+  const [listRowNumberDescending, setListRowNumberDescending] = useState(true);
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
   const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
@@ -8565,6 +8574,7 @@ export default function AllInWarehouse() {
     setInvoiceDetailTarget(option);
     setInvoiceDetailRows([]);
     setInvoiceDetailError("");
+    setInvoiceFilterStats(null);
     const receptionIds = Array.from(new Set(option.receptionIds.map((value) => String(value || "").trim()).filter(Boolean)));
     if (!receptionIds.length) {
       setInvoiceDetailBusy(false);
@@ -8575,6 +8585,16 @@ export default function AllInWarehouse() {
     try {
       const details = await Promise.all(receptionIds.map((id) => apiReceptionDetail(id)));
       setInvoiceDetailRows(details);
+      const invoiceRows = details.flatMap((detail) => (detail.rows || []).filter((row) => String(row.status || "").toLowerCase() !== "ignored"));
+      const invoiceQty = invoiceRows.reduce((sum, row) => {
+        const normalized = row.normalized && typeof row.normalized === "object" ? row.normalized as Record<string, any> : {};
+        return sum + n(row.qty ?? normalized.qty);
+      }, 0);
+      setInvoiceFilterStats({
+        value: option.value,
+        rowCount: invoiceRows.length || option.count,
+        totalQty: invoiceQty,
+      });
     } catch (error: any) {
       setInvoiceDetailError(error?.message || "A számla részleteinek betöltése nem sikerült.");
     } finally {
@@ -9592,6 +9612,10 @@ export default function AllInWarehouse() {
     return filtered.slice(start, start + productPageSize);
   }, [filtered, safeProductPage, productPageSize]);
 
+  const activeInvoiceFilterStats = invoiceFilter !== "all" && invoiceFilterStats?.value === invoiceFilter
+    ? invoiceFilterStats
+    : null;
+
   const filteredVariantIds = useMemo(() => {
     const sourceItems = incomingFocus?.batchId ? filtered : productPageItems;
     return sourceItems.map((x) => String(x.variant_id || "")).filter(Boolean);
@@ -9955,7 +9979,8 @@ export default function AllInWarehouse() {
   const productPager = filtered.length > 0 ? (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
       <div>
-        {productPageStartIndex}-{productPageEndIndex} / {filtered.length} termék
+        {productPageStartIndex}-{productPageEndIndex} / {filtered.length} terméksor
+        {activeInvoiceFilterStats ? <span className="ml-2 text-[#d7fffd]">• számla összesen: {formatQty(activeInvoiceFilterStats.totalQty)} db</span> : null}
         <span className="ml-2 text-white/45">• oldal {safeProductPage} / {totalProductPages}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -14292,6 +14317,7 @@ export default function AllInWarehouse() {
                 <Eye size={17} />
                 <span>Terméklista</span>
                 <span className={chip}>{filtered.length} variáns</span>
+                {activeInvoiceFilterStats ? <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/16 px-2.5 py-1 text-xs text-[#d7fffd]">{formatQty(activeInvoiceFilterStats.totalQty)} db a számlán</span> : null}
                 {inventoryLoading && (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/16 px-2.5 py-1 text-xs text-[#d7fffd]">
                     <RefreshCw size={12} className="animate-spin" />
@@ -14495,6 +14521,7 @@ export default function AllInWarehouse() {
                 <table className="min-w-[1120px] w-full table-fixed text-left text-[12px]">
                   <colgroup>
                     <col style={{ width: "42px" }} />
+                    <col style={{ width: "48px" }} />
                     <col style={{ width: "62px" }} />
                     <col style={{ width: "94px" }} />
                     <col style={{ width: "250px" }} />
@@ -14520,6 +14547,17 @@ export default function AllInWarehouse() {
                           title={incomingFocus?.batchId ? "Az utolsó bevételezés összes szűrt termékének kijelölése" : "Az aktuális oldal termékeinek kijelölése"}
                         />
                       </th>
+                      <th className="px-1 py-3 text-center align-middle font-normal">
+                        <button
+                          type="button"
+                          className="mx-auto inline-flex items-center gap-0.5 rounded-lg px-1.5 py-1 text-white/72 transition hover:bg-white/10 hover:text-white"
+                          onClick={() => setListRowNumberDescending((current) => !current)}
+                          title={listRowNumberDescending ? "Kattintás: növekvő sorszám" : "Kattintás: visszafelé sorszám"}
+                          aria-label="Raktárlista sorszámozási irányának megfordítása"
+                        >
+                          # {listRowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                        </button>
+                      </th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Kép</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Márka</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Terméknév</th>
@@ -14542,6 +14580,8 @@ export default function AllInWarehouse() {
                       const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                       const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                       const openOrderInfo = openPurchaseOrdersByVariant[variantId] || null;
+                      const absoluteRowIndex = (safeProductPage - 1) * productPageSize + index;
+                      const visibleRowNumber = listRowNumberDescending ? filtered.length - absoluteRowIndex : absoluteRowIndex + 1;
                       return (
                       <tr
                         key={it.variant_id}
@@ -14557,6 +14597,7 @@ export default function AllInWarehouse() {
                             aria-label={`${it.title_ro || "Termék"} kijelölése`}
                           />
                         </td>
+                        <td className="px-1 py-2.5 text-center align-middle font-medium tabular-nums text-[#d7fffd]">{visibleRowNumber}</td>
                         <td className="px-2 py-2.5 text-center align-middle">
                           <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="mx-auto h-11 w-11 rounded-lg" iconSize={17} />
                         </td>
@@ -14625,7 +14666,7 @@ export default function AllInWarehouse() {
                       </tr>
                       );
                     })}
-                    {!productPageItems.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={12}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                    {!productPageItems.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -14633,7 +14674,7 @@ export default function AllInWarehouse() {
               <div className="mt-3 hidden lg:block">{productPager}</div>
 
               <div className="grid gap-3 lg:hidden">
-                {productPageItems.map((it) => {
+                {productPageItems.map((it, index) => {
                   const variantId = String(it.variant_id || "");
                   const isSelected = Boolean(activeListSelectionMap[variantId]);
                   const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
@@ -14641,6 +14682,8 @@ export default function AllInWarehouse() {
                   const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                   const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                   const openOrderInfo = openPurchaseOrdersByVariant[variantId] || null;
+                  const absoluteRowIndex = (safeProductPage - 1) * productPageSize + index;
+                  const visibleRowNumber = listRowNumberDescending ? filtered.length - absoluteRowIndex : absoluteRowIndex + 1;
                   return (
                   <article
                     key={it.variant_id}
@@ -14648,7 +14691,9 @@ export default function AllInWarehouse() {
                     className={`scroll-mt-32 rounded-xl border p-3 ${isHighlighted ? "border-amber-200/75 bg-amber-400/14 ring-2 ring-amber-200/60" : isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}
                   >
                     <div className="mb-2 flex items-center justify-between gap-3">
-                      <label className="inline-flex items-center gap-2 text-xs text-white/76">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-lg border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 px-1.5 text-xs font-medium tabular-nums text-[#d7fffd]">{visibleRowNumber}</span>
+                        <label className="inline-flex items-center gap-2 text-xs text-white/76">
                         <input
                           className={selectBox}
                           type="checkbox"
@@ -14656,7 +14701,8 @@ export default function AllInWarehouse() {
                           onChange={(e) => toggleVariantSelection(String(it.variant_id || ""), e.target.checked)}
                         />
                         Kijelölés
-                      </label>
+                        </label>
+                      </div>
                       <div className="flex flex-wrap items-center justify-end gap-1.5">
                         {isHighlighted ? <ContinuationBadge className="shrink-0" /> : null}
                         {isSelected && <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/22 px-2 py-0.5 text-[11px] text-white">Kijelölve</span>}
