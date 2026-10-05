@@ -7122,6 +7122,117 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  // Legacy/import compatibility: if an incoming row has an exact, unique barcode that already
+  // belongs to the same brand + size + normalized color, we may use that EXISTING variant for
+  // stock even when the old model_code is a historical placeholder and therefore differs from the
+  // new supplier model code. In this mode the product identity is deliberately preserved:
+  // - model_id / model_code are NOT changed
+  // - internal_sku is NOT changed
+  // - existing product/supplier code is NOT overwritten and no new supplier-code mapping is created
+  // - barcode / color identity fields are NOT rewritten
+  // The incoming supplier product code stays on the import row for audit/history only.
+  async function findLegacyBarcodeStockTarget(client, { normalized, supplierCode }) {
+    const barcode = emptyToNull(normalized?.barcode);
+    const size = text(normalized?.size);
+    const colorName = text(normalized?.colorName || "");
+    const colorCode = text(normalized?.colorCode || normalized?.supplierColorCode || "");
+    if (!barcode || !size) return null;
+
+    const result = await client.query(
+      `SELECT
+         v.id, v.model_id, v.barcode, v.size, v.color_code, v.color_name, v.status,
+         m.model_code, m.status AS model_status, m.brand_id,
+         b.code AS brand_code, b.name AS brand_name
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+       ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
+                v.created_at ASC,
+                v.id::text ASC
+       LIMIT 2`,
+      [barcode]
+    );
+
+    // Barcode fallback is only safe when the barcode has one unambiguous owner.
+    if (result.rowCount !== 1) return null;
+    const owner = result.rows[0];
+
+    if (normCode(owner.size || "") !== normCode(size)) return null;
+
+    const incomingBrandId = text(normalized?.brandId || normalized?.brand_id || "");
+    const incomingBrandKeys = new Set([
+      normCode(normalized?.brandCode || normalized?.brand_code || ""),
+      normCode(normalized?.brandName || normalized?.brand_name || ""),
+    ].filter(Boolean));
+    const ownerBrandKeys = new Set([
+      normCode(owner.brand_code || ""),
+      normCode(owner.brand_name || ""),
+    ].filter(Boolean));
+
+    const brandMatchesById = incomingBrandId && String(owner.brand_id || "") === incomingBrandId;
+    const brandMatchesByText = [...incomingBrandKeys].some((key) => ownerBrandKeys.has(key));
+    if (!brandMatchesById && !brandMatchesByText) return null;
+
+    const ownerColorName = normCode(owner.color_name || "");
+    const incomingColorName = normCode(colorName || "");
+    const ownerColorCode = normCode(owner.color_code || "");
+    const incomingColorCode = normCode(colorCode || "");
+    const colorMatches =
+      Boolean(ownerColorName && incomingColorName && ownerColorName === incomingColorName) ||
+      Boolean(ownerColorCode && incomingColorCode && ownerColorCode === incomingColorCode);
+    if (!colorMatches) return null;
+
+    const brandKey = normCode(normalized?.brandCode || normalized?.brandName || supplierCode || "aif");
+    const baseModelCode = normalized?.modelCode || normalized?.supplierProductCode || normalized?.titleRo;
+    const expectedModelCode = `${brandKey}:${normCode(baseModelCode)}`;
+
+    // Same canonical model: let the normal upsert path handle it, including supplier-code updates.
+    // This fallback exists ONLY for historical/legacy model identifiers.
+    if (normCode(owner.model_code || "") === normCode(expectedModelCode)) return null;
+
+    return owner;
+  }
+
+  async function refreshLegacyBarcodeStockTarget(client, { owner, normalized }) {
+    const snCod = emptyToNull(normalized?.snCod ?? normalized?.sn_cod);
+    const variantAttributesJson = variantAttributesJsonFromNormalized(normalized || {});
+
+    // Refresh commercial/current receipt data, but do not rewrite product identity.
+    await client.query(
+      `UPDATE aif_product_variants SET
+         sn_cod=COALESCE($2, sn_cod),
+         buy_price=COALESCE($3, buy_price),
+         sell_price=COALESCE($4, sell_price),
+         compare_at_price=COALESCE($5, compare_at_price),
+         weight_grams=COALESCE($6, weight_grams),
+         image_url=COALESCE($7, image_url),
+         attributes=COALESCE(attributes,'{}'::jsonb) || $8::jsonb,
+         status='active',
+         updated_at=now()
+       WHERE id=$1`,
+      [
+        owner.id,
+        snCod,
+        normalized?.buyPrice ?? null,
+        normalized?.sellPrice ?? null,
+        normalized?.compareAtPrice ?? null,
+        normalized?.weightGrams ?? null,
+        normalized?.imageUrl ?? null,
+        variantAttributesJson,
+      ]
+    );
+
+    await client.query(
+      `UPDATE aif_product_models
+       SET status='active', updated_at=now()
+       WHERE id=$1`,
+      [owner.model_id]
+    );
+
+    return owner.id;
+  }
+
   async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
     if (!isUuidText(batchId)) {
       const e = new Error("Import csomag nem található.");
@@ -7250,19 +7361,40 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         delete normalized.variant_status;
         delete normalized.status;
 
-        const modelId = await upsertModel(client, {
+        const legacyBarcodeTarget = await findLegacyBarcodeStockTarget(client, {
+          normalized,
           supplierCode: batch.supplier_code,
-          normalized,
-          createStatus: "active",
-          updateStatus: "active",
         });
-        const variantId = await upsertVariant(client, {
-          modelId,
-          normalized,
-          createStatus: "active",
-          updateStatus: "active",
-        });
-        await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
+
+        let variantId;
+        if (legacyBarcodeTarget) {
+          // Exact barcode + same brand/size/color, but legacy model identity differs.
+          // Stock goes to the existing product. Incoming product code is audit-only and MUST NOT
+          // become the warehouse product code, so we intentionally skip upsertSupplierCode here.
+          variantId = await refreshLegacyBarcodeStockTarget(client, {
+            owner: legacyBarcodeTarget,
+            normalized,
+          });
+          normalized.legacyBarcodeStockMatch = true;
+          normalized.legacyBarcodeMatchedVariantId = String(variantId);
+          normalized.legacyBarcodeIncomingProductCode = normalized.supplierProductCode || null;
+          normalized.legacyBarcodeExistingModelCode = legacyBarcodeTarget.model_code || null;
+        } else {
+          const modelId = await upsertModel(client, {
+            supplierCode: batch.supplier_code,
+            normalized,
+            createStatus: "active",
+            updateStatus: "active",
+          });
+          variantId = await upsertVariant(client, {
+            modelId,
+            normalized,
+            createStatus: "active",
+            updateStatus: "active",
+          });
+          await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
+        }
+
         await addStock(client, {
           locationId: batch.target_location_id,
           variantId,
