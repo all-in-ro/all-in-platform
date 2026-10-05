@@ -4567,11 +4567,20 @@ function compareWarehouseVariantsInsideSameProductCode(a: InventoryItem, b: Inve
     sensitivity: "base",
   });
 
-  const byColor = compareText(warehouseVariantColorSortKey(a), warehouseVariantColorSortKey(b));
-  if (byColor !== 0) return byColor;
-
+  // Ugyanazon AKTUÁLIS termékkódon belül a méret az elsődleges rendezési kulcs.
+  // Ez szándékosan megelőzi a nyers színkódot, mert a legacy importok ugyanarra a
+  // tényleges színre különböző technikai értéket őrizhetnek (pl. NEGRU vs 890).
+  // A felületen mindkettő lehet fekete, ezért a nyers színkód nem törheti szét az
+  // XS, S, M, L, XL, XXL... sorrendet.
   const bySize = compareWarehouseSizeLabels(a.size, b.size);
   if (bySize !== 0) return bySize;
+
+  // Azonos méretnél csak másodlagosan rendezzünk szín szerint, lehetőleg a
+  // felhasználónak megjelenített / normalizált színnévvel.
+  const aColor = displayColorName((a as any).color_name, (a as any).color_code);
+  const bColor = displayColorName((b as any).color_name, (b as any).color_code);
+  const byColor = compareText(aColor, bColor);
+  if (byColor !== 0) return byColor;
 
   return compareText(a.variant_id, b.variant_id);
 }
