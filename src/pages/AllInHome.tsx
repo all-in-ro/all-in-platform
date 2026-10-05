@@ -41,6 +41,8 @@ type CarRow = {
   casco_months?: number;
   rovinieta_start?: string;
   rovinieta_months?: number;
+  parking_start?: string;
+  parking_months?: number;
 };
 
 type MenuItem = {
@@ -266,9 +268,9 @@ function MainMenuButton({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-red-300/55 bg-[#c90d22] hover:bg-[#ad0b1d]"
+      ? "border-[#b60e21] bg-[#b60e21] hover:bg-[#9f0c1d]"
       : tone === "warning"
-        ? "border-amber-200/50 bg-[#7a6226] hover:bg-[#8b712c]"
+        ? "border-[#f6ca3c] bg-[#f6ca3c] !text-[#2b2300] hover:bg-[#efd04f]"
         : tone === "accent"
           ? "border-[#7bd7d4]/55 bg-gradient-to-r from-[#247f7c] to-[#2c6674] hover:brightness-110"
           : "border-white/30 bg-[#354153] hover:border-white/45 hover:bg-[#3c485b]";
@@ -316,6 +318,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             daysLeft(justDate(car.rca_date), 1, 0),
             daysLeft(justDate(car.casco_start), 0, Number(car.casco_months || 0)),
             daysLeft(justDate(car.rovinieta_start), 0, Number(car.rovinieta_months || 0)),
+            daysLeft(justDate(car.parking_start), 0, Number(car.parking_months || 0)),
           ];
 
           if (values.some((days) => days != null && days < 0)) hasExpired = true;

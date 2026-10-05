@@ -37,6 +37,8 @@ type Car = {
   casco_months?: number;
   rovinieta_start?: string;
   rovinieta_months?: number;
+  parking_start?: string;
+  parking_months?: number;
   vin?: string;
   civ?: string;
   color?: string;
@@ -52,7 +54,6 @@ type ViewMode = "board" | "list";
 type SelectOption = { value: string; label: string };
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
-const MARLBORO = "#E21C2A";
 
 const page = "min-h-screen overflow-x-hidden bg-gradient-to-b from-[#5a6575] via-[#505b6b] to-[#454f5e] pb-8 text-white font-normal";
 const shell = "mx-auto w-full min-w-0 max-w-[760px] space-y-3 px-3";
@@ -129,8 +130,8 @@ async function listCars(): Promise<Car[]> {
 
 function statusTone(days: number | null) {
   if (days == null) return "border-white/12 bg-white/[0.05] text-white/45";
-  if (days < 0) return "border-white/75 bg-[#E21C2A] text-white shadow-[0_7px_18px_rgba(226,28,42,.24)]";
-  if (days <= 5) return "border-amber-200/32 bg-amber-400/13 text-amber-50";
+  if (days < 0) return "border-[#b60e21] bg-[#b60e21] text-white shadow-[0_7px_18px_rgba(182,14,33,.24)]";
+  if (days <= 5) return "border-[#f6ca3c] bg-[#f6ca3c] text-[#2b2300] shadow-[0_7px_18px_rgba(246,202,60,.18)]";
   return "border-[#7bd7d4]/30 bg-[#2a8d8b]/14 text-[#d7fffd]";
 }
 
@@ -259,12 +260,15 @@ function CarCard({ car, compact = false }: { car: any; compact?: boolean }) {
     ["RCA", car.rca],
     ["Casco", car.cas],
     ["Rovinieta", car.rov],
+    ["Parkolás", car.park],
   ] as Array<[string, number | null]>;
   const visibleStatuses = statuses.filter(([, value]) => value != null);
-  const warning = visibleStatuses.some(([, value]) => value != null && value <= 5);
+  const hasExpired = visibleStatuses.some(([, value]) => value != null && value < 0);
+  const hasSoon = !hasExpired && visibleStatuses.some(([, value]) => value != null && value >= 0 && value <= 5);
+  const warning = hasExpired || hasSoon;
 
   return (
-    <article className={`overflow-hidden rounded-[22px] border bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,.16)] ${warning ? "border-red-300/30" : "border-white/13"}`}>
+    <article className={`overflow-hidden rounded-[22px] border bg-[#344154] shadow-[0_12px_28px_rgba(15,23,42,.16)] ${hasExpired ? "border-[#b60e21]/70" : hasSoon ? "border-[#f6ca3c]/70" : "border-white/13"}`}>
       <div className="p-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <CarImage car={car} />
@@ -274,7 +278,7 @@ function CarCard({ car, compact = false }: { car: any; compact?: boolean }) {
                 <p className="truncate text-[17px] leading-tight text-white">{car.plate || "Ismeretlen"}</p>
                 <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-white/52">{car.make_model || "-"}</p>
               </div>
-              {warning ? <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white"><AlertTriangle className="h-4 w-4" /></span> : <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/13 text-[#d7fffd]"><ShieldCheck className="h-4 w-4" /></span>}
+              {warning ? <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${hasExpired ? "border-[#b60e21] bg-[#b60e21] text-white" : "border-[#f6ca3c] bg-[#f6ca3c] text-[#2b2300]"}`}><AlertTriangle className="h-4 w-4" /></span> : <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/13 text-[#d7fffd]"><ShieldCheck className="h-4 w-4" /></span>}
             </div>
             <div className="mt-2 flex flex-wrap gap-1 text-[9px] text-white/52">
               {car.year ? <span className="rounded-lg border border-white/9 bg-white/[0.04] px-1.5 py-0.5">{car.year}</span> : null}
@@ -342,15 +346,17 @@ export default function AllInCarsMobile() {
     const rca = daysLeft(justDate(car.rca_date), 1, 0);
     const cas = daysLeft(justDate(car.casco_start), 0, car.casco_months || 0);
     const rov = daysLeft(justDate(car.rovinieta_start), 0, car.rovinieta_months || 0);
-    const minDays = Math.min(...[itp, rca, cas, rov].map((value) => value == null ? 9999 : value));
-    return { ...car, itp_years: itpYears, itp, rca, cas, rov, minDays };
+    const park = daysLeft(justDate(car.parking_start), 0, car.parking_months || 0);
+    const minDays = Math.min(...[itp, rca, cas, rov, park].map((value) => value == null ? 9999 : value));
+    return { ...car, itp_years: itpYears, itp, rca, cas, rov, park, minDays };
   }), [cars]);
 
-  const alertCount = useMemo(() => enriched.filter((car) => [car.itp, car.rca, car.cas, car.rov].some((value) => value != null && value <= 5)).length, [enriched]);
+  const alertCount = useMemo(() => enriched.filter((car) => [car.itp, car.rca, car.cas, car.rov, car.park].some((value) => value != null && value <= 5)).length, [enriched]);
+  const expiredAlertCount = useMemo(() => enriched.filter((car) => [car.itp, car.rca, car.cas, car.rov, car.park].some((value) => value != null && value < 0)).length, [enriched]);
 
   const filtered = useMemo(() => {
     let result = [...enriched];
-    if (alertsOnly) result = result.filter((car) => [car.itp, car.rca, car.cas, car.rov].some((value) => value != null && value <= 5));
+    if (alertsOnly) result = result.filter((car) => [car.itp, car.rca, car.cas, car.rov, car.park].some((value) => value != null && value <= 5));
     if (q.trim()) {
       const query = q.trim().toLowerCase();
       result = result.filter((car) => [car.plate, car.make_model, car.vin].some((value) => String(value || "").toLowerCase().includes(query)));
@@ -402,7 +408,7 @@ export default function AllInCarsMobile() {
             <div className="mt-1.5 text-[22px] leading-none text-white">{cars.length}</div>
             <div className="mt-1 text-[9px] text-white/40">összes aktív autó</div>
           </button>
-          <button type="button" onClick={() => setAlertsOnly(true)} className={`rounded-[20px] border p-3 text-left ${alertsOnly ? "border-white/75 bg-[#E21C2A]" : alertCount ? "border-red-300/28 bg-red-500/12" : "border-white/12 bg-[#344154]"}`}>
+          <button type="button" onClick={() => setAlertsOnly(true)} className={`rounded-[20px] border p-3 text-left ${alertsOnly ? (expiredAlertCount ? "border-[#b60e21] bg-[#b60e21] text-white" : "border-[#f6ca3c] bg-[#f6ca3c] text-[#2b2300]") : expiredAlertCount ? "border-[#b60e21]/50 bg-[#b60e21]/16" : alertCount ? "border-[#f6ca3c]/50 bg-[#f6ca3c]/12" : "border-white/12 bg-[#344154]"}`}>
             <div className="text-[8px] uppercase tracking-[0.1em] text-white/60">Figyelmeztetés</div>
             <div className="mt-1.5 text-[22px] leading-none text-white">{alertCount}</div>
             <div className="mt-1 text-[9px] text-white/55">lejárt vagy ≤ 5 nap</div>
@@ -440,7 +446,7 @@ export default function AllInCarsMobile() {
               <label className="grid gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Rendezés
                 <AllInSelect value={sort} onChange={(value) => setSort(value as SortKey)} ariaLabel="Rendezés" options={[{ value: "urgency", label: "Lejárat szerint" }, { value: "plate", label: "Rendszám szerint" }, { value: "make", label: "Márka / típus szerint" }]} />
               </label>
-              <button type="button" onClick={() => setAlertsOnly((value) => !value)} className={`flex h-12 items-center justify-between rounded-2xl border px-3 ${alertsOnly ? "border-white/75 bg-[#E21C2A] text-white" : "border-white/14 bg-[#293649] text-white/72"}`}>
+              <button type="button" onClick={() => setAlertsOnly((value) => !value)} className={`flex h-12 items-center justify-between rounded-2xl border px-3 ${alertsOnly ? (expiredAlertCount ? "border-[#b60e21] bg-[#b60e21] text-white" : "border-[#f6ca3c] bg-[#f6ca3c] text-[#2b2300]") : "border-white/14 bg-[#293649] text-white/72"}`}>
                 <span className="flex items-center gap-2 text-[12px]"><AlertTriangle className="h-4 w-4" /> Csak problémás</span>
                 <span className={`inline-flex h-6 w-10 items-center rounded-full border p-0.5 transition ${alertsOnly ? "justify-end border-white/40 bg-white/18" : "justify-start border-white/12 bg-black/10"}`}><span className="h-4 w-4 rounded-full bg-white" /></span>
               </button>

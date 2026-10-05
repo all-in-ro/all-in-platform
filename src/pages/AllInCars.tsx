@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +17,8 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Edit,
   Trash2,
   CarFront,
@@ -40,6 +43,8 @@ type Car = {
   casco_months?: number;
   rovinieta_start?: string;
   rovinieta_months?: number;
+  parking_start?: string;
+  parking_months?: number;
   vin?: string;
   civ?: string;
   color?: string;
@@ -62,6 +67,8 @@ const CUPE = {
   blue: "#303a4c",
   bgBlue: "#4b5362",
   green: "#2a8d8b",
+  warning: "#f6ca3c",
+  danger: "#b60e21",
 } as const;
 
 /* ---------- Helpers ---------- */
@@ -109,7 +116,7 @@ function cleanForSave(car: any): any {
   const copy = { ...car };
 
   // Normalize date-only strings and allow clearing to NULL
-  const dateKeys = ["itp_date","rca_date","casco_start","rovinieta_start"];
+  const dateKeys = ["itp_date","rca_date","casco_start","rovinieta_start","parking_start"];
   for (const dk of dateKeys) {
     const val = justDate((copy as any)[dk]);
     if (val) {
@@ -123,7 +130,7 @@ function cleanForSave(car: any): any {
   for (const [k, v] of Object.entries(copy)) {
     if (dateKeys.includes(k)) continue; // already handled above
     if (v === "" || v == null) continue;
-    if (["engine_cc","power_kw","total_mass","year","casco_months","rovinieta_months","itp_years","itp_months"].includes(k)) {
+    if (["engine_cc","power_kw","total_mass","year","casco_months","rovinieta_months","parking_months","itp_years","itp_months"].includes(k)) {
       const n = Number(v);
       if (!Number.isFinite(n)) continue;
       payload[k] = n;
@@ -151,10 +158,239 @@ function cleanForSave(car: any): any {
 }
 
 function toneFor(lvl: Level) {
-  if (lvl === "expired") return "bg-[#b90f1e] text-white border border-[#b90f1e]/50";
-  if (lvl === "soon") return "bg-amber-400/90 text-[#241a00] border border-amber-200/35";
+  if (lvl === "expired") return "bg-[#b60e21] text-white border border-[#b60e21] shadow-[0_7px_18px_rgba(182,14,33,.24)]";
+  if (lvl === "soon") return "bg-[#f6ca3c] text-[#2b2300] border border-[#f6ca3c] shadow-[0_7px_18px_rgba(246,202,60,.18)]";
   if (lvl === "ok") return "bg-[#2a8d8b] text-white border border-[#7bd7d4]/35";
   return "bg-[#354153] text-white/65 border border-white/14";
+}
+
+
+const HU_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+];
+const HU_WEEKDAYS = ["H", "K", "SZE", "CS", "P", "SZO", "V"];
+
+function datePickerIso(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function datePickerLabel(value?: string | null) {
+  const iso = justDate(value);
+  if (!iso) return "Válassz dátumot";
+  const [y, m, d] = iso.split("-");
+  return `${y}. ${m}. ${d}.`;
+}
+
+function AllInDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value?: string | null;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const selectedIso = justDate(value) || "";
+  const selectedDate = selectedIso ? new Date(`${selectedIso}T12:00:00`) : null;
+  const [open, setOpen] = useState(false);
+  const [viewDate, setViewDate] = useState<Date>(() => selectedDate || new Date());
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    if (typeof window === "undefined" || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const width = Math.min(320, window.innerWidth - 24);
+    const padding = 12;
+    const gap = 7;
+    const estimatedHeight = 360;
+    let left = Math.min(
+      Math.max(padding, rect.left),
+      Math.max(padding, window.innerWidth - width - padding),
+    );
+    let top = rect.bottom + gap;
+    let transform = "none";
+    if (top + estimatedHeight > window.innerHeight - padding && rect.top > estimatedHeight + padding) {
+      top = rect.top - gap;
+      transform = "translateY(-100%)";
+    }
+    setPopupStyle({
+      position: "fixed",
+      left,
+      top,
+      width,
+      transform,
+      zIndex: 2147483200,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setViewDate(selectedDate || new Date());
+    updatePosition();
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onMove = () => updatePosition();
+
+    document.addEventListener("mousedown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, selectedIso, updatePosition]);
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const first = new Date(year, month, 1, 12, 0, 0);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const gridStart = new Date(year, month, 1 - mondayOffset, 12, 0, 0);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setDate(gridStart.getDate() + index);
+    return day;
+  });
+  const todayIso = datePickerIso(new Date());
+
+  const popup = open && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          ref={popupRef}
+          style={popupStyle}
+          className="overflow-hidden rounded-[18px] border border-white/35 bg-[#303a4c] text-white shadow-[0_26px_70px_rgba(0,0,0,.55)]"
+          role="dialog"
+          aria-label={`${ariaLabel} naptár`}
+        >
+          <div className="border-b border-white/14 px-3 pt-2.5 pb-2">
+            <div className="text-[9px] uppercase tracking-[0.14em] text-white/45">Naptár</div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-[#354153] text-white/80 hover:bg-[#3e4d63]"
+                onClick={() => setViewDate(new Date(year, month - 1, 1, 12, 0, 0))}
+                aria-label="Előző hónap"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="text-[13px]">{year}. {HU_MONTHS[month]}</div>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/14 bg-[#354153] text-white/80 hover:bg-[#3e4d63]"
+                onClick={() => setViewDate(new Date(year, month + 1, 1, 12, 0, 0))}
+                aria-label="Következő hónap"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="p-3">
+            <div className="grid grid-cols-7 text-center text-[9px] uppercase tracking-[0.06em] text-white/42">
+              {HU_WEEKDAYS.map((day) => <div key={day} className="py-1">{day}</div>)}
+            </div>
+            <div className="mt-1 grid grid-cols-7 gap-1">
+              {days.map((day) => {
+                const iso = datePickerIso(day);
+                const inMonth = day.getMonth() === month;
+                const selected = iso === selectedIso;
+                const today = iso === todayIso;
+                return (
+                  <button
+                    type="button"
+                    key={iso}
+                    onClick={() => {
+                      onChange(iso);
+                      setOpen(false);
+                    }}
+                    className={`relative h-9 rounded-lg text-[11px] transition ${
+                      selected
+                        ? "bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(123,215,212,.35)]"
+                        : inMonth
+                          ? "bg-[#354153] text-white/88 hover:bg-[#415064]"
+                          : "bg-[#2a3342] text-white/28 hover:text-white/48"
+                    } ${today && !selected ? "ring-1 ring-inset ring-[#7bd7d4]/55" : ""}`}
+                  >
+                    {day.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 border-t border-white/14 px-3 py-2.5">
+            <span className="text-[9px] text-white/35">A hét hétfővel kezdődik.</span>
+            <div className="flex gap-1.5">
+              {selectedIso ? (
+                <button
+                  type="button"
+                  className="h-8 rounded-lg border border-white/14 bg-[#354153] px-2.5 text-[10px] text-white/70 hover:bg-[#3e4d63]"
+                  onClick={() => {
+                    onChange("");
+                    setOpen(false);
+                  }}
+                >
+                  Törlés
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2.5 text-[10px] text-white"
+                onClick={() => {
+                  onChange(todayIso);
+                  setOpen(false);
+                }}
+              >
+                <CalendarDays className="h-3.5 w-3.5" /> Ma
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`flex h-9 w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-[12px] outline-none transition ${
+          open
+            ? "border-[#7bd7d4]/70 bg-[#3f4959] ring-2 ring-[#7bd7d4]/16"
+            : "border-white/18 bg-[#3f4959] hover:border-white/30"
+        } ${selectedIso ? "text-white" : "text-white/42"}`}
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <CalendarDays className="h-4 w-4 shrink-0 text-[#9ee5e2]" />
+          <span className="truncate">{datePickerLabel(selectedIso)}</span>
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/45 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {popup}
+    </>
+  );
 }
 
 async function fetchJSON(url: string, init?: RequestInit) {
@@ -315,23 +551,22 @@ function BoardView({ rows }: { rows: any[] }) {
         {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
         {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
         {c.casco_start && c.cas != null && <Chip label="Casco" days={c.cas} />}
-        {c.rovinieta_start && c.rov != null && (
-          <Chip label="Rovigneta" days={c.rov} />
-        )}
+        {c.rovinieta_start && c.rov != null && <Chip label="Rovigneta" days={c.rov} />}
+        {c.parking_start && c.park != null && <Chip label="Parkolás" days={c.park} />}
       </div>
     </div>
   );
   return (
     <div className="grid md:grid-cols-3 gap-4">
       <div className={colCls}>
-        <div className="flex items-center gap-2 border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white">
+        <div className="flex items-center gap-2 border-b border-[#b60e21]/70 bg-[#b60e21] px-4 py-3 text-sm text-white">
           <Bell className="w-4 h-4" />
           <span>Lejárt</span>
         </div>
         <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
       </div>
       <div className={colCls}>
-        <div className="flex items-center gap-2 border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white">
+        <div className="flex items-center gap-2 border-b border-[#f6ca3c]/80 bg-[#f6ca3c] px-4 py-3 text-sm text-[#2b2300]">
           <AlertTriangle className="w-4 h-4" />
           <span>Közelgő</span>
         </div>
@@ -374,11 +609,11 @@ function ListView({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-white/14 bg-white/[0.055] text-white shadow-sm">
-      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 border-b border-white/12 bg-[#303a4c] px-4 py-2.5 text-[10px] uppercase tracking-[0.09em] text-white/55">
+      <div className="grid grid-cols-[1.2fr,1fr,1fr,2fr,180px] gap-0 border-b border-white/12 bg-[#303a4c] px-4 py-2.5 text-[10px] uppercase tracking-[0.09em] text-white/55">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
-        <div className="text-center">Casco/Rovi</div>
+        <div className="text-center">Casco / Rovi / Parkolás</div>
         <div className="text-right pr-4 flex items-center justify-end gap-2 whitespace-nowrap">
           Műveletek
         </div>
@@ -389,7 +624,7 @@ function ListView({
           const open = !!expanded[key];
           return (
             <div key={key} className="px-4 py-2.5 transition hover:bg-white/[0.035]">
-              <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
+              <div className="grid grid-cols-[1.2fr,1fr,1fr,2fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
 	                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-white shadow-sm">
 	                    {c.photo_url ? (
@@ -417,9 +652,8 @@ function ListView({
                 </div>
                 <div className="flex justify-center flex-wrap gap-2 mt-1 mb-1 min-w-[180px]">
                   {c.casco_start && c.cas != null && <Chip label="Casco" days={c.cas} />}
-                  {c.rovinieta_start && c.rov != null && (
-                    <Chip label="Rovigneta" days={c.rov} />
-                  )}
+                  {c.rovinieta_start && c.rov != null && <Chip label="Rovigneta" days={c.rov} />}
+                  {c.parking_start && c.park != null && <Chip label="Parkolás" days={c.park} />}
                 </div>
                 <div className="text-right pr-4 flex items-center justify-end gap-2 whitespace-nowrap">
                   {onEdit && (
@@ -479,6 +713,9 @@ function ListView({
                     </div>
                     <div>
                       <span className="text-white/42">Gyártási év:</span> {c.year ?? "—"}
+                    </div>
+                    <div>
+                      <span className="text-white/42">Parkolási bérlet:</span> {c.parking_start ? `${datePickerLabel(c.parking_start)} • ${c.parking_months || 12} hó` : "—"}
                     </div>
                   </div>
                   <div className="mt-3 flex justify-end">
@@ -557,6 +794,8 @@ function AllInCarsDesktop() {
     casco_months: 12,
     rovinieta_start: "",
     rovinieta_months: 12,
+    parking_start: "",
+    parking_months: 12,
     vin: "",
     civ: "",
     color: "",
@@ -583,6 +822,11 @@ function AllInCarsDesktop() {
   const roviDays = useMemo(
     () => daysLeft(form.rovinieta_start || undefined, 0, form.rovinieta_months || 0),
     [form.rovinieta_start, form.rovinieta_months]
+  );
+
+  const parkingDays = useMemo(
+    () => daysLeft(form.parking_start || undefined, 0, form.parking_months || 0),
+    [form.parking_start, form.parking_months]
   );
 
   useEffect(() => {
@@ -708,18 +952,19 @@ function AllInCarsDesktop() {
       const rca = daysLeft(justDate(c.rca_date), 1, 0);
       const cas = daysLeft(justDate(c.casco_start), 0, c.casco_months || 0);
       const rov = daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0);
-      const minDays = Math.min(...[itp, rca, cas, rov].map((v) => (v == null ? 9999 : v)));
+      const park = daysLeft(justDate(c.parking_start), 0, c.parking_months || 0);
+      const minDays = Math.min(...[itp, rca, cas, rov, park].map((v) => (v == null ? 9999 : v)));
       const worst = levelFor(
-        [itp, rca, cas, rov].reduce<null | number>((acc, v) => {
+        [itp, rca, cas, rov, park].reduce<null | number>((acc, v) => {
           const n = v == null ? null : v;
           if (acc == null) return n;
           if (n == null) return acc;
           return Math.min(acc, n);
         }, null)
       );
-      const hasExpired = [itp, rca, cas, rov].some((v) => v != null && v < 0);
-      const hasSoon = [itp, rca, cas, rov].some((v) => v != null && v >= 0 && v <= 5);
-      return { ...c, itp, rca, cas, rov, minDays, worst, hasExpired, hasSoon };
+      const hasExpired = [itp, rca, cas, rov, park].some((v) => v != null && v < 0);
+      const hasSoon = [itp, rca, cas, rov, park].some((v) => v != null && v >= 0 && v <= 5);
+      return { ...c, itp, rca, cas, rov, park, minDays, worst, hasExpired, hasSoon };
     });
   }, [cars]);
 
@@ -752,17 +997,6 @@ function AllInCarsDesktop() {
   return (
     <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5" style={cssVars}>
       <style>{`
-        input[type="date"].allin-date {
-          color-scheme: dark !important;
-          background-color: #3f4959 !important;
-          color: #ffffff !important;
-          -webkit-text-fill-color: #ffffff !important;
-        }
-        input[type="date"].allin-date::-webkit-calendar-picker-indicator {
-          filter: invert(1) brightness(1.8);
-          opacity: 0.82;
-          cursor: pointer;
-        }
         .allin-select { color-scheme: dark; }
         .allin-select option { background: #354153; color: #fff; }
       `}</style>
@@ -846,8 +1080,8 @@ function AllInCarsDesktop() {
         {/* KPI row */}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Kpi title="Összes autó" value={String(metrics.total)} hint="Nyilvántartott tétel" />
-          <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" />
-          <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" />
+          <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" tone={metrics.soon > 0 ? "border-[#f6ca3c]/75 bg-[#f6ca3c]/14" : ""} />
+          <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" tone={metrics.expired > 0 ? "border-[#b60e21]/75 bg-[#b60e21]/18" : ""} />
         </div>
 
         {/* Tools bar */}
@@ -923,6 +1157,8 @@ function AllInCarsDesktop() {
                 rca_date: justDate(car.rca_date),
                 casco_start: justDate(car.casco_start),
                 rovinieta_start: justDate(car.rovinieta_start),
+                parking_start: justDate(car.parking_start),
+                parking_months: Number(car.parking_months || 12),
               });
               setPhotoEdit(false);
               setPhotoUploading(false);
@@ -1052,13 +1288,10 @@ function AllInCarsDesktop() {
                   {/* ITP: dátum + év select jobbra */}
                   <div className="grid grid-cols-[1fr,auto] gap-2">
                     <Field label="ITP dátum">
-                      <Input
-                        type="date"
-                        className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      <AllInDatePicker
                         value={form.itp_date || ""}
-                        onChange={(e) =>
-                          onChange("itp_date", justDate(e.target.value))
-                        }
+                        onChange={(value) => onChange("itp_date", value)}
+                        ariaLabel="ITP dátum"
                       />
                     </Field>
                     <Field label="Érvényesség">
@@ -1080,13 +1313,10 @@ function AllInCarsDesktop() {
                   </div>
 
                   <Field label="RCA dátum">
-                    <Input
-                      type="date"
-                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    <AllInDatePicker
                       value={form.rca_date || ""}
-                      onChange={(e) =>
-                        onChange("rca_date", justDate(e.target.value))
-                      }
+                      onChange={(value) => onChange("rca_date", value)}
+                      ariaLabel="RCA dátum"
                     />
                   </Field>
                   {/* üres helykitöltő a rácsban */}
@@ -1105,19 +1335,16 @@ function AllInCarsDesktop() {
 
                   <div className="col-span-2 mt-1 mb-1 border-t border-white/10" />
                   <div className="col-span-2 text-[10px] uppercase tracking-[0.15em] text-white/42">
-                    Biztosítások
+                    Biztosítások, útdíjak és parkolás
                   </div>
                   <Field label="Casco kezdete">
-                    <Input
-                      type="date"
-                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    <AllInDatePicker
                       value={form.casco_start || ""}
-                      onChange={(e) =>
-                        onChange("casco_start", justDate(e.target.value))
-                      }
+                      onChange={(value) => onChange("casco_start", value)}
+                      ariaLabel="Casco kezdete"
                     />
                   </Field>
-                  <Field label="Casco hónap">
+                  <Field label="Casco érvényesség">
                     <select
                       className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.casco_months || 12}
@@ -1125,24 +1352,24 @@ function AllInCarsDesktop() {
                         onChange("casco_months", Number(e.target.value))
                       }
                     >
-                      {[1, 3, 6, 12].map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
+                      {[
+                        [1, "Havi"],
+                        [3, "Negyedéves"],
+                        [6, "Féléves"],
+                        [12, "Éves"],
+                      ].map(([m, labelText]) => (
+                        <option key={m} value={m}>{labelText}</option>
                       ))}
                     </select>
                   </Field>
                   <Field label="Rovinieta kezdete">
-                    <Input
-                      type="date"
-                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    <AllInDatePicker
                       value={form.rovinieta_start || ""}
-                      onChange={(e) =>
-                        onChange("rovinieta_start", justDate(e.target.value))
-                      }
+                      onChange={(value) => onChange("rovinieta_start", value)}
+                      ariaLabel="Rovinieta kezdete"
                     />
                   </Field>
-                  <Field label="Rovinieta hónap">
+                  <Field label="Rovinieta érvényesség">
                     <select
                       className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rovinieta_months || 12}
@@ -1150,14 +1377,39 @@ function AllInCarsDesktop() {
                         onChange("rovinieta_months", Number(e.target.value))
                       }
                     >
-                      {[1, 12].map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
+                      {[
+                        [1, "Havi"],
+                        [12, "Éves"],
+                      ].map(([m, labelText]) => (
+                        <option key={m} value={m}>{labelText}</option>
                       ))}
                     </select>
                   </Field>
-                  <div className="col-span-2 -mt-1 text-[11px] text-white/48 flex items-center gap-3">
+
+                  <Field label="Parkolási bérlet kezdete">
+                    <AllInDatePicker
+                      value={form.parking_start || ""}
+                      onChange={(value) => onChange("parking_start", value)}
+                      ariaLabel="Parkolási bérlet kezdete"
+                    />
+                  </Field>
+                  <Field label="Parkolási bérlet érvényesség">
+                    <select
+                      className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      value={form.parking_months || 12}
+                      onChange={(e) => onChange("parking_months", Number(e.target.value))}
+                    >
+                      {[
+                        [1, "Havi"],
+                        [3, "Negyedéves"],
+                        [6, "Féléves"],
+                        [12, "Éves"],
+                      ].map(([m, labelText]) => (
+                        <option key={m} value={m}>{labelText}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div className="col-span-2 -mt-1 grid grid-cols-1 gap-2 text-[11px] text-white/48 sm:grid-cols-3">
                     <div className="flex items-center gap-2">
                       <CalendarDays className="h-4 w-4" />
                       <span>Casco: {cascoDays ?? "-"}</span>
@@ -1165,6 +1417,10 @@ function AllInCarsDesktop() {
                     <div className="flex items-center gap-2">
                       <CalendarDays className="h-4 w-4" />
                       <span>Rovigneta: {roviDays ?? "-"}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <CalendarDays className="h-4 w-4" />
+                      <span>Parkolás: {parkingDays ?? "-"}</span>
                     </div>
                   </div>
 
