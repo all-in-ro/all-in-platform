@@ -26,6 +26,7 @@ import {
   MapPin,
   PackageSearch,
   Phone,
+  Plus,
   Receipt,
   RefreshCw,
   RotateCcw,
@@ -44,12 +45,14 @@ import {
   apiAifCancelShopShiftHandover,
   apiAifCloseShopDay,
   apiAifCreateShopCashMovement,
+  apiAifCreateShopSaleLineNote,
   apiAifCreateShopShiftHandover,
   apiAifGetShopCustomer,
   apiAifShopCashOverview,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
   apiAifShopSaleDetail,
+  apiAifShopSaleLineNotes,
   apiAifShopShiftDayOverview,
   apiAifShopShiftEmployees,
   apiAifShopStockOverview,
@@ -58,7 +61,9 @@ import {
   type AifShopCustomerDetail,
   type AifShopDailySummaryResponse,
   type AifShopDailySaleItem,
+  type AifShopDailyProductItem,
   type AifShopSaleCatalogItem,
+  type AifShopSaleLineNoteThread,
   type AifShopSaleDetailResponse,
   type AifShopShiftDayOverview,
   type AifShopShiftHandover,
@@ -1039,6 +1044,11 @@ export default function AllInShopOperations({
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
   const [saleDetailError, setSaleDetailError] = useState("");
+  const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
+  const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifShopDailyProductItem | null>(null);
+  const [saleLineNoteDraft, setSaleLineNoteDraft] = useState("");
+  const [saleLineNoteSaving, setSaleLineNoteSaving] = useState(false);
+  const [saleLineNoteError, setSaleLineNoteError] = useState("");
   const [shiftData, setShiftData] = useState<AifShopShiftDayOverview | null>(null);
   const [shiftEmployees, setShiftEmployees] = useState<Array<{ name: string; current?: boolean }>>([]);
   const [shiftLoading, setShiftLoading] = useState(false);
@@ -1405,6 +1415,54 @@ export default function AllInShopOperations({
     }
   }
 
+  function closeSaleLineNote() {
+    if (saleLineNoteSaving) return;
+    setSaleLineNoteTarget(null);
+    setSaleLineNoteDraft("");
+    setSaleLineNoteError("");
+  }
+
+  function openSaleLineNote(item: AifShopDailyProductItem) {
+    setSaleLineNoteTarget(item);
+    setSaleLineNoteDraft("");
+    setSaleLineNoteError("");
+  }
+
+  async function saveSaleLineNote() {
+    const item = saleLineNoteTarget;
+    const note = saleLineNoteDraft.trim();
+    if (!item || !note || saleLineNoteSaving) return;
+    const lineId = String(item.lineId || "").trim();
+    if (!lineId) return;
+
+    setSaleLineNoteSaving(true);
+    setSaleLineNoteError("");
+    try {
+      const response = await apiAifCreateShopSaleLineNote({ location: locationCode, lineId, note });
+      setSaleLineNoteThreads((current) => {
+        const existing = current[lineId] || {
+          lineId,
+          saleId: String(item.saleId || ""),
+          lineNo: 0,
+          saleNumber: item.saleNumber || null,
+          soldAt: item.soldAt || null,
+          saleActor: actor || null,
+          saleNote: null,
+          notes: [],
+        };
+        return {
+          ...current,
+          [lineId]: { ...existing, notes: [...(existing.notes || []), response.item] },
+        };
+      });
+      setSaleLineNoteDraft("");
+    } catch (caught) {
+      setSaleLineNoteError(caught instanceof Error ? caught.message : "A megjegyzés mentése nem sikerült.");
+    } finally {
+      setSaleLineNoteSaving(false);
+    }
+  }
+
   async function createShiftHandover() {
     if (!handoverTarget) {
       setError("Válaszd ki, melyik kolléga veszi át a műszakot.");
@@ -1671,6 +1729,40 @@ export default function AllInShopOperations({
   }
 
   useEffect(() => {
+    if (!open || mode !== "summary") return;
+    const sourceItems = summaryData?.productLines?.length
+      ? summaryData.productLines
+      : (summaryData?.products || []);
+    const lineIds = Array.from(new Set(
+      sourceItems
+        .filter((item) => String(item.recordType || "sale") === "sale")
+        .map((item) => String(item.lineId || "").trim())
+        .filter(Boolean)
+    ));
+
+    if (!lineIds.length) {
+      setSaleLineNoteThreads({});
+      return;
+    }
+
+    let cancelled = false;
+    void apiAifShopSaleLineNotes({ location: locationCode, lineIds })
+      .then((result) => {
+        if (cancelled) return;
+        const next: Record<string, AifShopSaleLineNoteThread> = {};
+        for (const thread of result.threads || []) next[String(thread.lineId)] = thread;
+        setSaleLineNoteThreads(next);
+      })
+      .catch(() => {
+        if (!cancelled) setSaleLineNoteThreads({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [locationCode, mode, open, summaryData?.productLines, summaryData?.products]);
+
+  useEffect(() => {
     if (!open) return;
     setError("");
     setProductFilters(emptyProductFilters());
@@ -1686,6 +1778,10 @@ export default function AllInShopOperations({
     setSaleDetail(null);
     setSaleDetailError("");
     setSaleDetailLoading(false);
+    setSaleLineNoteThreads({});
+    setSaleLineNoteTarget(null);
+    setSaleLineNoteDraft("");
+    setSaleLineNoteError("");
     setCashHistoryOpen(false);
     if (mode === "search") {
       setSearchQuery("");
@@ -1735,6 +1831,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (saleLineNoteTarget) {
+          if (!saleLineNoteSaving) closeSaleLineNote();
+          return;
+        }
         if (cashHistoryOpen) {
           setCashHistoryOpen(false);
           return;
@@ -1776,7 +1876,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2553,6 +2653,8 @@ export default function AllInShopOperations({
                         numberValue(item.balanceDue) > 0.005 ||
                         ["unpaid", "partial", "credit"].includes(paymentStatus)
                       );
+                      const lineNoteThread = !settlement ? saleLineNoteThreads[String(item.lineId || "")] || null : null;
+                      const hasProductNote = Boolean(lineNoteThread?.saleNote || lineNoteThread?.notes?.length);
 
                       const linkedSale = settlement
                         ? null
@@ -2699,6 +2801,25 @@ export default function AllInShopOperations({
                                     <Clock3 size={13} className="text-white/32" />
                                     {settlement ? "Fizetve " : ""}{formatTime(item.soldAt)}
                                   </span>
+                                </>
+                              ) : null}
+
+                              {!settlement && String(item.recordType || "sale") === "sale" && item.lineId ? (
+                                <>
+                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                  <button
+                                    type="button"
+                                    onClick={() => openSaleLineNote(item)}
+                                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition active:scale-[0.95] ${
+                                      hasProductNote
+                                        ? "border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.22)] hover:bg-[#319c99]"
+                                        : "border-[#8ce7e2]/28 bg-[#2a8d8b]/10 text-[#bff8f5] hover:border-[#8ce7e2]/52 hover:bg-[#2a8d8b]/22"
+                                    }`}
+                                    title={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
+                                    aria-label={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
+                                  >
+                                    {hasProductNote ? <Mail size={14} strokeWidth={2.1} /> : <Plus size={15} strokeWidth={2.4} />}
+                                  </button>
                                 </>
                               ) : null}
 
@@ -2874,6 +2995,95 @@ export default function AllInShopOperations({
             onClose={closeSaleDetail}
           />
         ) : null}
+
+        {saleLineNoteTarget ? (() => {
+          const lineId = String(saleLineNoteTarget.lineId || "");
+          const thread = saleLineNoteThreads[lineId] || null;
+          const notes = thread?.notes || [];
+          return createPortal(
+            <div
+              className="fixed inset-0 z-[545] grid place-items-center bg-[#0f172a]/88 px-4 py-6 backdrop-blur-md"
+              onMouseDown={(event) => {
+                if (event.currentTarget === event.target) closeSaleLineNote();
+              }}
+            >
+              <section className="flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-[26px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_40px_125px_rgba(0,0,0,0.68)]">
+                <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#214a50] via-[#27666a] to-[#2a8d8b] px-5 py-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
+                      {notes.length ? <Mail size={20} /> : <Plus size={21} />}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/66">Termékmegjegyzés</p>
+                      <h3 className="mt-1 truncate text-lg text-white">{saleLineNoteTarget.title}</h3>
+                      <p className="mt-1 text-[11px] text-white/58">
+                        {saleLineNoteTarget.saleNumber || "Eladás"} • {formatExactDateTime(saleLineNoteTarget.soldAt)}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={saleLineNoteSaving}
+                    onClick={closeSaleLineNote}
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-black/20 disabled:opacity-45"
+                    aria-label="Megjegyzések bezárása"
+                  >
+                    <X size={17} />
+                  </button>
+                </header>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  <div className="space-y-2.5">
+                    {thread?.saleNote ? (
+                      <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3.5">
+                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Eladáskor rögzítve</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-white/78">{thread.saleNote}</p>
+                        <p className="mt-2 text-[10px] text-white/38">{thread.saleActor || actor || "-"}</p>
+                      </div>
+                    ) : null}
+
+                    {notes.map((item) => (
+                      <div key={item.id} className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                        <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-white">{item.note}</p>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/42">
+                          <span>{item.actor || "-"}</span>
+                          <span>{item.createdAt ? formatExactDateTime(item.createdAt) : ""}</span>
+                        </div>
+                      </div>
+                    ))}
+
+                    {!thread?.saleNote && !notes.length ? (
+                      <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-xs text-white/38">Nincs megjegyzés.</div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 border-t border-white/10 pt-4">
+                    <textarea
+                      value={saleLineNoteDraft}
+                      onChange={(event) => setSaleLineNoteDraft(event.target.value.slice(0, 1000))}
+                      rows={3}
+                      placeholder="Új megjegyzés…"
+                      className="w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]"
+                    />
+                    {saleLineNoteError ? <p className="mt-2 text-xs text-rose-100">{saleLineNoteError}</p> : null}
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        disabled={saleLineNoteSaving || !saleLineNoteDraft.trim()}
+                        onClick={() => void saveSaleLineNote()}
+                        className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {saleLineNoteSaving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                        Mentés
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>,
+            document.body,
+          );
+        })() : null}
 
         {cashHistoryOpen ? createPortal(
           <div

@@ -34,6 +34,7 @@ import {
   MoreVertical,
   PackageCheck,
   Percent,
+  Plus,
   ReceiptText,
   RefreshCw,
   Search,
@@ -51,12 +52,15 @@ import {
 import {
   apiAifAdminDeleteShopSaleLine,
   apiAifAdminShopOverview,
+  apiAifCreateShopSaleLineNote,
+  apiAifShopSaleLineNotes,
   apiAifShopShiftDayOverview,
   type AifAdminShopOverviewResponse,
   type AifShopShiftDayOverview,
   type AifAdminShopRankingItem,
   type AifAdminShopRecentSale,
   type AifAdminShopSaleLineDeleteMode,
+  type AifShopSaleLineNoteThread,
 } from "../lib/aif/api";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 import AllInAdminShiftRepair from "./AllInAdminShiftRepair";
@@ -230,14 +234,6 @@ type AdminRecentSaleExtended = AifAdminShopRecentSale & {
   paymentMethod?: string | null;
 };
 
-type AdminSaleNoteInfo = {
-  saleId: string;
-  saleNumber?: string | null;
-  soldAt?: string | null;
-  actor?: string | null;
-  note: string;
-};
-
 function settlementInfo(sale: AifAdminShopRecentSale) {
   return sale as AdminRecentSaleExtended;
 }
@@ -248,34 +244,6 @@ function isPaymentSettlement(sale: AifAdminShopRecentSale) {
 
 function settlementTypeLabel(sale: AifAdminShopRecentSale) {
   return isPaymentSettlement(sale) ? "Korábbi vásárlás fizetése" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue);
-}
-
-async function apiAdminSaleNotes(location: string, saleIds: string[]) {
-  const ids = Array.from(new Set(saleIds.map((value) => String(value || "").trim()).filter(Boolean))).slice(0, 500);
-  if (!ids.length) return { items: [] as AdminSaleNoteInfo[] };
-
-  const response = await fetch("/api/aif/admin-shops/sale-notes", {
-    method: "POST",
-    credentials: "include",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ location, saleIds: ids }),
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
-  return {
-    items: Array.isArray(body?.items)
-      ? body.items
-          .map((item: Record<string, any>) => ({
-            saleId: String(item.saleId || item.sale_id || "").trim(),
-            saleNumber: item.saleNumber || item.sale_number || null,
-            soldAt: item.soldAt || item.sold_at || null,
-            actor: item.actor || null,
-            note: String(item.note || "").trim(),
-          }))
-          .filter((item: AdminSaleNoteInfo) => item.saleId && item.note)
-      : [],
-  };
 }
 
 function SalePriceBreakdown({
@@ -1403,8 +1371,11 @@ export default function AllInAdminMagazinDashboard({
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
-  const [saleNotes, setSaleNotes] = useState<Record<string, AdminSaleNoteInfo>>({});
-  const [saleNoteTarget, setSaleNoteTarget] = useState<{ sale: AifAdminShopRecentSale; note: AdminSaleNoteInfo } | null>(null);
+  const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
+  const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifAdminShopRecentSale | null>(null);
+  const [saleLineNoteDraft, setSaleLineNoteDraft] = useState("");
+  const [saleLineNoteSaving, setSaleLineNoteSaving] = useState(false);
+  const [saleLineNoteError, setSaleLineNoteError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -1439,27 +1410,27 @@ export default function AllInAdminMagazinDashboard({
   }, [load]);
 
   useEffect(() => {
-    const saleIds = Array.from(new Set(
+    const lineIds = Array.from(new Set(
       (data?.recentSales || [])
-        .filter((sale) => !isPaymentSettlement(sale))
-        .map((sale) => String(sale.saleId || "").trim())
+        .filter((sale) => !isPaymentSettlement(sale) && String(sale.recordType || "sale") === "sale")
+        .map((sale) => String(sale.lineId || "").trim())
         .filter(Boolean)
     ));
-    if (!saleIds.length) {
-      setSaleNotes({});
+    if (!lineIds.length) {
+      setSaleLineNoteThreads({});
       return;
     }
 
     let cancelled = false;
-    void apiAdminSaleNotes(locationCode, saleIds)
+    void apiAifShopSaleLineNotes({ location: locationCode, lineIds })
       .then((result) => {
         if (cancelled) return;
-        const next: Record<string, AdminSaleNoteInfo> = {};
-        for (const item of result.items) next[item.saleId] = item;
-        setSaleNotes(next);
+        const next: Record<string, AifShopSaleLineNoteThread> = {};
+        for (const thread of result.threads || []) next[String(thread.lineId)] = thread;
+        setSaleLineNoteThreads(next);
       })
       .catch(() => {
-        if (!cancelled) setSaleNotes({});
+        if (!cancelled) setSaleLineNoteThreads({});
       });
 
     return () => {
@@ -1515,6 +1486,54 @@ export default function AllInAdminMagazinDashboard({
 
     return () => window.clearTimeout(timer);
   }, [draft.snCod, draft.search, applied.snCod, applied.search]);
+
+  function closeSaleLineNote() {
+    if (saleLineNoteSaving) return;
+    setSaleLineNoteTarget(null);
+    setSaleLineNoteDraft("");
+    setSaleLineNoteError("");
+  }
+
+  function openSaleLineNote(sale: AifAdminShopRecentSale) {
+    setSaleLineNoteTarget(sale);
+    setSaleLineNoteDraft("");
+    setSaleLineNoteError("");
+  }
+
+  async function saveSaleLineNote() {
+    const sale = saleLineNoteTarget;
+    const note = saleLineNoteDraft.trim();
+    if (!sale || !note || saleLineNoteSaving) return;
+    const lineId = String(sale.lineId || "").trim();
+    if (!lineId) return;
+
+    setSaleLineNoteSaving(true);
+    setSaleLineNoteError("");
+    try {
+      const response = await apiAifCreateShopSaleLineNote({ location: locationCode, lineId, note });
+      setSaleLineNoteThreads((current) => {
+        const existing = current[lineId] || {
+          lineId,
+          saleId: String(sale.saleId || ""),
+          lineNo: numberValue(sale.lineNo),
+          saleNumber: sale.saleNumber || null,
+          soldAt: sale.soldAt || null,
+          saleActor: sale.actor || null,
+          saleNote: null,
+          notes: [],
+        };
+        return {
+          ...current,
+          [lineId]: { ...existing, notes: [...(existing.notes || []), response.item] },
+        };
+      });
+      setSaleLineNoteDraft("");
+    } catch (caught: any) {
+      setSaleLineNoteError(caught?.message || "A megjegyzés mentése nem sikerült.");
+    } finally {
+      setSaleLineNoteSaving(false);
+    }
+  }
 
   async function deleteSaleLine(mode: AifAdminShopSaleLineDeleteMode) {
     if (!deleteTarget || deleteSaving) return;
@@ -1577,13 +1596,13 @@ export default function AllInAdminMagazinDashboard({
   }, [receiptTarget]);
 
   useEffect(() => {
-    if (!saleNoteTarget) return;
+    if (!saleLineNoteTarget) return;
     const closeWithEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSaleNoteTarget(null);
+      if (event.key === "Escape" && !saleLineNoteSaving) closeSaleLineNote();
     };
     window.addEventListener("keydown", closeWithEscape, true);
     return () => window.removeEventListener("keydown", closeWithEscape, true);
-  }, [saleNoteTarget]);
+  }, [saleLineNoteSaving, saleLineNoteTarget]);
 
   const summary = data?.summary;
   const previous = data?.previousSummary;
@@ -2185,7 +2204,8 @@ export default function AllInAdminMagazinDashboard({
                   {eventLogSales.map((sale, index) => {
                     const settlement = isPaymentSettlement(sale);
                     const settlementMeta = settlementInfo(sale);
-                    const noteInfo = !settlement ? saleNotes[String(sale.saleId || "")] || null : null;
+                    const lineNoteThread = !settlement ? saleLineNoteThreads[String(sale.lineId || "")] || null : null;
+                    const hasProductNote = Boolean(lineNoteThread?.saleNote || lineNoteThread?.notes?.length);
                     const reverseRowNumber = settlement
                       ? null
                       : eventLogSales.slice(index).filter((item) => !isPaymentSettlement(item)).length;
@@ -2309,15 +2329,19 @@ export default function AllInAdminMagazinDashboard({
                               setDeleteTarget(sale);
                             }}
                           />
-                          {noteInfo ? (
+                          {!settlement && String(sale.recordType || "sale") === "sale" ? (
                             <button
                               type="button"
-                              onClick={() => setSaleNoteTarget({ sale, note: noteInfo })}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.24)] transition hover:border-[#bff8f5]/72 hover:bg-[#319c99] active:scale-[0.95]"
-                              title="Megjegyzés elolvasása"
-                              aria-label="Eladási megjegyzés"
+                              onClick={() => openSaleLineNote(sale)}
+                              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition active:scale-[0.95] ${
+                                hasProductNote
+                                  ? "border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.24)] hover:border-[#bff8f5]/72 hover:bg-[#319c99]"
+                                  : "border-[#8ce7e2]/30 bg-[#2a8d8b]/10 text-[#bff8f5] hover:border-[#8ce7e2]/58 hover:bg-[#2a8d8b]/22"
+                              }`}
+                              title={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
+                              aria-label={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
                             >
-                              <Mail size={14} strokeWidth={2.1} />
+                              {hasProductNote ? <Mail size={14} strokeWidth={2.1} /> : <Plus size={15} strokeWidth={2.4} />}
                             </button>
                           ) : null}
                         </div>
@@ -2339,49 +2363,93 @@ export default function AllInAdminMagazinDashboard({
         </section>
       </div>
 
-      {saleNoteTarget ? (
-        <div
-          className="fixed inset-0 z-[315] grid place-items-center bg-slate-950/82 px-4 py-6 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setSaleNoteTarget(null);
-          }}
-        >
-          <section className="w-full max-w-[580px] overflow-hidden rounded-[24px] border border-[#8ce7e2]/30 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
-            <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#214a50] via-[#27666a] to-[#2a8d8b] px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
-                  <Mail size={20} />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/66">Eladási megjegyzés</p>
-                  <h3 className="mt-1 truncate text-lg text-white">{saleNoteTarget.sale.productTitle || saleNoteTarget.sale.saleNumber}</h3>
-                  <p className="mt-1 text-[11px] text-white/58">
-                    {saleNoteTarget.sale.saleNumber} • {dateTime(saleNoteTarget.sale.soldAt)}
-                  </p>
+      {saleLineNoteTarget ? (() => {
+        const lineId = String(saleLineNoteTarget.lineId || "");
+        const thread = saleLineNoteThreads[lineId] || null;
+        const notes = thread?.notes || [];
+        return (
+          <div
+            className="fixed inset-0 z-[315] grid place-items-center bg-slate-950/82 px-4 py-6 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) closeSaleLineNote();
+            }}
+          >
+            <section className="flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-[24px] border border-[#8ce7e2]/30 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+              <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#214a50] via-[#27666a] to-[#2a8d8b] px-5 py-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
+                    {notes.length ? <Mail size={20} /> : <Plus size={21} />}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/66">Termékmegjegyzés</p>
+                    <h3 className="mt-1 truncate text-lg text-white">{saleLineNoteTarget.productTitle || saleLineNoteTarget.saleNumber}</h3>
+                    <p className="mt-1 text-[11px] text-white/58">
+                      {saleLineNoteTarget.saleNumber} • {dateTime(saleLineNoteTarget.soldAt)}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={saleLineNoteSaving}
+                  onClick={closeSaleLineNote}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-black/20 disabled:opacity-45"
+                  aria-label="Megjegyzések bezárása"
+                >
+                  <X size={17} />
+                </button>
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                <div className="space-y-2.5">
+                  {thread?.saleNote ? (
+                    <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3.5">
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Eladáskor rögzítve</p>
+                      <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-white/78">{thread.saleNote}</p>
+                      <p className="mt-2 text-[10px] text-white/38">{thread.saleActor || saleLineNoteTarget.actor || "-"}</p>
+                    </div>
+                  ) : null}
+
+                  {notes.map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                      <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-white">{item.note}</p>
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/42">
+                        <span>{item.actor || "-"}</span>
+                        <span>{item.createdAt ? dateTime(item.createdAt) : ""}</span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {!thread?.saleNote && !notes.length ? (
+                    <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-xs text-white/38">Nincs megjegyzés.</div>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <textarea
+                    value={saleLineNoteDraft}
+                    onChange={(event) => setSaleLineNoteDraft(event.target.value.slice(0, 1000))}
+                    rows={3}
+                    placeholder="Új megjegyzés…"
+                    className="w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]"
+                  />
+                  {saleLineNoteError ? <p className="mt-2 text-xs text-rose-100">{saleLineNoteError}</p> : null}
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={saleLineNoteSaving || !saleLineNoteDraft.trim()}
+                      onClick={() => void saveSaleLineNote()}
+                      className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {saleLineNoteSaving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                      Mentés
+                    </button>
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setSaleNoteTarget(null)}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-black/20"
-                aria-label="Megjegyzés bezárása"
-              >
-                <X size={17} />
-              </button>
-            </header>
-
-            <div className="p-5">
-              <div className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-4 text-[14px] leading-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <p className="whitespace-pre-wrap break-words">{saleNoteTarget.note.note}</p>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/44">
-                <span>{saleNoteTarget.note.actor || saleNoteTarget.sale.actor || "-"}</span>
-                <span>{saleNoteTarget.sale.customerName || "Nincs kliens megadva"}</span>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
+            </section>
+          </div>
+        );
+      })() : null}
 
       {receiptTarget ? (
         <div
