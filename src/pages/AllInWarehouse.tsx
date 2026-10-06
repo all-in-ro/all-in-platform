@@ -3111,6 +3111,7 @@ type WarehouseLabelContentKey =
   | "category"
   | "sizeColor"
   | "code"
+  | "snCod"
   | "price";
 
 type WarehouseLabelPrintMode = "a4" | "zebra";
@@ -3166,6 +3167,7 @@ const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean>
   category: true,
   sizeColor: true,
   code: true,
+  snCod: true,
   price: true,
 };
 
@@ -3179,6 +3181,7 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "category", label: "Alkategória", hint: "A termék alkategóriája / terméktípusa kerül a címkére." },
   { key: "sizeColor", label: "Méret", hint: "A variáns mérete kerül a címkére." },
   { key: "code", label: "Termékkód / színkód", hint: "A termékkód után a gyártói színkód jelenik meg." },
+  { key: "snCod", label: "S/N/COD", hint: "Diszkrét technikai azonosító a kód és az ár között." },
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
 ];
 
@@ -3228,6 +3231,7 @@ type WarehouseLabelPrintItem = {
   color: string;
   description: string;
   productCode: string;
+  snCod: string;
   price: string;
   stockQty: number;
   copyIndex: number;
@@ -3286,7 +3290,8 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWhLabelTitle,
 .aifWhLabelDescription,
 .aifWhLabelCategory,
-.aifWhLabelCode { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aifWhLabelCode,
+.aifWhLabelSnCod { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .aifWhLabelCompany { font-size:8.4px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.055em; color:#333; margin-bottom:.45mm; }
 .aifWhLabelBrand { font-size:8px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.04em; color:#222; margin-bottom:.4mm; }
 .aifWhLabelTitle { font-size:10.4px; line-height:1.06; text-align:center; color:#111; margin-bottom:.55mm; flex:0 0 auto; }
@@ -3295,7 +3300,8 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:100%; max-width:100%; max-height:100%; }
 .aifWhLabelDescription { text-align:center; font-size:7.7px; line-height:1.05; color:#222; margin-bottom:.35mm; }
 .aifWhLabelCategory { text-align:center; text-transform:uppercase; font-size:8.1px; line-height:1.05; color:#111; margin-bottom:.35mm; }
-.aifWhLabelCode { font-size:7.1px; line-height:1.05; color:#444; text-align:center; margin-bottom:.55mm; }
+.aifWhLabelCode { font-size:7.1px; line-height:1.05; color:#444; text-align:center; margin-bottom:.20mm; }
+.aifWhLabelSnCod { font-size:5.7px; line-height:1.02; color:#777; text-align:center; letter-spacing:.035em; margin:0 0 .30mm; }
 .aifWhLabelPrice { margin-top:0; padding-top:0; text-align:center; line-height:.92; color:#111; white-space:nowrap; }
 .aifWhPriceMajor { font-size:20px; letter-spacing:.055em; }
 .aifWhPriceCents { font-size:10.5px; vertical-align:top; margin-left:1px; }
@@ -3431,7 +3437,7 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
 .aifWhZebraLabel .aifWhLabelCode {
   flex:0 0 auto;
   width:100%;
-  margin:.42mm 0 0;
+  margin:.30mm 0 0;
   font-size:8.15px;
   font-weight:700;
   line-height:1.08;
@@ -3439,11 +3445,26 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   text-align:center;
   color:#111;
 }
+.aifWhZebraLabel .aifWhLabelSnCod {
+  flex:0 0 auto;
+  width:100%;
+  margin:.15mm 0 0;
+  padding:0 .2mm;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:5.55px;
+  font-weight:400;
+  line-height:1.02;
+  letter-spacing:.045em;
+  text-align:center;
+  color:#6b6b6b;
+}
 .aifWhZebraLabel .aifWhLabelPrice {
   flex:0 0 auto;
   width:100%;
-  margin:.6mm 0 0;
-  padding:.55mm 0 0;
+  margin:.40mm 0 0;
+  padding:.44mm 0 0;
   text-align:center;
   line-height:.88;
   border-top:.24mm solid #222;
@@ -3697,6 +3718,9 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
   if (options.labelContent.code && (productCodeWithColor || label.barcode)) {
     html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
   }
+  if (options.labelContent.snCod && label.snCod) {
+    html.push(`<div class="aifWhLabelSnCod">S/N/COD · ${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
+  }
   if (options.labelContent.price && priceParts.major) {
     html.push(
       `<div class="aifWhLabelPrice"><span class="aifWhPriceMajor">${labelEscapeHtml(priceParts.major)}</span>${
@@ -3761,6 +3785,9 @@ function warehouseZebraLabelContentHtml(label: WarehouseLabelPrintItem, options:
   }
   if (options.labelContent.code && (productCodeWithColor || label.barcode)) {
     html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
+  }
+  if (options.labelContent.snCod && label.snCod) {
+    html.push(`<div class="aifWhLabelSnCod">S/N/COD · ${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
   }
   if (options.labelContent.price && priceParts.major) {
     html.push(`<div class="aifWhLabelPrice"><span class="aifWhPriceMajor">${labelEscapeHtml(priceParts.major)}</span>${priceParts.cents ? `<span class="aifWhPriceCents">${labelEscapeHtml(priceParts.cents)}</span>` : ""}<span class="aifWhPriceUnit">${labelEscapeHtml(labelCleanText(options.labelUnitText || options.labelCurrency, 12))}</span></div>`);
@@ -11583,6 +11610,7 @@ export default function AllInWarehouse() {
         color: colorCode || "-",
         description: detailItem.material || item.material || "",
         productCode: labelProductCodeForItem(mergedLabelItem),
+        snCod: itemSnCod(mergedLabelItem),
         price,
         stockQty: Math.floor(n(item.total_qty)),
         render: labelCode128Svg(barcode, 52),
@@ -11610,6 +11638,7 @@ export default function AllInWarehouse() {
           color: row.color,
           description: row.description,
           productCode: row.productCode,
+          snCod: row.snCod,
           price: row.price,
           stockQty: row.stockQty,
           copyIndex: i + 1,
@@ -11772,6 +11801,7 @@ export default function AllInWarehouse() {
           </div>
         )}
         {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
+        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">S/N/COD · {labelCleanText(label.snCod, 48)}</div>}
         {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
@@ -11804,6 +11834,7 @@ export default function AllInWarehouse() {
         {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 90)}</div>}
         {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
         {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
+        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">S/N/COD · {labelCleanText(label.snCod, 48)}</div>}
         {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
@@ -15038,6 +15069,7 @@ export default function AllInWarehouse() {
                           <p className="truncate text-sm text-white">{row.title}</p>
                           <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • Színkód: {row.color || "-"} • {row.size}</p>
                           <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}</p>
+                          {row.snCod ? <p className="mt-1 truncate font-mono text-[10px] tracking-[0.035em] text-[#bfe9e6]/72">S/N/COD · {row.snCod}</p> : null}
                           {!row.render.ok && (
                             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">
                               <span className="text-xs text-rose-100">{row.render.error}</span>
