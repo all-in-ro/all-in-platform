@@ -1735,6 +1735,47 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return ["label", "order", "move", "shopify"].includes(action) ? action : null;
   }
 
+  function selectedSelectionMetaFromItem(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return {};
+    const source = item.selectionMeta && typeof item.selectionMeta === "object" && !Array.isArray(item.selectionMeta)
+      ? item.selectionMeta
+      : item.selection_meta && typeof item.selection_meta === "object" && !Array.isArray(item.selection_meta)
+        ? item.selection_meta
+        : {};
+    const meta = {};
+    const labelQtyRaw = source.labelQty ?? source.label_qty;
+    if (labelQtyRaw !== undefined) {
+      const parsed = toInt(labelQtyRaw);
+      meta.labelQty = parsed !== null && parsed > 0 ? parsed : null;
+      meta.label_qty = meta.labelQty;
+    }
+    const labelSourceRaw = source.labelSource ?? source.label_source;
+    if (labelSourceRaw !== undefined) {
+      const labelSource = text(labelSourceRaw).slice(0, 40);
+      meta.labelSource = labelSource || null;
+      meta.label_source = meta.labelSource;
+    }
+    const invoiceKeyRaw = source.invoiceKey ?? source.invoice_key;
+    if (invoiceKeyRaw !== undefined) {
+      const invoiceKey = text(invoiceKeyRaw).slice(0, 300);
+      meta.invoiceKey = invoiceKey || null;
+      meta.invoice_key = meta.invoiceKey;
+    }
+    const invoiceNumberRaw = source.invoiceNumber ?? source.invoice_number;
+    if (invoiceNumberRaw !== undefined) {
+      const invoiceNumber = text(invoiceNumberRaw).slice(0, 200);
+      meta.invoiceNumber = invoiceNumber || null;
+      meta.invoice_number = meta.invoiceNumber;
+    }
+    const receptionIdRaw = source.receptionId ?? source.reception_id;
+    if (receptionIdRaw !== undefined) {
+      const receptionId = text(receptionIdRaw).slice(0, 100);
+      meta.receptionId = receptionId || null;
+      meta.reception_id = meta.receptionId;
+    }
+    return meta;
+  }
+
   function selectedRowsFromBody(body) {
     const sourceItems = Array.isArray(body?.items)
       ? body.items
@@ -1760,13 +1801,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const id = text(typeof item === "object" && item !== null ? (item.variantId || item.variant_id || item.id) : item);
         if (!id) continue;
         const action = cleanSelectedWorkAction(typeof item === "object" && item !== null ? (item.action || item.selectedAction || item.selected_action || actionMap[id]) : actionMap[id]);
-        rows.push({ variantId: id, action });
+        rows.push({ variantId: id, action, selectionMeta: selectedSelectionMetaFromItem(item) });
       }
     } else if (selectedObject) {
       for (const [idRaw, selected] of Object.entries(selectedObject)) {
         const id = text(idRaw);
         if (!id || !selected) continue;
-        rows.push({ variantId: id, action: cleanSelectedWorkAction(actionMap[id]) });
+        rows.push({ variantId: id, action: cleanSelectedWorkAction(actionMap[id]), selectionMeta: {} });
       }
     }
 
@@ -1921,7 +1962,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          sxp.validation_errors AS shopify_export_errors, sxp.validation_warnings AS shopify_export_warnings,
          (sxp.item_status='exported_pending' AND svm.variant_id IS NULL) AS shopify_export_pending,
          sel.variant_id AS selected_variant_id,
-         sel.action, sel.sort_order, sel.created_at AS selected_at, sel.updated_at AS selected_updated_at
+         sel.action, sel.sort_order, sel.raw AS selection_raw,
+         sel.created_at AS selected_at, sel.updated_at AS selected_updated_at
        FROM selected sel
        LEFT JOIN aif_product_variants v ON v.id::text=sel.variant_id
        LEFT JOIN aif_product_models m ON m.id=v.model_id
@@ -12652,7 +12694,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              sort_order=EXCLUDED.sort_order,
              raw=EXCLUDED.raw,
              updated_at=now()`,
-          [ownerKey, row.variantId, row.action, index, JSON.stringify({ source: "warehouse_ui" })]
+          [ownerKey, row.variantId, row.action, index, JSON.stringify({ ...(row.selectionMeta || {}), source: "warehouse_ui" })]
         );
         saved++;
       }
@@ -12718,7 +12760,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              raw=COALESCE(aif_user_selected_variants.raw, '{}'::jsonb) || EXCLUDED.raw,
              updated_at=now()
            RETURNING (xmax = 0) AS inserted`,
-          [ownerKey, row.variantId, row.action, nextSort++, JSON.stringify({ source: "warehouse_ui_atomic_add" })]
+          [ownerKey, row.variantId, row.action, nextSort++, JSON.stringify({ ...(row.selectionMeta || {}), source: "warehouse_ui_atomic_add" })]
         );
         if (result.rows[0]?.inserted) added++;
       }
@@ -12752,7 +12794,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                raw=COALESCE(raw, '{}'::jsonb) || $4::jsonb,
                updated_at=now()
            WHERE owner_key=$1 AND variant_id=$2`,
-          [ownerKey, row.variantId, row.action, JSON.stringify({ source: "warehouse_ui_atomic_action" })]
+          [ownerKey, row.variantId, row.action, JSON.stringify({ ...(row.selectionMeta || {}), source: "warehouse_ui_atomic_action" })]
         );
         updated += result.rowCount;
       }
@@ -13223,6 +13265,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS imported_at,
            array_agg(DISTINCT b.id::text) AS batch_ids,
            array_agg(DISTINCT rw.variant_id::text) AS variant_ids,
+           jsonb_agg(
+             jsonb_build_object('variantId', rw.variant_id::text, 'qty', COALESCE(rw.qty,0))
+             ORDER BY rw.row_no ASC, rw.id ASC
+           ) FILTER (WHERE rw.variant_id IS NOT NULL) AS variant_qty_rows,
            array_agg(DISTINCT l.name) FILTER (WHERE l.name IS NOT NULL AND l.name <> '') AS location_names,
            array_agg(DISTINCT COALESCE(r.currency_code, b.currency_code)) FILTER (WHERE COALESCE(r.currency_code, b.currency_code) IS NOT NULL) AS currency_codes,
            array_agg(DISTINCT b.source_file_name) FILTER (WHERE b.source_file_name IS NOT NULL AND b.source_file_name <> '') AS source_file_names
