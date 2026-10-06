@@ -1051,6 +1051,7 @@ export default function AllInShopOperations({
   const [cashMoveNote, setCashMoveNote] = useState("");
   const [cashMoveSaving, setCashMoveSaving] = useState(false);
   const [cashCancelBusyId, setCashCancelBusyId] = useState<string | null>(null);
+  const [cashHistoryOpen, setCashHistoryOpen] = useState(false);
 
   const paymentMap = useMemo(() => {
     const map = new Map<string, {
@@ -1163,6 +1164,13 @@ export default function AllInShopOperations({
   const cashHistoryOlderYear = cashHistoryYearIndex >= 0 && cashHistoryYearIndex < cashHistoryYears.length - 1
     ? cashHistoryYears[cashHistoryYearIndex + 1]
     : null;
+  const recentCashMovements = useMemo(
+    () => [...(cashData?.movements || [])].sort(
+      (a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime(),
+    ),
+    [cashData?.movements],
+  );
+  const latestCashMovement = recentCashMovements[0] || null;
   const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
   const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
     ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
@@ -1661,6 +1669,7 @@ export default function AllInShopOperations({
     setSaleDetail(null);
     setSaleDetailError("");
     setSaleDetailLoading(false);
+    setCashHistoryOpen(false);
     if (mode === "search") {
       setSearchQuery("");
       setSearchItems([]);
@@ -1709,6 +1718,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (cashHistoryOpen) {
+          setCashHistoryOpen(false);
+          return;
+        }
         if (cashCalendarMode) {
           setCashCalendarMode(null);
           return;
@@ -1746,7 +1759,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2190,157 +2203,84 @@ export default function AllInShopOperations({
 
                     <div className="rounded-[22px] border border-white/12 bg-[#344055] p-4">
                       <div className="flex items-center justify-between gap-3">
-                        <div>
+                        <div className="min-w-0">
                           <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Auditnapló</p>
-                          <h4 className="mt-1 text-base text-white">Legutóbbi pénzmozgások</h4>
+                          <h4 className="mt-1 text-base text-white">Legutóbbi pénzmozgás</h4>
                         </div>
-                        <History size={20} className="text-[#8ee6e2]" />
+                        <button
+                          type="button"
+                          onClick={() => setCashHistoryOpen(true)}
+                          className="group inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/38 bg-[#2a8d8b]/18 px-3 text-[#d7fffd] shadow-[0_8px_20px_rgba(42,141,139,0.12)] transition hover:border-[#b9f5f2]/65 hover:bg-[#2a8d8b] hover:text-white active:scale-[0.97]"
+                          title="Pénzmozgások előzményeinek megnyitása"
+                          aria-label="Pénzmozgások előzményeinek megnyitása"
+                        >
+                          <History size={18} className="transition group-hover:-rotate-12" />
+                          <span className="hidden text-[10px] uppercase tracking-[0.08em] sm:inline">Előzmények</span>
+                        </button>
                       </div>
-                      <div className="mt-3 space-y-2">
-                        {(cashData?.movements || []).slice(0, 8).map((movement) => (
-                          <div key={movement.id} className={`rounded-xl border px-3 py-2.5 ${
-                            movement.status === "pending"
-                              ? "border-orange-200/24 bg-orange-500/8"
-                              : movement.status === "confirmed"
-                                ? "border-emerald-200/16 bg-emerald-500/7"
-                                : "border-white/10 bg-[#293548]"
-                          }`}>
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-xs text-white">{movement.type === "manager_handover" ? "Készpénz átadása" : "Bankbefizetés"}</p>
-                                <p className="mt-1 truncate text-[10px] text-white/42">{movement.requestedBy} • {formatTime(movement.requestedAt)}{movement.reference ? ` • ${movement.reference}` : ""}</p>
+
+                      {latestCashMovement ? (
+                        <button
+                          type="button"
+                          onClick={() => setCashHistoryOpen(true)}
+                          className={`mt-3 w-full rounded-2xl border px-3.5 py-3 text-left transition hover:-translate-y-0.5 hover:shadow-[0_10px_26px_rgba(0,0,0,0.18)] active:translate-y-0 ${
+                            latestCashMovement.status === "pending"
+                              ? "border-orange-200/28 bg-orange-500/10 hover:border-orange-100/45"
+                              : latestCashMovement.status === "confirmed"
+                                ? "border-emerald-200/20 bg-emerald-500/[0.08] hover:border-emerald-100/36"
+                                : "border-white/11 bg-[#293548] hover:border-[#9be9e5]/30"
+                          }`}
+                          title="Kattints a teljes pénzmozgási előzményhez"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="truncate text-sm text-white">{latestCashMovement.type === "manager_handover" ? "Készpénz átadása" : "Bankbefizetés"}</p>
+                                <span className="rounded-full border border-white/12 bg-black/10 px-2 py-0.5 text-[9px] text-white/55">legutóbbi</span>
                               </div>
-                              <div className="shrink-0 text-right">
-                                <p className="text-sm text-white">{formatMoney(movement.amount)}</p>
-                                <p className={`mt-1 text-[9px] ${movement.status === "confirmed" ? "text-emerald-100" : movement.status === "pending" ? "text-orange-100" : "text-white/45"}`}>
-                                  {movement.status === "confirmed" ? "Visszaigazolva" : movement.status === "pending" ? "Visszaigazolásra vár" : movement.status}
-                                </p>
-                              </div>
+                              <p className="mt-1.5 text-[11px] tabular-nums text-[#d7fffd]">
+                                {formatExactDateTime(latestCashMovement.requestedAt)}
+                              </p>
+                              <p className="mt-1 truncate text-[10px] text-white/42">
+                                {latestCashMovement.requestedBy}{latestCashMovement.reference ? ` • ${latestCashMovement.reference}` : ""}
+                              </p>
                             </div>
-                          </div>
-                        ))}
-                        {!cashLoading && !(cashData?.movements || []).length ? (
-                          <div className="rounded-xl border border-dashed border-white/12 px-3 py-7 text-center text-xs text-white/40">Még nincs készpénzátadás vagy bankbefizetés.</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="mt-4 overflow-hidden rounded-[26px] border border-[#ffe66b]/35 bg-[#2d394b] shadow-[0_16px_38px_rgba(15,23,42,0.20)]">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303a4c] px-4 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#ffe66b]/55 bg-[#fed700] text-[#243044]"><History size={20} /></span>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Üzleti átadási előzmények</p>
-                      <h3 className="mt-1 text-lg text-white">Készpénzátadások</h3>
-                    </div>
-                  </div>
-                  <div className="w-full rounded-2xl border border-[#ffe66b]/18 bg-[#273243] p-2.5 sm:w-auto sm:min-w-[430px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        disabled={!cashHistoryOlderYear}
-                        onClick={() => cashHistoryOlderYear && selectCashHistoryYear(cashHistoryOlderYear)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
-                        aria-label="Régebbi év"
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <div className="text-center">
-                        <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Átadási history</p>
-                        <p className="mt-0.5 text-sm text-white">{cashHistorySelectedYear}</p>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={!cashHistoryNewerYear}
-                        onClick={() => cashHistoryNewerYear && selectCashHistoryYear(cashHistoryNewerYear)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
-                        aria-label="Újabb év"
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                    <div className="mt-2 grid grid-cols-6 gap-1">
-                      {CASH_HISTORY_MONTHS.map((_, index) => {
-                        const month = `${cashHistorySelectedYear}-${String(index + 1).padStart(2, "0")}`;
-                        const enabled = cashHistoryAvailableMonthSet.has(month);
-                        const selected = cashHistoryMonth === month;
-                        return (
-                          <button
-                            key={month}
-                            type="button"
-                            disabled={!enabled}
-                            onClick={() => selectCashHistoryPeriod(month)}
-                            className={`h-8 rounded-lg border px-1 text-[10px] transition ${
-                              selected
-                                ? "border-[#ffe66b] bg-[#fed700] text-[#243044]"
-                                : enabled
-                                  ? "border-white/10 bg-white/[0.04] text-white/68 hover:border-[#ffe66b]/30 hover:bg-[#fed700]/10 hover:text-white"
-                                  : "border-transparent bg-transparent text-white/18"
-                            } disabled:cursor-default`}
-                          >
-                            {CASH_HISTORY_MONTHS_SHORT[index]}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-2 p-3 lg:grid-cols-2">
-                  {cashHandoverHistory.map((movement) => {
-                    const confirmed = movement.status === "confirmed";
-                    const pending = movement.status === "pending";
-                    return (
-                      <article key={`handover-history-${movement.id}`} className={`rounded-2xl border p-3 ${
-                        pending
-                          ? "border-[#ffe66b]/35 bg-[#fed700]/[0.07]"
-                          : confirmed
-                            ? "border-emerald-200/18 bg-emerald-500/[0.06]"
-                            : "border-white/10 bg-[#303a4c]"
-                      }`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className={`rounded-full border px-2 py-1 text-[9px] ${
-                                confirmed
-                                  ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
-                                  : pending
-                                    ? "border-[#ffe66b]/45 bg-[#fed700]/12 text-[#fff4a5]"
-                                    : "border-white/12 bg-white/[0.04] text-white/55"
+                            <div className="shrink-0 text-right">
+                              <p className="text-lg tabular-nums text-white">{formatMoney(latestCashMovement.amount)}</p>
+                              <p className={`mt-1 text-[9px] ${
+                                latestCashMovement.status === "confirmed"
+                                  ? "text-emerald-100"
+                                  : latestCashMovement.status === "pending"
+                                    ? "text-orange-100"
+                                    : "text-white/45"
                               }`}>
-                                {confirmed ? "Átvéve" : pending ? "Átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
-                              </span>
-                              <span className="text-[10px] text-white/42">
-                                {(movement.handoverFromDate || movement.handoverToDate)
-                                  ? `${movement.handoverFromDate || movement.handoverToDate} → ${movement.handoverToDate || movement.handoverFromDate}`
-                                  : formatDate(String(movement.requestedAt || "").slice(0, 10))}
-                              </span>
+                                {latestCashMovement.status === "confirmed"
+                                  ? "Visszaigazolva"
+                                  : latestCashMovement.status === "pending"
+                                    ? "Visszaigazolásra vár"
+                                    : latestCashMovement.status}
+                              </p>
                             </div>
-                            <p className="mt-2 text-[11px] text-white/58">
-                              Átadó: <span className="text-white/82">{movement.requestedBy || "–"}</span>
-                              {" • "}
-                              Rögzítve: {movement.requestedAt ? formatExactDateTime(movement.requestedAt) : "–"}
-                            </p>
-                            {movement.confirmedAt ? (
-                              <p className="mt-1 text-[11px] text-emerald-100/70">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
-                            ) : null}
                           </div>
-                          <div className="shrink-0 text-right">
-                            <p className="text-xl text-white">{formatMoney(movement.amount)}</p>
-                            <p className="mt-1 text-[9px] text-white/36">{movement.coveredDayCount || 1} nap</p>
+                          <div className="mt-2 flex items-center justify-end gap-1.5 border-t border-white/8 pt-2 text-[9px] uppercase tracking-[0.08em] text-[#bdf8f5]/64">
+                            Teljes előzmény <ChevronRight size={12} />
                           </div>
+                        </button>
+                      ) : !cashLoading ? (
+                        <button
+                          type="button"
+                          onClick={() => setCashHistoryOpen(true)}
+                          className="mt-3 flex min-h-[92px] w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/12 px-3 text-xs text-white/40 transition hover:border-[#9be9e5]/30 hover:text-white/60"
+                        >
+                          <History size={17} /> Még nincs készpénzátadás vagy bankbefizetés
+                        </button>
+                      ) : (
+                        <div className="mt-3 flex min-h-[92px] items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#293548] text-xs text-white/44">
+                          <Loader2 size={16} className="animate-spin" /> Pénzmozgások betöltése…
                         </div>
-                      </article>
-                    );
-                  })}
-                  {!cashLoading && !cashHandoverHistory.length ? (
-                    <div className="lg:col-span-2 rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/42">
-                      {monthLabel(cashHistoryMonth)} hónapban nincs készpénzátadás.
+                      )}
                     </div>
-                  ) : null}
+                  </div>
                 </div>
               </section>
 
@@ -2916,6 +2856,254 @@ export default function AllInShopOperations({
             error={saleDetailError}
             onClose={closeSaleDetail}
           />
+        ) : null}
+
+        {cashHistoryOpen ? createPortal(
+          <div
+            className="fixed inset-0 z-[540] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) setCashHistoryOpen(false);
+            }}
+          >
+            <section className="flex max-h-[88vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/44 bg-[#303a4c] text-white shadow-[0_44px_140px_rgba(0,0,0,0.72)]">
+              <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#203d4c] via-[#246263] to-[#2a8d8b] px-4 py-4 sm:px-5">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/10 text-white shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
+                    <History size={23} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[9px] uppercase tracking-[0.16em] text-white/55">Kassza auditnapló</p>
+                    <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">Pénzmozgások előzményei</h3>
+                    <p className="mt-1 text-[11px] text-white/58">{locationName} • legújabb esemény felül</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCashHistoryOpen(false)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white transition hover:bg-white/10"
+                  aria-label="Pénzmozgások előzményeinek bezárása"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5">
+                <section className="rounded-[22px] border border-white/12 bg-[#344055] p-3.5 sm:p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Legutóbbi mozgások</p>
+                      <h4 className="mt-1 text-base text-white">Készpénzátadás és bankbefizetés</h4>
+                    </div>
+                    <span className="rounded-full border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 py-1.5 text-[10px] text-[#d7fffd]">
+                      {recentCashMovements.length} esemény
+                    </span>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {recentCashMovements.map((movement, index) => (
+                      <article
+                        key={`cash-history-modal-${movement.id}`}
+                        className={`rounded-2xl border px-3.5 py-3 ${
+                          movement.status === "pending"
+                            ? "border-orange-200/28 bg-orange-500/[0.09]"
+                            : movement.status === "confirmed"
+                              ? "border-emerald-200/18 bg-emerald-500/[0.06]"
+                              : "border-white/10 bg-[#293548]"
+                        }`}
+                      >
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-lg border border-white/10 bg-black/10 px-2 text-[10px] tabular-nums text-white/45">
+                                {recentCashMovements.length - index}
+                              </span>
+                              <p className="text-sm text-white">
+                                {movement.type === "manager_handover" ? "Készpénz átadása" : "Bankbefizetés"}
+                              </p>
+                              <span className={`rounded-full border px-2 py-0.5 text-[9px] ${
+                                movement.status === "confirmed"
+                                  ? "border-emerald-200/22 bg-emerald-500/10 text-emerald-50"
+                                  : movement.status === "pending"
+                                    ? "border-orange-200/30 bg-orange-400/10 text-orange-50"
+                                    : "border-white/12 bg-black/10 text-white/50"
+                              }`}>
+                                {movement.status === "confirmed"
+                                  ? "Visszaigazolva"
+                                  : movement.status === "pending"
+                                    ? "Átvételre vár"
+                                    : movement.status === "cancelled"
+                                      ? "Visszavonva"
+                                      : movement.status}
+                              </span>
+                            </div>
+
+                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                              <span className="inline-flex items-center gap-1.5 tabular-nums text-[#d7fffd]">
+                                <CalendarDays size={13} className="text-[#8ee6e2]" />
+                                {formatExactDateTime(movement.requestedAt)}
+                              </span>
+                              <span className="text-white/26">•</span>
+                              <span className="text-white/58">{movement.requestedBy || "–"}</span>
+                              {movement.reference ? (
+                                <>
+                                  <span className="text-white/26">•</span>
+                                  <span className="truncate text-white/52">Ref.: {movement.reference}</span>
+                                </>
+                              ) : null}
+                            </div>
+
+                            {(movement.handoverFromDate || movement.handoverToDate) ? (
+                              <p className="mt-1.5 text-[10px] text-[#fff1a0]/70">
+                                Átadási időszak: {movement.handoverFromDate || movement.handoverToDate} → {movement.handoverToDate || movement.handoverFromDate}
+                              </p>
+                            ) : null}
+                            {movement.confirmedAt ? (
+                              <p className="mt-1 text-[10px] text-emerald-100/62">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
+                            ) : null}
+                          </div>
+
+                          <div className="shrink-0 border-t border-white/8 pt-2 text-left sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0 sm:text-right">
+                            <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Összeg</p>
+                            <p className="mt-1 text-xl tabular-nums text-white">{formatMoney(movement.amount)}</p>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                    {!cashLoading && !recentCashMovements.length ? (
+                      <div className="rounded-2xl border border-dashed border-white/12 px-4 py-9 text-center text-sm text-white/42">
+                        Még nincs rögzített pénzmozgás.
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="mt-4 rounded-[22px] border border-[#ffe66b]/28 bg-[#2d394b] p-3.5 sm:p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Készpénzátadási archívum</p>
+                      <h4 className="mt-1 text-base text-white">Hónap szerinti visszakeresés</h4>
+                    </div>
+                    <div className="w-full rounded-2xl border border-[#ffe66b]/18 bg-[#273243] p-2.5 sm:w-auto sm:min-w-[430px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          disabled={!cashHistoryOlderYear}
+                          onClick={() => cashHistoryOlderYear && selectCashHistoryYear(cashHistoryOlderYear)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                          aria-label="Régebbi év"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <div className="text-center">
+                          <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Átadási előzmények</p>
+                          <p className="mt-0.5 text-sm text-white">{cashHistorySelectedYear}</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!cashHistoryNewerYear}
+                          onClick={() => cashHistoryNewerYear && selectCashHistoryYear(cashHistoryNewerYear)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/70 transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10 disabled:cursor-not-allowed disabled:opacity-25"
+                          aria-label="Újabb év"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                      <div className="mt-2 grid grid-cols-6 gap-1">
+                        {CASH_HISTORY_MONTHS.map((_, index) => {
+                          const month = `${cashHistorySelectedYear}-${String(index + 1).padStart(2, "0")}`;
+                          const enabled = cashHistoryAvailableMonthSet.has(month);
+                          const selected = cashHistoryMonth === month;
+                          return (
+                            <button
+                              key={`modal-${month}`}
+                              type="button"
+                              disabled={!enabled}
+                              onClick={() => selectCashHistoryPeriod(month)}
+                              className={`h-8 rounded-lg border px-1 text-[10px] transition ${
+                                selected
+                                  ? "border-[#ffe66b] bg-[#fed700] text-[#243044]"
+                                  : enabled
+                                    ? "border-white/10 bg-white/[0.04] text-white/68 hover:border-[#ffe66b]/30 hover:bg-[#fed700]/10 hover:text-white"
+                                    : "border-transparent bg-transparent text-white/18"
+                              } disabled:cursor-default`}
+                            >
+                              {CASH_HISTORY_MONTHS_SHORT[index]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                    {cashHandoverHistory.map((movement) => {
+                      const confirmed = movement.status === "confirmed";
+                      const pending = movement.status === "pending";
+                      return (
+                        <article key={`modal-handover-${movement.id}`} className={`rounded-2xl border p-3 ${
+                          pending
+                            ? "border-[#ffe66b]/35 bg-[#fed700]/[0.07]"
+                            : confirmed
+                              ? "border-emerald-200/18 bg-emerald-500/[0.06]"
+                              : "border-white/10 bg-[#303a4c]"
+                        }`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                                  confirmed
+                                    ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
+                                    : pending
+                                      ? "border-[#ffe66b]/45 bg-[#fed700]/12 text-[#fff4a5]"
+                                      : "border-white/12 bg-white/[0.04] text-white/55"
+                                }`}>
+                                  {confirmed ? "Átvéve" : pending ? "Átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
+                                </span>
+                                <span className="text-[10px] text-white/42">
+                                  {(movement.handoverFromDate || movement.handoverToDate)
+                                    ? `${movement.handoverFromDate || movement.handoverToDate} → ${movement.handoverToDate || movement.handoverFromDate}`
+                                    : formatDate(String(movement.requestedAt || "").slice(0, 10))}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-[11px] text-white/58">
+                                Átadó: <span className="text-white/82">{movement.requestedBy || "–"}</span>
+                                {" • "}
+                                Rögzítve: {movement.requestedAt ? formatExactDateTime(movement.requestedAt) : "–"}
+                              </p>
+                              {movement.confirmedAt ? (
+                                <p className="mt-1 text-[11px] text-emerald-100/70">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
+                              ) : null}
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="text-xl text-white">{formatMoney(movement.amount)}</p>
+                              <p className="mt-1 text-[9px] text-white/36">{movement.coveredDayCount || 1} nap</p>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                    {!cashLoading && !cashHandoverHistory.length ? (
+                      <div className="lg:col-span-2 rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/42">
+                        {monthLabel(cashHistoryMonth)} hónapban nincs készpénzátadás.
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+              </div>
+
+              <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+                <p className="hidden text-[10px] text-white/38 sm:block">A lista a felugró ablakon belül görgethető.</p>
+                <button
+                  type="button"
+                  onClick={() => setCashHistoryOpen(false)}
+                  className="ml-auto inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-5 text-sm text-white transition hover:bg-[#319c99]"
+                >
+                  <X size={16} /> Bezárás
+                </button>
+              </footer>
+            </section>
+          </div>,
+          document.body,
         ) : null}
 
         {dayCloseOpen ? createPortal(
