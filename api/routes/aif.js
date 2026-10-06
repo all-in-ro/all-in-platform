@@ -27604,11 +27604,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ),
         pool.query(
           `WITH filtered_sales AS (
-             -- Ugyanaz a szabály a részletes terméksorokra is: a credit elvitel
-             -- az eredeti napon nem jelenik meg, a későbbi befizetés viszont igen.
+             -- A részletes terméksorokban a hiteles eladásokat is visszaadjuk.
+             -- A frontend normál nézetben elrejti, a Kintlévőség nézetben pedig
+             -- pontosan ezeket a credit / unpaid / partial sorokat mutatja.
              SELECT s.* FROM aif_shop_sales s
              WHERE ${salesFilter}
-               AND s.sale_type <> 'credit'
            )
            SELECT
              sl.id::text AS key,
