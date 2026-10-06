@@ -257,9 +257,9 @@ export default function createAifShopSaleLineNotesRouter(deps) {
       const deleted = await pool.query(
         `UPDATE aif_shop_sale_line_notes n
          SET deleted_at=now(),
-             deleted_by=$3,
+             deleted_by=$3::text,
              raw=COALESCE(n.raw,'{}'::jsonb) || jsonb_build_object(
-               'deletedBy',$3,
+               'deletedBy',$3::text,
                'deletedAt',to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
              )
          FROM aif_shop_sale_lines sl
