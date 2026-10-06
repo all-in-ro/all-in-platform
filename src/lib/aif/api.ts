@@ -3376,6 +3376,22 @@ export function apiAifCreateShopSaleLineNote(input: { location: string; lineId: 
   );
 }
 
+export function apiAifDeleteShopSaleLineNote(input: { location: string; noteId: string }) {
+  const q = new URLSearchParams();
+  q.set("location", input.location);
+  return fetchAifJSON<{
+    ok: true;
+    deleted: true;
+    id: string;
+    lineId: string;
+    saleId: string;
+    deletedBy?: string | null;
+    deletedAt?: string | null;
+  }>(`/shop-sale-line-notes/${encodeURIComponent(input.noteId)}?${q.toString()}`, {
+    method: "DELETE",
+  });
+}
+
 export type AifShopSaleDetailPayment = {
   method: string;
   label: string;
