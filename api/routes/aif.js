@@ -5,6 +5,7 @@ import createAifShopReservationsRouter from "./aif/shopReservations.js";
 import createAifShopIncomingRouter from "./aif/shopIncoming.js";
 import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
+import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -28976,6 +28977,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     normCode,
     aifNumber,
     insertStockMovementSafe,
+  }));
+
+  // Utólagos, terméksor-szintű eladási megjegyzések. Külön modulban marad,
+  // hogy az aif.js csak a bekötést tartalmazza.
+  router.use("/shop-sale-line-notes", createAifShopSaleLineNotesRouter({
+    pool,
+    requireAuthed,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    normCode,
+    isUuidText,
   }));
 
   // Az admin üzletmonitor soraihoz tartozó rövid eladási megjegyzések.
