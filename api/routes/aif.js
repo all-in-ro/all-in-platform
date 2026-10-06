@@ -28978,6 +28978,82 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     insertStockMovementSafe,
   }));
 
+  // Az admin üzletmonitor soraihoz tartozó rövid eladási megjegyzések.
+  // Külön, célzott kérésben jönnek, hogy a fő overview válasz ne hízzon feleslegesen,
+  // és csak azoknál a soroknál jelenjen meg a zöld boríték, ahol tényleg van megjegyzés.
+  router.post("/admin-shops/sale-notes", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.body?.location ?? req.query?.location);
+      const rawIds = Array.isArray(req.body?.saleIds)
+        ? req.body.saleIds
+        : Array.isArray(req.body?.sale_ids)
+          ? req.body.sale_ids
+          : [];
+      const saleIds = Array.from(new Set(
+        rawIds.map((value) => text(value)).filter(Boolean)
+      )).slice(0, 500);
+
+      if (!saleIds.length) {
+        return res.json({ ok: true, items: [], count: 0 });
+      }
+
+      const result = await pool.query(
+        `SELECT
+           s.id::text AS sale_id,
+           s.sale_number,
+           s.sold_at,
+           s.actor,
+           COALESCE(
+             NULLIF(btrim(COALESCE(s.note,'')),''),
+             (
+               SELECT NULLIF(btrim(COALESCE(ev.note,'')),'')
+               FROM aif_shop_sale_events ev
+               WHERE ev.sale_id=s.id
+                 AND ev.event_type='completed'
+                 AND NULLIF(btrim(COALESCE(ev.note,'')),'') IS NOT NULL
+               ORDER BY ev.created_at DESC
+               LIMIT 1
+             )
+           ) AS note
+         FROM aif_shop_sales s
+         WHERE s.location_id=$1
+           AND s.id::text = ANY($2::text[])
+           AND (
+             NULLIF(btrim(COALESCE(s.note,'')),'') IS NOT NULL
+             OR EXISTS (
+               SELECT 1
+               FROM aif_shop_sale_events ev
+               WHERE ev.sale_id=s.id
+                 AND ev.event_type='completed'
+                 AND NULLIF(btrim(COALESCE(ev.note,'')),'') IS NOT NULL
+             )
+           )
+         ORDER BY s.sold_at DESC, s.created_at DESC`,
+        [location.id, saleIds]
+      );
+
+      return res.json({
+        ok: true,
+        count: result.rows.length,
+        items: result.rows.map((row) => ({
+          saleId: String(row.sale_id),
+          saleNumber: row.sale_number || null,
+          soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+          actor: row.actor || null,
+          note: text(row.note),
+        })),
+      });
+    } catch (error) {
+      console.error("AIF admin shop sale notes failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az eladási megjegyzések betöltése nem sikerült.",
+        code: error?.code || null,
+      });
+    }
+  });
+
   // Admin üzletmonitor külön modulokban. Innentől ezt a funkciócsaládot ne az aif.js-ben bővítsük.
   router.use("/admin-shops", createAifAdminShopsRouter({
     pool,
