@@ -2470,7 +2470,7 @@ export default function AllInAdminMagazinDashboard({
                                   type="button"
                                   disabled={deleting}
                                   onClick={() => void deleteSaleLineNote(item.id)}
-                                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-rose-300/45 bg-rose-500/18 px-2.5 text-[10px] text-rose-50 transition hover:bg-rose-500/28 disabled:opacity-40"
+                                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#ff8792] bg-[#E21C2A] px-3 text-[10px] font-medium text-white shadow-[0_6px_16px_rgba(226,28,42,0.34)] transition hover:bg-[#c91522] hover:shadow-[0_8px_20px_rgba(226,28,42,0.44)] active:scale-[0.97] disabled:opacity-40"
                                   title="Megjegyzés végleges eltávolítása"
                                 >
                                   {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
@@ -2482,7 +2482,7 @@ export default function AllInAdminMagazinDashboard({
                                 type="button"
                                 disabled={Boolean(saleLineNoteDeleteBusyId)}
                                 onClick={() => setSaleLineNoteDeleteConfirmId(item.id)}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-500/[0.06] text-rose-100/72 transition hover:border-rose-300/45 hover:bg-rose-500/18 hover:text-rose-50 disabled:opacity-35"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#ff8792] bg-[#E21C2A] text-white shadow-[0_6px_16px_rgba(226,28,42,0.32)] transition hover:bg-[#c91522] hover:shadow-[0_8px_20px_rgba(226,28,42,0.42)] active:scale-[0.96] disabled:opacity-35"
                                 title="Megjegyzés törlése"
                                 aria-label="Megjegyzés törlése"
                               >
