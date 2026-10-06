@@ -13233,6 +13233,135 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  // Címkenyomtatás előtt mindig az aktuális készletből számolunk. Számlás
+  // kijelölésnél az adott receptió célhelyén, a beérkezés UTÁNI kimenő mozgásokat
+  // levonva kapjuk meg, hány címkére van még ténylegesen szükség. Így egy két nappal
+  // későbbi nyomtatás nem gyárt címkét az időközben eladott / kivett darabokra.
+  router.post("/label-stock-check", requireAuthed, async (req, res) => {
+    const sourceItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    const unique = new Map();
+    for (const raw of sourceItems.slice(0, 600)) {
+      const variantId = text(raw?.variantId ?? raw?.variant_id);
+      if (!variantId) continue;
+      const receptionId = text(raw?.receptionId ?? raw?.reception_id) || null;
+      const invoiceQtyRaw = Number(raw?.invoiceQty ?? raw?.invoice_qty ?? 0);
+      const invoiceQty = Number.isFinite(invoiceQtyRaw) ? Math.max(0, Math.floor(invoiceQtyRaw)) : 0;
+      unique.set(variantId, { variantId, receptionId, invoiceQty });
+    }
+    const items = Array.from(unique.values());
+    if (!items.length) return res.json({ ok: true, items: [] });
+
+    try {
+      const result = await pool.query(
+        `WITH input AS (
+           SELECT x.variant_id,
+                  NULLIF(x.reception_id,'') AS reception_id,
+                  GREATEST(COALESCE(x.invoice_qty,0),0)::numeric AS invoice_qty
+           FROM jsonb_to_recordset($1::jsonb)
+             AS x(variant_id text, reception_id text, invoice_qty numeric)
+         ),
+         ctx AS (
+           SELECT i.variant_id,
+                  i.reception_id,
+                  i.invoice_qty,
+                  v.id AS variant_uuid,
+                  r.invoice_number,
+                  COALESCE(
+                    r.target_location_id,
+                    (
+                      SELECT ib.target_location_id
+                      FROM aif_import_batches ib
+                      WHERE r.id IS NOT NULL
+                        AND ib.reception_id=r.id
+                        AND ib.target_location_id IS NOT NULL
+                      ORDER BY COALESCE(ib.committed_at,ib.updated_at,ib.created_at) ASC, ib.id ASC
+                      LIMIT 1
+                    )
+                  ) AS target_location_id
+           FROM input i
+           JOIN aif_product_variants v ON v.id::text=i.variant_id
+           LEFT JOIN aif_receptions r ON r.id::text=i.reception_id
+         )
+         SELECT
+           ctx.variant_id AS "variantId",
+           ctx.reception_id AS "receptionId",
+           ctx.invoice_qty AS "invoiceQty",
+           COALESCE(total_stock.qty,0) AS "currentQty",
+           CASE WHEN ctx.target_location_id IS NOT NULL THEN COALESCE(target_stock.qty,0) ELSE COALESCE(total_stock.qty,0) END AS "currentLocationQty",
+           COALESCE(outgoing.outgoing_qty,0) AS "outgoingSinceReception",
+           GREATEST(
+             0,
+             FLOOR(
+               CASE
+                 WHEN ctx.invoice_qty > 0 AND anchor.created_at IS NOT NULL THEN
+                   LEAST(
+                     ctx.invoice_qty,
+                     GREATEST(0, ctx.invoice_qty - COALESCE(outgoing.outgoing_qty,0)),
+                     CASE WHEN ctx.target_location_id IS NOT NULL THEN COALESCE(target_stock.qty,0) ELSE COALESCE(total_stock.qty,0) END
+                   )
+                 WHEN ctx.invoice_qty > 0 AND ctx.target_location_id IS NOT NULL THEN
+                   LEAST(ctx.invoice_qty, COALESCE(target_stock.qty,0))
+                 WHEN ctx.invoice_qty > 0 THEN
+                   LEAST(ctx.invoice_qty, COALESCE(total_stock.qty,0))
+                 ELSE COALESCE(total_stock.qty,0)
+               END
+             )
+           )::int AS "maxCopies",
+           CASE
+             WHEN ctx.invoice_qty > 0 AND anchor.created_at IS NOT NULL THEN 'invoice_outgoing_guard'
+             WHEN ctx.invoice_qty > 0 AND ctx.target_location_id IS NOT NULL THEN 'invoice_location_cap'
+             WHEN ctx.invoice_qty > 0 THEN 'invoice_total_cap'
+             ELSE 'current_stock'
+           END AS mode
+         FROM ctx
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(COALESCE(s.qty,0)),0)::numeric AS qty
+           FROM aif_stock s
+           WHERE s.variant_id=ctx.variant_uuid
+         ) total_stock ON true
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(COALESCE(s.qty,0)),0)::numeric AS qty
+           FROM aif_stock s
+           WHERE s.variant_id=ctx.variant_uuid
+             AND ctx.target_location_id IS NOT NULL
+             AND s.location_id=ctx.target_location_id
+         ) target_stock ON true
+         LEFT JOIN LATERAL (
+           SELECT sm.created_at
+           FROM aif_stock_movements sm
+           JOIN aif_import_batches ib
+             ON ib.id::text=sm.source_id
+            AND sm.source_type='import_batch'
+           WHERE sm.variant_id=ctx.variant_uuid
+             AND ctx.reception_id IS NOT NULL
+             AND ib.reception_id::text=ctx.reception_id
+             AND (ctx.target_location_id IS NULL OR sm.location_id=ctx.target_location_id)
+             AND COALESCE(sm.qty_delta,0) > 0
+           ORDER BY sm.created_at ASC, sm.id ASC
+           LIMIT 1
+         ) anchor ON true
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(CASE WHEN COALESCE(sm.qty_delta,0) < 0 THEN -sm.qty_delta ELSE 0 END),0)::numeric AS outgoing_qty
+           FROM aif_stock_movements sm
+           WHERE sm.variant_id=ctx.variant_uuid
+             AND anchor.created_at IS NOT NULL
+             AND sm.created_at > anchor.created_at
+             AND (ctx.target_location_id IS NULL OR sm.location_id=ctx.target_location_id)
+         ) outgoing ON true
+         ORDER BY ctx.variant_id`,
+        [JSON.stringify(items.map((item) => ({
+          variant_id: item.variantId,
+          reception_id: item.receptionId,
+          invoice_qty: item.invoiceQty,
+        })))]
+      );
+      return res.json({ ok: true, items: result.rows });
+    } catch (error) {
+      console.error("AIF label stock check failed", error);
+      return res.status(500).json({ error: "A címkenyomtatás előtti készletellenőrzés nem sikerült.", code: error?.code || null });
+    }
+  });
+
   // A számlaszűrő külön, egyetlen aggregált lekérdezésből épül. Így a terméklista
   // nem cipeli minden 300/2200-as csomagban újra ugyanazt a számlatörténetet.
   router.get("/warehouse-invoices", requireAuthed, async (_req, res) => {
