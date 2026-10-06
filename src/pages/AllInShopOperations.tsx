@@ -402,6 +402,23 @@ function formatExactDateTime(value?: string | null) {
   });
 }
 
+function formatCashPeriodDate(value?: string | null) {
+  if (!value) return "–";
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const date = iso
+    ? new Date(`${iso[1]}-${iso[2]}-${iso[3]}T12:00:00`)
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  });
+}
+
 function saleStatusLabel(value?: string | null) {
   const status = String(value || "").toLowerCase();
   if (status === "completed") return "Lezárva";
@@ -2911,8 +2928,8 @@ export default function AllInShopOperations({
                               : "border-white/10 bg-[#293548]"
                         }`}
                       >
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                          <div className="min-w-0">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(230px,0.82fr)_190px] sm:items-stretch">
+                          <div className="min-w-0 self-center">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-lg border border-white/10 bg-black/10 px-2 text-[10px] tabular-nums text-white/45">
                                 {recentCashMovements.length - index}
@@ -2951,20 +2968,34 @@ export default function AllInShopOperations({
                                 </>
                               ) : null}
                             </div>
-
-                            {(movement.handoverFromDate || movement.handoverToDate) ? (
-                              <p className="mt-1.5 text-[10px] text-[#fff1a0]/70">
-                                Átadási időszak: {movement.handoverFromDate || movement.handoverToDate} → {movement.handoverToDate || movement.handoverFromDate}
-                              </p>
-                            ) : null}
-                            {movement.confirmedAt ? (
-                              <p className="mt-1 text-[10px] text-emerald-100/62">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
-                            ) : null}
                           </div>
 
-                          <div className="shrink-0 border-t border-white/8 pt-2 text-left sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0 sm:text-right">
-                            <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Összeg</p>
-                            <p className="mt-1 text-xl tabular-nums text-white">{formatMoney(movement.amount)}</p>
+                          <div className="flex min-w-0 items-center">
+                            {(movement.handoverFromDate || movement.handoverToDate) ? (
+                              <div className="w-full rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/16 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                                <p className="text-[9px] uppercase tracking-[0.15em] text-[#bff8f5]/68">Átadási időszak</p>
+                                <div className="mt-1.5 flex items-center gap-2 text-[15px] leading-tight text-[#f0fffe]">
+                                  <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverFromDate || movement.handoverToDate)}</span>
+                                  <ArrowRight size={15} className="shrink-0 text-[#8ee6e2]" />
+                                  <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverToDate || movement.handoverFromDate)}</span>
+                                </div>
+                                {movement.confirmedAt ? (
+                                  <p className="mt-1.5 text-[10px] tabular-nums text-emerald-100/72">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div className="w-full rounded-2xl border border-white/10 bg-black/[0.06] px-4 py-3">
+                                <p className="text-[9px] uppercase tracking-[0.15em] text-white/34">Banki referencia</p>
+                                <p className="mt-1.5 truncate text-[13px] text-white/66">{movement.reference || "Nincs megadva"}</p>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex min-w-0 items-center border-t border-white/8 pt-2 sm:w-[190px] sm:min-w-[190px] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
+                            <div className="w-full text-left sm:text-right">
+                              <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Összeg</p>
+                              <p className="mt-1 whitespace-nowrap text-[20px] tabular-nums text-white">{formatMoney(movement.amount)}</p>
+                            </div>
                           </div>
                         </div>
                       </article>
