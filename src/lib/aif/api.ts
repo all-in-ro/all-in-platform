@@ -3334,6 +3334,48 @@ export type AifShopDailyProductItem = {
 };
 
 
+
+export type AifShopSaleLineNoteItem = {
+  id: string;
+  lineId: string;
+  saleId: string;
+  note: string;
+  actor?: string | null;
+  actorRole?: string | null;
+  createdAt?: string | null;
+};
+
+export type AifShopSaleLineNoteThread = {
+  lineId: string;
+  saleId: string;
+  lineNo: number;
+  saleNumber?: string | null;
+  soldAt?: string | null;
+  saleActor?: string | null;
+  saleNote?: string | null;
+  notes: AifShopSaleLineNoteItem[];
+};
+
+export function apiAifShopSaleLineNotes(options: { location: string; lineIds: string[] }) {
+  return fetchAifJSON<{ ok: true; count: number; threads: AifShopSaleLineNoteThread[] }>(
+    "/shop-sale-line-notes/query",
+    {
+      method: "POST",
+      body: JSON.stringify({ location: options.location, lineIds: options.lineIds }),
+    },
+  );
+}
+
+export function apiAifCreateShopSaleLineNote(input: { location: string; lineId: string; note: string }) {
+  return fetchAifJSON<{ ok: true; item: AifShopSaleLineNoteItem }>(
+    "/shop-sale-line-notes",
+    {
+      method: "POST",
+      body: JSON.stringify({ location: input.location, lineId: input.lineId, note: input.note }),
+    },
+  );
+}
+
 export type AifShopSaleDetailPayment = {
   method: string;
   label: string;
