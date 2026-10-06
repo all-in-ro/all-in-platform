@@ -30,6 +30,7 @@ import {
   Landmark,
   Layers3,
   Loader2,
+  Mail,
   MoreVertical,
   PackageCheck,
   Percent,
@@ -226,6 +227,15 @@ type AdminRecentSaleExtended = AifAdminShopRecentSale & {
   customerPaymentId?: string | null;
   settlementLineCount?: number | null;
   stockEffect?: number | null;
+  paymentMethod?: string | null;
+};
+
+type AdminSaleNoteInfo = {
+  saleId: string;
+  saleNumber?: string | null;
+  soldAt?: string | null;
+  actor?: string | null;
+  note: string;
 };
 
 function settlementInfo(sale: AifAdminShopRecentSale) {
@@ -238,6 +248,71 @@ function isPaymentSettlement(sale: AifAdminShopRecentSale) {
 
 function settlementTypeLabel(sale: AifAdminShopRecentSale) {
   return isPaymentSettlement(sale) ? "Korábbi vásárlás fizetése" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue);
+}
+
+async function apiAdminSaleNotes(location: string, saleIds: string[]) {
+  const ids = Array.from(new Set(saleIds.map((value) => String(value || "").trim()).filter(Boolean))).slice(0, 500);
+  if (!ids.length) return { items: [] as AdminSaleNoteInfo[] };
+
+  const response = await fetch("/api/aif/admin-shops/sale-notes", {
+    method: "POST",
+    credentials: "include",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ location, saleIds: ids }),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+  return {
+    items: Array.isArray(body?.items)
+      ? body.items
+          .map((item: Record<string, any>) => ({
+            saleId: String(item.saleId || item.sale_id || "").trim(),
+            saleNumber: item.saleNumber || item.sale_number || null,
+            soldAt: item.soldAt || item.sold_at || null,
+            actor: item.actor || null,
+            note: String(item.note || "").trim(),
+          }))
+          .filter((item: AdminSaleNoteInfo) => item.saleId && item.note)
+      : [],
+  };
+}
+
+function SalePriceBreakdown({
+  sale,
+  compact = false,
+}: {
+  sale: AifAdminShopRecentSale;
+  compact?: boolean;
+}) {
+  const quantity = Math.max(0, numberValue(sale.quantity));
+  const discount = Math.max(0, numberValue(sale.lineDiscountAmount));
+  const finalTotal = numberValue(sale.lineTotal);
+  const listPriceTotal = numberValue(sale.listPrice) * quantity;
+  const regularTotal = listPriceTotal > 0.005 ? listPriceTotal : finalTotal + discount;
+  const discountPercent = Math.max(0, numberValue(sale.lineDiscountPercent));
+  const fullyPaid = String(sale.paymentStatus || "").toLowerCase() === "paid" && numberValue(sale.balanceDue) <= 0.005;
+  const finalLabel = fullyPaid ? "Fizetett" : "Végső ár";
+  const discountText = discount > 0.005
+    ? `${discountPercent > 0.005 ? `−${discountPercent.toFixed(1)}% • ` : ""}−${money(discount)}`
+    : "Nincs";
+
+  return (
+    <div className={`${compact ? "w-[184px]" : "w-[210px]"} ml-auto overflow-hidden rounded-xl border border-white/10 bg-[#293548]/72 text-[10px] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]`}>
+      <div className="flex items-center justify-between gap-3 px-2.5 py-1.5">
+        <span className="uppercase tracking-[0.08em] text-white/38">Rendes eladási ár</span>
+        <span className="whitespace-nowrap tabular-nums text-white/88">{money(regularTotal)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t border-white/7 px-2.5 py-1.5">
+        <span className="uppercase tracking-[0.08em] text-white/38">Akció</span>
+        <span className={`whitespace-nowrap tabular-nums ${discount > 0.005 ? "text-amber-100" : "text-white/48"}`}>{discountText}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t border-[#7bd7d4]/16 bg-[#2a8d8b]/8 px-2.5 py-1.5">
+        <span className="uppercase tracking-[0.08em] text-[#bff8f5]/62">{finalLabel}</span>
+        <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d7fffd]">{money(finalTotal)}</span>
+      </div>
+    </div>
+  );
 }
 
 function PaymentMethodIcon({
@@ -1328,6 +1403,8 @@ export default function AllInAdminMagazinDashboard({
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
+  const [saleNotes, setSaleNotes] = useState<Record<string, AdminSaleNoteInfo>>({});
+  const [saleNoteTarget, setSaleNoteTarget] = useState<{ sale: AifAdminShopRecentSale; note: AdminSaleNoteInfo } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -1360,6 +1437,35 @@ export default function AllInAdminMagazinDashboard({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const saleIds = Array.from(new Set(
+      (data?.recentSales || [])
+        .filter((sale) => !isPaymentSettlement(sale))
+        .map((sale) => String(sale.saleId || "").trim())
+        .filter(Boolean)
+    ));
+    if (!saleIds.length) {
+      setSaleNotes({});
+      return;
+    }
+
+    let cancelled = false;
+    void apiAdminSaleNotes(locationCode, saleIds)
+      .then((result) => {
+        if (cancelled) return;
+        const next: Record<string, AdminSaleNoteInfo> = {};
+        for (const item of result.items) next[item.saleId] = item;
+        setSaleNotes(next);
+      })
+      .catch(() => {
+        if (!cancelled) setSaleNotes({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.recentSales, locationCode]);
 
   function applyPreset(nextPreset: PeriodPreset) {
     const dates = presetDates(nextPreset);
@@ -1469,6 +1575,15 @@ export default function AllInAdminMagazinDashboard({
       window.removeEventListener("keydown", closeWithEscape, true);
     };
   }, [receiptTarget]);
+
+  useEffect(() => {
+    if (!saleNoteTarget) return;
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSaleNoteTarget(null);
+    };
+    window.addEventListener("keydown", closeWithEscape, true);
+    return () => window.removeEventListener("keydown", closeWithEscape, true);
+  }, [saleNoteTarget]);
 
   const summary = data?.summary;
   const previous = data?.previousSummary;
@@ -2049,7 +2164,7 @@ export default function AllInAdminMagazinDashboard({
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1230px] border-collapse text-xs">
+              <table className="w-full min-w-[1160px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="w-[54px] min-w-[54px] px-2 py-3 text-center">#</th>
@@ -2058,8 +2173,7 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
                     <th className="px-3 py-3 text-center">Típus</th>
                     <th className="px-3 py-3 text-center">Darab</th>
-                    <th className="px-3 py-3 text-right">Kedvezmény</th>
-                    <th className="px-3 py-3 text-right">Összeg</th>
+                    <th className="min-w-[205px] px-3 py-3 text-right">Árazás</th>
                     <th className="px-3 py-3 text-right">Hátralévő</th>
                     <th className="min-w-[132px] px-2 py-3 text-center">Állapot</th>
                     <th className="sticky right-0 z-20 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#293548] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)]">
@@ -2071,6 +2185,7 @@ export default function AllInAdminMagazinDashboard({
                   {eventLogSales.map((sale, index) => {
                     const settlement = isPaymentSettlement(sale);
                     const settlementMeta = settlementInfo(sale);
+                    const noteInfo = !settlement ? saleNotes[String(sale.saleId || "")] || null : null;
                     const reverseRowNumber = settlement
                       ? null
                       : eventLogSales.slice(index).filter((item) => !isPaymentSettlement(item)).length;
@@ -2143,17 +2258,17 @@ export default function AllInAdminMagazinDashboard({
                         </span>
                       </td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
-                      <td className="px-3 py-3 text-right text-amber-50">
-                        <p>{money(sale.lineDiscountAmount)}</p>
-                        {numberValue(sale.lineDiscountPercent) > 0 ? <p className="mt-1 text-[10px] text-amber-100/65">{numberValue(sale.lineDiscountPercent).toFixed(1)}%</p> : null}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right">
+                      <td className="min-w-[205px] px-3 py-2.5 text-right">
                         {settlement ? (
-                          <>
-                            <p className="text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</p>
-                            <p className="mt-1 text-[10px] text-white/38">fizetési esemény</p>
-                          </>
-                        ) : money(sale.lineTotal)}
+                          <div className="ml-auto w-[184px] overflow-hidden rounded-xl border border-[#9bc8ff]/22 bg-[#31506a]/24">
+                            <div className="flex items-center justify-between gap-3 px-2.5 py-2">
+                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55">Befizetés</span>
+                              <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <SalePriceBreakdown sale={sale} compact />
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
                       <td className="min-w-[132px] px-2 py-3">
@@ -2184,15 +2299,28 @@ export default function AllInAdminMagazinDashboard({
                           })()}
                         </div>
                       </td>
-                      <td className="sticky right-0 z-10 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#344154] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)] transition-colors group-hover:bg-[#39475a]">
-                        <SaleRowActionMenu
-                          sale={sale}
-                          onReceipt={setReceiptTarget}
-                          onDelete={(sale) => {
-                            setDeleteError("");
-                            setDeleteTarget(sale);
-                          }}
-                        />
+                      <td className="sticky right-0 z-10 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#344154] px-1 py-2.5 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)] transition-colors group-hover:bg-[#39475a]">
+                        <div className="flex flex-col items-center justify-center gap-1.5">
+                          <SaleRowActionMenu
+                            sale={sale}
+                            onReceipt={setReceiptTarget}
+                            onDelete={(sale) => {
+                              setDeleteError("");
+                              setDeleteTarget(sale);
+                            }}
+                          />
+                          {noteInfo ? (
+                            <button
+                              type="button"
+                              onClick={() => setSaleNoteTarget({ sale, note: noteInfo })}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.24)] transition hover:border-[#bff8f5]/72 hover:bg-[#319c99] active:scale-[0.95]"
+                              title="Megjegyzés elolvasása"
+                              aria-label="Eladási megjegyzés"
+                            >
+                              <Mail size={14} strokeWidth={2.1} />
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                     );
@@ -2210,6 +2338,50 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </section>
       </div>
+
+      {saleNoteTarget ? (
+        <div
+          className="fixed inset-0 z-[315] grid place-items-center bg-slate-950/82 px-4 py-6 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setSaleNoteTarget(null);
+          }}
+        >
+          <section className="w-full max-w-[580px] overflow-hidden rounded-[24px] border border-[#8ce7e2]/30 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#214a50] via-[#27666a] to-[#2a8d8b] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
+                  <Mail size={20} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/66">Eladási megjegyzés</p>
+                  <h3 className="mt-1 truncate text-lg text-white">{saleNoteTarget.sale.productTitle || saleNoteTarget.sale.saleNumber}</h3>
+                  <p className="mt-1 text-[11px] text-white/58">
+                    {saleNoteTarget.sale.saleNumber} • {dateTime(saleNoteTarget.sale.soldAt)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaleNoteTarget(null)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-black/20"
+                aria-label="Megjegyzés bezárása"
+              >
+                <X size={17} />
+              </button>
+            </header>
+
+            <div className="p-5">
+              <div className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-4 text-[14px] leading-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <p className="whitespace-pre-wrap break-words">{saleNoteTarget.note.note}</p>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/44">
+                <span>{saleNoteTarget.note.actor || saleNoteTarget.sale.actor || "-"}</span>
+                <span>{saleNoteTarget.sale.customerName || "Nincs kliens megadva"}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {receiptTarget ? (
         <div
@@ -2298,12 +2470,11 @@ export default function AllInAdminMagazinDashboard({
                           {[line.productCode ? `Kód: ${line.productCode}` : "", line.barcode ? `Vonalkód: ${line.barcode}` : ""].filter(Boolean).join(" • ")}
                         </p>
                       </div>
-                      <div className="shrink-0 text-right">
-                        <span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[11px] text-[#d5fffd]">{integer(line.quantity)} db</span>
-                        <p className="mt-2 text-sm text-white">{money(line.lineTotal)}</p>
-                        {numberValue(line.lineDiscountAmount) > 0 ? (
-                          <p className="mt-1 text-[10px] text-amber-100/66">Kedvezmény: {money(line.lineDiscountAmount)}</p>
-                        ) : null}
+                      <div className="shrink-0">
+                        <div className="mb-2 flex justify-end">
+                          <span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[11px] text-[#d5fffd]">{integer(line.quantity)} db</span>
+                        </div>
+                        <SalePriceBreakdown sale={line} compact />
                       </div>
                     </div>
                   ))}
