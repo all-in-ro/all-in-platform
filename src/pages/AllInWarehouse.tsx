@@ -3300,8 +3300,8 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:100%; max-width:100%; max-height:100%; }
 .aifWhLabelDescription { text-align:center; font-size:7.7px; line-height:1.05; color:#222; margin-bottom:.35mm; }
 .aifWhLabelCategory { text-align:center; text-transform:uppercase; font-size:8.1px; line-height:1.05; color:#111; margin-bottom:.35mm; }
-.aifWhLabelCode { font-size:7.1px; line-height:1.05; color:#444; text-align:center; margin-bottom:.20mm; }
-.aifWhLabelSnCod { font-size:5.7px; line-height:1.02; color:#777; text-align:center; letter-spacing:.035em; margin:0 0 .30mm; }
+.aifWhLabelCode { font-size:6.9px; line-height:1.05; color:#444; text-align:center; margin-bottom:.18mm; }
+.aifWhLabelSnCod { font-size:6.8px; font-weight:700; line-height:1.03; color:#222; text-align:center; letter-spacing:.025em; margin:0 0 .30mm; }
 .aifWhLabelPrice { margin-top:0; padding-top:0; text-align:center; line-height:.92; color:#111; white-space:nowrap; }
 .aifWhPriceMajor { font-size:20px; letter-spacing:.055em; }
 .aifWhPriceCents { font-size:10.5px; vertical-align:top; margin-left:1px; }
@@ -3438,7 +3438,7 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   flex:0 0 auto;
   width:100%;
   margin:.30mm 0 0;
-  font-size:8.15px;
+  font-size:7.75px;
   font-weight:700;
   line-height:1.08;
   letter-spacing:.02em;
@@ -3453,12 +3453,12 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   overflow:hidden;
   white-space:nowrap;
   text-overflow:ellipsis;
-  font-size:5.55px;
-  font-weight:400;
-  line-height:1.02;
-  letter-spacing:.045em;
+  font-size:6.85px;
+  font-weight:700;
+  line-height:1.03;
+  letter-spacing:.03em;
   text-align:center;
-  color:#6b6b6b;
+  color:#111;
 }
 .aifWhZebraLabel .aifWhLabelPrice {
   flex:0 0 auto;
@@ -3719,7 +3719,7 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
     html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
   }
   if (options.labelContent.snCod && label.snCod) {
-    html.push(`<div class="aifWhLabelSnCod">S/N/COD · ${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
+    html.push(`<div class="aifWhLabelSnCod">${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
   }
   if (options.labelContent.price && priceParts.major) {
     html.push(
@@ -3787,7 +3787,7 @@ function warehouseZebraLabelContentHtml(label: WarehouseLabelPrintItem, options:
     html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
   }
   if (options.labelContent.snCod && label.snCod) {
-    html.push(`<div class="aifWhLabelSnCod">S/N/COD · ${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
+    html.push(`<div class="aifWhLabelSnCod">${labelEscapeHtml(labelCleanText(label.snCod, 48))}</div>`);
   }
   if (options.labelContent.price && priceParts.major) {
     html.push(`<div class="aifWhLabelPrice"><span class="aifWhPriceMajor">${labelEscapeHtml(priceParts.major)}</span>${priceParts.cents ? `<span class="aifWhPriceCents">${labelEscapeHtml(priceParts.cents)}</span>` : ""}<span class="aifWhPriceUnit">${labelEscapeHtml(labelCleanText(options.labelUnitText || options.labelCurrency, 12))}</span></div>`);
@@ -11801,7 +11801,7 @@ export default function AllInWarehouse() {
           </div>
         )}
         {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
-        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">S/N/COD · {labelCleanText(label.snCod, 48)}</div>}
+        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">{labelCleanText(label.snCod, 48)}</div>}
         {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
@@ -11834,7 +11834,7 @@ export default function AllInWarehouse() {
         {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 90)}</div>}
         {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
         {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
-        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">S/N/COD · {labelCleanText(label.snCod, 48)}</div>}
+        {labelContent.snCod && label.snCod && <div className="aifWhLabelSnCod">{labelCleanText(label.snCod, 48)}</div>}
         {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
