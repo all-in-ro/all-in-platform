@@ -53,6 +53,7 @@ import {
   apiAifAdminDeleteShopSaleLine,
   apiAifAdminShopOverview,
   apiAifCreateShopSaleLineNote,
+  apiAifDeleteShopSaleLineNote,
   apiAifShopSaleLineNotes,
   apiAifShopShiftDayOverview,
   type AifAdminShopOverviewResponse,
@@ -1375,6 +1376,8 @@ export default function AllInAdminMagazinDashboard({
   const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [saleLineNoteDraft, setSaleLineNoteDraft] = useState("");
   const [saleLineNoteSaving, setSaleLineNoteSaving] = useState(false);
+  const [saleLineNoteDeleteBusyId, setSaleLineNoteDeleteBusyId] = useState<string | null>(null);
+  const [saleLineNoteDeleteConfirmId, setSaleLineNoteDeleteConfirmId] = useState<string | null>(null);
   const [saleLineNoteError, setSaleLineNoteError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
@@ -1488,15 +1491,17 @@ export default function AllInAdminMagazinDashboard({
   }, [draft.snCod, draft.search, applied.snCod, applied.search]);
 
   function closeSaleLineNote() {
-    if (saleLineNoteSaving) return;
+    if (saleLineNoteSaving || saleLineNoteDeleteBusyId) return;
     setSaleLineNoteTarget(null);
     setSaleLineNoteDraft("");
+    setSaleLineNoteDeleteConfirmId(null);
     setSaleLineNoteError("");
   }
 
   function openSaleLineNote(sale: AifAdminShopRecentSale) {
     setSaleLineNoteTarget(sale);
     setSaleLineNoteDraft("");
+    setSaleLineNoteDeleteConfirmId(null);
     setSaleLineNoteError("");
   }
 
@@ -1532,6 +1537,36 @@ export default function AllInAdminMagazinDashboard({
       setSaleLineNoteError(caught?.message || "A megjegyzés mentése nem sikerült.");
     } finally {
       setSaleLineNoteSaving(false);
+    }
+  }
+
+  async function deleteSaleLineNote(noteId: string) {
+    const sale = saleLineNoteTarget;
+    const cleanId = String(noteId || "").trim();
+    if (!sale || !cleanId || saleLineNoteDeleteBusyId) return;
+    const lineId = String(sale.lineId || "").trim();
+    if (!lineId) return;
+
+    setSaleLineNoteDeleteBusyId(cleanId);
+    setSaleLineNoteError("");
+    try {
+      await apiAifDeleteShopSaleLineNote({ location: locationCode, noteId: cleanId });
+      setSaleLineNoteThreads((current) => {
+        const existing = current[lineId];
+        if (!existing) return current;
+        return {
+          ...current,
+          [lineId]: {
+            ...existing,
+            notes: (existing.notes || []).filter((item) => String(item.id) !== cleanId),
+          },
+        };
+      });
+      setSaleLineNoteDeleteConfirmId(null);
+    } catch (caught: any) {
+      setSaleLineNoteError(caught?.message || "A megjegyzés törlése nem sikerült.");
+    } finally {
+      setSaleLineNoteDeleteBusyId(null);
     }
   }
 
@@ -2390,7 +2425,7 @@ export default function AllInAdminMagazinDashboard({
                 </div>
                 <button
                   type="button"
-                  disabled={saleLineNoteSaving}
+                  disabled={saleLineNoteSaving || Boolean(saleLineNoteDeleteBusyId)}
                   onClick={closeSaleLineNote}
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-black/20 disabled:opacity-45"
                   aria-label="Megjegyzések bezárása"
@@ -2409,15 +2444,56 @@ export default function AllInAdminMagazinDashboard({
                     </div>
                   ) : null}
 
-                  {notes.map((item) => (
-                    <div key={item.id} className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                      <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-white">{item.note}</p>
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/42">
-                        <span>{item.actor || "-"}</span>
-                        <span>{item.createdAt ? dateTime(item.createdAt) : ""}</span>
+                  {notes.map((item) => {
+                    const deleteConfirm = saleLineNoteDeleteConfirmId === item.id;
+                    const deleting = saleLineNoteDeleteBusyId === item.id;
+                    return (
+                      <div key={item.id} className="rounded-2xl border border-[#8ce7e2]/22 bg-[#203f49] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                        <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-white">{item.note}</p>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/42">
+                          <span>{item.actor || "-"}</span>
+                          <span className="flex items-center gap-2">
+                            <span>{item.createdAt ? dateTime(item.createdAt) : ""}</span>
+                            {deleteConfirm ? (
+                              <span className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={deleting}
+                                  onClick={() => setSaleLineNoteDeleteConfirmId(null)}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/14 bg-white/[0.04] text-white/60 transition hover:bg-white/[0.09] disabled:opacity-40"
+                                  title="Mégse"
+                                  aria-label="Megjegyzés törlésének megszakítása"
+                                >
+                                  <X size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={deleting}
+                                  onClick={() => void deleteSaleLineNote(item.id)}
+                                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-rose-300/45 bg-rose-500/18 px-2.5 text-[10px] text-rose-50 transition hover:bg-rose-500/28 disabled:opacity-40"
+                                  title="Megjegyzés végleges eltávolítása"
+                                >
+                                  {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                  Törlés
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={Boolean(saleLineNoteDeleteBusyId)}
+                                onClick={() => setSaleLineNoteDeleteConfirmId(item.id)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-500/[0.06] text-rose-100/72 transition hover:border-rose-300/45 hover:bg-rose-500/18 hover:text-rose-50 disabled:opacity-35"
+                                title="Megjegyzés törlése"
+                                aria-label="Megjegyzés törlése"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
 
                   {!thread?.saleNote && !notes.length ? (
                     <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-xs text-white/38">Nincs megjegyzés.</div>
