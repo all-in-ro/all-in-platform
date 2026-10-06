@@ -344,6 +344,19 @@ type InventoryItem = {
   shopify_export_pending?: boolean | null;
 };
 
+type WarehouseSelectionMeta = {
+  labelSource?: string | null;
+  label_source?: string | null;
+  labelQty?: number | null;
+  label_qty?: number | null;
+  invoiceKey?: string | null;
+  invoice_key?: string | null;
+  invoiceNumber?: string | null;
+  invoice_number?: string | null;
+  receptionId?: string | null;
+  reception_id?: string | null;
+};
+
 type PersistedSelectedWorkItem = InventoryItem & {
   selected_variant_id?: string | null;
   action?: SelectedWorkAction | null;
@@ -351,6 +364,7 @@ type PersistedSelectedWorkItem = InventoryItem & {
   sort_order?: number | string | null;
   selected_at?: string | null;
   selected_updated_at?: string | null;
+  selection_raw?: WarehouseSelectionMeta | null;
 };
 
 function warehouseShopifyStatusLabel(value: unknown) {
@@ -2597,6 +2611,7 @@ type WarehouseInvoiceFilterOption = {
   locationNames: string[];
   currencyCodes: string[];
   sourceFileNames: string[];
+  variantQtyById: Record<string, number>;
   items: InventoryItem[];
   displayLabel: string;
 };
@@ -6050,6 +6065,7 @@ type WarehouseInvoiceIndexItem = {
   location_names?: string[] | null;
   currency_codes?: string[] | null;
   source_file_names?: string[] | null;
+  variant_qty_rows?: Array<{ variantId?: string | null; variant_id?: string | null; qty?: number | string | null }> | null;
 };
 
 type WarehouseBootstrapCache = {
@@ -6532,7 +6548,7 @@ async function apiSelectedVariantSelection() {
   return fetchJSON<SelectedVariantSelectionResponse>(`/api/aif/selection?_=${Date.now()}`);
 }
 
-async function apiAddSelectedVariantSelection(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
+async function apiAddSelectedVariantSelection(items: Array<{ variantId: string; action?: SelectedWorkAction | null; selectionMeta?: WarehouseSelectionMeta | null }>) {
   return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection/items", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -6540,7 +6556,7 @@ async function apiAddSelectedVariantSelection(items: Array<{ variantId: string; 
   });
 }
 
-async function apiUpdateSelectedVariantActions(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
+async function apiUpdateSelectedVariantActions(items: Array<{ variantId: string; action?: SelectedWorkAction | null; selectionMeta?: WarehouseSelectionMeta | null }>) {
   return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection/items", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -8397,6 +8413,13 @@ export default function AllInWarehouse() {
           }
 
           const mappedItems = variantIds.map((id) => itemById.get(id)).filter(Boolean) as InventoryItem[];
+          const variantQtyById: Record<string, number> = {};
+          for (const qtyRow of row.variant_qty_rows || []) {
+            const variantId = String(qtyRow?.variantId || qtyRow?.variant_id || "").trim();
+            if (!variantId) continue;
+            const qty = Math.max(0, Math.floor(n(qtyRow?.qty)));
+            variantQtyById[variantId] = (variantQtyById[variantId] || 0) + qty;
+          }
           const dateMs = Math.max(dateTimeMs(row.reception_date), dateTimeMs(row.invoice_date), dateTimeMs(row.imported_at));
           const receptionId = String(row.reception_id || "").trim();
           const invoiceNumber = String(row.invoice_number || "").trim();
@@ -8420,6 +8443,7 @@ export default function AllInWarehouse() {
             locationNames: Array.from(new Set((row.location_names || []).map(String).filter(Boolean))),
             currencyCodes: Array.from(new Set((row.currency_codes || []).map(String).filter(Boolean))),
             sourceFileNames: Array.from(new Set((row.source_file_names || []).map(String).filter(Boolean))),
+            variantQtyById,
             items: mappedItems,
             displayLabel: `${invoiceNumber}${dateLabel ? ` • ${dateLabel}` : ""} • ${variantIds.length} variáns`,
           } satisfies WarehouseInvoiceFilterOption;
@@ -8572,6 +8596,7 @@ export default function AllInWarehouse() {
           locationNames: Array.from(row.locationNames),
           currencyCodes: Array.from(row.currencyCodes),
           sourceFileNames: Array.from(row.sourceFileNames),
+          variantQtyById: {},
           items: Array.from(row.items.values()),
           displayLabel: `${row.invoiceNumber}${dateLabel ? ` • ${dateLabel}` : ""} • ${count} variáns`,
         } satisfies WarehouseInvoiceFilterOption;
@@ -8583,6 +8608,41 @@ export default function AllInWarehouse() {
     () => invoiceFilter === "all" ? null : invoiceFilterOptions.find((option) => option.value === invoiceFilter) || null,
     [invoiceFilter, invoiceFilterOptions],
   );
+
+  function invoiceSelectionMetaForVariant(variantId: string): WarehouseSelectionMeta | null {
+    const id = String(variantId || "").trim();
+    const option = selectedInvoiceFilterOption;
+    if (!id || !option || !option.variantIds.includes(id)) return null;
+    const qty = Math.max(0, Math.floor(n(option.variantQtyById[id])));
+    if (!qty) return null;
+    const receptionId = String(option.receptionIds[0] || "").trim() || null;
+    return {
+      labelSource: "invoice",
+      labelQty: qty,
+      invoiceKey: option.value,
+      invoiceNumber: option.invoiceNumber,
+      receptionId,
+    };
+  }
+
+  function selectedMutationItem(variantId: string, action?: SelectedWorkAction | null) {
+    const selectionMeta = invoiceSelectionMetaForVariant(variantId);
+    if (selectionMeta) return { variantId, action, selectionMeta };
+    if (action === "label") {
+      return {
+        variantId,
+        action,
+        selectionMeta: {
+          labelSource: null,
+          labelQty: null,
+          invoiceKey: null,
+          invoiceNumber: null,
+          receptionId: null,
+        },
+      };
+    }
+    return { variantId, action };
+  }
 
 
   useEffect(() => {
@@ -11073,6 +11133,7 @@ export default function AllInWarehouse() {
       String(item.sell_price ?? ""),
       String(item.model_status || ""),
       String(item.variant_status || ""),
+      JSON.stringify((item as any).selection_raw || {}),
     ].join("\u001f");
 
     setPersistedSelectedItems((current) => {
@@ -11237,7 +11298,7 @@ export default function AllInWarehouse() {
     setSelectedActionTargets([]);
     setSelectedWorkPanel(action);
     void runSelectedVariantMutation(
-      () => apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId, action }))),
+      () => apiAddSelectedVariantSelection(ids.map((variantId) => selectedMutationItem(variantId, action))),
       "A kijelölt termékek műveletének mentése nem sikerült.",
     ).catch(() => undefined);
   }
@@ -11445,7 +11506,23 @@ export default function AllInWarehouse() {
     setLabelContent({ ...WAREHOUSE_LABEL_DEFAULT_CONTENT, ...(template.labelContent || {}) });
   }
 
+  function invoiceLabelCopiesForItem(item: InventoryItem) {
+    const id = String(item.variant_id || "").trim();
+    if (id && selectedInvoiceFilterOption?.variantIds.includes(id)) {
+      const activeInvoiceQty = Math.max(0, Math.floor(n(selectedInvoiceFilterOption.variantQtyById[id])));
+      if (activeInvoiceQty > 0) return activeInvoiceQty;
+    }
+    const selectionRaw = (item as any).selection_raw && typeof (item as any).selection_raw === "object"
+      ? (item as any).selection_raw as WarehouseSelectionMeta
+      : null;
+    const source = String(selectionRaw?.labelSource || selectionRaw?.label_source || "").trim().toLowerCase();
+    const qty = Math.max(0, Math.floor(n(selectionRaw?.labelQty ?? selectionRaw?.label_qty)));
+    return source === "invoice" && qty > 0 ? qty : 0;
+  }
+
   function defaultLabelCopiesForItem(item: InventoryItem) {
+    const invoiceQty = invoiceLabelCopiesForItem(item);
+    if (invoiceQty > 0) return String(invoiceQty);
     const qty = Math.floor(n(item.total_qty || item.available_qty));
     return String(Math.max(1, qty || 1));
   }
@@ -11466,11 +11543,11 @@ export default function AllInWarehouse() {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
     }
-    setLabelCopies((current) => {
-      const next = { ...current };
+    setLabelCopies(() => {
+      const next: Record<string, string> = {};
       for (const item of selectedLabelItems) {
         const id = String(item.variant_id || "");
-        if (id && !next[id]) next[id] = defaultLabelCopiesForItem(item);
+        if (id) next[id] = defaultLabelCopiesForItem(item);
       }
       return next;
     });
@@ -11876,7 +11953,7 @@ export default function AllInWarehouse() {
 
     void runSelectedVariantMutation(
       () => checked
-        ? apiAddSelectedVariantSelection([{ variantId: id }])
+        ? apiAddSelectedVariantSelection([selectedMutationItem(id)])
         : apiRemoveSelectedVariantSelection([id]),
       checked ? "A termék kijelölése nem sikerült." : "A termék kijelölésének törlése nem sikerült.",
     ).catch(() => undefined);
@@ -11919,7 +11996,7 @@ export default function AllInWarehouse() {
 
     void runSelectedVariantMutation(
       () => checked
-        ? apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId })))
+        ? apiAddSelectedVariantSelection(ids.map((variantId) => selectedMutationItem(variantId)))
         : apiRemoveSelectedVariantSelection(ids),
       checked ? "A szűrt termékek kijelölése nem sikerült." : "A szűrt kijelölések törlése nem sikerült.",
     ).catch(() => undefined);
