@@ -3137,7 +3137,25 @@ type WarehouseLabelPrintFlow = {
   totalLabels: number;
   totalProducts: number;
   printedVariantIds: string[];
+  completedVariantIds?: string[];
   mode: WarehouseLabelPrintMode;
+};
+
+type WarehouseLabelStockCheckItem = {
+  variantId: string;
+  receptionId?: string | null;
+  invoiceQty?: number | null;
+};
+
+type WarehouseLabelStockCheckRow = {
+  variantId: string;
+  receptionId?: string | null;
+  invoiceQty?: number | string | null;
+  currentQty?: number | string | null;
+  currentLocationQty?: number | string | null;
+  outgoingSinceReception?: number | string | null;
+  maxCopies?: number | string | null;
+  mode?: string | null;
 };
 
 type WarehouseLabelTemplate = {
@@ -6313,6 +6331,14 @@ async function apiVariantDetail(id: string) {
   return fetchJSON<DetailResponse>(`/api/aif/variants/${encodeURIComponent(id)}`);
 }
 
+async function apiLabelStockCheck(items: WarehouseLabelStockCheckItem[]) {
+  return fetchJSON<{ ok?: true; items?: WarehouseLabelStockCheckRow[] }>("/api/aif/label-stock-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+}
+
 function warehouseCatalogItemFromDetail(detail: DetailResponse, fallbackBarcode = ""): InventoryItem | null {
   const raw = (detail?.item || {}) as Record<string, any>;
   const variantId = firstWarehouseText(raw.variant_id, raw.id);
@@ -7110,6 +7136,7 @@ export default function AllInWarehouse() {
   const [labelDetailMap, setLabelDetailMap] = useState<Record<string, DetailResponse>>({});
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [labelPrintFlow, setLabelPrintFlow] = useState<WarehouseLabelPrintFlow | null>(null);
+  const [labelStockLimitById, setLabelStockLimitById] = useState<Record<string, number>>({});
   const [labelClearConfirmOpen, setLabelClearConfirmOpen] = useState(false);
   const [labelCleanupBusy, setLabelCleanupBusy] = useState(false);
   const [barcodeScanner, setBarcodeScanner] = useState<BarcodeScannerSession | null>(null);
@@ -11422,7 +11449,7 @@ export default function AllInWarehouse() {
       setLabelComposerOpen(false);
       if (remainingLabelCount === 0) setSelectedWorkPanel(null);
 
-      const noun = source === "printed" ? "nyomtatott terméket" : "terméket";
+      const noun = source === "printed" ? "feldolgozott tételt" : "terméket";
       setMessage(
         cleanup.synced
           ? `${ids.length} ${noun} eltávolítottam a címkelistából. A következő nyomtatás tiszta listával indul.`
@@ -11563,25 +11590,111 @@ export default function AllInWarehouse() {
     setLabelContent({ ...WAREHOUSE_LABEL_DEFAULT_CONTENT, ...(template.labelContent || {}) });
   }
 
-  function invoiceLabelCopiesForItem(item: InventoryItem) {
-    const id = String(item.variant_id || "").trim();
-    if (id && selectedInvoiceFilterOption?.variantIds.includes(id)) {
-      const activeInvoiceQty = Math.max(0, Math.floor(n(selectedInvoiceFilterOption.variantQtyById[id])));
-      if (activeInvoiceQty > 0) return activeInvoiceQty;
-    }
-    const selectionRaw = (item as any).selection_raw && typeof (item as any).selection_raw === "object"
-      ? (item as any).selection_raw as WarehouseSelectionMeta
+  function labelSelectionMetaForItem(item: InventoryItem): WarehouseSelectionMeta | null {
+    const raw = (item as any).selection_raw;
+    const persisted = raw && typeof raw === "object" && !Array.isArray(raw)
+      ? raw as WarehouseSelectionMeta
       : null;
-    const source = String(selectionRaw?.labelSource || selectionRaw?.label_source || "").trim().toLowerCase();
-    const qty = Math.max(0, Math.floor(n(selectionRaw?.labelQty ?? selectionRaw?.label_qty)));
+    const persistedSource = String(persisted?.labelSource || persisted?.label_source || "").trim().toLowerCase();
+    if (persistedSource === "invoice") return persisted;
+
+    const id = String(item.variant_id || "").trim();
+    const activeInvoiceMeta = id ? invoiceSelectionMetaForVariant(id) : null;
+    return activeInvoiceMeta || persisted;
+  }
+
+  function invoiceLabelCopiesForItem(item: InventoryItem) {
+    const meta = labelSelectionMetaForItem(item);
+    const source = String(meta?.labelSource || meta?.label_source || "").trim().toLowerCase();
+    const qty = Math.max(0, Math.floor(n(meta?.labelQty ?? meta?.label_qty)));
     return source === "invoice" && qty > 0 ? qty : 0;
   }
 
   function defaultLabelCopiesForItem(item: InventoryItem) {
+    const id = String(item.variant_id || "").trim();
+    if (id && Object.prototype.hasOwnProperty.call(labelStockLimitById, id)) {
+      return String(Math.max(0, Math.floor(n(labelStockLimitById[id]))));
+    }
     const invoiceQty = invoiceLabelCopiesForItem(item);
     if (invoiceQty > 0) return String(invoiceQty);
     const qty = Math.floor(n(item.total_qty || item.available_qty));
-    return String(Math.max(1, qty || 1));
+    return String(Math.max(0, qty || 0));
+  }
+
+  function labelStockCheckItemFor(item: InventoryItem): WarehouseLabelStockCheckItem | null {
+    const variantId = String(item.variant_id || "").trim();
+    if (!variantId) return null;
+    const meta = labelSelectionMetaForItem(item);
+    const source = String(meta?.labelSource || meta?.label_source || "").trim().toLowerCase();
+    const invoiceQty = source === "invoice"
+      ? Math.max(0, Math.floor(n(meta?.labelQty ?? meta?.label_qty)))
+      : 0;
+    const receptionId = source === "invoice"
+      ? firstWarehouseText(meta?.receptionId, meta?.reception_id) || null
+      : null;
+    return { variantId, receptionId, invoiceQty: invoiceQty || null };
+  }
+
+  async function refreshLabelStockLimits(itemsToCheck: InventoryItem[], preserveExistingCopies: boolean) {
+    const requestItems = itemsToCheck
+      .map(labelStockCheckItemFor)
+      .filter((row): row is WarehouseLabelStockCheckItem => Boolean(row?.variantId));
+    if (!requestItems.length) {
+      return {
+        copiesById: {} as Record<string, number>,
+        zeroStockVariantIds: [] as string[],
+        reducedProducts: 0,
+        removedLabels: 0,
+      };
+    }
+
+    const response = await apiLabelStockCheck(requestItems);
+    const rows = Array.isArray(response.items) ? response.items : [];
+    const byId = new Map(rows.map((row) => [String(row.variantId || "").trim(), row] as const));
+    const missingIds = requestItems.map((row) => row.variantId).filter((id) => !byId.has(id));
+    if (missingIds.length) {
+      throw new Error(`A friss készletellenőrzés ${missingIds.length} terméknél nem adott eredményt.`);
+    }
+
+    const copiesById: Record<string, number> = {};
+    const limitsById: Record<string, number> = {};
+    const zeroStockVariantIds: string[] = [];
+    let reducedProducts = 0;
+    let removedLabels = 0;
+
+    for (const item of itemsToCheck) {
+      const id = String(item.variant_id || "").trim();
+      if (!id) continue;
+      const row = byId.get(id);
+      if (!row) continue;
+      const maxCopies = Math.max(0, Math.floor(n(row.maxCopies)));
+      limitsById[id] = maxCopies;
+
+      const fallbackRequested = Math.max(
+        0,
+        invoiceLabelCopiesForItem(item) || Math.floor(n(item.total_qty || item.available_qty)),
+      );
+      const requested = preserveExistingCopies && labelCopies[id] !== undefined
+        ? labelInt(labelCopies[id], fallbackRequested, 0, 999)
+        : fallbackRequested;
+      const finalCopies = Math.max(0, Math.min(requested, maxCopies));
+      copiesById[id] = finalCopies;
+
+      if (maxCopies <= 0) zeroStockVariantIds.push(id);
+      if (finalCopies < requested) {
+        reducedProducts += 1;
+        removedLabels += requested - finalCopies;
+      }
+    }
+
+    setLabelStockLimitById((current) => ({ ...current, ...limitsById }));
+    setLabelCopies((current) => {
+      const next: Record<string, string> = preserveExistingCopies ? { ...current } : {};
+      for (const [id, qty] of Object.entries(copiesById)) next[id] = String(qty);
+      return next;
+    });
+
+    return { copiesById, zeroStockVariantIds, reducedProducts, removedLabels };
   }
 
   function barcodeForLabelItem(item: InventoryItem, detailItem?: Record<string, any> | null) {
@@ -11594,31 +11707,22 @@ export default function AllInWarehouse() {
   async function openLabelComposer() {
     setLabelPrintFlow(null);
     setLabelClearConfirmOpen(false);
-    // Minden megnyitáskor keret és márka nélkül induljon. Mentett sablon
-    // betöltése továbbra is tudatosan visszakapcsolhatja ezeket.
     setLabelShowBorder(false);
     setLabelContent((current) => ({ ...current, brand: false }));
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
     }
-    setLabelCopies(() => {
-      const next: Record<string, string> = {};
-      for (const item of selectedLabelItems) {
-        const id = String(item.variant_id || "");
-        if (id) next[id] = defaultLabelCopiesForItem(item);
-      }
-      return next;
-    });
 
-    const resolvedDetailMap: Record<string, DetailResponse> = { ...labelDetailMap };
-    const missingIds = selectedLabelItems
-      .map((item) => String(item.variant_id || ""))
-      .filter((id) => id && !resolvedDetailMap[id]);
+    setLabelDetailsBusy(true);
+    try {
+      const stockCheck = await refreshLabelStockLimits(selectedLabelItems, false);
+      const resolvedDetailMap: Record<string, DetailResponse> = { ...labelDetailMap };
+      const missingIds = selectedLabelItems
+        .map((item) => String(item.variant_id || ""))
+        .filter((id) => id && !resolvedDetailMap[id]);
 
-    if (missingIds.length) {
-      setLabelDetailsBusy(true);
-      try {
+      if (missingIds.length) {
         const loaded = await Promise.all(
           missingIds.map(async (id) => {
             try {
@@ -11629,27 +11733,30 @@ export default function AllInWarehouse() {
             }
           })
         );
-
         for (const row of loaded) {
           if (row.detail) resolvedDetailMap[row.id] = row.detail;
         }
         setLabelDetailMap(resolvedDetailMap);
-      } finally {
-        setLabelDetailsBusy(false);
       }
-    }
 
-    const missingBarcodeItems = selectedLabelItems.filter((item) => {
-      const id = String(item.variant_id || "");
-      return !barcodeForLabelItem(item, resolvedDetailMap[id]?.item || null);
-    });
+      const missingBarcodeItems = selectedLabelItems.filter((item) => {
+        const id = String(item.variant_id || "");
+        return !barcodeForLabelItem(item, resolvedDetailMap[id]?.item || null);
+      });
 
-    setLabelComposerOpen(true);
-    if (missingBarcodeItems.length) {
-      const first = missingBarcodeItems[0];
-      setMessage(
-        `${missingBarcodeItems.length} terméknek nincs mentett bárkódja. A címkenyomtatás csak a termékhez elmentett kódot használja. Első hiányzó: ${first.title_ro || first.variant_id || "termék"}.`
-      );
+      setLabelComposerOpen(true);
+      if (stockCheck.removedLabels > 0) {
+        setMessage(`A friss készlet alapján ${stockCheck.removedLabels} címkét kihagytam ${stockCheck.reducedProducts} terméknél.`);
+      } else if (missingBarcodeItems.length) {
+        const first = missingBarcodeItems[0];
+        setMessage(`${missingBarcodeItems.length} terméknek nincs mentett bárkódja. Első hiányzó: ${first.title_ro || first.variant_id || "termék"}.`);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error
+        ? `A címke-előkészítés leállt: ${error.message}`
+        : "A címke-előkészítés leállt, mert a friss készlet nem ellenőrizhető.");
+    } finally {
+      setLabelDetailsBusy(false);
     }
   }
 
@@ -11684,14 +11791,20 @@ export default function AllInWarehouse() {
   }, [labelComposerOpen]);
 
   function updateLabelCopies(id: string, value: string) {
-    const qty = labelInt(value, 1, 0, 999);
+    const limit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+      ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
+      : 999;
+    const qty = labelInt(value, 1, 0, limit);
     setLabelCopies((current) => ({ ...current, [id]: String(qty) }));
   }
 
   function adjustLabelCopies(id: string, delta: number) {
     setLabelCopies((current) => {
-      const currentQty = labelInt(current[id], 1, 0, 999);
-      return { ...current, [id]: String(Math.max(0, currentQty + delta)) };
+      const limit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+        ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
+        : 999;
+      const currentQty = labelInt(current[id], 1, 0, limit);
+      return { ...current, [id]: String(Math.max(0, Math.min(limit, currentQty + delta))) };
     });
   }
 
@@ -11722,7 +11835,10 @@ export default function AllInWarehouse() {
       const id = String(item.variant_id || "");
       const detailItem = labelDetailMap[id]?.item || {};
       const barcode = barcodeForLabelItem(item, detailItem);
-      const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 1, 1, 999), 0, 999);
+      const stockLimit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+        ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
+        : 999;
+      const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 0, 0, stockLimit), 0, stockLimit);
       const mergedLabelItem = { ...item, ...detailItem } as InventoryItem;
       const colorCode = firstWarehouseText(
         detailItem.color_code,
@@ -11752,7 +11868,7 @@ export default function AllInWarehouse() {
         render: labelCode128Svg(barcode, 52),
       };
     });
-  }, [selectedLabelItems, labelCopies, labelDetailMap]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById]);
 
   const labelInvalidRows = useMemo(
     () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
@@ -11819,31 +11935,95 @@ export default function AllInWarehouse() {
   }, [labelW, labelH]);
 
   async function printGeneratedLabels(options: { testOnly?: boolean } = {}) {
-    if (!labelPrintItems.length) {
-      setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
-      return;
-    }
-    if (labelInvalidRows.length) {
-      const first = labelInvalidRows[0];
-      setMessage(
-        `${labelInvalidRows.length} termék címkéje nem nyomtatható, mert nincs termékhez mentett, érvényes bárkód. Első érintett: ${first.title || first.id}.`
-      );
+    if (!selectedLabelItems.length) {
+      setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
     }
 
-    const printItems = options.testOnly ? labelPrintItems.slice(0, 1) : labelPrintItems;
-    const printedVariantIds = Array.from(new Set(printItems.map((item) => String(item.variantId || "").trim()).filter(Boolean)));
     const trackedPrint = !options.testOnly;
     if (trackedPrint) {
       setLabelPrintFlow({
         phase: "preparing",
-        progress: 10,
-        totalLabels: printItems.length,
-        totalProducts: printedVariantIds.length,
-        printedVariantIds,
+        progress: 6,
+        totalLabels: labelPrintItems.length,
+        totalProducts: selectedLabelItems.length,
+        printedVariantIds: [],
+        completedVariantIds: [],
         mode: labelPrintMode,
       });
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+
+    let stockCheck;
+    try {
+      stockCheck = await refreshLabelStockLimits(selectedLabelItems, true);
+    } catch (error) {
+      if (trackedPrint) setLabelPrintFlow(null);
+      setMessage(error instanceof Error
+        ? `Nyomtatás leállítva: ${error.message}`
+        : "Nyomtatás leállítva, mert a friss készlet nem ellenőrizhető.");
+      return;
+    }
+
+    const safeRows = labelRowsForPrint.map((row) => ({
+      ...row,
+      copies: Math.max(0, Math.min(row.copies, stockCheck.copiesById[row.id] ?? 0)),
+    }));
+    const invalidRows = safeRows.filter((row) => row.copies > 0 && !row.render.ok);
+    if (invalidRows.length) {
+      if (trackedPrint) setLabelPrintFlow(null);
+      const first = invalidRows[0];
+      setMessage(`${invalidRows.length} termék címkéje nem nyomtatható, mert nincs mentett, érvényes bárkód. Első érintett: ${first.title || first.id}.`);
+      return;
+    }
+
+    const safePrintItems: WarehouseLabelPrintItem[] = [];
+    for (const row of safeRows) {
+      for (let i = 0; i < row.copies; i += 1) {
+        safePrintItems.push({
+          key: `${row.id}-${i}`,
+          variantId: row.id,
+          barcode: row.barcode,
+          title: row.title,
+          brand: row.brand,
+          category: row.category,
+          size: row.size,
+          color: row.color,
+          description: row.description,
+          productCode: row.productCode,
+          snCod: row.snCod,
+          price: row.price,
+          stockQty: row.stockQty,
+          copyIndex: i + 1,
+          copyTotal: row.copies,
+          render: row.render,
+        });
+      }
+    }
+
+    const printItems = options.testOnly ? safePrintItems.slice(0, 1) : safePrintItems;
+    if (!printItems.length) {
+      if (trackedPrint) setLabelPrintFlow(null);
+      setMessage("A friss készletellenőrzés után nincs nyomtatható címke. Az elfogyott vagy kivett tételeket 0 darabra állítottam.");
+      return;
+    }
+
+    const printedVariantIds = Array.from(new Set(printItems.map((item) => String(item.variantId || "").trim()).filter(Boolean)));
+    const completedVariantIds = Array.from(new Set([...printedVariantIds, ...stockCheck.zeroStockVariantIds]));
+    if (trackedPrint) {
+      setLabelPrintFlow((current) => current ? {
+        ...current,
+        progress: 24,
+        totalLabels: printItems.length,
+        totalProducts: printedVariantIds.length,
+        printedVariantIds,
+        completedVariantIds,
+      } : current);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+
+    if (stockCheck.removedLabels > 0) {
+      setMessage(`Készletfrissítés: ${stockCheck.removedLabels} címkét kihagytam ${stockCheck.reducedProducts} terméknél, mert közben csökkent a készlet.`);
     }
 
     const printHtml = labelPrintMode === "zebra"
@@ -11864,7 +12044,7 @@ export default function AllInWarehouse() {
         );
 
     if (trackedPrint) {
-      setLabelPrintFlow((current) => current ? { ...current, progress: 38 } : current);
+      setLabelPrintFlow((current) => current ? { ...current, progress: 42 } : current);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     }
 
@@ -11874,10 +12054,6 @@ export default function AllInWarehouse() {
     iframe.style.left = "-10000px";
     iframe.style.top = "0";
     iframe.style.width = labelPrintMode === "zebra" ? `${labelW}mm` : "210mm";
-    // Zebra módban a rejtett nyomtatási dokumentum viewportja eddig mindig csak
-    // egyetlen címke magas volt. A második/harmadik oldal benne volt a HTML-ben,
-    // de Chromium + a Zebra driver kombinációja így képes volt csak az első oldalt
-    // spoololni. A viewport most a teljes példányszám magasságát lefedi.
     iframe.style.height = labelPrintMode === "zebra"
       ? `${Math.max(labelH, labelH * Math.max(1, printItems.length))}mm`
       : "297mm";
@@ -11911,22 +12087,16 @@ export default function AllInWarehouse() {
     printDocument.close();
 
     if (trackedPrint) {
-      setLabelPrintFlow((current) => current ? { ...current, progress: 68 } : current);
+      setLabelPrintFlow((current) => current ? { ...current, progress: 70 } : current);
     }
 
     const runPrint = () => {
-      // Kényszerítjük a teljes többoldalas Zebra dokumentum layoutját a print()
-      // előtt. Ez különösen a kis egyedi papírméreteknél számít.
       void printDocument.documentElement.offsetHeight;
       void printDocument.body?.offsetHeight;
       if (trackedPrint) {
         setLabelPrintFlow((current) => current ? { ...current, phase: "printing", progress: 94 } : current);
       }
 
-      // A print() alatt a böngésző saját nyomtatási ablaka veszi át a vezérlést.
-      // A böngésző nem tudja megmondani, hogy a fizikai Zebra tényleg kinyomtatta-e
-      // az utolsó címkét, ezért a lista törlése csak a felhasználó utólagos
-      // megerősítésére történik. Így egy Mégse sem tudja véletlenül eltüntetni a sort.
       window.setTimeout(() => {
         try {
           printWindow.focus();
@@ -15129,7 +15299,7 @@ export default function AllInWarehouse() {
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/50 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_12px_28px_rgba(42,141,139,.20)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
                   type="button"
                   disabled={labelCleanupBusy}
-                  onClick={() => void clearLabelSelectionIds(labelPrintFlow.printedVariantIds, "printed")}
+                  onClick={() => void clearLabelSelectionIds(labelPrintFlow.completedVariantIds || labelPrintFlow.printedVariantIds, "printed")}
                 >
                   <CheckCircle2 size={17} /> {labelCleanupBusy ? "Lista törlése..." : "Igen, kész • töröld a nyomtatottakat"}
                 </button>
@@ -15186,7 +15356,9 @@ export default function AllInWarehouse() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3 text-xs">
                       <span className="truncate text-white">
-                        {labelPrintFlow.phase === "preparing" ? "Nyomtatási csomag előkészítése" : "Átadás a nyomtatási ablaknak"}
+                        {labelPrintFlow.phase === "preparing"
+                          ? labelPrintFlow.progress < 30 ? "Aktuális készlet ellenőrzése" : "Nyomtatási csomag előkészítése"
+                          : "Átadás a nyomtatási ablaknak"}
                       </span>
                       <span className="shrink-0 tabular-nums text-[#d7fffd]">{labelPrintFlow.totalLabels} címke • {labelPrintFlow.progress}%</span>
                     </div>
@@ -15384,7 +15556,12 @@ export default function AllInWarehouse() {
                           <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
                             <button className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
                             <input className="h-full min-w-0 flex-1 bg-transparent px-2 text-center text-sm tabular-nums text-white outline-none" value={String(labelInt(labelCopies[row.id], row.copies, 0, 999))} inputMode="numeric" onChange={(e) => updateLabelCopies(row.id, e.target.value)} />
-                            <button className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99]" onClick={() => adjustLabelCopies(row.id, 1)} type="button">+</button>
+                            <button
+                              className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
+                              onClick={() => adjustLabelCopies(row.id, 1)}
+                              disabled={Object.prototype.hasOwnProperty.call(labelStockLimitById, row.id) && labelInt(labelCopies[row.id], row.copies, 0, 999) >= Math.max(0, Math.floor(n(labelStockLimitById[row.id])))}
+                              type="button"
+                            >+</button>
                           </div>
                         </div>
                       </div>
@@ -16110,9 +16287,6 @@ export default function AllInWarehouse() {
                 </div>
               ) : (
                 <>
-                  <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                    Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad. Shopify exportnál a következő ablak minden szükséges adatot ellenőriz, mielőtt az egyetlen Shopify CSV elkészül.
-                  </div>
                   <div className="grid gap-2">
                     {selectedItemsForAction(selectedWorkPanel).map((it) => (
                       <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
