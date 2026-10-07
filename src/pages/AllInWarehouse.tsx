@@ -7019,6 +7019,12 @@ export default function AllInWarehouse() {
   const [invoiceIndexRows, setInvoiceIndexRows] = useState<WarehouseInvoiceIndexItem[]>([]);
   const [invoiceDetailTarget, setInvoiceDetailTarget] = useState<WarehouseInvoiceFilterOption | null>(null);
   const [invoiceDetailRows, setInvoiceDetailRows] = useState<WarehouseReceptionDetail[]>([]);
+  // A számlák eredeti termékneve külön cache-ben marad akkor is, ha a receptió-részletek
+  // modalját bezárjuk. Ugyanezt a történeti nevet használja a fő lista, a Kijelöltek
+  // munkalista és a címkenyomtatás is, így egyik lépésben sem esünk vissza a közös
+  // modellnévre (pl. BEAUTIFUL).
+  const [invoiceHistoricalTitlesByReception, setInvoiceHistoricalTitlesByReception] = useState<Record<string, Record<string, string>>>({});
+  const invoiceHistoricalDetailCacheRef = useRef<Map<string, WarehouseReceptionDetail>>(new Map());
   const [invoiceDetailBusy, setInvoiceDetailBusy] = useState(false);
   const [invoiceDetailError, setInvoiceDetailError] = useState("");
   const [invoiceFilterStats, setInvoiceFilterStats] = useState<{ value: string; rowCount: number; totalQty: number } | null>(null);
@@ -8648,38 +8654,118 @@ export default function AllInWarehouse() {
     [invoiceFilter, invoiceFilterOptions],
   );
 
-  // Számlaszűrésnél a fő raktárlistában is ugyanazt a történeti terméknevet
-  // mutatjuk, amely a számla / receptió részleteiben szerepel. A katalógus jelenlegi
-  // model-címe ettől nem változik: ez csak a kiválasztott számla megjelenítési nézete.
-  // Így pl. egy közös "BEAUTIFUL" modell alá importált AMBER / ZEBRA / VENUS sorok
-  // a számlaszűrt listában nem veszítik el az eredeti terméknevüket.
+  function invoiceHistoricalTitlesFromDetail(detail: WarehouseReceptionDetail | null | undefined) {
+    const titles: Record<string, string> = {};
+    for (const row of detail?.rows || []) {
+      if (String(row?.status || "").toLowerCase() === "ignored") continue;
+      const normalized = row?.normalized && typeof row.normalized === "object"
+        ? row.normalized as Record<string, any>
+        : {};
+      const variantId = firstWarehouseText(
+        row?.variant_id,
+        row?.variantId,
+        normalized.variant_id,
+        normalized.variantId,
+      );
+      const invoiceTitle = firstWarehouseText(
+        normalized.titleRo,
+        normalized.productName,
+        row?.title_ro,
+        row?.supplier_product_code,
+      );
+      if (variantId && invoiceTitle && !titles[variantId]) titles[variantId] = invoiceTitle;
+    }
+    return titles;
+  }
+
+  function rememberInvoiceHistoricalTitles(receptionId: string, detail: WarehouseReceptionDetail) {
+    const cleanReceptionId = String(receptionId || detail?.item?.id || "").trim();
+    if (!cleanReceptionId) return;
+    invoiceHistoricalDetailCacheRef.current.set(cleanReceptionId, detail);
+    const titles = invoiceHistoricalTitlesFromDetail(detail);
+    if (!Object.keys(titles).length) return;
+    setInvoiceHistoricalTitlesByReception((current) => ({
+      ...current,
+      [cleanReceptionId]: { ...(current[cleanReceptionId] || {}), ...titles },
+    }));
+  }
+
+  function selectionInvoiceMeta(item: Partial<PersistedSelectedWorkItem> | Record<string, any> | null | undefined) {
+    const raw = item && typeof item === "object" && (item as any).selection_raw && typeof (item as any).selection_raw === "object"
+      ? (item as any).selection_raw as WarehouseSelectionMeta
+      : {};
+    return {
+      receptionId: firstWarehouseText(raw.receptionId, raw.reception_id),
+      invoiceKey: firstWarehouseText(raw.invoiceKey, raw.invoice_key),
+      invoiceNumber: firstWarehouseText(raw.invoiceNumber, raw.invoice_number),
+    };
+  }
+
+  async function ensureInvoiceHistoricalTitlesForItems(targetItems: Array<Partial<PersistedSelectedWorkItem> & Record<string, any>>) {
+    const receptionIds = Array.from(new Set(
+      (targetItems || [])
+        .map((item) => selectionInvoiceMeta(item).receptionId)
+        .filter(Boolean),
+    ));
+    const missing = receptionIds.filter((id) => !invoiceHistoricalDetailCacheRef.current.has(id));
+    if (!missing.length) return;
+
+    const loaded = await Promise.all(missing.map(async (receptionId) => {
+      try {
+        return { receptionId, detail: await apiReceptionDetail(receptionId) };
+      } catch {
+        return { receptionId, detail: null as WarehouseReceptionDetail | null };
+      }
+    }));
+    for (const row of loaded) {
+      if (row.detail) rememberInvoiceHistoricalTitles(row.receptionId, row.detail);
+    }
+  }
+
+  // Számlaszűrésnél a fő raktárlista ugyanazt a történeti terméknevet használja,
+  // amely a receptióban szerepelt. A cache a részletes ablak bezárása után is megmarad.
   const invoiceDisplayTitleByVariantId = useMemo(() => {
     const map = new Map<string, string>();
-    if (invoiceFilter === "all") return map;
+    if (invoiceFilter === "all" || !selectedInvoiceFilterOption) return map;
 
+    for (const receptionId of selectedInvoiceFilterOption.receptionIds || []) {
+      const rows = invoiceHistoricalTitlesByReception[String(receptionId || "").trim()] || {};
+      for (const [variantId, title] of Object.entries(rows)) {
+        if (variantId && title && !map.has(variantId)) map.set(variantId, title);
+      }
+    }
+
+    // Betöltés közben / nagyon régi adatoknál a modal pillanatnyi részlete is fallback.
     for (const detail of invoiceDetailRows || []) {
-      for (const row of detail.rows || []) {
-        if (String(row?.status || "").toLowerCase() === "ignored") continue;
-        const normalized = row?.normalized && typeof row.normalized === "object"
-          ? row.normalized as Record<string, any>
-          : {};
-        const variantId = firstWarehouseText(
-          row?.variant_id,
-          row?.variantId,
-          normalized.variant_id,
-          normalized.variantId,
-        );
-        const invoiceTitle = firstWarehouseText(
-          normalized.titleRo,
-          normalized.productName,
-          row?.title_ro,
-          row?.supplier_product_code,
-        );
-        if (variantId && invoiceTitle && !map.has(variantId)) map.set(variantId, invoiceTitle);
+      const rows = invoiceHistoricalTitlesFromDetail(detail);
+      for (const [variantId, title] of Object.entries(rows)) {
+        if (variantId && title && !map.has(variantId)) map.set(variantId, title);
       }
     }
     return map;
-  }, [invoiceFilter, invoiceDetailRows]);
+  }, [invoiceFilter, selectedInvoiceFilterOption, invoiceHistoricalTitlesByReception, invoiceDetailRows]);
+
+  function selectedInvoiceDisplayTitle(item: Partial<PersistedSelectedWorkItem> & Record<string, any>) {
+    const variantId = selectedVariantIdFromItem(item as InventoryItem);
+    if (!variantId) return firstWarehouseText(item.title_ro, item.shopify_title);
+
+    const meta = selectionInvoiceMeta(item);
+    const fromSavedReception = meta.receptionId
+      ? firstWarehouseText(invoiceHistoricalTitlesByReception[meta.receptionId]?.[variantId])
+      : "";
+    if (fromSavedReception) return fromSavedReception;
+
+    const currentInvoiceMatches = Boolean(
+      selectedInvoiceFilterOption && (
+        (meta.receptionId && selectedInvoiceFilterOption.receptionIds.includes(meta.receptionId)) ||
+        (meta.invoiceKey && selectedInvoiceFilterOption.value === meta.invoiceKey) ||
+        (meta.invoiceNumber && normalizeSearch(selectedInvoiceFilterOption.invoiceNumber) === normalizeSearch(meta.invoiceNumber)) ||
+        (!meta.receptionId && !meta.invoiceKey && !meta.invoiceNumber && selectedInvoiceFilterOption.variantIds.includes(variantId))
+      )
+    );
+    const currentInvoiceTitle = currentInvoiceMatches ? invoiceDisplayTitleByVariantId.get(variantId) : "";
+    return firstWarehouseText(currentInvoiceTitle, item.title_ro, item.shopify_title);
+  }
 
   function invoiceSelectionMetaForVariant(variantId: string): WarehouseSelectionMeta | null {
     const id = String(variantId || "").trim();
@@ -8743,6 +8829,7 @@ export default function AllInWarehouse() {
     setInvoiceDetailBusy(true);
     try {
       const details = await Promise.all(receptionIds.map((id) => apiReceptionDetail(id)));
+      details.forEach((detail, index) => rememberInvoiceHistoricalTitles(receptionIds[index] || String(detail?.item?.id || ""), detail));
       setInvoiceDetailRows(details);
       const invoiceRows = details.flatMap((detail) => (detail.rows || []).filter((row) => String(row.status || "").toLowerCase() !== "ignored"));
       const invoiceQty = invoiceRows.reduce((sum, row) => {
@@ -10215,8 +10302,15 @@ export default function AllInWarehouse() {
 
   const selectedItems = useMemo(() => {
     const selected = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
-    return selectionSourceItems.filter((x) => selected.has(selectedVariantIdFromItem(x)));
-  }, [selectionSourceItems, selectedVariants]);
+    return selectionSourceItems
+      .filter((x) => selected.has(selectedVariantIdFromItem(x)))
+      .map((item) => {
+        const historicalTitle = selectedInvoiceDisplayTitle(item as PersistedSelectedWorkItem & Record<string, any>);
+        return historicalTitle && historicalTitle !== String(item.title_ro || "").trim()
+          ? { ...item, title_ro: historicalTitle }
+          : item;
+      });
+  }, [selectionSourceItems, selectedVariants, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId]);
 
   const incomingSelectedItems = useMemo(() => {
     if (!incomingFocus?.batchId) return [] as InventoryItem[];
@@ -11314,6 +11408,7 @@ export default function AllInWarehouse() {
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedVisibleCount === filteredVariantIds.length;
 
   function openSelectedProductsPanel() {
+    void ensureInvoiceHistoricalTitlesForItems(selectedItems as Array<PersistedSelectedWorkItem & Record<string, any>>);
     const rememberedId = String(lastSelectionVariantIdRef.current || "").trim();
     const rememberedStillSelected = Boolean(rememberedId && selectedVariants[rememberedId]);
     if (rememberedStillSelected) {
@@ -11370,6 +11465,7 @@ export default function AllInWarehouse() {
   }
 
   function assignSelectedItemsToAction(targetItems: InventoryItem[], action: SelectedWorkAction) {
+    void ensureInvoiceHistoricalTitlesForItems(targetItems as Array<PersistedSelectedWorkItem & Record<string, any>>);
     const ids = Array.from(new Set((targetItems || []).map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
     if (!ids.length) return;
     setSelectedVariants((current) => {
@@ -11764,6 +11860,7 @@ export default function AllInWarehouse() {
 
     setLabelDetailsBusy(true);
     try {
+      await ensureInvoiceHistoricalTitlesForItems(selectedLabelItems as Array<PersistedSelectedWorkItem & Record<string, any>>);
       const stockCheck = await refreshLabelStockLimits(selectedLabelItems, false);
       const resolvedDetailMap: Record<string, DetailResponse> = { ...labelDetailMap };
       const missingIds = selectedLabelItems
@@ -11903,7 +12000,7 @@ export default function AllInWarehouse() {
         barcode,
         copies,
         imageUrl: labelComposerImageUrl(item, detailItem),
-        title: detailItem.title_ro || item.title_ro || "-",
+        title: selectedInvoiceDisplayTitle(item as PersistedSelectedWorkItem & Record<string, any>) || item.title_ro || detailItem.title_ro || "-",
         brand: detailItem.brand_name || item.brand_name || "-",
         category: detailItem.subcategory_name_ro || item.subcategory_name_ro || detailItem.subcategory_name_hu || item.subcategory_name_hu || detailItem.product_type || item.product_type || "-",
         size: detailItem.size || item.size || "-",
@@ -11916,7 +12013,7 @@ export default function AllInWarehouse() {
         render: labelCode128Svg(barcode, 52),
       };
     });
-  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId]);
 
   const labelInvalidRows = useMemo(
     () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
