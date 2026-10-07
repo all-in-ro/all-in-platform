@@ -2800,12 +2800,12 @@ export default function AllInReceptions(_props: Props) {
                     <th className="px-1 py-1.5 text-center">
                       <button
                         type="button"
-                        className="inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1 text-white/78 transition hover:bg-white/10 hover:text-white"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
                         onClick={() => setReceptionListNumberDescending((current) => !current)}
                         title={receptionListNumberDescending ? `Kattintás: 1 → ${items.length} számozás` : `Kattintás: ${items.length} → 1 számozás`}
                         aria-label="Receptiólista számozási irányának megfordítása"
                       >
-                        # {receptionListNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                        {receptionListNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
                       </button>
                     </th>
                     <th className="px-2 py-1.5">Számla</th>
