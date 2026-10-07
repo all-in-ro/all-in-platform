@@ -487,10 +487,10 @@ function activityText(item: AifAdminCustomerOverviewItem, year: number) {
 
 function storeTone(code?: string | null) {
   return code === "main_warehouse"
-    ? "border-[#9be9e5]/40 bg-[#2a8d8b]/22 text-[#d7fffd]"
+    ? "border-[#8fe9e5]/70 bg-[#108D8B] text-white shadow-[0_4px_12px_rgba(16,141,139,0.24)]"
     : code === "magazin_targu_secuiesc"
-      ? "border-[#b6ebf4]/42 bg-[rgba(104,200,221,0.18)] text-[#eefcff]"
-      : "border-white/18 bg-white/[0.05] text-white/78";
+      ? "border-[#b9edf7]/85 bg-[#68c8dd] text-[#12313a] shadow-[0_4px_12px_rgba(104,200,221,0.20)]"
+      : "border-white/24 bg-white/[0.10] text-white";
 }
 
 function StoreBadge({ code, name }: { code?: string | null; name?: string | null }) {
@@ -500,7 +500,7 @@ function StoreBadge({ code, name }: { code?: string | null; name?: string | null
       ? "Kézdivásárhely"
       : (name || "Üzlet");
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] ${storeTone(code)}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none ${storeTone(code)}`}>
       <Store size={11} />
       {label}
     </span>
@@ -529,9 +529,9 @@ function SummaryCard({
     : tone === "blue"
       ? "border-sky-200/25 bg-gradient-to-br from-[#315c76] to-[#344154]"
       : tone === "red"
-        ? "border-rose-200/34 bg-gradient-to-br from-[#6d1f2c] via-[#a12231] to-[#344154]"
+        ? "border-[#ff9aa4]/70 bg-[#E21C2A] shadow-[0_14px_30px_rgba(226,28,42,0.24)]"
         : tone === "gold"
-          ? "border-[#ff9b70]/34 bg-gradient-to-br from-[#8b2c08] via-[#ff5301] to-[#344154]"
+          ? "border-[#ffb08a]/75 bg-[#ff5301] shadow-[0_14px_30px_rgba(255,83,1,0.24)]"
           : "border-white/16 bg-gradient-to-br from-[#3d4b5f] to-[#344154]";
   const interactiveClass = onClick
     ? "cursor-pointer text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/55 hover:shadow-[0_16px_34px_rgba(15,23,42,0.28)] focus:outline-none focus:ring-2 focus:ring-[#9be9e5]/45 active:translate-y-0"
@@ -540,23 +540,24 @@ function SummaryCard({
     ? "ring-2 ring-[#9be9e5]/65 border-[#b9fffb]/70 shadow-[0_0_0_1px_rgba(155,233,229,0.16),0_18px_38px_rgba(15,23,42,0.30)]"
     : "";
   const className = `min-w-0 rounded-[21px] border p-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.16)] ${toneClass} ${interactiveClass} ${activeClass}`;
+  const strongTone = tone === "gold" || tone === "red";
   const content = (
     <>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="text-[9px] uppercase tracking-[0.14em] text-white/55">{label}</p>
-            {active ? <span className="rounded-full border border-[#cffffd]/30 bg-[#2a8d8b]/36 px-2 py-0.5 text-[8px] uppercase tracking-[0.08em] text-[#e8ffff]">Aktív szűrő</span> : null}
+            <p className={`text-[9px] uppercase tracking-[0.14em] ${strongTone ? "font-medium text-white/92" : "text-white/55"}`}>{label}</p>
+            {active ? <span className={`rounded-full border px-2 py-0.5 text-[8px] uppercase tracking-[0.08em] ${strongTone ? "border-white/35 bg-black/12 text-white" : "border-[#cffffd]/30 bg-[#2a8d8b]/36 text-[#e8ffff]"}`}>Aktív szűrő</span> : null}
           </div>
           <p className="mt-2 truncate text-[clamp(1.05rem,1.6vw,1.55rem)] leading-none text-white" title={value}>{value}</p>
         </div>
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-white/[0.07] text-[#d7fffd]">
+        <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${strongTone ? "border-white/55 bg-black/10 text-white" : "border-white/18 bg-white/[0.07] text-[#d7fffd]"}`}>
           <Icon size={17} />
         </span>
       </div>
       <div className="mt-2.5 flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[10px] text-white/50" title={hint}>{hint}</p>
-        {onClick ? <span className="shrink-0 text-[9px] text-[#bff8f5]/72">{active ? "Törlés" : "Szűrés"}</span> : null}
+        <p className={`min-w-0 truncate text-[10px] ${strongTone ? "text-white/84" : "text-white/50"}`} title={hint}>{hint}</p>
+        {onClick ? <span className={`shrink-0 text-[9px] ${strongTone ? "font-medium text-white/92" : "text-[#bff8f5]/72"}`}>{active ? "Törlés" : "Szűrés"}</span> : null}
       </div>
     </>
   );
@@ -3085,7 +3086,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                       {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
                     </button>
                   </th>
-                  <th className="px-3 py-3 text-left align-middle">Kliens</th>
+                  <th className="py-3 pl-14 pr-3 text-left align-middle">Kliens</th>
                   <th className="px-3 py-3 text-left align-middle">Üzlet</th>
                   <th className="px-3 py-3 text-right align-middle">{year}. évi forgalom</th>
                   <th className="px-3 py-3 text-center align-middle">Vásárlás / db</th>
@@ -3099,7 +3100,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                 {numberedCustomerRows.map(({ item, index, rowNumber }) => (
                   <tr key={item.key} className="group cursor-pointer border-t border-white/8 align-middle transition hover:bg-white/[0.035]" onClick={() => setSelected(item)}>
                     <td className="px-2 py-3 text-center">
-                      <span className={`inline-flex min-w-[34px] items-center justify-center rounded-full border px-2 py-1 text-[11px] leading-none ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/10 bg-black/12 text-white/70"}`}>{rowNumber}</span>
+                      <span className={`inline-flex min-w-[34px] items-center justify-center rounded-full border px-2 py-1 text-[11px] leading-none ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/18 bg-[#263548] text-white/90"}`}>{rowNumber}</span>
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex min-w-0 items-start gap-3">
@@ -3107,7 +3108,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                         <div className="min-w-0">
                           <div className="flex min-w-0 items-center gap-2">
                             <p className="truncate text-sm text-white" title={item.fullName}>{item.fullName}</p>
-                            {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb692]/42 bg-[rgba(255,83,1,0.18)] px-2 py-0.5 text-[9px] text-white">Visszatérő</span> : null}
+                            {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb08a]/80 bg-[#ff5301] px-2.5 py-1 text-[10px] font-medium leading-none text-white shadow-[0_4px_10px_rgba(255,83,1,0.24)]">Visszatérő</span> : null}
                             {item.combined ? <span className="shrink-0 rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">Összevonva</span> : null}
                           </div>
                           <p className="mt-1 truncate text-[10px] text-white/43">{[item.phone, item.email].filter(Boolean).join(" • ") || "Nincs elérhetőség"}</p>
@@ -3126,7 +3127,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                     <td className="px-3 py-3 text-center"><p className="text-white">{integer(item.periodTransactions)} / {integer(item.periodItemsSold)} db</p></td>
                     <td className="px-3 py-3"><SellerChips sellers={item.employees} /></td>
                     <td className="px-3 py-3"><p className={item.periodTransactions > 0 ? "text-white/70" : "text-amber-50/72"}>{activityText(item, year)}</p></td>
-                    <td className={`whitespace-nowrap px-3 py-3 text-right ${item.currentOpenBalance > 0.005 ? "text-rose-50" : "text-white/45"}`}>{money(item.currentOpenBalance)}</td>
+                    <td className={`whitespace-nowrap px-3 py-3 text-right ${item.currentOpenBalance > 0.005 ? "font-medium text-[#ff6975]" : "text-white/45"}`}>{money(item.currentOpenBalance)}</td>
                     <td className="px-2 py-3 text-center"><ChevronRight size={17} className="text-white/30 transition group-hover:translate-x-0.5 group-hover:text-[#9be9e5]" /></td>
                   </tr>
                 ))}
@@ -3138,13 +3139,13 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
             {numberedCustomerRows.map(({ item, index, rowNumber }) => (
               <button key={item.key} type="button" onClick={() => setSelected(item)} className="rounded-[20px] border border-white/11 bg-[#2b3749] p-3 text-left transition active:scale-[0.99]">
                 <div className="flex items-start gap-3">
-                  <span className={`inline-flex h-9 min-w-[36px] shrink-0 items-center justify-center rounded-xl border px-2 text-sm ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/10 bg-black/10 text-white/70"}`}>{rowNumber}</span>
+                  <span className={`inline-flex h-9 min-w-[36px] shrink-0 items-center justify-center rounded-xl border px-2 text-sm ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/18 bg-[#263548] text-white/90"}`}>{rowNumber}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex min-w-0 items-center gap-2">
                           <p className="truncate text-sm text-white">{item.fullName}</p>
-                          {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb692]/42 bg-[rgba(255,83,1,0.18)] px-2 py-0.5 text-[9px] text-white">Visszatérő</span> : null}
+                          {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb08a]/80 bg-[#ff5301] px-2.5 py-1 text-[10px] font-medium leading-none text-white shadow-[0_4px_10px_rgba(255,83,1,0.24)]">Visszatérő</span> : null}
                         </div>
                         <p className="mt-1 truncate text-[10px] text-white/42">{item.phone || item.email || "Nincs elérhetőség"}</p>
                       </div>
