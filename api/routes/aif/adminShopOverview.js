@@ -1582,6 +1582,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
       summary.revenue = aifNumber(currentCombinedRow.paid_total);
       previousSummary.revenue = aifNumber(previousCombinedRow.paid_total);
 
+      // Bruttó forgalom a dashboardon ugyanazon realizált forgalmi alapon:
+      // kedvezmény nélküli eladási érték = tényleges forgalom + adott időszaki kedvezmény.
+      // Így a kártya nem keveri a sale-dátum szerinti subtotal-t a payment-dátum szerinti
+      // Forgalommal (pl. korábbi hitel későbbi rendezése esetén).
+      summary.salesBeforeDiscount = aifNumber(summary.revenue) + aifNumber(summary.discountTotal);
+      previousSummary.salesBeforeDiscount = aifNumber(previousSummary.revenue) + aifNumber(previousSummary.discountTotal);
+
       const mergeRankingRows = (saleRows, exchangeRows, nameKey, productCodeKey = null) => {
         const map = new Map();
         for (const row of saleRows || []) {
