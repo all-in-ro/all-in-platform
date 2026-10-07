@@ -59,6 +59,7 @@ const DEFAULT_SALES_TVA_SETTINGS: SalesTvaSettings = {
 
 const OPEN_RECEPTION_HANDOFF_KEY = "allinfashion:reception-open:v1";
 const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
+const RECEPTIONS_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp";
 
 async function fetchAifJsonLocal<T>(path: string, init?: RequestInit): Promise<T> {
   const requestHeaders = new Headers(init?.headers || {});
@@ -687,6 +688,201 @@ function receptionNetInvoiceValue(item: any) {
   if (gross <= 0 || rate <= 0 || mode === "no_tva") return gross;
   const factor = 1 + rate / 100;
   return factor > 0 ? gross / factor : gross;
+}
+
+function receptionSalesTotalRon(item: any) {
+  return n(item?.sales_total_ron ?? item?.salesTotalRon);
+}
+
+function receptionValueRon(value: unknown, item: any) {
+  const currency = String(item?.currency_code || "RON").toUpperCase();
+  const rate = currency === "RON" ? 1 : (n(item?.exchange_rate_to_ron) || 1);
+  return n(value) * rate;
+}
+
+function receptionStatusTextRo(value?: string | null) {
+  const status = String(value || "").toLowerCase();
+  if (status === "draft") return "Ciornă";
+  if (status === "parsed") return "Verificată";
+  if (status === "needs_review") return "Necesită verificare";
+  if (status === "review") return "În lucru";
+  if (status === "committed") return "Recepționată";
+  if (status === "ignored") return "Ignorată";
+  if (status === "cancelled") return "Anulată";
+  return value || "-";
+}
+
+type ReceptionReportFilters = {
+  search?: string;
+  supplier?: string;
+  location?: string;
+  currency?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+};
+
+function buildFilteredReceptionsReportHtml(
+  reportItems: AifReceptionSummary[],
+  filters: ReceptionReportFilters,
+) {
+  const rows = reportItems || [];
+  const totalInvoices = rows.length;
+  const totalLines = rows.reduce((sum, row) => sum + Number(row.line_count || 0), 0);
+  const totalQty = rows.reduce((sum, row) => sum + Number(row.total_qty || 0), 0);
+  const purchaseNetRon = rows.reduce((sum, row) => sum + receptionValueRon(receptionNetInvoiceValue(row), row), 0);
+  const purchaseGrossRon = rows.reduce((sum, row) => sum + receptionValueRon(row.invoice_gross, row), 0);
+  const salesGrossRon = rows.reduce((sum, row) => sum + receptionSalesTotalRon(row), 0);
+  const generatedAt = new Date().toLocaleString("ro-RO");
+  const periodLabel = filters.from || filters.to
+    ? `${filters.from || "…"} – ${filters.to || "…"}`
+    : "Toată perioada";
+
+  const filterChips = [
+    ["Perioadă", periodLabel],
+    ["Furnizor", filters.supplier || "Toți furnizorii"],
+    ["Gestiune", filters.location || "Toate gestiunile"],
+    ["Monedă", filters.currency || "Toate monedele"],
+    ["Stare", filters.status || "Toate stările"],
+    ...(filters.search ? [["Căutare", filters.search]] : []),
+  ].map(([labelText, value]) => `
+    <div class="filterBox">
+      <span>${pdfEscape(labelText)}</span>
+      <strong>${pdfEscape(value)}</strong>
+    </div>`).join("");
+
+  const tableRows = rows.map((row, index) => `
+    <tr>
+      <td class="center">${index + 1}</td>
+      <td class="invoice">${pdfEscape(cell(row.invoice_number))}</td>
+      <td>${pdfEscape(supplierDisplayName(row.supplier_name))}</td>
+      <td>${pdfEscape(cell(row.location_name))}</td>
+      <td class="center">${pdfEscape(dateText(row.reception_date))}</td>
+      <td class="center">${pdfEscape(cell(row.currency_code))}</td>
+      <td class="money">${pdfEscape(money(receptionNetInvoiceValue(row), row.currency_code))}</td>
+      <td class="money">${pdfEscape(money(row.invoice_gross, row.currency_code))}</td>
+      <td class="money sales">${pdfEscape(money(receptionSalesTotalRon(row), "RON"))}</td>
+      <td class="qty">${pdfNumber(row.total_qty || 0, 0)}</td>
+      <td class="center">${pdfEscape(receptionStatusTextRo(row.status))}</td>
+    </tr>`).join("");
+
+  return `<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <title>Raport receptii</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; color: #172033; font-family: Arial, Helvetica, sans-serif; font-size: 9px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .screen-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+    .screen-actions button { border: 1px solid #173f39; border-radius: 6px; background: #173f39; color: #fff; padding: 7px 11px; cursor: pointer; }
+    .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10mm; padding-bottom: 4mm; border-bottom: 2px solid #255f54; }
+    .company { color: #183d36; font-size: 16px; font-weight: 700; letter-spacing: .04em; }
+    .muted { color: #687582; font-size: 8px; }
+    h1 { margin: 1.5mm 0 0; font-size: 19px; letter-spacing: .035em; }
+    .generated { text-align: right; color: #687582; font-size: 8px; line-height: 1.5; }
+    .filters { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2mm; margin-top: 4mm; }
+    .filterBox { min-width: 0; border: 1px solid #d7e0de; border-radius: 2mm; background: #f6f9f8; padding: 2mm 2.3mm; }
+    .filterBox span { display: block; color: #78848e; font-size: 6.5px; text-transform: uppercase; letter-spacing: .08em; }
+    .filterBox strong { display: block; margin-top: .7mm; font-size: 8.5px; overflow-wrap: anywhere; }
+    .summary { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2mm; margin-top: 3mm; }
+    .summaryCard { border: 1px solid #cfd9d7; border-radius: 2.2mm; padding: 2.2mm; background: #fff; }
+    .summaryCard.sales { border-color: #75c9c3; background: #edfafa; }
+    .summaryCard span { display: block; color: #6b7783; font-size: 6.7px; text-transform: uppercase; letter-spacing: .07em; }
+    .summaryCard strong { display: block; margin-top: .9mm; color: #183d36; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 4mm; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    th { background: #26384b; color: #fff; padding: 2.1mm 1.3mm; border: 1px solid #26384b; font-size: 6.9px; text-transform: uppercase; letter-spacing: .035em; }
+    td { border: 1px solid #d7dfe2; padding: 1.7mm 1.3mm; font-size: 7.8px; vertical-align: middle; overflow-wrap: anywhere; }
+    tbody tr:nth-child(even) td { background: #f8fafb; }
+    th:nth-child(1), td:nth-child(1) { width: 5mm; }
+    th:nth-child(2), td:nth-child(2) { width: 28mm; }
+    th:nth-child(3), td:nth-child(3) { width: 24mm; }
+    th:nth-child(4), td:nth-child(4) { width: 22mm; }
+    th:nth-child(5), td:nth-child(5) { width: 20mm; }
+    th:nth-child(6), td:nth-child(6) { width: 14mm; }
+    th:nth-child(7), td:nth-child(7) { width: 28mm; }
+    th:nth-child(8), td:nth-child(8) { width: 28mm; }
+    th:nth-child(9), td:nth-child(9) { width: 31mm; }
+    th:nth-child(10), td:nth-child(10) { width: 12mm; }
+    th:nth-child(11), td:nth-child(11) { width: 28mm; }
+    .center { text-align: center; }
+    .money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .money.sales { color: #0f625b; font-weight: 700; }
+    .qty { text-align: center; font-weight: 700; }
+    .invoice { font-weight: 700; }
+    .footerTotals td { background: #edf4f2; border-top: 2px solid #255f54; font-weight: 700; }
+    .footerTotals .salesTotal { background: #255f54; color: #fff; }
+    .footer { display: flex; justify-content: space-between; gap: 10mm; margin-top: 4mm; padding-top: 2mm; border-top: 1px solid #d8e0de; color: #78848e; font-size: 7px; }
+    @media print { .screen-actions { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="screen-actions">
+    <button onclick="window.print()">Tipărire / Salvare PDF</button>
+    <button onclick="window.close()">Închide</button>
+  </div>
+
+  <div class="header">
+    <div>
+      <div class="company">TITAN EURO-COM SRL</div>
+      <div class="muted">AllInFashion • raport intern de recepții și achiziții</div>
+      <h1>RAPORT RECEPȚII / ACHIZIȚII</h1>
+    </div>
+    <div class="generated">
+      <div>Generat: ${pdfEscape(generatedAt)}</div>
+      <div>${totalInvoices} facturi • ${totalQty} buc.</div>
+    </div>
+  </div>
+
+  <div class="filters">${filterChips}</div>
+
+  <div class="summary">
+    <div class="summaryCard"><span>Facturi</span><strong>${pdfNumber(totalInvoices, 0)}</strong></div>
+    <div class="summaryCard"><span>Linii produse</span><strong>${pdfNumber(totalLines, 0)}</strong></div>
+    <div class="summaryCard"><span>Cantitate totală</span><strong>${pdfNumber(totalQty, 0)} buc.</strong></div>
+    <div class="summaryCard"><span>Achiziție netă</span><strong>${pdfNumber(purchaseNetRon)} RON</strong></div>
+    <div class="summaryCard"><span>Achiziție brută</span><strong>${pdfNumber(purchaseGrossRon)} RON</strong></div>
+    <div class="summaryCard sales"><span>Valoare vânzare brută</span><strong>${pdfNumber(salesGrossRon)} RON</strong></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Factura</th>
+        <th>Furnizor</th>
+        <th>Gestiune</th>
+        <th>Data</th>
+        <th>Monedă</th>
+        <th>Valoare netă</th>
+        <th>Total factură</th>
+        <th>Valoare vânzare</th>
+        <th>Buc.</th>
+        <th>Stare</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tableRows || `<tr><td colspan="11" style="padding:16px;text-align:center;">Nu există recepții pentru filtrele selectate.</td></tr>`}
+    </tbody>
+    <tfoot>
+      <tr class="footerTotals">
+        <td colspan="8">TOTAL FILTRAT</td>
+        <td class="money salesTotal">${pdfNumber(salesGrossRon)} RON</td>
+        <td class="qty">${pdfNumber(totalQty, 0)}</td>
+        <td>${pdfNumber(totalInvoices, 0)} facturi</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="footer">
+    <span>Filtrele din AllInFashion sunt aplicate direct raportului.</span>
+    <span>Valorile de achiziție din sumar sunt convertite în RON cu cursul salvat pe fiecare recepție.</span>
+  </div>
+</body>
+</html>`;
 }
 
 function receptionLookupKey(value: unknown) {
@@ -1836,14 +2032,70 @@ export default function AllInReceptions(_props: Props) {
         acc.qty += Number(r.total_qty || 0);
         acc.lines += Number(r.line_count || 0);
         acc.value += n(r.invoice_gross);
+        acc.salesValueRon += receptionSalesTotalRon(r);
         acc.deletable += r.can_delete ? 1 : 0;
         return acc;
       },
-      { count: 0, qty: 0, lines: 0, value: 0, deletable: 0 }
+      { count: 0, qty: 0, lines: 0, value: 0, salesValueRon: 0, deletable: 0 }
     );
   }, [items]);
 
   const salesTvaText = useMemo(() => salesTvaLabel(salesTvaSettings), [salesTvaSettings]);
+
+  async function exportFilteredReceptionsPdf() {
+    const reportWindow = window.open("", "_blank", "width=1260,height=860,scrollbars=yes,resizable=yes");
+    if (!reportWindow) {
+      setMessage("A böngésző blokkolta a PDF ablakot. Engedélyezd a felugró ablakokat ehhez az oldalhoz.");
+      return;
+    }
+
+    reportWindow.document.open();
+    reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Raport recepții</title></head><body style="font-family:Arial,sans-serif;padding:28px;color:#243244"><p>Raport készül…</p></body></html>`);
+    reportWindow.document.close();
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifListReceptions({ limit: 5000, search, supplier, location, currency, status, from, to });
+      const reportItems = result.items || [];
+      const supplierLabel = supplier
+        ? supplierDisplayName((meta?.suppliers || []).find((item) => item.id === supplier || item.code === supplier)?.name || supplier)
+        : "";
+      const locationLabel = location
+        ? ((meta?.locations || []).find((item) => item.id === location || item.code === location)?.name || location)
+        : "";
+      const currencyLabel = currency || "";
+      const statusLabel = status ? receptionStatusTextRo(status) : "";
+      const html = buildFilteredReceptionsReportHtml(reportItems, {
+        search: search.trim(),
+        supplier: supplierLabel,
+        location: locationLabel,
+        currency: currencyLabel,
+        status: statusLabel,
+        from,
+        to,
+      }).replace(
+        "</head>",
+        `<script>
+          document.title=${JSON.stringify(`raport_receptii_${fileSafe(supplierLabel || "toate")}_${fileSafe(from || "inceput")}_${fileSafe(to || "azi")}.pdf`)};
+          window.addEventListener('load', function () {
+            setTimeout(function () {
+              try { window.focus(); window.print(); } catch (e) {}
+            }, 450);
+          });
+        </script></head>`
+      );
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      reportWindow.location.href = url;
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e: any) {
+      try { reportWindow.close(); } catch {}
+      setMessage(e?.message || "A szűrt receptió PDF export nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function openDetail(id: string) {
     setBusy(true);
@@ -2431,6 +2683,9 @@ export default function AllInReceptions(_props: Props) {
               <p className="mt-0.5 text-[11px] leading-snug text-white/52">Számlás bevételezések, export és részletezés.</p>
             </div>
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button className={headerBtnSoft} onClick={() => void exportFilteredReceptionsPdf()} disabled={busy} type="button" title="A jelenlegi szűrés PDF exportja">
+                <img src={RECEPTIONS_PDF_ICON_URL} alt="" className="h-[17px] w-[17px] shrink-0 object-contain" /> PDF
+              </button>
               <button className={headerBtnSoft} onClick={load} disabled={busy} type="button"><RefreshCw size={15} /> Frissítés</button>
               <button className={headerBtnSoft} onClick={() => setSalesTvaModalOpen(true)} disabled={salesTvaSettingsLoading} type="button">Eladási TVA {salesTvaShort(salesTvaSettings)}</button>
               <button className={headerPrimaryBtn} onClick={() => (window.location.hash = "#allinincoming")} type="button"><FileText size={15} /> Új bevételezés</button>
@@ -2526,28 +2781,28 @@ export default function AllInReceptions(_props: Props) {
             <div className="hidden overflow-x-auto lg:block">
               <table className="w-full table-fixed text-left text-xs">
                 <colgroup>
-                  <col className="w-[11%]" />
                   <col className="w-[12%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[11%]" />
                   <col className="w-[10%]" />
                   <col className="w-[9%]" />
                   <col className="w-[6%]" />
                   <col className="w-[10%]" />
                   <col className="w-[10%]" />
+                  <col className="w-[11%]" />
                   <col className="w-[5%]" />
                   <col className="w-[9%]" />
-                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
                 </colgroup>
                 <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
-                    <th className="px-2 py-1.5 text-center">UIT kód</th>
                     <th className="px-2 py-1.5 text-center">Beszállító</th>
                     <th className="px-2 py-1.5 text-center">Cél hely</th>
                     <th className="px-2 py-1.5 text-center">Dátum</th>
                     <th className="px-2 py-1.5 text-center">Pénznem</th>
                     <th className="px-2 py-1.5 text-right">Nettó érték</th>
                     <th className="px-2 py-1.5 text-right">Végösszeg</th>
+                    <th className="px-2 py-1.5 text-right text-[#baf7f3]">Számla végösszeg</th>
                     <th className="px-2 py-1.5 text-right">Darab</th>
                     <th className="px-2 py-1.5 text-center">Állapot</th>
                     <th className="px-2 py-1.5 text-center"><span className="sr-only">Műveletek</span></th>
@@ -2557,13 +2812,13 @@ export default function AllInReceptions(_props: Props) {
                   {items.map((r) => (
                     <tr key={r.id} className="hover:bg-white/[0.04]">
                       <td className="px-2 py-2 text-white"><span className="block truncate whitespace-nowrap" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
-                      <td className="px-2 py-2 text-center font-mono text-[11px] text-[#cffffd]"><span className="block truncate whitespace-nowrap text-center" title={cell((r as any).uit_code || (r as any).uitCode)}>{cell((r as any).uit_code || (r as any).uitCode)}</span></td>
                       <td className="px-2 py-2 text-center text-white/82"><span className="block truncate whitespace-nowrap text-center" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span></td>
                       <td className="px-2 py-2 text-center text-white/82"><span className="block truncate whitespace-nowrap" title={cell(r.location_name)}>{cell(r.location_name)}</span></td>
                       <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-white/82">{dateText(r.reception_date)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-center text-white/82">{cell(r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{money(receptionNetInvoiceValue(r), r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white">{money(r.invoice_gross, r.currency_code)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium text-[#baf7f3]">{money(receptionSalesTotalRon(r), "RON")}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{r.total_qty || 0}</td>
                       <td className="px-2 py-2 text-center">
                         <span
@@ -2607,7 +2862,6 @@ export default function AllInReceptions(_props: Props) {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs text-white">{cell(r.invoice_number)}</p>
-                      {(r as any).uit_code || (r as any).uitCode ? <p className="mt-1 font-mono text-[11px] text-[#cffffd]">UIT: {String((r as any).uit_code || (r as any).uitCode)}</p> : null}
                       <p className="mt-1 text-xs text-white/62">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
                     <span className={`inline-flex items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span>
@@ -2617,6 +2871,7 @@ export default function AllInReceptions(_props: Props) {
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
+                    <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Számla végösszeg</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionSalesTotalRon(r), "RON")}</p></div>
                   </div>
                   <div className="mt-2 flex items-center justify-end gap-2">
                     <button
