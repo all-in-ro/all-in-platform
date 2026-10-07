@@ -24850,6 +24850,70 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }));
   }
 
+  function aifImportedOriginalProductTitle(normalized = {}, raw = {}) {
+    const n = normalized && typeof normalized === "object" && !Array.isArray(normalized) ? normalized : {};
+    const r = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    return emptyToNull(
+      n.titleRo || n.title_ro || n.productName || n.product_name ||
+      rawValueByHeaders(r, [
+        "ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS",
+        "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV"
+      ])
+    );
+  }
+
+  async function aifLatestVariantImportedTitles(client, variantIds = []) {
+    const ids = Array.from(new Set((variantIds || []).map((value) => text(value)).filter(Boolean))).slice(0, 500);
+    if (!ids.length) return new Map();
+
+    const result = await client.query(
+      `WITH title_sources AS (
+         SELECT
+           rw.variant_id::text AS variant_id,
+           COALESCE(rw.normalized, '{}'::jsonb) AS normalized,
+           COALESCE(rw.raw, '{}'::jsonb) AS raw,
+           COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at, rw.created_at) AS source_at,
+           0 AS source_rank
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         WHERE rw.variant_id IS NOT NULL
+           AND rw.variant_id::text = ANY($1::text[])
+           AND rw.status='committed'
+
+         UNION ALL
+
+         SELECT
+           sm.variant_id::text AS variant_id,
+           '{}'::jsonb AS normalized,
+           CASE
+             WHEN jsonb_typeof(COALESCE(sm.raw, '{}'::jsonb)->'raw')='object'
+               THEN COALESCE(sm.raw, '{}'::jsonb)->'raw'
+             ELSE '{}'::jsonb
+           END AS raw,
+           sm.created_at AS source_at,
+           1 AS source_rank
+         FROM aif_stock_movements sm
+         WHERE sm.variant_id IS NOT NULL
+           AND sm.variant_id::text = ANY($1::text[])
+           AND sm.source_type='import_batch'
+           AND COALESCE(sm.qty_delta,0) > 0
+       )
+       SELECT variant_id, normalized, raw, source_at, source_rank
+       FROM title_sources
+       ORDER BY variant_id ASC, source_at DESC NULLS LAST, source_rank ASC`,
+      [ids]
+    );
+
+    const titles = new Map();
+    for (const row of result.rows || []) {
+      const variantId = text(row.variant_id);
+      if (!variantId || titles.has(variantId)) continue;
+      const title = aifImportedOriginalProductTitle(row.normalized || {}, row.raw || {});
+      if (title) titles.set(variantId, title);
+    }
+    return titles;
+  }
+
   router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
@@ -24886,6 +24950,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(v.color_name,'') ILIKE ${pattern}
           OR COALESCE(v.color_code,'') ILIKE ${pattern}
           OR COALESCE(v.size,'') ILIKE ${pattern}
+          OR EXISTS (
+            SELECT 1
+            FROM aif_import_rows title_rw
+            WHERE title_rw.variant_id=v.id
+              AND title_rw.status='committed'
+              AND (
+                COALESCE(title_rw.normalized->>'titleRo','') ILIKE ${pattern}
+                OR COALESCE(title_rw.normalized->>'title_ro','') ILIKE ${pattern}
+                OR COALESCE(title_rw.normalized->>'productName','') ILIKE ${pattern}
+                OR COALESCE(title_rw.normalized->>'product_name','') ILIKE ${pattern}
+              )
+          )
         )`);
         orderPrefix = `CASE
           WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
@@ -24983,6 +25059,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             return String(a.title || "").localeCompare(String(b.title || ""), "hu");
           })
           .slice(0, limit);
+      }
+
+      // Az üzleti felületeken a konkrét, legutóbbi bevételezés eredeti terméknevét mutatjuk.
+      // Így egy közös modellnév (pl. FASHION / BEAUTIFUL) nem írja felül a számlán szereplő
+      // valódi nevet (pl. VIRAG / AMBER / ZEBRA). Az importelőzmény törlése után a készletmozgás
+      // raw pillanatképe marad biztonsági tartalék.
+      const importedTitles = await aifLatestVariantImportedTitles(pool, items.map((item) => item.variantId));
+      if (importedTitles.size) {
+        items = items.map((item) => ({
+          ...item,
+          title: importedTitles.get(String(item.variantId)) || item.title,
+        }));
       }
 
       res.json({
@@ -28381,6 +28469,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FOR UPDATE OF s`,
         [location.id, variantIds]
       );
+      // Az eladási bizonylat pillanatképe is ugyanazt a konkrét bevételezési nevet kapja,
+      // amit az eladó a katalógusban lát. Így később az admin történetben sem FASHION/BEAUTIFUL
+      // jelenik meg egy VIRAG/AMBER termék helyett.
+      const saleImportedTitles = await aifLatestVariantImportedTitles(client, variantIds);
+      for (const row of stockResult.rows || []) {
+        const preferredTitle = saleImportedTitles.get(String(row.variant_id));
+        if (preferredTitle) row.title = preferredTitle;
+      }
       const stockByVariant = new Map(stockResult.rows.map((row) => [String(row.variant_id), row]));
       if (stockByVariant.size !== preparedInput.length) {
         const missing = preparedInput.find((item) => !stockByVariant.has(item.variantId));
