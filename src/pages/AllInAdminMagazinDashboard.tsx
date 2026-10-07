@@ -1155,6 +1155,50 @@ function MetricCard({
   return <article className={baseClass}>{content}</article>;
 }
 
+function SalesVolumeCard({
+  transactions,
+  itemsSold,
+  previousTransactions,
+  previousItemsSold,
+}: {
+  transactions: number;
+  itemsSold: number;
+  previousTransactions: number;
+  previousItemsSold: number;
+}) {
+  return (
+    <article className="relative min-w-0 overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
+      <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
+      <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
+      <div className="relative flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">Eladások / termék</p>
+          <p className="mt-1 text-[10px] text-white/42">Lezárt valódi eladás • hitel nélkül</p>
+        </div>
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+          <ShoppingBag size={17} />
+        </span>
+      </div>
+      <div className="relative mt-3 grid grid-cols-2 gap-2">
+        <div className="rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5">
+          <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ReceiptText size={11} className="text-[#8ee6e2]" />Eladások</div>
+          <div className="mt-1.5 flex items-end justify-between gap-2">
+            <span className="text-[1.18rem] leading-none text-white">{integer(transactions)}</span>
+            <DeltaBadge current={transactions} previous={previousTransactions} />
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5">
+          <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ShoppingBag size={11} className="text-[#8ee6e2]" />Eladott termék</div>
+          <div className="mt-1.5 flex items-end justify-between gap-2">
+            <span className="whitespace-nowrap text-[1.18rem] leading-none text-white">{integer(itemsSold)} db</span>
+            <DeltaBadge current={itemsSold} previous={previousItemsSold} />
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function RevenueChart({ data }: { data: AifAdminShopOverviewResponse["trend"] }) {
   const width = 840;
   const height = 290;
@@ -1281,10 +1325,19 @@ function RankingBars({
   );
 }
 
-function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments"] }) {
+function PaymentDonut({
+  items,
+  summary,
+}: {
+  items: AifAdminShopOverviewResponse["payments"];
+  summary?: AifAdminShopOverviewResponse["summary"];
+}) {
   const colors = ["#36d8ca", "#67aaf9", "#f4b24c", "#f06478", "#aa8df3", "#9ca9b9"];
   const total = items.reduce((sum, item) => sum + numberValue(item.amount), 0);
   const totalMagnitude = items.reduce((sum, item) => sum + Math.abs(numberValue(item.amount)), 0);
+  const grossValue = numberValue(summary?.salesBeforeDiscount);
+  const discountValue = numberValue(summary?.discountTotal);
+  const discountRate = grossValue > 0 ? discountValue / grossValue * 100 : 0;
   let cursor = 0;
   const parts = items.map((item, index) => {
     const share = totalMagnitude > 0 ? Math.abs(numberValue(item.amount)) / totalMagnitude * 100 : 0;
@@ -1299,44 +1352,74 @@ function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments
   const totalText = money(total);
 
   return (
-    <section className={`${card} p-4`}>
+    <section className={`${card} overflow-hidden p-4`}>
       <div>
         <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Pénzmozgás</p>
         <h3 className="mt-1 text-base text-white">Fizetési megoszlás</h3>
       </div>
-      <div className="mt-4 grid gap-5 sm:grid-cols-[176px_1fr] sm:items-center">
-        <div className="relative mx-auto grid h-40 w-40 place-items-center">
-          <div
-            className="absolute inset-0 rounded-full shadow-[0_16px_34px_rgba(7,14,26,0.24),inset_0_0_0_1px_rgba(255,255,255,0.05)]"
-            style={{ background }}
-          />
-          <div className="absolute inset-[13px] rounded-full border border-white/10 bg-[#344154] shadow-[inset_0_10px_24px_rgba(9,18,30,0.16)]" />
-          <div className="absolute inset-[18px] rounded-full border border-white/[0.045]" />
-          <div className="relative z-10 flex max-w-[124px] flex-col items-center justify-center text-center">
-            <p className="text-[9px] uppercase tracking-[0.16em] text-white/44">Fizetve</p>
-            <p
-              className="mt-1.5 max-w-full whitespace-nowrap text-[clamp(0.72rem,1.05vw,0.92rem)] font-medium leading-none tracking-[-0.025em] text-white"
-              title={totalText}
-            >
-              {totalText}
-            </p>
-            <span className="mt-2 h-px w-8 bg-gradient-to-r from-transparent via-[#8ce7e2]/50 to-transparent" />
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="relative overflow-hidden rounded-2xl border border-[#8ce7e2]/20 bg-gradient-to-br from-[#244f59] via-[#2b5962] to-[#2c3d50] px-3 py-3">
+          <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-[#bff8f5]/52 to-transparent" />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[8px] uppercase tracking-[0.12em] text-[#d7fffd]/55">Bruttó érték</p>
+            <CircleDollarSign size={14} className="text-[#8ee6e2]" />
+          </div>
+          <p className="mt-2 whitespace-nowrap text-[clamp(0.98rem,1.25vw,1.22rem)] font-medium tracking-tight text-white">{money(grossValue)}</p>
+          <p className="mt-1 text-[9px] text-white/38">Kedvezmény előtti érték</p>
+        </div>
+
+        <div className="relative overflow-hidden rounded-2xl border border-[#ffc39f]/22 bg-gradient-to-br from-[#51392f] via-[#4a3b3e] to-[#303b4d] px-3 py-3">
+          <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-[#ffd9c1]/48 to-transparent" />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[8px] uppercase tracking-[0.12em] text-white/52">Kedvezmény</p>
+            <Percent size={14} className="text-[#ffc39f]" />
+          </div>
+          <div className="mt-2 flex items-end justify-between gap-2">
+            <p className="text-[clamp(1.05rem,1.3vw,1.3rem)] font-medium leading-none text-white">{discountRate.toFixed(1)}%</p>
+            <p className="whitespace-nowrap text-[11px] text-[#ffd9c1]">{money(discountValue)}</p>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/18">
+            <div className="h-full rounded-full bg-[#ff8a4c]" style={{ width: `${Math.min(100, Math.max(0, discountRate))}%` }} />
           </div>
         </div>
-        <div className="space-y-2">
-          {items.slice(0, 6).map((item, index) => (
-            <div key={item.method} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2">
-              <span className="flex min-w-0 items-center gap-2 text-xs text-white/70">
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_10px_rgba(255,255,255,0.05)]"
-                  style={{ backgroundColor: colors[index % colors.length] }}
-                />
-                <span className="truncate">{item.label}</span>
-              </span>
-              <span className="whitespace-nowrap text-xs text-white">{money(item.amount)}</span>
+      </div>
+
+      <div className="mt-5 border-t border-white/8 pt-5">
+        <div className="grid gap-5 sm:grid-cols-[176px_1fr] sm:items-center">
+          <div className="relative mx-auto grid h-40 w-40 place-items-center">
+            <div
+              className="absolute inset-0 rounded-full shadow-[0_16px_34px_rgba(7,14,26,0.24),inset_0_0_0_1px_rgba(255,255,255,0.05)]"
+              style={{ background }}
+            />
+            <div className="absolute inset-[13px] rounded-full border border-white/10 bg-[#344154] shadow-[inset_0_10px_24px_rgba(9,18,30,0.16)]" />
+            <div className="absolute inset-[18px] rounded-full border border-white/[0.045]" />
+            <div className="relative z-10 flex max-w-[124px] flex-col items-center justify-center text-center">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/44">Fizetve</p>
+              <p
+                className="mt-1.5 max-w-full whitespace-nowrap text-[clamp(0.72rem,1.05vw,0.92rem)] font-medium leading-none tracking-[-0.025em] text-white"
+                title={totalText}
+              >
+                {totalText}
+              </p>
+              <span className="mt-2 h-px w-8 bg-gradient-to-r from-transparent via-[#8ce7e2]/50 to-transparent" />
             </div>
-          ))}
-          {!items.length ? <p className="py-4 text-center text-xs text-white/42">Nincs rögzített fizetés.</p> : null}
+          </div>
+          <div className="space-y-2">
+            {items.slice(0, 6).map((item, index) => (
+              <div key={item.method} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2">
+                <span className="flex min-w-0 items-center gap-2 text-xs text-white/70">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_10px_rgba(255,255,255,0.05)]"
+                    style={{ backgroundColor: colors[index % colors.length] }}
+                  />
+                  <span className="truncate">{item.label}</span>
+                </span>
+                <span className="whitespace-nowrap text-xs text-white">{money(item.amount)}</span>
+              </div>
+            ))}
+            {!items.length ? <p className="py-4 text-center text-xs text-white/42">Nincs rögzített fizetés.</p> : null}
+          </div>
         </div>
       </div>
     </section>
@@ -1689,6 +1772,7 @@ export default function AllInAdminMagazinDashboard({
   const previousDiscountPercent = numberValue(previous?.salesBeforeDiscount) > 0
     ? numberValue(previous?.discountTotal) / numberValue(previous?.salesBeforeDiscount) * 100
     : 0;
+  const creditFilterActive = applied.paymentStatus === "credit" && applied.saleType === "credit";
   const marginCostMissingQty = numberValue((summary as any)?.costMissingQty);
   const marginCostFallbackQty = numberValue((summary as any)?.costFallbackQty);
   const marginHint = marginCostMissingQty > 0
@@ -2042,20 +2126,19 @@ export default function AllInAdminMagazinDashboard({
             tone="success"
           />
           <MetricCard
-            title="Eladások"
-            value={integer(summary?.transactions)}
-            hint="Lezárt valódi eladás • hitel nélkül"
-            icon={ReceiptText}
-            current={numberValue(summary?.transactions)}
-            previous={numberValue(previous?.transactions)}
+            title="Bruttó forgalom"
+            value={money(summary?.salesBeforeDiscount)}
+            hint="TVA-val, kedvezmény előtt • hitel nélkül"
+            icon={CircleDollarSign}
+            current={numberValue(summary?.salesBeforeDiscount)}
+            previous={numberValue(previous?.salesBeforeDiscount)}
+            tone="accent"
           />
-          <MetricCard
-            title="Eladott termék"
-            value={`${integer(summary?.itemsSold)} db`}
-            hint="Valóban eladott darab • hitel nélkül"
-            icon={ShoppingBag}
-            current={numberValue(summary?.itemsSold)}
-            previous={numberValue(previous?.itemsSold)}
+          <SalesVolumeCard
+            transactions={numberValue(summary?.transactions)}
+            itemsSold={numberValue(summary?.itemsSold)}
+            previousTransactions={numberValue(previous?.transactions)}
+            previousItemsSold={numberValue(previous?.itemsSold)}
           />
           <MetricCard
             title="Kedvezmény"
@@ -2071,13 +2154,15 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Kintlévőség"
             value={money(summary?.unpaidTotal)}
-            hint={`${integer(summary?.unpaidSales)} nyitott fizetés • kattints a hiteles sorokhoz`}
+            hint={creditFilterActive ? "Hitelszűrő aktív • kattints a kikapcsoláshoz" : `${integer(summary?.unpaidSales)} nyitott fizetés • kattints a hiteles sorokhoz`}
             icon={WalletCards}
             current={numberValue(summary?.unpaidTotal)}
             previous={numberValue(previous?.unpaidTotal)}
             tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"}
-            onClick={() => applyInstantFilter({ paymentStatus: "credit", saleType: "credit" })}
-            actionLabel={applied.paymentStatus === "credit" && applied.saleType === "credit" ? "Hitel szűrő aktív" : "Hitel szűrés"}
+            onClick={() => applyInstantFilter(creditFilterActive
+              ? { paymentStatus: "", saleType: "" }
+              : { paymentStatus: "credit", saleType: "credit" })}
+            actionLabel={creditFilterActive ? "Szűrő ki" : "Hitel szűrés"}
           />
           <MetricCard
             title="Becsült árrés"
@@ -2108,7 +2193,7 @@ export default function AllInAdminMagazinDashboard({
                 ["Készlet", `${integer(stock?.totalQty)} db`, Boxes],
                 ["Elérhető", `${integer(stock?.availableQty)} db`, PackageCheck],
                 ["Foglalt", `${integer(stock?.reservedQty)} db`, Clock3],
-                ["Eladási érték", money(stock?.retailValue), CircleDollarSign],
+                ["Készlet eladási értéke", money(stock?.retailValue), CircleDollarSign],
                 ["Alacsony készlet", integer(stock?.lowStockVariants), AlertTriangle],
               ].map(([title, value, Icon]) => (
                 <div key={String(title)} className="rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
@@ -2163,7 +2248,7 @@ export default function AllInAdminMagazinDashboard({
             <RevenueChart data={data?.trend || []} />
           </div>
 
-          <PaymentDonut items={data?.payments || []} />
+          <PaymentDonut items={data?.payments || []} summary={summary} />
         </section>
 
         <section className="grid gap-3 xl:grid-cols-3">
