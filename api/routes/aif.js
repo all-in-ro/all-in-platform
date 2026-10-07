@@ -7203,7 +7203,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const result = await client.query(
       `SELECT
-         v.id, v.model_id, v.barcode, v.size, v.color_code, v.color_name, v.status, v.attributes,
+         v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name, v.status, v.attributes,
          m.model_code, m.title_ro AS model_title_ro, m.status AS model_status, m.brand_id,
          b.code AS brand_code, b.name AS brand_name,
          current_sc.supplier_product_code AS previous_supplier_product_code
@@ -7253,10 +7253,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const incomingColorName = normCode(colorName || "");
     const ownerColorCode = normCode(owner.color_code || "");
     const incomingColorCode = normCode(colorCode || "");
+    const ownerColorParts = new Set(ownerColorName.split(/_+/).filter(Boolean));
+    const incomingColorParts = incomingColorName.split(/_+/).filter(Boolean);
+    const incomingNameContainedInOwner = Boolean(
+      incomingColorParts.length && incomingColorParts.every((part) => ownerColorParts.has(part))
+    );
+    const ownerSkuParts = new Set(normCode(owner.internal_sku || "").split(/_+/).filter(Boolean));
+    const incomingCodeRecordedInLegacySku = Boolean(incomingColorCode && ownerSkuParts.has(incomingColorCode));
     const colorMatches =
       Boolean(ownerColorName && incomingColorName && ownerColorName === incomingColorName) ||
-      Boolean(ownerColorCode && incomingColorCode && ownerColorCode === incomingColorCode);
-    if (!colorMatches) return null;
+      Boolean(ownerColorCode && incomingColorCode && ownerColorCode === incomingColorCode) ||
+      incomingNameContainedInOwner ||
+      incomingCodeRecordedInLegacySku;
+
+    // Az egzakt vonalkód + azonos márka + azonos fizikai méret a legerősebb azonosság.
+    // Ha csak a színadat változott, kizárólag a felhasználó explicit választása után
+    // engedjük a régi variánst tovább használni.
+    const barcodeColorResolution = normCode(
+      normalized?.barcodeColorResolution || normalized?.barcode_color_resolution || ""
+    );
+    const barcodeColorResolutionVariantId = text(
+      normalized?.barcodeColorResolutionVariantId || normalized?.barcode_color_resolution_variant_id || ""
+    );
+    const barcodeColorResolutionBarcode = text(
+      normalized?.barcodeColorResolutionBarcode || normalized?.barcode_color_resolution_barcode || ""
+    );
+    const explicitColorResolutionMatchesOwner =
+      ["keep_existing", "use_incoming"].includes(barcodeColorResolution) &&
+      barcodeColorResolutionVariantId === String(owner.id) &&
+      (!barcodeColorResolutionBarcode || barcodeColorResolutionBarcode.toLowerCase() === String(barcode || "").toLowerCase());
+
+    if (!colorMatches && !explicitColorResolutionMatchesOwner) return null;
 
     const brandKey = normCode(normalized?.brandCode || normalized?.brandName || supplierCode || "aif");
     const baseModelCode = normalized?.modelCode || normalized?.supplierProductCode || normalized?.titleRo;
@@ -7413,6 +7440,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         JSON.stringify(attributesToMerge),
       ]
     );
+
+    // Ha az egyeztetésnél az új színt választották, a meglévő fizikai variáns
+    // kanonikus színadata is frissül. A keep_existing választás érintetlenül hagyja.
+    const legacyBarcodeColorResolution = normCode(
+      normalized?.barcodeColorResolution || normalized?.barcode_color_resolution || ""
+    );
+    if (legacyBarcodeColorResolution === "use_incoming") {
+      await client.query(
+        `UPDATE aif_product_variants
+         SET color_code=COALESCE(NULLIF($2,''), color_code),
+             color_name=COALESCE(NULLIF($3,''), color_name),
+             color_hex=COALESCE($4, color_hex),
+             updated_at=now()
+         WHERE id=$1`,
+        [
+          owner.id,
+          text(normalized?.colorCode || normalized?.supplierColorCode || ""),
+          text(normalized?.colorName || ""),
+          emptyToNull(normalized?.colorHex),
+        ]
+      );
+    }
 
     // If a one-variant legacy model became empty, archive it instead of leaving another zombie
     // in the model table. Shared old buckets (e.g. fundango:ah) remain active while variants use them.
@@ -7924,8 +7973,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const incomingModel = normCode(normalized.modelCode || normalized.model_code || normalized.supplierProductCode || row.supplier_product_code || '');
     const ownerModelRaw = text(owner?.model_code || '');
     const ownerModel = normCode(ownerModelRaw.includes(':') ? ownerModelRaw.split(':').slice(1).join(':') : ownerModelRaw);
-    const sameSize = owner && sameAifVariantSize(owner.size, incomingSize);
-    const sameModel = owner && (!incomingModel || !ownerModel || incomingModel === ownerModel);
+    const sameSize = Boolean(owner && sameAifVariantSize(owner.size, incomingSize));
+    const sameModel = Boolean(owner && (!incomingModel || !ownerModel || incomingModel === ownerModel));
+    const incomingBrandKeys = new Set([
+      normCode(normalized.brandCode || normalized.brand_code || ''),
+      normCode(normalized.brandName || normalized.brand_name || ''),
+    ].filter(Boolean));
+    const ownerBrandKeys = new Set([
+      normCode(owner?.brand_code || ''),
+      normCode(owner?.brand_name || ''),
+    ].filter(Boolean));
+    const sameBrand = Boolean(owner && [...incomingBrandKeys].some((key) => ownerBrandKeys.has(key)));
     const existingColorCode = text(owner?.color_code || '');
     const existingColorName = text(owner?.color_name || '');
     const incomingColorCode = text(normalized.colorCode || normalized.supplierColorCode || row.supplier_color_code || '');
@@ -7938,9 +7996,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       row,
       barcode,
       owner,
-      canResolve: Boolean(owner && sameSize && sameModel && colorDiffers),
+      canResolve: Boolean(owner && sameSize && (sameModel || sameBrand) && colorDiffers),
       sameSize,
       sameModel,
+      sameBrand,
       colorDiffers,
       incoming: {
         colorCode: incomingColorCode || null,
