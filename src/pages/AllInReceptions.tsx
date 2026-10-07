@@ -3088,15 +3088,6 @@ export default function AllInReceptions(_props: Props) {
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-[11px] uppercase tracking-[0.13em] text-[#d9fffd]/78">Terméksorok</p>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
-                      <button
-                        type="button"
-                        onClick={() => setRowNumberDescending((current) => !current)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
-                        title={rowNumberDescending ? `Kattintás: 1 → ${visibleRows.length} számozás` : `Kattintás: ${visibleRows.length} → 1 számozás`}
-                        aria-label="Terméksorok számozási irányának megfordítása"
-                      >
-                        {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
-                      </button>
                       {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
                     <p className="mt-1 text-[14px] text-white/90">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
