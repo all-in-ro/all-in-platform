@@ -592,6 +592,122 @@ export default function createAifAdminShopOverviewRouter(deps) {
         };
       };
 
+      const buildStockSnapshotQuery = (snapshotDate) => {
+        const args = [location.id, snapshotDate];
+        const where = ["1=1"];
+        const push = (value) => {
+          args.push(value);
+          return `$${args.length}`;
+        };
+
+        if (brand) {
+          const p = push(brand);
+          where.push(`lower(COALESCE(b.name,''))=lower(${p})`);
+        }
+        if (category) {
+          const p = push(category);
+          where.push(`lower(COALESCE(
+            NULLIF(subc.name_hu,''),
+            NULLIF(subc.name_ro,''),
+            'Nincs alkategória'
+          ))=lower(${p})`);
+        }
+        if (snCod) {
+          const p = push(`%${snCod}%`);
+          where.push(`COALESCE(v.sn_cod,'') ILIKE ${p}`);
+        }
+        if (search) {
+          const p = push(`%${search}%`);
+          where.push(`(
+            COALESCE(m.title_hu,'') ILIKE ${p}
+            OR COALESCE(m.title_ro,'') ILIKE ${p}
+            OR COALESCE(m.shopify_title,'') ILIKE ${p}
+            OR COALESCE(m.model_code,'') ILIKE ${p}
+            OR COALESCE(v.internal_sku,'') ILIKE ${p}
+            OR COALESCE(v.barcode,'') ILIKE ${p}
+            OR COALESCE(v.sn_cod,'') ILIKE ${p}
+            OR COALESCE(v.color_name,'') ILIKE ${p}
+            OR COALESCE(v.color_code,'') ILIKE ${p}
+            OR COALESCE(v.size,'') ILIKE ${p}
+          )`);
+        }
+
+        return {
+          sql: `
+            WITH candidate_variants AS (
+              SELECT s.variant_id
+              FROM aif_stock s
+              WHERE s.location_id=$1
+
+              UNION
+
+              SELECT sm.variant_id
+              FROM aif_stock_movements sm
+              WHERE sm.location_id=$1
+                AND (sm.created_at AT TIME ZONE 'Europe/Bucharest')::date > $2::date
+            ),
+            future_movements AS (
+              SELECT
+                sm.variant_id,
+                COALESCE(sum(sm.qty_delta),0)::numeric AS qty_delta_after
+              FROM aif_stock_movements sm
+              WHERE sm.location_id=$1
+                AND (sm.created_at AT TIME ZONE 'Europe/Bucharest')::date > $2::date
+              GROUP BY sm.variant_id
+            ),
+            snapshot_rows AS (
+              SELECT
+                cv.variant_id,
+                GREATEST(
+                  COALESCE(s.qty,0)::numeric - COALESCE(fm.qty_delta_after,0)::numeric,
+                  0
+                )::numeric AS snapshot_qty,
+                CASE
+                  WHEN $2::date >= ((now() AT TIME ZONE 'Europe/Bucharest')::date)
+                  THEN LEAST(
+                    GREATEST(COALESCE(s.reserved_qty,0)::numeric,0),
+                    GREATEST(COALESCE(s.qty,0)::numeric - COALESCE(fm.qty_delta_after,0)::numeric,0)
+                  )
+                  ELSE 0::numeric
+                END AS snapshot_reserved_qty,
+                COALESCE(v.sell_price,0)::numeric AS sell_price
+              FROM candidate_variants cv
+              LEFT JOIN aif_stock s
+                ON s.location_id=$1
+               AND s.variant_id=cv.variant_id
+              LEFT JOIN future_movements fm ON fm.variant_id=cv.variant_id
+              JOIN aif_product_variants v ON v.id=cv.variant_id
+              JOIN aif_product_models m ON m.id=v.model_id
+              LEFT JOIN aif_brands b ON b.id=m.brand_id
+              LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+              WHERE ${where.join(" AND ")}
+            )
+            SELECT
+              count(*) FILTER (WHERE snapshot_qty > 0)::int AS variant_count,
+              COALESCE(sum(snapshot_qty),0)::numeric AS total_qty,
+              COALESCE(sum(snapshot_reserved_qty),0)::numeric AS reserved_qty,
+              COALESCE(sum(GREATEST(snapshot_qty - snapshot_reserved_qty,0)),0)::numeric AS available_qty,
+              COALESCE(sum(
+                GREATEST(snapshot_qty - snapshot_reserved_qty,0) * sell_price
+              ),0)::numeric AS retail_value,
+              count(*) FILTER (
+                WHERE GREATEST(snapshot_qty - snapshot_reserved_qty,0) > 0
+                  AND GREATEST(snapshot_qty - snapshot_reserved_qty,0) <= 2
+              )::int AS low_stock_variants
+            FROM snapshot_rows
+          `,
+          args,
+        };
+      };
+
+      // A készletkártyák a kiválasztott időszak ZÁRÓ napjára állnak vissza.
+      // Így a múltbeli dátumszűrésnél az eladási készletérték is ténylegesen változik.
+      // A múltbeli foglalási állapot nem rekonstruálható biztosan a jelenlegi sémából,
+      // ezért múltbeli snapshotnál a foglalt mennyiséget 0-nak vesszük; mai/jövőbeli
+      // nézetnél a jelenlegi reserved_qty marad érvényben.
+      const stockSnapshotDate = to > today ? today : to;
+      const stockSnapshotQuery = buildStockSnapshotQuery(stockSnapshotDate);
+
       const currentFilters = buildFilters(from, to);
       const previousFilters = buildFilters(previousFrom, previousTo);
       const currentPaymentFilters = buildPaymentFilters(from, to);
@@ -769,19 +885,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         exchangeBrandsOptionResult,
         exchangeCategoriesOptionResult,
       ] = await Promise.all([
-        pool.query(
-          `SELECT
-             count(*) FILTER (WHERE s.qty > 0)::int AS variant_count,
-             COALESCE(sum(s.qty),0)::numeric AS total_qty,
-             COALESCE(sum(s.reserved_qty),0)::numeric AS reserved_qty,
-             COALESCE(sum(s.qty - s.reserved_qty),0)::numeric AS available_qty,
-             COALESCE(sum((s.qty - s.reserved_qty) * COALESCE(v.sell_price,0)),0)::numeric AS retail_value,
-             count(*) FILTER (WHERE (s.qty - s.reserved_qty) > 0 AND (s.qty - s.reserved_qty) <= 2)::int AS low_stock_variants
-           FROM aif_stock s
-           JOIN aif_product_variants v ON v.id=s.variant_id
-           WHERE s.location_id=$1`,
-          [location.id]
-        ),
+        pool.query(stockSnapshotQuery.sql, stockSnapshotQuery.args),
         pool.query(
           `SELECT
              count(*)::int AS movement_count,
@@ -1676,6 +1780,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         summary,
         previousSummary,
         stockSnapshot: {
+          asOfDate: stockSnapshotDate,
           variantCount: aifNumber(stockResult.rows[0]?.variant_count),
           totalQty: aifNumber(stockResult.rows[0]?.total_qty),
           reservedQty: aifNumber(stockResult.rows[0]?.reserved_qty),
