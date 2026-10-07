@@ -203,6 +203,9 @@ export type AifReceptionSummary = {
   invoice_net?: string | number | null;
   invoice_vat?: string | number | null;
   invoice_gross?: string | number | null;
+  /** A receptió terméksorainak bruttó eladási értéke RON-ban (eladási ár × db). */
+  sales_total_ron?: string | number | null;
+  salesTotalRon?: string | number | null;
   shipping_cost?: string | number | null;
   raw_meta?: Record<string, unknown> | null;
   total_qty?: number | null;
