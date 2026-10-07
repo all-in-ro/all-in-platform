@@ -1773,6 +1773,7 @@ export default function AllInAdminMagazinDashboard({
     ? numberValue(previous?.discountTotal) / numberValue(previous?.salesBeforeDiscount) * 100
     : 0;
   const creditFilterActive = applied.paymentStatus === "credit" && applied.saleType === "credit";
+  const stockSnapshotHistorical = applied.to < localIsoDate(new Date());
   const marginCostMissingQty = numberValue((summary as any)?.costMissingQty);
   const marginCostFallbackQty = numberValue((summary as any)?.costFallbackQty);
   const marginHint = marginCostMissingQty > 0
@@ -2181,11 +2182,15 @@ export default function AllInAdminMagazinDashboard({
           <div className={`${card} p-4`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Élő készletpillanat</p>
-                <h2 className="mt-1 text-base">Az üzlet jelenlegi állapota</h2>
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">
+                  {stockSnapshotHistorical ? "Visszaszámolt készletpillanat" : "Élő készletpillanat"}
+                </p>
+                <h2 className="mt-1 text-base">
+                  {stockSnapshotHistorical ? `Az üzlet készlete ${huDateLabel(applied.to)} zárásakor` : "Az üzlet jelenlegi állapota"}
+                </h2>
               </div>
               <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-3 py-1 text-[10px] text-[#cffffd]/70">
-                {data?.location.name || locationName}
+                {data?.location.name || locationName}{stockSnapshotHistorical ? ` • ${huDateLabel(applied.to)}` : ""}
               </span>
             </div>
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
