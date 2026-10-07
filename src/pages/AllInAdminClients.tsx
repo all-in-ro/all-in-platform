@@ -13,7 +13,9 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   Edit3,
   FileCheck2,
@@ -485,8 +487,10 @@ function activityText(item: AifAdminCustomerOverviewItem, year: number) {
 
 function storeTone(code?: string | null) {
   return code === "main_warehouse"
-    ? "border-[#78ded9]/35 bg-[#2a8d8b]/18 text-[#d7fffd]"
-    : "border-sky-200/28 bg-sky-400/12 text-sky-50";
+    ? "border-[#9be9e5]/40 bg-[#2a8d8b]/22 text-[#d7fffd]"
+    : code === "magazin_targu_secuiesc"
+      ? "border-[#b6ebf4]/42 bg-[rgba(104,200,221,0.18)] text-[#eefcff]"
+      : "border-white/18 bg-white/[0.05] text-white/78";
 }
 
 function StoreBadge({ code, name }: { code?: string | null; name?: string | null }) {
@@ -525,9 +529,9 @@ function SummaryCard({
     : tone === "blue"
       ? "border-sky-200/25 bg-gradient-to-br from-[#315c76] to-[#344154]"
       : tone === "red"
-        ? "border-rose-200/28 bg-gradient-to-br from-[#66404c] to-[#344154]"
+        ? "border-rose-200/34 bg-gradient-to-br from-[#6d1f2c] via-[#a12231] to-[#344154]"
         : tone === "gold"
-          ? "border-amber-200/26 bg-gradient-to-br from-[#65593d] to-[#344154]"
+          ? "border-[#ff9b70]/34 bg-gradient-to-br from-[#8b2c08] via-[#ff5301] to-[#344154]"
           : "border-white/16 bg-gradient-to-br from-[#3d4b5f] to-[#344154]";
   const interactiveClass = onClick
     ? "cursor-pointer text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/55 hover:shadow-[0_16px_34px_rgba(15,23,42,0.28)] focus:outline-none focus:ring-2 focus:ring-[#9be9e5]/45 active:translate-y-0"
@@ -2693,6 +2697,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [summaryQuickFilter, setSummaryQuickFilter] = useState<SummaryQuickFilter>("");
+  const [rowNumberDescending, setRowNumberDescending] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2733,6 +2738,14 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
 
   const summary = data?.summary;
   const customerRows = data?.customers || [];
+  const numberedCustomerRows = useMemo(
+    () => customerRows.map((item, index) => ({
+      item,
+      index,
+      rowNumber: rowNumberDescending ? customerRows.length - index : index + 1,
+    })),
+    [customerRows, rowNumberDescending],
+  );
   const topRevenue = Math.max(1, ...customerRows.map((item) => item.periodRevenue));
 
   function selectEmployee(value: string) {
@@ -3047,35 +3060,54 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
           </div>
 
           <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full min-w-[1120px] border-collapse text-xs">
+            <table className="w-full min-w-[1180px] border-collapse text-xs">
+              <colgroup>
+                <col className="w-[58px]" />
+                <col className="w-[320px]" />
+                <col className="w-[170px]" />
+                <col className="w-[150px]" />
+                <col className="w-[120px]" />
+                <col className="w-[290px]" />
+                <col className="w-[190px]" />
+                <col className="w-[130px]" />
+                <col className="w-[48px]" />
+              </colgroup>
               <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/43">
                 <tr>
-                  {topTen ? <th className="w-[54px] px-3 py-3 text-center">#</th> : null}
-                  <th className="min-w-[270px] px-3 py-3 text-left">Kliens</th>
-                  <th className="min-w-[150px] px-3 py-3 text-left">Üzlet</th>
-                  <th className="px-3 py-3 text-right">{year}. évi forgalom</th>
-                  <th className="px-3 py-3 text-center">Vásárlás / db</th>
-                  <th className="min-w-[260px] px-3 py-3 text-left">Eladó(k)</th>
-                  <th className="min-w-[180px] px-3 py-3 text-left">Aktivitás</th>
-                  <th className="px-3 py-3 text-right">Tartozás</th>
-                  <th className="w-[48px] px-2 py-3"><span className="sr-only">Részletek</span></th>
+                  <th className="px-2 py-3 text-center align-middle">
+                    <button
+                      type="button"
+                      onClick={() => setRowNumberDescending((current) => !current)}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
+                      title={rowNumberDescending ? `Kattintás: 1 → ${customerRows.length} számozás` : `Kattintás: ${customerRows.length} → 1 számozás`}
+                      aria-label="Klienslista számozási irányának megfordítása"
+                    >
+                      {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
+                    </button>
+                  </th>
+                  <th className="px-3 py-3 text-left align-middle">Kliens</th>
+                  <th className="px-3 py-3 text-left align-middle">Üzlet</th>
+                  <th className="px-3 py-3 text-right align-middle">{year}. évi forgalom</th>
+                  <th className="px-3 py-3 text-center align-middle">Vásárlás / db</th>
+                  <th className="px-3 py-3 text-left align-middle">Eladó(k)</th>
+                  <th className="px-3 py-3 text-left align-middle">Aktivitás</th>
+                  <th className="px-3 py-3 text-right align-middle">Tartozás</th>
+                  <th className="px-2 py-3 align-middle"><span className="sr-only">Részletek</span></th>
                 </tr>
               </thead>
               <tbody>
-                {customerRows.map((item, index) => (
+                {numberedCustomerRows.map(({ item, index, rowNumber }) => (
                   <tr key={item.key} className="group cursor-pointer border-t border-white/8 align-middle transition hover:bg-white/[0.035]" onClick={() => setSelected(item)}>
-                    {topTen ? (
-                      <td className="px-3 py-3 text-center">
-                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border text-sm ${index < 3 ? "border-amber-200/35 bg-amber-400/12 text-amber-50" : "border-white/10 bg-black/10 text-white/55"}`}>{index + 1}</span>
-                      </td>
-                    ) : null}
+                    <td className="px-2 py-3 text-center">
+                      <span className={`inline-flex min-w-[34px] items-center justify-center rounded-full border px-2 py-1 text-[11px] leading-none ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/10 bg-black/12 text-white/70"}`}>{rowNumber}</span>
+                    </td>
                     <td className="px-3 py-3">
                       <div className="flex min-w-0 items-start gap-3">
                         <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 text-[#bff8f5]"><UserRound size={18} /></span>
                         <div className="min-w-0">
                           <div className="flex min-w-0 items-center gap-2">
                             <p className="truncate text-sm text-white" title={item.fullName}>{item.fullName}</p>
-                            {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-amber-200/22 bg-amber-400/8 px-2 py-0.5 text-[9px] text-amber-50">Visszatérő</span> : null}
+                            {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb692]/42 bg-[rgba(255,83,1,0.18)] px-2 py-0.5 text-[9px] text-white">Visszatérő</span> : null}
                             {item.combined ? <span className="shrink-0 rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">Összevonva</span> : null}
                           </div>
                           <p className="mt-1 truncate text-[10px] text-white/43">{[item.phone, item.email].filter(Boolean).join(" • ") || "Nincs elérhetőség"}</p>
@@ -3103,13 +3135,19 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
           </div>
 
           <div className="grid gap-2 p-3 lg:hidden">
-            {customerRows.map((item, index) => (
+            {numberedCustomerRows.map(({ item, index, rowNumber }) => (
               <button key={item.key} type="button" onClick={() => setSelected(item)} className="rounded-[20px] border border-white/11 bg-[#2b3749] p-3 text-left transition active:scale-[0.99]">
                 <div className="flex items-start gap-3">
-                  {topTen ? <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border text-sm ${index < 3 ? "border-amber-200/35 bg-amber-400/12 text-amber-50" : "border-white/10 bg-black/10 text-white/55"}`}>{index + 1}</span> : <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 text-[#bff8f5]"><UserRound size={17} /></span>}
+                  <span className={`inline-flex h-9 min-w-[36px] shrink-0 items-center justify-center rounded-xl border px-2 text-sm ${topTen && index < 3 ? "border-[#ffb692]/45 bg-[rgba(255,83,1,0.20)] text-white" : "border-white/10 bg-black/10 text-white/70"}`}>{rowNumber}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0"><p className="truncate text-sm text-white">{item.fullName}</p><p className="mt-1 truncate text-[10px] text-white/42">{item.phone || item.email || "Nincs elérhetőség"}</p></div>
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <p className="truncate text-sm text-white">{item.fullName}</p>
+                          {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb692]/42 bg-[rgba(255,83,1,0.18)] px-2 py-0.5 text-[9px] text-white">Visszatérő</span> : null}
+                        </div>
+                        <p className="mt-1 truncate text-[10px] text-white/42">{item.phone || item.email || "Nincs elérhetőség"}</p>
+                      </div>
                       <p className="shrink-0 text-sm text-white">{money(item.periodRevenue)}</p>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">{item.stores.map((store) => <StoreBadge key={`${store.locationId}-${store.customerId}`} code={store.locationCode} name={store.locationName} />)}</div>
