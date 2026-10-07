@@ -1404,6 +1404,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+  // Variánsazonosításnál az egyméretes jelölések ugyanazt a fizikai méretet jelentik.
+  // OSFA / OSFY szándékosan NINCS ebben a családban, mert azok külön variánsok.
+  const AIF_ONE_SIZE_IDENTITY_KEYS = new Set([
+    "osfm", "one_size", "onesize", "os", "osf", "ns", "uni", "universal",
+  ]);
+  function aifVariantSizeIdentity(value) {
+    const key = normCode(value);
+    if (!key) return "";
+    return AIF_ONE_SIZE_IDENTITY_KEYS.has(key) ? "one_size" : key;
+  }
+  function sameAifVariantSize(left, right) {
+    const a = aifVariantSizeIdentity(left);
+    const b = aifVariantSizeIdentity(right);
+    return Boolean(a && b && a === b);
+  }
+
   function cleanAifUitCode(value) {
     const compact = text(value).toUpperCase().replace(/\s+/g, "");
     if (!compact) return null;
@@ -1644,7 +1660,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const size = text(normalized.supplierSize || normalized.supplier_size || normalized.size || row.supplier_size || "");
     const code = text(split.fullCode || productCode || split.modelCode || normalized.modelCode || normalized.model_code || "");
     return {
-      key: `${normCode(code)}|${normCode(color)}|${normCode(size)}`,
+      key: `${normCode(code)}|${normCode(color)}|${aifVariantSizeIdentity(size)}`,
       label: [code || "kód nélkül", color || "szín nélkül", size || "méret nélkül"].join(" / "),
     };
   }
@@ -2517,7 +2533,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     // Ugyanazt a modell + szín + méret kulcsot párhuzamos importok sem hozhatják létre kétszer.
     await client.query(
       `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
-      [`aif_variant:${modelId}:${identityColorKind}:${normalizedIdentityPart(identityColorValue)}:${normalizedIdentityPart(size)}`]
+      [`aif_variant:${modelId}:${identityColorKind}:${normalizedIdentityPart(identityColorValue)}:${aifVariantSizeIdentity(size) || normalizedIdentityPart(size)}`]
     );
 
     const findBarcodeOwner = async (candidateBarcode, excludeVariantId = null) => {
@@ -2540,7 +2556,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const barcodeOwnerMatchesIncomingVariant = (owner) => {
       if (!owner) return false;
       if (String(owner.model_id) !== String(modelId)) return false;
-      if (normCode(owner.size || "") !== normCode(size)) return false;
+      if (!sameAifVariantSize(owner.size, size)) return false;
       return true;
     };
 
@@ -2645,14 +2661,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
 
     const findIdentityCandidate = async () => {
+      const pickEquivalentSize = (rows = []) => rows.find((row) => sameAifVariantSize(row?.size, size)) || null;
       let result;
       if (colorCode) {
         result = await client.query(
-          `SELECT id, barcode, status, created_at
+          `SELECT id, barcode, status, created_at, size
            FROM aif_product_variants
            WHERE model_id=$1
              AND lower(btrim(COALESCE(color_code,'')))=lower(btrim($2))
-             AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
            ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
                     CASE
                       WHEN NULLIF(btrim(barcode),'') IS NOT NULL AND barcode !~* '^AIF' THEN 0
@@ -2660,39 +2676,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                       ELSE 2
                     END,
                     created_at ASC,
-                    id::text ASC
-           LIMIT 1`,
-          [modelId, colorCode, size]
+                    id::text ASC`,
+          [modelId, colorCode]
         );
-        if (result.rowCount) return result.rows[0];
+        const byCode = pickEquivalentSize(result.rows);
+        if (byCode) return byCode;
 
         // Régi adatoknál előfordulhat, hogy a színkód még üres, de a normalizált színnév már megvan.
         if (colorName) {
           result = await client.query(
-            `SELECT id, barcode, status, created_at
+            `SELECT id, barcode, status, created_at, size
              FROM aif_product_variants
              WHERE model_id=$1
                AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
                AND lower(btrim(COALESCE(color_name,'')))=lower(btrim($2))
-               AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
              ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
                       created_at ASC,
-                      id::text ASC
-             LIMIT 1`,
-            [modelId, colorName, size]
+                      id::text ASC`,
+            [modelId, colorName]
           );
-          if (result.rowCount) return result.rows[0];
+          const byName = pickEquivalentSize(result.rows);
+          if (byName) return byName;
         }
         return null;
       }
 
       result = await client.query(
-        `SELECT id, barcode, status, created_at
+        `SELECT id, barcode, status, created_at, size
          FROM aif_product_variants
          WHERE model_id=$1
            AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
            AND lower(btrim(COALESCE(color_name,'')))=lower(btrim($2))
-           AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
          ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
                   CASE
                     WHEN NULLIF(btrim(barcode),'') IS NOT NULL AND barcode !~* '^AIF' THEN 0
@@ -2700,11 +2714,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     ELSE 2
                   END,
                   created_at ASC,
-                  id::text ASC
-         LIMIT 1`,
-        [modelId, colorName, size]
+                  id::text ASC`,
+        [modelId, colorName]
       );
-      return result.rows[0] || null;
+      return pickEquivalentSize(result.rows);
     };
 
     const resolveMatchingBarcodeOwner = async (barcodeOwner) => {
@@ -7220,7 +7233,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (result.rowCount !== 1) return null;
     const owner = result.rows[0];
 
-    if (normCode(owner.size || "") !== normCode(size)) return null;
+    if (!sameAifVariantSize(owner.size, size)) return null;
 
     const incomingBrandId = text(normalized?.brandId || normalized?.brand_id || "");
     const incomingBrandKeys = new Set([
@@ -7265,11 +7278,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        FROM aif_product_variants
        WHERE model_id=$1
          AND id<>$2
-         AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
        ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
                 created_at ASC,
                 id::text ASC`,
-      [targetModelId, owner.id, size]
+      [targetModelId, owner.id]
     );
 
     const incomingCode = normCode(normalized?.colorCode || normalized?.supplierColorCode || "");
@@ -7278,6 +7290,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const ownerName = normCode(owner?.color_name || "");
 
     for (const candidate of candidates.rows || []) {
+      if (!sameAifVariantSize(candidate?.size, size)) continue;
       const candidateCode = normCode(candidate?.color_code || "");
       const candidateName = normCode(candidate?.color_name || "");
       const codeMatches =
@@ -7911,7 +7924,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const incomingModel = normCode(normalized.modelCode || normalized.model_code || normalized.supplierProductCode || row.supplier_product_code || '');
     const ownerModelRaw = text(owner?.model_code || '');
     const ownerModel = normCode(ownerModelRaw.includes(':') ? ownerModelRaw.split(':').slice(1).join(':') : ownerModelRaw);
-    const sameSize = owner && normCode(owner.size || '') === normCode(incomingSize);
+    const sameSize = owner && sameAifVariantSize(owner.size, incomingSize);
     const sameModel = owner && (!incomingModel || !ownerModel || incomingModel === ownerModel);
     const existingColorCode = text(owner?.color_code || '');
     const existingColorName = text(owner?.color_name || '');
@@ -9100,7 +9113,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       } else if (barcodeCandidates.length === 1) {
         match = barcodeCandidates[0];
         action = 'existing';
-        if (row.rawSize && match.size && normCode(row.size) !== normCode(match.size)) messages.push(`Barcode egyezik, de a méret eltér: ForIT ${row.size} / AllIn ${match.size}.`);
+        if (row.rawSize && match.size && !sameAifVariantSize(row.size, match.size)) messages.push(`Barcode egyezik, de a méret eltér: ForIT ${row.size} / AllIn ${match.size}.`);
         if (row.colorCode && match.color_code && normCode(row.colorCode) !== normCode(match.color_code)) messages.push(`Barcode egyezik, de a színkód eltér: ForIT ${row.colorCode} / AllIn ${match.color_code}.`);
       } else if (skuCandidates.length === 1) {
         match = skuCandidates[0];
@@ -10457,7 +10470,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
       if (barcodeOwner.rowCount === 1) {
         const owner = barcodeOwner.rows[0];
-        if (String(owner.model_id) === String(modelId) && normCode(owner.size) === normCode(normalized.size)) return { ...owner, created: false };
+        if (String(owner.model_id) === String(modelId) && sameAifVariantSize(owner.size, normalized.size)) return { ...owner, created: false };
         throw Object.assign(new Error(`A ${normalized.barcode} barcode közben egy másik AllIn variánshoz került.`), { code: 'legacy_barcode_conflict' });
       }
       if (barcodeOwner.rowCount > 1) throw Object.assign(new Error(`A ${normalized.barcode} barcode több AllIn variánshoz tartozik.`), { code: 'legacy_barcode_conflict' });
