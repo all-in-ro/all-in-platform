@@ -8648,6 +8648,39 @@ export default function AllInWarehouse() {
     [invoiceFilter, invoiceFilterOptions],
   );
 
+  // Számlaszűrésnél a fő raktárlistában is ugyanazt a történeti terméknevet
+  // mutatjuk, amely a számla / receptió részleteiben szerepel. A katalógus jelenlegi
+  // model-címe ettől nem változik: ez csak a kiválasztott számla megjelenítési nézete.
+  // Így pl. egy közös "BEAUTIFUL" modell alá importált AMBER / ZEBRA / VENUS sorok
+  // a számlaszűrt listában nem veszítik el az eredeti terméknevüket.
+  const invoiceDisplayTitleByVariantId = useMemo(() => {
+    const map = new Map<string, string>();
+    if (invoiceFilter === "all") return map;
+
+    for (const detail of invoiceDetailRows || []) {
+      for (const row of detail.rows || []) {
+        if (String(row?.status || "").toLowerCase() === "ignored") continue;
+        const normalized = row?.normalized && typeof row.normalized === "object"
+          ? row.normalized as Record<string, any>
+          : {};
+        const variantId = firstWarehouseText(
+          row?.variant_id,
+          row?.variantId,
+          normalized.variant_id,
+          normalized.variantId,
+        );
+        const invoiceTitle = firstWarehouseText(
+          normalized.titleRo,
+          normalized.productName,
+          row?.title_ro,
+          row?.supplier_product_code,
+        );
+        if (variantId && invoiceTitle && !map.has(variantId)) map.set(variantId, invoiceTitle);
+      }
+    }
+    return map;
+  }, [invoiceFilter, invoiceDetailRows]);
+
   function invoiceSelectionMetaForVariant(variantId: string): WarehouseSelectionMeta | null {
     const id = String(variantId || "").trim();
     const option = selectedInvoiceFilterOption;
@@ -8735,9 +8768,16 @@ export default function AllInWarehouse() {
 
   function closeInvoiceDetail() {
     setInvoiceDetailTarget(null);
-    setInvoiceDetailRows([]);
+    // A részletsorokat szándékosan megtartjuk, amíg a számlaszűrés aktív.
+    // A fő raktárlista ezekből tudja a számlán szereplő eredeti terméknevet mutatni.
     setInvoiceDetailError("");
   }
+
+  useEffect(() => {
+    if (invoiceFilter !== "all") return;
+    setInvoiceDetailRows([]);
+    setInvoiceFilterStats(null);
+  }, [invoiceFilter]);
 
   useEffect(() => {
     if (subCategory === "all") return;
@@ -9469,7 +9509,15 @@ export default function AllInWarehouse() {
     }
     if (invoiceFilter !== "all") {
       const allowedInvoiceVariants = new Set(selectedInvoiceFilterOption?.variantIds || []);
-      out = out.filter((x) => allowedInvoiceVariants.has(String(x.variant_id || "")));
+      out = out
+        .filter((x) => allowedInvoiceVariants.has(String(x.variant_id || "")))
+        .map((x) => {
+          const variantId = String(x.variant_id || "").trim();
+          const invoiceTitle = invoiceDisplayTitleByVariantId.get(variantId);
+          return invoiceTitle && invoiceTitle !== String(x.title_ro || "").trim()
+            ? { ...x, title_ro: invoiceTitle }
+            : x;
+        });
     }
     if (stockFilter === "available") out = out.filter((x) => n(x.available_qty) > 0);
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
@@ -9533,7 +9581,7 @@ export default function AllInWarehouse() {
       return compareWarehouseVariantPresentation(a, b);
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, brands, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, brands, location, invoiceFilter, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     catalogSearchAbortRef.current?.abort();
