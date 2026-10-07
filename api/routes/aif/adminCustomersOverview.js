@@ -109,10 +109,23 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
              FROM aif_shop_sales s
              WHERE ${periodSaleWhereSql}
            ),
+           returned_by_line AS (
+             SELECT
+               e.source_sale_line_id,
+               COALESCE(sum(e.returned_qty),0)::numeric AS returned_qty
+             FROM aif_shop_exchanges e
+             WHERE e.status='completed'
+             GROUP BY e.source_sale_line_id
+           ),
            sale_line_totals AS (
-             SELECT sl.sale_id, COALESCE(sum(sl.quantity),0)::numeric AS items_sold
+             SELECT
+               sl.sale_id,
+               COALESCE(sum(
+                 GREATEST(sl.quantity::numeric - COALESCE(r.returned_qty,0),0)
+               ),0)::numeric AS items_sold
              FROM aif_shop_sale_lines sl
              JOIN period_sale_base psb ON psb.id=sl.sale_id
+             LEFT JOIN returned_by_line r ON r.source_sale_line_id=sl.id
              GROUP BY sl.sale_id
            ),
            period_sales AS (
@@ -127,31 +140,46 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
              SELECT
                customer_id,
                location_id,
-               count(*)::int AS period_transactions,
-               COALESCE(sum(total),0)::numeric AS period_revenue,
-               COALESCE(sum(subtotal),0)::numeric AS period_sales_before_discount,
-               COALESCE(sum(discount_total),0)::numeric AS period_discount_total,
-               COALESCE(sum(paid_total),0)::numeric AS period_paid_total,
-               COALESCE(sum(balance_due),0)::numeric AS period_balance_due,
+               count(*) FILTER (WHERE items_sold > 0)::int AS period_transactions,
+               COALESCE(sum(total) FILTER (WHERE items_sold > 0),0)::numeric AS period_revenue,
+               COALESCE(sum(subtotal) FILTER (WHERE items_sold > 0),0)::numeric AS period_sales_before_discount,
+               COALESCE(sum(discount_total) FILTER (WHERE items_sold > 0),0)::numeric AS period_discount_total,
+               COALESCE(sum(paid_total) FILTER (WHERE items_sold > 0),0)::numeric AS period_paid_total,
+               COALESCE(sum(balance_due) FILTER (WHERE items_sold > 0),0)::numeric AS period_balance_due,
                COALESCE(sum(items_sold),0)::numeric AS period_items_sold,
-               COALESCE(avg(total),0)::numeric AS period_average_basket,
-               min(sold_at) AS period_first_sale_at,
-               max(sold_at) AS period_last_sale_at
+               COALESCE(avg(total) FILTER (WHERE items_sold > 0),0)::numeric AS period_average_basket,
+               min(sold_at) FILTER (WHERE items_sold > 0) AS period_first_sale_at,
+               max(sold_at) FILTER (WHERE items_sold > 0) AS period_last_sale_at
              FROM period_sales
              GROUP BY customer_id, location_id
+           ),
+           lifetime_line_totals AS (
+             SELECT
+               sl.sale_id,
+               COALESCE(sum(
+                 GREATEST(sl.quantity::numeric - COALESCE(r.returned_qty,0),0)
+               ),0)::numeric AS items_sold
+             FROM aif_shop_sale_lines sl
+             JOIN aif_shop_sales ls ON ls.id=sl.sale_id
+             LEFT JOIN returned_by_line r ON r.source_sale_line_id=sl.id
+             WHERE ls.status='completed'
+               AND ls.customer_id IS NOT NULL
+               AND ls.location_id = ANY($2::uuid[])
+             GROUP BY sl.sale_id
            ),
            lifetime_by_customer AS (
              SELECT
                s.customer_id,
                s.location_id,
-               count(*)::int AS lifetime_transactions,
-               COALESCE(sum(s.total),0)::numeric AS lifetime_purchase_total,
-               COALESCE(sum(s.paid_total),0)::numeric AS lifetime_paid_total,
-               COALESCE(sum(s.balance_due),0)::numeric AS current_open_balance,
-               count(*) FILTER (WHERE s.balance_due > 0)::int AS current_open_sales,
-               min(s.sold_at) AS first_sale_at,
-               max(s.sold_at) AS last_sale_at
+               count(*) FILTER (WHERE COALESCE(llt.items_sold,0) > 0)::int AS lifetime_transactions,
+               COALESCE(sum(s.total) FILTER (WHERE COALESCE(llt.items_sold,0) > 0),0)::numeric AS lifetime_purchase_total,
+               COALESCE(sum(s.paid_total) FILTER (WHERE COALESCE(llt.items_sold,0) > 0),0)::numeric AS lifetime_paid_total,
+               COALESCE(sum(s.balance_due) FILTER (WHERE COALESCE(llt.items_sold,0) > 0),0)::numeric AS current_open_balance,
+               count(*) FILTER (WHERE s.balance_due > 0 AND COALESCE(llt.items_sold,0) > 0)::int AS current_open_sales,
+               min(s.sold_at) FILTER (WHERE COALESCE(llt.items_sold,0) > 0) AS first_sale_at,
+               max(s.sold_at) FILTER (WHERE COALESCE(llt.items_sold,0) > 0) AS last_sale_at
              FROM aif_shop_sales s
+             LEFT JOIN lifetime_line_totals llt ON llt.sale_id=s.id
              WHERE s.status='completed'
                AND s.customer_id IS NOT NULL
                AND s.location_id = ANY($2::uuid[])
@@ -213,10 +241,23 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
              FROM aif_shop_sales s
              WHERE ${periodSaleWhereSql}
            ),
+           returned_by_line AS (
+             SELECT
+               e.source_sale_line_id,
+               COALESCE(sum(e.returned_qty),0)::numeric AS returned_qty
+             FROM aif_shop_exchanges e
+             WHERE e.status='completed'
+             GROUP BY e.source_sale_line_id
+           ),
            sale_line_totals AS (
-             SELECT sl.sale_id, COALESCE(sum(sl.quantity),0)::numeric AS items_sold
+             SELECT
+               sl.sale_id,
+               COALESCE(sum(
+                 GREATEST(sl.quantity::numeric - COALESCE(r.returned_qty,0),0)
+               ),0)::numeric AS items_sold
              FROM aif_shop_sale_lines sl
              JOIN period_sale_base psb ON psb.id=sl.sale_id
+             LEFT JOIN returned_by_line r ON r.source_sale_line_id=sl.id
              GROUP BY sl.sale_id
            ),
            period_sales AS (
@@ -240,6 +281,7 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
            FROM period_sales ps
            JOIN aif_shop_customers c ON c.id=ps.customer_id AND c.location_id=ps.location_id
            WHERE ${customerWhereSql}
+             AND ps.items_sold > 0
            GROUP BY ps.customer_id, ps.location_id, ps.actor
            ORDER BY revenue DESC, transactions DESC, ps.actor ASC`,
           args
@@ -251,6 +293,17 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
              FROM aif_shop_sales s
              WHERE s.status='completed'
                AND s.location_id = ANY($1::uuid[])
+               AND EXISTS (
+                 SELECT 1
+                 FROM aif_shop_sale_lines sl
+                 WHERE sl.sale_id=s.id
+                   AND sl.quantity::numeric > COALESCE((
+                     SELECT sum(e.returned_qty)::numeric
+                     FROM aif_shop_exchanges e
+                     WHERE e.source_sale_line_id=sl.id
+                       AND e.status='completed'
+                   ),0)
+               )
              UNION
              SELECT $2::int AS year
            ) years
@@ -265,6 +318,17 @@ export default function createAifAdminCustomersOverviewRouter(deps) {
              AND s.location_id = ANY($1::uuid[])
              AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$2::int
              AND NULLIF(s.actor,'') IS NOT NULL
+             AND EXISTS (
+               SELECT 1
+               FROM aif_shop_sale_lines sl
+               WHERE sl.sale_id=s.id
+                 AND sl.quantity::numeric > COALESCE((
+                   SELECT sum(e.returned_qty)::numeric
+                   FROM aif_shop_exchanges e
+                   WHERE e.source_sale_line_id=sl.id
+                     AND e.status='completed'
+                 ),0)
+             )
            ORDER BY s.actor ASC`,
           [locationIds, year]
         ),
