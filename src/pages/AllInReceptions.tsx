@@ -1590,6 +1590,15 @@ export default function AllInReceptions(_props: Props) {
   const [rowColorResolutionBusy, setRowColorResolutionBusy] = useState(false);
   const [rowColorResolutionActionError, setRowColorResolutionActionError] = useState("");
   const [rowColorChoice, setRowColorChoice] = useState<'keep_existing' | 'use_incoming' | null>(null);
+
+  const closeRowErrorModal = useCallback(() => {
+    setRowErrorTarget(null);
+    setRowColorResolution(null);
+    setRowColorChoice(null);
+    setRowColorResolutionActionError("");
+    setRowColorResolutionLoading(false);
+  }, []);
+
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -2106,6 +2115,26 @@ export default function AllInReceptions(_props: Props) {
   }
 
   useEffect(() => {
+    if (!rowErrorTarget) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeRowErrorModal();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [rowErrorTarget, closeRowErrorModal]);
+
+  useEffect(() => {
     const rowId = String(rowErrorTarget?.id || '').trim();
     if (!rowId) {
       setRowColorResolution(null);
@@ -2148,10 +2177,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       const freshRow = (next?.rows || []).find((row: any) => String(row.id) === rowId);
       if (freshRow?.status === 'committed') {
-        setRowColorResolutionActionError("");
-        setRowErrorTarget(null);
-        setRowColorResolution(null);
-        setRowColorChoice(null);
+        closeRowErrorModal();
         setMessage(
           resolution === 'keep_existing'
             ? 'Készletre véve. A meglévő színnév maradt, az új darabok ehhez a variánshoz kerültek.'
@@ -3012,7 +3038,7 @@ export default function AllInReceptions(_props: Props) {
             aria-modal="true"
             aria-labelledby="reception-row-error-title"
             onMouseDown={(event) => {
-              if (event.currentTarget === event.target) setRowErrorTarget(null);
+              if (event.currentTarget === event.target) closeRowErrorModal();
             }}
           >
             <div className="flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] border border-rose-200/28 bg-[#303a4c] text-white shadow-[0_28px_90px_rgba(0,0,0,0.62)] ring-1 ring-rose-400/10" onMouseDown={(event) => event.stopPropagation()}>
@@ -3027,7 +3053,16 @@ export default function AllInReceptions(_props: Props) {
                   </h2>
                   <p className="mt-1 text-sm text-white/58">Nr. {rowErrorTarget.row_no || "?"} • {title}</p>
                 </div>
-                <button className={neutralBtn} type="button" onClick={() => setRowErrorTarget(null)} aria-label="Bezárás">
+                <button
+                  className={neutralBtn}
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeRowErrorModal();
+                  }}
+                  aria-label="Bezárás"
+                >
                   <X size={15} /> Bezárás
                 </button>
               </div>
@@ -3224,11 +3259,10 @@ export default function AllInReceptions(_props: Props) {
                         className={neutralBtn}
                         type="button"
                         disabled={rowColorResolutionBusy}
-                        onClick={() => {
-                          setRowErrorTarget(null);
-                          setRowColorResolution(null);
-                          setRowColorChoice(null);
-                          setRowColorResolutionActionError("");
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          closeRowErrorModal();
                         }}
                       >
                         <X size={15} /> Mégse
@@ -3251,7 +3285,15 @@ export default function AllInReceptions(_props: Props) {
                       </button>
                     </>
                   ) : (
-                    <button className={primaryBtn} type="button" onClick={() => setRowErrorTarget(null)}>
+                    <button
+                      className={primaryBtn}
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeRowErrorModal();
+                      }}
+                    >
                       <Check size={15} /> Értem, javítom
                     </button>
                   )}
