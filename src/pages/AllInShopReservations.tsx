@@ -132,6 +132,7 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
   const [clock, setClock] = useState(Date.now());
   const searchRef = useRef<HTMLInputElement | null>(null);
   const scanTimerRef = useRef<number | null>(null);
+  const autoAddInFlightRef = useRef("");
   const requestKeyRef = useRef("");
 
   const today = useMemo(() => bucharestDate(), [clock]);
@@ -227,6 +228,14 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
   async function searchProducts(value = query, autoAdd = false) {
     const search = value.trim();
     if (!search) return;
+
+    // A vonalkódolvasó tipikusan Entert is küld. Közben a 180 ms-os automatikus
+    // felismerés is elindulhat ugyanarra a kódra, ezért ugyanazt a fizikai csippantást
+    // két párhuzamos kérés nem teheti kétszer a félretételi listába.
+    const autoAddKey = autoAdd ? search.toLowerCase() : "";
+    if (autoAdd && autoAddInFlightRef.current === autoAddKey) return;
+    if (autoAdd) autoAddInFlightRef.current = autoAddKey;
+
     setProductLoading(true);
     setError("");
     try {
@@ -245,6 +254,7 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A termékkeresés nem sikerült.");
     } finally {
+      if (autoAdd && autoAddInFlightRef.current === autoAddKey) autoAddInFlightRef.current = "";
       setProductLoading(false);
     }
   }
@@ -403,8 +413,8 @@ export default function AllInShopReservations({ open, actor, locationCode, locat
               <div className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
                 <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">1. Termékek</p><h3 className="mt-1 text-lg">Szkenneld vagy keresd ki</h3></div><span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-3 py-1 text-xs text-[#d7fffd]">{draftQty} db • {formatMoney(draftTotal)}</span></div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
-                  <label className="relative block"><Barcode className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={21} /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchProducts(e.currentTarget.value, true); }} placeholder="Vonalkód, termékkód, név…" className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-3 text-base outline-none focus:border-[#72d8d4]" /></label>
-                  <button type="button" onClick={() => void searchProducts(query, true)} className="inline-flex h-14 items-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm">{productLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
+                  <label className="relative block"><Barcode className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={21} /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (scanTimerRef.current !== null) { window.clearTimeout(scanTimerRef.current); scanTimerRef.current = null; } void searchProducts(e.currentTarget.value, true); } }} placeholder="Vonalkód, termékkód, név…" className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-3 text-base outline-none focus:border-[#72d8d4]" /></label>
+                  <button type="button" onClick={() => { if (scanTimerRef.current !== null) { window.clearTimeout(scanTimerRef.current); scanTimerRef.current = null; } void searchProducts(query, true); }} className="inline-flex h-14 items-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm">{productLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
                 </div>
                 {products.length ? <div className="mt-3 grid gap-2 md:grid-cols-2">{products.slice(0, 20).map((item) => <button key={item.variantId} type="button" onClick={() => addLine(item)} className="grid grid-cols-[64px_1fr] gap-3 rounded-2xl border border-white/12 bg-[#2c384a] p-3 text-left hover:border-[#72d8d4]/45"><span className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/95">{item.imageUrl ? <img src={item.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><span className="min-w-0"><span className="block truncate text-sm">{item.title}</span><span className="mt-1 block text-xs text-white/50">{[item.colorName, item.size, item.productCode].filter(Boolean).join(" • ")}</span><span className="mt-2 block text-xs text-[#d7fffd]">{item.availableQty} db szabad • {formatMoney(item.sellPrice)}</span></span></button>)}</div> : null}
                 <div className="mt-4 space-y-2">{draftLines.length ? draftLines.map((line) => <div key={line.variantId} className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/12 bg-[#293548] p-3"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <ShoppingBag className="text-slate-500" />}</span><div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-xs text-white/48">{[line.colorName, line.size, line.productCode].filter(Boolean).join(" • ")}</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(numberValue(line.sellPrice) * line.quantity)}</p></div><div className="flex items-center gap-2"><div className="inline-grid grid-cols-[38px_42px_38px] overflow-hidden rounded-xl border border-white/14 bg-[#253144]"><button onClick={() => setQty(line.variantId, line.quantity - 1)} className="grid h-10 place-items-center"><Minus size={15} /></button><span className="grid h-10 place-items-center border-x border-white/10">{line.quantity}</span><button onClick={() => setQty(line.variantId, line.quantity + 1)} className="grid h-10 place-items-center"><Plus size={15} /></button></div><button onClick={() => setQty(line.variantId, 0)} className="grid h-10 w-10 place-items-center rounded-xl border border-rose-300/50 bg-rose-600"><Trash2 size={15} /></button></div></div>) : <div className="rounded-2xl border border-dashed border-white/14 py-10 text-center text-sm text-white/40">Még nincs kiválasztott termék.</div>}</div>
