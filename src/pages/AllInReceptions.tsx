@@ -1623,7 +1623,7 @@ function buildReceptionVerificationHtml(
 
   <div class="title">
     <div class="eyebrow">Verificare internă marfă</div>
-    <h1>FIȘĂ VERIFICARE MARFĂ</h1>
+    <h1>NOTA DE RECEPȚIE ȘI VERIFICARE MARFĂ</h1>
     <div class="subtitle">Cantități și prețuri de vânzare • TVA ${pdfEscape(salesTvaShort(salesTva))}</div>
   </div>
 
