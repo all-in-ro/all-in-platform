@@ -1357,182 +1357,324 @@ function genderPdfLabel(value: unknown, genderTypes?: any[]) {
   return found ? String(found.name || raw) : raw;
 }
 
-function checkRowData(row: any, draft: any, categories?: any[], genderTypes?: any[]) {
-  const rawCategory = draft.categoryName || draft.categoryCode || row?.normalized?.categoryName || row?.normalized?.categoryCode;
-  const rawGender = draft.gender || row?.normalized?.gender;
+function checkRowData(
+  row: any,
+  draft: any,
+  salesSettings: SalesTvaSettings = DEFAULT_SALES_TVA_SETTINGS,
+) {
+  const qty = n(draft.qty ?? row?.qty ?? row?.normalized?.qty);
+  const enteredSellPrice = rowSellEnteredPriceRon(row, draft);
+  const sellPriceRon = enteredSellPrice > 0 ? rowSellGrossPriceRon(row, draft, salesSettings) : null;
+  const lineValueRon = sellPriceRon === null ? null : qty * sellPriceRon;
+  const imageUrl = String(
+    draft.imageUrl ||
+    draft.image_url ||
+    row?.normalized?.imageUrl ||
+    row?.normalized?.image_url ||
+    ""
+  ).trim();
+
   return {
     code: rowSku(row, draft),
-    snCod: cell(row?.sn_cod || draft.snCod || draft.sn_cod || row?.normalized?.snCod || row?.normalized?.sn_cod),
+    barcode: cell(receptionRowBarcode(row)),
     title: cell(draft.titleRo || draft.productName || row?.normalized?.titleRo || row?.supplier_product_code),
     brand: cell(draft.brandName || draft.brandCode || row?.normalized?.brandName || row?.normalized?.brandCode),
-    category: categoryPdfLabel(rawCategory, categories),
-    gender: genderPdfLabel(rawGender, genderTypes),
-    color: cell(draft.colorName || row?.normalized?.colorName),
-    colorCode: cell(row?.supplier_color_code || draft.colorCode || row?.normalized?.colorCode),
+    color: cell(draft.colorName || row?.normalized?.colorName || row?.supplier_color_code),
     size: cell(row?.supplier_size || draft.size || row?.normalized?.size),
-    qty: n(draft.qty ?? row?.qty ?? row?.normalized?.qty),
-    status: statusText(row?.status),
+    qty,
+    imageUrl,
+    sellPriceRon,
+    lineValueRon,
   };
 }
 
 function buildReceptionVerificationHtml(
   detail: AifReceptionDetail,
   drafts: Record<string, Record<string, unknown>> = {},
-  categories?: any[],
-  genderTypes?: any[]
+  salesSettings: SalesTvaSettings = DEFAULT_SALES_TVA_SETTINGS,
 ) {
   const item: any = detail.item || {};
   const rows = (detail.rows || []).filter((row: any) => row.status !== "ignored");
+  const salesTva = normalizeSalesTvaSettings(salesSettings);
   const title = `Fisa verificare marfa ${item.invoice_number || item.id || ""}`;
   const today = new Date().toLocaleDateString("ro-RO");
-  const lines = rows.map((row: any, index: number) => {
+
+  const preparedRows = rows.map((row: any, index: number) => {
     const draft = rowDraft(row, drafts);
-    const x = checkRowData(row, draft, categories, genderTypes);
+    return { index, row, draft, data: checkRowData(row, draft, salesTva) };
+  });
+
+  const totalQty = preparedRows.reduce((sum, itemRow) => sum + itemRow.data.qty, 0);
+  const totalValueRon = preparedRows.reduce(
+    (sum, itemRow) => sum + (itemRow.data.lineValueRon ?? 0),
+    0,
+  );
+  const missingPrices = preparedRows.filter((itemRow) => itemRow.data.sellPriceRon === null).length;
+
+  const lines = preparedRows.map(({ index, data }) => {
+    const image = data.imageUrl
+      ? `<img class="img" src="${pdfEscape(data.imageUrl)}" alt="" />`
+      : `<div class="img empty">Fără foto</div>`;
+
+    const unitPrice = data.sellPriceRon === null ? "-" : pdfNumber(data.sellPriceRon);
+    const lineValue = data.lineValueRon === null ? "-" : pdfNumber(data.lineValueRon);
+
     return `
       <tr>
-        <td class="num">${index + 1}</td>
-        <td>${pdfEscape(x.code)}</td>
-        <td>${pdfEscape(x.snCod)}</td>
-        <td>${pdfEscape(x.title)}</td>
-        <td>${pdfEscape(x.brand)}</td>
-        <td>${pdfEscape(x.category)}</td>
-        <td>${pdfEscape(x.gender)}</td>
-        <td>${pdfEscape(x.color)}</td>
-        <td>${pdfEscape(x.colorCode)}</td>
-        <td>${pdfEscape(x.size)}</td>
-        <td class="num">${pdfNumber(x.qty, 0)}</td>
-        <td class="write"></td>
-        <td class="check"></td>
-        <td class="write"></td>
-        <td class="write wide"></td>
+        <td class="center">${index + 1}</td>
+        <td>
+          <div class="product">
+            ${image}
+            <div class="productInfo">
+              <strong>${pdfEscape(data.title)}</strong>
+              <div class="productMeta">
+                <div class="productMetaRow">
+                  <span><b>Marcă:</b> ${pdfEscape(data.brand)}</span>
+                  <span><b>Culoare:</b> ${pdfEscape(data.color)}</span>
+                </div>
+                <div class="productMetaSize"><span><b>Mărime:</b> ${pdfEscape(data.size)}</span></div>
+              </div>
+            </div>
+          </div>
+        </td>
+        <td class="code codeEmphasis">${pdfEscape(data.code)}</td>
+        <td class="code codeEmphasis">${pdfEscape(data.barcode)}</td>
+        <td class="center">buc.</td>
+        <td class="qty">${pdfNumber(data.qty, 0)}</td>
+        <td class="checkCell"><span class="checkBox" aria-hidden="true"></span></td>
+        <td class="money">${unitPrice}</td>
+        <td class="money value">${lineValue}</td>
       </tr>`;
   }).join("");
-  const totalQty = rows.reduce((sum: number, row: any) => {
-    const draft = rowDraft(row, drafts);
-    return sum + n(draft.qty ?? row.qty ?? row.normalized?.qty);
-  }, 0);
 
   return `<!doctype html>
-<html>
+<html lang="ro">
 <head>
   <meta charset="utf-8" />
   <title>${pdfEscape(title)}</title>
   <style>
-    @page { size: A4 landscape; margin: 10mm; }
+    @page { size: A4 portrait; margin: 12mm; }
     * { box-sizing: border-box; }
-    body { margin: 0; color: #111827; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9px; }
-    .doc { width: 100%; }
-    .header { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; border-bottom: 2px solid #111827; padding-bottom: 7px; margin-bottom: 8px; }
-    .company { font-size: 9px; line-height: 1.42; }
-    .company-name { font-size: 14px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 2px; }
-    .title { text-align: right; }
-    .title h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: .05em; text-transform: uppercase; }
-    .title .sub { font-size: 10px; border: 1px solid #111827; display: inline-block; padding: 3px 8px; margin-top: 3px; }
-    .meta { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 8px; }
-    .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 4px 5px; min-height: 30px; }
-    .box .label { color: #6b7280; text-transform: uppercase; font-size: 7px; letter-spacing: .05em; margin-bottom: 2px; }
-    .box .value { font-size: 9px; }
-    .box .value.uit { font-weight: 700; letter-spacing: .035em; overflow-wrap: anywhere; }
-    .note { border: 1px solid #f59e0b; background: #fffbeb; padding: 5px 7px; margin: 7px 0 8px; line-height: 1.35; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    thead { display: table-header-group; }
-    th { background: #111827; color: #fff; font-weight: 400; text-transform: uppercase; font-size: 7px; letter-spacing: .02em; padding: 4px 3px; border: 1px solid #111827; }
-    td { padding: 3px; border: 1px solid #d1d5db; vertical-align: top; font-size: 8px; line-height: 1.18; overflow-wrap: anywhere; min-height: 18px; }
-    tbody tr:nth-child(even) td { background: #f9fafb; }
-    .num { text-align: right; white-space: nowrap; }
-    .write { min-height: 20px; background: #fff; }
-    .wide { min-width: 56px; }
-    .check::before { content: ''; display: block; width: 12px; height: 12px; border: 1.5px solid #111827; margin: 0 auto; }
-    .totals td { border-top: 2px solid #111827; background: #f3f4f6; font-size: 9px; }
-    .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 16px; font-size: 9px; }
-    .sig { padding-top: 20px; border-top: 1px solid #111827; }
-    .footer { margin-top: 8px; color: #6b7280; font-size: 7px; display: flex; justify-content: space-between; }
+    html, body { width: 100%; max-width: 100%; margin: 0; padding: 0; background: #fff; color: #172033; overflow: visible; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
     .screen-actions { margin: 0 0 8px; display: flex; gap: 8px; }
-    .screen-actions button { border: 1px solid #111827; background: #111827; color: #fff; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-    @media print { .screen-actions { display: none; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+    .screen-actions button { border: 1px solid #172033; background: #172033; color: #fff; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+
+    .top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(74mm, .95fr);
+      gap: 8mm;
+      align-items: start;
+      padding-bottom: 4.5mm;
+      border-bottom: 2px solid #255f54;
+    }
+    .company { color: #183d36; font-size: 17px; font-weight: 700; letter-spacing: .03em; }
+    .staffTag { margin-top: 2.5mm; color: #667382; font-size: 9px; line-height: 1.4; }
+
+    .docBox { border: 1px solid #b9c7c4; border-radius: 3mm; overflow: hidden; }
+    .docBox h3 { margin: 0; padding: 2.2mm 3mm; background: #255f54; color: #fff; font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+    .docBoxBody { padding: 2.4mm 3mm; background: #f5f8f7; }
+    .docLine { display: flex; justify-content: space-between; gap: 5mm; padding: 1.1mm 0; border-bottom: 1px solid #d8e0de; }
+    .docLine:last-child { border-bottom: 0; }
+    .docLine span { color: #667382; }
+    .docLine strong { max-width: 48mm; text-align: right; color: #172033; overflow-wrap: anywhere; }
+
+    .title { padding: 4.5mm 0 2.8mm; text-align: center; }
+    .eyebrow { color: #255f54; font-size: 8.5px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    h1 { margin: 1.3mm 0 0; font-size: 19px; line-height: 1.15; letter-spacing: .02em; }
+    .subtitle { margin-top: 1.5mm; color: #526070; font-size: 9px; }
+
+    .flowSection { margin-top: 2.5mm; border: 1px solid #d8e1e5; border-radius: 2.5mm; overflow: hidden; }
+    .flowHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 5mm;
+      padding: 2.4mm 3mm;
+      background: #ecfdf9;
+      border-top: 3px solid #14b8a6;
+      border-bottom: 1px solid #d8e1e5;
+      color: #0f5f59;
+    }
+    .flowHeader div { display: grid; gap: .7mm; }
+    .flowHeader strong { font-size: 10px; letter-spacing: .09em; }
+    .flowHeader span { font-size: 7.5px; color: #52716d; }
+    .flowHeader b { font-size: 9px; white-space: nowrap; }
+
+    table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    th {
+      background: #26384b;
+      color: #fff;
+      border: 1px solid #26384b;
+      padding: 2.2mm 1.4mm;
+      font-size: 7.7px;
+      line-height: 1.2;
+      text-transform: uppercase;
+      text-align: left;
+    }
+    td {
+      border: 1px solid #d4dcdf;
+      padding: 1.7mm 1.4mm;
+      font-size: 8.7px;
+      line-height: 1.25;
+      vertical-align: middle;
+      overflow-wrap: anywhere;
+    }
+    tbody tr:nth-child(even) td { background: #f8fafb; }
+
+    th:nth-child(1), td:nth-child(1) { width: 6mm; }
+    th:nth-child(2), td:nth-child(2) { width: 58mm; }
+    th:nth-child(3), td:nth-child(3) { width: 20mm; }
+    th:nth-child(4), td:nth-child(4) { width: 24mm; }
+    th:nth-child(5), td:nth-child(5) { width: 8mm; }
+    th:nth-child(6), td:nth-child(6) { width: 9mm; }
+    th:nth-child(7), td:nth-child(7) { width: 17mm; }
+    th:nth-child(8), td:nth-child(8) { width: 19mm; }
+    th:nth-child(9), td:nth-child(9) { width: 23mm; }
+
+    thead th:nth-child(1),
+    thead th:nth-child(3),
+    thead th:nth-child(4),
+    thead th:nth-child(5),
+    thead th:nth-child(6),
+    thead th:nth-child(7),
+    thead th:nth-child(8),
+    thead th:nth-child(9) { text-align: center; }
+
+    .codeHeader { font-size: 8px; font-weight: 700; letter-spacing: .025em; }
+    .center { text-align: center; }
+    .qty { text-align: center; font-size: 11px; font-weight: 700; color: #255f54; }
+    .code { font-family: "Courier New", monospace; font-size: 8.15px; line-height: 1.25; overflow-wrap: anywhere; }
+    .codeEmphasis { text-align: center; font-weight: 700; color: #172033; letter-spacing: .01em; }
+    .checkCell { text-align: center; }
+    .checkBox { display: inline-block; width: 6.2mm; height: 6.2mm; border: 1.4px solid #334155; border-radius: 1.2mm; background: #fff; vertical-align: middle; }
+    .money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .value { font-weight: 700; color: #183d36; }
+
+    .product { display: flex; align-items: center; gap: 2mm; min-width: 0; }
+    .productInfo { min-width: 0; flex: 1; }
+    .product strong { display: block; font-size: 9.3px; line-height: 1.22; color: #172033; }
+    .productMeta { margin-top: 1mm; color: #435164; font-size: 7.8px; line-height: 1.28; }
+    .productMetaRow { display: flex; flex-wrap: wrap; gap: .35mm 1.8mm; }
+    .productMetaSize { margin-top: .55mm; }
+    .productMeta span { white-space: nowrap; }
+    .productMeta b { color: #1f3d37; font-weight: 700; }
+    .img { width: 9mm; height: 11mm; flex: 0 0 auto; object-fit: contain; border: 1px solid #d4dcdf; border-radius: 1.5mm; background: #fff; }
+    .img.empty { display: flex; align-items: center; justify-content: center; padding: 1mm; color: #9aa4ae; font-size: 5.5px; text-align: center; }
+
+    tfoot td { background: #eef4f2; border-color: #b9c7c4; font-weight: 700; }
+    tfoot .totalLabel { text-align: right; color: #183d36; letter-spacing: .08em; }
+    tfoot .totalValue { background: #255f54; color: #fff; font-size: 11px; }
+
+    .signoff {
+      display: grid;
+      grid-template-columns: 1.4fr .7fr;
+      gap: 7mm;
+      margin-top: 10mm;
+      break-inside: avoid;
+    }
+    .signBox { border-top: 1px solid #667382; padding-top: 1.5mm; color: #667382; font-size: 8px; }
+    .signBox strong { color: #255f54; }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 8mm;
+      margin-top: 5mm;
+      padding-top: 2.5mm;
+      border-top: 1px solid #d7dfdd;
+      color: #7b8793;
+      font-size: 7.2px;
+    }
+    .valuationNote { margin-top: 1.5mm; color: #8a5b00; font-size: 7.5px; text-align: right; }
+
+    @media print {
+      .screen-actions { display: none; }
+      body { width: auto; max-width: none; }
+      .flowSection { overflow: visible; }
+      table { width: 100% !important; max-width: 100% !important; }
+    }
   </style>
 </head>
 <body>
   <div class="screen-actions">
-    <button onclick="window.print()">Tiparire / Salvare PDF</button>
-    <button onclick="window.close()">Inchide</button>
+    <button onclick="window.print()">Tipărire / Salvare PDF</button>
+    <button onclick="window.close()">Închide</button>
   </div>
-  <div class="doc">
-    <div class="header">
-      <div class="company">
-        <div class="company-name">SC TITAN EURO-COM SRL</div>
-        <div>Cod Fiscal: RO17495362</div>
-        <div>Nr. Reg. Com.: J19/420/2005</div>
-        <div>Miercurea Ciuc, Jud. Harghita, Str. Mihail Sadoveanu 33/c/17</div>
-      </div>
-      <div class="title">
-        <h1>Fisa verificare marfa</h1>
-        <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
-        <div class="sub">Document fara preturi</div>
+
+  <div class="top">
+    <div>
+      <div class="company">TITAN EURO-COM SRL</div>
+      <div class="staffTag">Fișă internă pentru verificarea mărfii primite în gestiune.</div>
+    </div>
+    <div class="docBox">
+      <h3>Datele verificării</h3>
+      <div class="docBoxBody">
+        <div class="docLine"><span>Furnizor</span><strong>${pdfEscape(item.supplier_name || "-")}</strong></div>
+        <div class="docLine"><span>Factura</span><strong>${pdfEscape(item.invoice_number || "-")}</strong></div>
+        <div class="docLine"><span>Data facturii</span><strong>${pdfEscape(pdfDate(item.invoice_date))}</strong></div>
+        <div class="docLine"><span>Gestiune</span><strong>${pdfEscape(item.location_name || "-")}</strong></div>
       </div>
     </div>
-    <div class="meta">
-      <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
-      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
-      <div class="box"><div class="label">Cod UIT</div><div class="value uit">${pdfEscape(item.uit_code || item.uitCode || "-")}</div></div>
-      <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
-      <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
-      <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
+  </div>
+
+  <div class="title">
+    <div class="eyebrow">Verificare internă marfă</div>
+    <h1>FIȘĂ VERIFICARE MARFĂ</h1>
+    <div class="subtitle">Cantități și prețuri de vânzare • TVA ${pdfEscape(salesTvaShort(salesTva))}</div>
+  </div>
+
+  <section class="flowSection">
+    <div class="flowHeader">
+      <div>
+        <strong>PRODUSE DE VERIFICAT</strong>
+        <span>Bifează „Verificat” după controlul fizic al fiecărui produs.</span>
+      </div>
+      <b>${pdfNumber(totalQty, 0)} buc. · ${pdfNumber(totalValueRon)} RON</b>
     </div>
-    <div class="note">Lista pentru verificarea fizica a marfii primite. Nu contine preturi. Completeaza cantitatea receptionata, bifeaza OK sau noteaza problema si observatiile.</div>
+
     <table>
-      <colgroup>
-        <col style="width: 3%" />
-        <col style="width: 7%" />
-        <col style="width: 9%" />
-        <col style="width: 15%" />
-        <col style="width: 7%" />
-        <col style="width: 7%" />
-        <col style="width: 5%" />
-        <col style="width: 7%" />
-        <col style="width: 6%" />
-        <col style="width: 5%" />
-        <col style="width: 6%" />
-        <col style="width: 6%" />
-        <col style="width: 3%" />
-        <col style="width: 7%" />
-        <col style="width: 7%" />
-      </colgroup>
       <thead>
         <tr>
-          <th>Nr.</th>
-          <th>Cod produs</th>
-          <th>S/N/COD</th>
-          <th>Denumire produs</th>
-          <th>Brand</th>
-          <th>Categorie</th>
-          <th>Gen</th>
-          <th>Culoare</th>
-          <th>Cod culoare</th>
-          <th>Marime</th>
-          <th>Cant. factura</th>
-          <th>Cant. receptionata</th>
-          <th>OK</th>
-          <th>Lipsa / problema</th>
-          <th>Observatii</th>
+          <th>Nr. crt.</th>
+          <th>Denumirea produsului / varianta</th>
+          <th class="codeHeader">Cod produs</th>
+          <th class="codeHeader">Cod de bare</th>
+          <th>U.M.</th>
+          <th>Cant.</th>
+          <th>Verificat</th>
+          <th>P.U. RON</th>
+          <th>Valoare RON</th>
         </tr>
       </thead>
       <tbody>
-        ${lines || `<tr><td colspan="15" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
+        ${lines || `<tr><td colspan="9" style="text-align:center;padding:18px;">Nu există produse de verificat.</td></tr>`}
       </tbody>
       <tfoot>
-        <tr class="totals"><td colspan="10">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
+        <tr>
+          <td colspan="5" class="totalLabel">TOTAL</td>
+          <td class="qty">${pdfNumber(totalQty, 0)}</td>
+          <td></td>
+          <td></td>
+          <td class="money totalValue">${pdfNumber(totalValueRon)}</td>
+        </tr>
       </tfoot>
     </table>
-    <div class="signatures">
-      <div class="sig">Verificat de</div>
-      <div class="sig">Semnatura</div>
-      <div class="sig">Data</div>
-    </div>
-    <div class="footer">
-      <span>SC TITAN EURO-COM SRL - fisa verificare marfa</span>
-      <span>Generat: ${pdfEscape(today)}</span>
-    </div>
+  </section>
+
+  ${missingPrices ? `<div class="valuationNote">Atenție: ${missingPrices} poziții nu au preț de vânzare disponibil; totalul valoric include numai pozițiile evaluate.</div>` : ""}
+
+  <div class="signoff">
+    <div class="signBox"><strong>Verificat de:</strong> ____________________________________________</div>
+    <div class="signBox"><strong>Data:</strong> __________________</div>
+  </div>
+
+  <div class="footer">
+    <span>AllInFashion • fișă internă magazin</span>
+    <span>${pdfEscape(item.invoice_number || "-")} • ${pdfEscape(pdfDate(item.reception_date) || today)}</span>
   </div>
 </body>
 </html>`;
@@ -1541,11 +1683,10 @@ function buildReceptionVerificationHtml(
 function openReceptionVerificationPdf(
   detail: AifReceptionDetail,
   drafts: Record<string, Record<string, unknown>> = {},
-  categories?: any[],
-  genderTypes?: any[]
+  salesSettings: SalesTvaSettings = DEFAULT_SALES_TVA_SETTINGS,
 ) {
   const fileName = `verificare_marfa_${fileSafe((detail.item as any)?.invoice_number || (detail.item as any)?.id)}.pdf`;
-  const html = buildReceptionVerificationHtml(detail, drafts, categories, genderTypes).replace(
+  const html = buildReceptionVerificationHtml(detail, drafts, salesSettings).replace(
     "</head>",
     `<script>
       document.title=${JSON.stringify(fileName)};
@@ -1565,7 +1706,6 @@ function openReceptionVerificationPdf(
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-
 
 export default function AllInReceptions(_props: Props) {
   const [meta, setMeta] = useState<AifMeta | null>(null);
@@ -1766,7 +1906,7 @@ export default function AllInReceptions(_props: Props) {
       const data = detail?.item?.id === id ? detail : await apiAifGetReception(id);
       if (!data) throw new Error("A receptió nem tölthető be ellenőrző PDF exporthoz.");
       const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
-      openReceptionVerificationPdf(data, drafts, (meta?.categories || []) as any[], (meta?.genderTypes || []) as any[]);
+      openReceptionVerificationPdf(data, drafts, salesTvaSettings);
     } catch (e: any) {
       setMessage(e?.message || "Az ellenőrző PDF export nem sikerült.");
     } finally {
