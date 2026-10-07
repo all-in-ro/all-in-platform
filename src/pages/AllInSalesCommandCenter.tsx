@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   Database,
   Filter,
@@ -1786,6 +1787,7 @@ function DetailsTable({
   const sectionRef = useRef<HTMLElement | null>(null);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
+  const [rowNumberDescending, setRowNumberDescending] = useState(true);
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const startIndex = (safePage - 1) * pageSize;
@@ -1810,17 +1812,36 @@ function DetailsTable({
           <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Részletes eladási adatok</p>
           <h2 className="mt-1 text-lg text-white">Eladási tételek</h2>
         </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] text-white/44">{rows.length} sor</span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] text-white/44">{rows.length} sor</span>
+          <button
+            type="button"
+            onClick={() => setRowNumberDescending((current) => !current)}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
+            title={rowNumberDescending ? `Kattintás: 1 → ${rows.length} számozás` : `Kattintás: ${rows.length} → 1 számozás`}
+            aria-label="Eladási tételek számozási irányának megfordítása"
+          >
+            {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
+          </button>
+        </div>
       </div>
 
       <div className="divide-y divide-white/8">
-        {visible.map((item) => {
+        {visible.map((item, index) => {
           const imageUrl = String((item as any).imageUrl || "").trim() || null;
+          const absoluteIndex = startIndex + index;
+          const rowNumber = rowNumberDescending ? rows.length - absoluteIndex : absoluteIndex + 1;
           return (
             <article
               key={`${item.source}:${item.id}`}
-              className="grid gap-3 px-4 py-3 transition hover:bg-white/[0.035] md:grid-cols-[minmax(0,2.15fr)_minmax(130px,0.8fr)_78px_minmax(105px,0.7fr)_minmax(105px,0.7fr)_38px] md:items-center"
+              className="grid gap-3 px-4 py-3 transition hover:bg-white/[0.035] md:grid-cols-[46px_minmax(0,2.15fr)_minmax(130px,0.8fr)_78px_minmax(105px,0.7fr)_minmax(105px,0.7fr)_38px] md:items-center"
             >
+              <div className="flex items-center md:justify-center">
+                <span className="inline-flex min-w-[34px] items-center justify-center rounded-full border border-white/10 bg-black/12 px-2 py-1 text-[11px] leading-none text-white/70">
+                  {rowNumber}
+                </span>
+              </div>
+
               <div className="flex min-w-0 items-start gap-3">
                 <ProductThumb src={imageUrl} alt={item.productTitle || item.productCode || "Termék"} />
                 <div className="min-w-0">
