@@ -3845,7 +3845,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   router.get("/receptions", requireAuthed, async (req, res) => {
-    const limit = Math.min(300, Math.max(1, Number(req.query.limit || 80)));
+    const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 80)));
     const search = text(req.query.q || req.query.search);
     const supplier = text(req.query.supplier || req.query.supplier_id || req.query.supplierId);
     const location = text(req.query.location || req.query.location_id || req.query.locationId);
@@ -3898,6 +3898,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
 
     const limitParam = addArg(limit);
+    const salesUnitPriceRonSql = `COALESCE(
+      rw_sale.sell_price_ron,
+      ${sellPriceRonSql("rw_sale.sell_price", "rw_sale.normalized", "COALESCE(r.exchange_rate_to_ron,1)")}
+    )`;
     const sql = `
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
@@ -3914,6 +3918,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
         count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
         count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
+        COALESCE(sale_totals.sales_total_ron,0)::numeric(14,2) AS sales_total_ron,
         (count(sm.id) > 0) AS has_stock_movements,
         (
           r.status <> 'committed'
@@ -3927,8 +3932,41 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       LEFT JOIN aif_import_batches b ON b.reception_id=r.id
       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
       LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
+      LEFT JOIN LATERAL (
+        SELECT round(COALESCE(sum(
+          COALESCE(rw_sale.qty,0)::numeric *
+          COALESCE(${salesUnitPriceRonSql},0)::numeric *
+          CASE
+            WHEN lower(COALESCE(
+              rw_sale.normalized->>'salesPriceIncludesTva',
+              rw_sale.normalized->>'sellPriceIncludesTva',
+              'true'
+            )) IN ('false','0','no','nem','off')
+            THEN 1 + (
+              CASE
+                WHEN replace(COALESCE(
+                  rw_sale.normalized->>'salesTvaRate',
+                  rw_sale.normalized->>'saleTvaRate',
+                  '21'
+                ), ',', '.') ~ '^[0-9]+([.][0-9]+)?$'
+                THEN replace(COALESCE(
+                  rw_sale.normalized->>'salesTvaRate',
+                  rw_sale.normalized->>'saleTvaRate',
+                  '21'
+                ), ',', '.')::numeric
+                ELSE 21::numeric
+              END
+            ) / 100
+            ELSE 1::numeric
+          END
+        ),0),2)::numeric(14,2) AS sales_total_ron
+        FROM aif_import_batches b_sale
+        JOIN aif_import_rows rw_sale ON rw_sale.batch_id=b_sale.id
+        WHERE b_sale.reception_id=r.id
+          AND rw_sale.status <> 'ignored'
+      ) sale_totals ON true
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      GROUP BY r.id, s.name, l.name, po.order_number
+      GROUP BY r.id, s.name, l.name, po.order_number, sale_totals.sales_total_ron
       ORDER BY r.created_at DESC
       LIMIT ${limitParam}
     `;
