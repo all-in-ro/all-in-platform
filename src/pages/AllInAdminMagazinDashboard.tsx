@@ -1166,6 +1166,17 @@ function SalesVolumeCard({
   previousTransactions: number;
   previousItemsSold: number;
 }) {
+  const [transactionsView, setTransactionsView] = useState<"value" | "percent">("value");
+  const [itemsView, setItemsView] = useState<"value" | "percent">("value");
+  const transactionsDelta = percentChange(transactions, previousTransactions);
+  const itemsDelta = percentChange(itemsSold, previousItemsSold);
+  const signedPercent = (value: number) => `${value > 0.01 ? "+" : ""}${value.toFixed(1)}%`;
+  const percentTone = (value: number) => value > 0.01
+    ? "text-emerald-100"
+    : value < -0.01
+      ? "text-rose-100"
+      : "text-white";
+
   return (
     <article className="relative min-w-0 overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
@@ -1173,27 +1184,50 @@ function SalesVolumeCard({
       <div className="relative flex items-center justify-between gap-3">
         <div>
           <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">Eladások / termék</p>
-          <p className="mt-1 text-[10px] text-white/42">Lezárt valódi eladás • hitel nélkül</p>
+          <p className="mt-1 text-[10px] text-white/42">Külön kattintható: darabszám ↔ változás %</p>
         </div>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <ShoppingBag size={17} />
         </span>
       </div>
       <div className="relative mt-3 grid grid-cols-2 gap-2">
-        <div className="rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5">
-          <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ReceiptText size={11} className="text-[#8ee6e2]" />Eladások</div>
-          <div className="mt-1.5 flex items-end justify-between gap-2">
-            <span className="text-[1.18rem] leading-none text-white">{integer(transactions)}</span>
-            <DeltaBadge current={transactions} previous={previousTransactions} />
+        <button
+          type="button"
+          onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
+          className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
+          title="Kattintás: eladások száma / változás százalék"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ReceiptText size={11} className="shrink-0 text-[#8ee6e2]" />Eladások</span>
+            <span className="rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{transactionsView === "value" ? "%" : "db"}</span>
           </div>
-        </div>
-        <div className="rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5">
-          <div className="flex items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ShoppingBag size={11} className="text-[#8ee6e2]" />Eladott termék</div>
-          <div className="mt-1.5 flex items-end justify-between gap-2">
-            <span className="whitespace-nowrap text-[1.18rem] leading-none text-white">{integer(itemsSold)} db</span>
-            <DeltaBadge current={itemsSold} previous={previousItemsSold} />
+          <div className="mt-2 min-h-[24px]">
+            {transactionsView === "value" ? (
+              <span className="text-[1.22rem] leading-none text-white">{integer(transactions)}</span>
+            ) : (
+              <span className={`whitespace-nowrap text-[1.12rem] leading-none ${percentTone(transactionsDelta)}`}>{signedPercent(transactionsDelta)}</span>
+            )}
           </div>
-        </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setItemsView((current) => current === "value" ? "percent" : "value")}
+          className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
+          title="Kattintás: eladott darab / változás százalék"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ShoppingBag size={11} className="shrink-0 text-[#8ee6e2]" />Eladott termék</span>
+            <span className="rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{itemsView === "value" ? "%" : "db"}</span>
+          </div>
+          <div className="mt-2 min-h-[24px]">
+            {itemsView === "value" ? (
+              <span className="whitespace-nowrap text-[1.22rem] leading-none text-white">{integer(itemsSold)} db</span>
+            ) : (
+              <span className={`whitespace-nowrap text-[1.12rem] leading-none ${percentTone(itemsDelta)}`}>{signedPercent(itemsDelta)}</span>
+            )}
+          </div>
+        </button>
       </div>
     </article>
   );
@@ -2129,7 +2163,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Bruttó forgalom"
             value={money(summary?.salesBeforeDiscount)}
-            hint="TVA-val, kedvezmény előtt • hitel nélkül"
+            hint="Kedvezmény nélküli eladási érték • eladási ár × db"
             icon={CircleDollarSign}
             current={numberValue(summary?.salesBeforeDiscount)}
             previous={numberValue(previous?.salesBeforeDiscount)}
@@ -2198,7 +2232,7 @@ export default function AllInAdminMagazinDashboard({
                 ["Készlet", `${integer(stock?.totalQty)} db`, Boxes],
                 ["Elérhető", `${integer(stock?.availableQty)} db`, PackageCheck],
                 ["Foglalt", `${integer(stock?.reservedQty)} db`, Clock3],
-                ["Készlet eladási értéke", money(stock?.retailValue), CircleDollarSign],
+                [`${data?.location.name || locationName} készletértéke`, money(stock?.retailValue), CircleDollarSign],
                 ["Alacsony készlet", integer(stock?.lowStockVariants), AlertTriangle],
               ].map(([title, value, Icon]) => (
                 <div key={String(title)} className="rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
