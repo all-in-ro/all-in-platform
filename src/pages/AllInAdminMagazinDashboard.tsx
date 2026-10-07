@@ -1112,23 +1112,23 @@ function MetricCard({
           : tone === "accent"
             ? "border-[#8ce7e2]/34 bg-gradient-to-br from-[#286874] via-[#315c6b] to-[#344154]"
             : "border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d]";
-  const baseClass = `relative min-w-0 overflow-hidden rounded-[20px] border p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)] ${toneClass}`;
+  const baseClass = `relative flex min-h-[136px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)] ${toneClass}`;
 
   const content = (
     <>
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
       <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
-      <div className="relative flex min-w-0 items-start justify-between gap-2.5">
-        <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">{title}</p>
-          <p className="mt-2 whitespace-nowrap text-[clamp(1.05rem,1.35vw,1.44rem)] font-medium leading-tight tracking-tight text-white">{value}</p>
-        </div>
+      <div className="relative flex min-h-[36px] min-w-0 items-start justify-between gap-2.5">
+        <p className="min-w-0 pt-0.5 text-[9px] uppercase leading-[1.15] tracking-[0.14em] text-white/60">{title}</p>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <Icon size={17} />
         </span>
       </div>
-      <div className="relative mt-2.5 flex min-w-0 items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-[10px] text-white/58" title={hint}>{hint}</span>
+      <div className="relative flex min-h-[34px] items-start">
+        <p className="whitespace-nowrap text-[clamp(1.05rem,1.35vw,1.44rem)] font-medium leading-tight tracking-tight text-white">{value}</p>
+      </div>
+      <div className="relative mt-auto flex min-h-[28px] min-w-0 items-end justify-between gap-2">
+        <span className="min-w-0 truncate pb-0.5 text-[10px] leading-none text-white/58" title={hint}>{hint}</span>
         <span className="flex shrink-0 items-center gap-1.5">
           {actionLabel ? (
             <span className="rounded-full border border-white/16 bg-black/10 px-2 py-1 text-[9px] text-white/68">
@@ -1179,18 +1179,16 @@ function SalesVolumeCard({
       : "text-white";
 
   return (
-    <article className="relative min-w-0 overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
+    <article className="relative flex min-h-[136px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
       <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
-      <div className="relative flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">Eladások / termék</p>
-        </div>
+      <div className="relative flex min-h-[36px] items-start justify-between gap-3">
+        <p className="pt-0.5 text-[9px] uppercase leading-[1.15] tracking-[0.14em] text-white/60">Eladások / termék</p>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <ShoppingBag size={17} />
         </span>
       </div>
-      <div className="relative mt-3 grid grid-cols-2 gap-2">
+      <div className="relative mt-auto grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
