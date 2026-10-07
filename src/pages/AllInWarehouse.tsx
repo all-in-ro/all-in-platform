@@ -3125,6 +3125,7 @@ type WarehouseLabelContentKey =
   | "description"
   | "category"
   | "sizeColor"
+  | "color"
   | "code"
   | "snCod"
   | "price";
@@ -3208,6 +3209,7 @@ const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean>
   description: true,
   category: true,
   sizeColor: true,
+  color: true,
   code: true,
   snCod: true,
   price: true,
@@ -3222,6 +3224,7 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "description", label: "Anyag / összetétel", hint: "Csak az anyagösszetétel kerül a címkére. Ha nincs megadva, üres marad." },
   { key: "category", label: "Alkategória", hint: "A termék alkategóriája / terméktípusa kerül a címkére." },
   { key: "sizeColor", label: "Méret", hint: "A variáns mérete kerül a címkére." },
+  { key: "color", label: "Szín", hint: "A méret mellett románul jelenik meg, pl. Negru, Roșu." },
   { key: "code", label: "Termékkód / színkód", hint: "A termékkód után a gyártói színkód jelenik meg." },
   { key: "snCod", label: "S/N/COD", hint: "Diszkrét technikai azonosító a kód és az ár között." },
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
@@ -3271,6 +3274,7 @@ type WarehouseLabelPrintItem = {
   category: string;
   size: string;
   color: string;
+  colorNameRo: string;
   description: string;
   productCode: string;
   snCod: string;
@@ -3708,6 +3712,25 @@ function labelPriceParts(value: unknown) {
   return { major, cents };
 }
 
+function warehouseLabelRomanianColorText(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "-") return "";
+  return raw.charAt(0).toLocaleUpperCase("ro-RO") + raw.slice(1);
+}
+
+function warehouseLabelSizeColorText(
+  label: Pick<WarehouseLabelPrintItem, "size" | "colorNameRo">,
+  content: Record<WarehouseLabelContentKey, boolean>,
+) {
+  const size = content.sizeColor && label.size && label.size !== "-"
+    ? String(label.size).trim()
+    : "";
+  const color = content.color
+    ? warehouseLabelRomanianColorText(label.colorNameRo)
+    : "";
+  return [size, color].filter(Boolean).join(" - ");
+}
+
 type WarehouseLabelPrintDocumentOptions = {
   labelContent: Record<WarehouseLabelContentKey, boolean>;
   labelCompanyName: string;
@@ -3729,6 +3752,7 @@ type WarehouseLabelPrintDocumentLayout = {
 
 function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
   const priceParts = labelPriceParts(label.price);
+  const sizeColorText = warehouseLabelSizeColorText(label, options.labelContent);
   const productCodeWithColor = [label.productCode, label.color]
     .map((value) => String(value || "").trim())
     .filter((value) => value && value !== "-")
@@ -3745,8 +3769,8 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
   if (options.labelContent.title) {
     html.push(`<div class="aifWhLabelTitle">${labelEscapeHtml(labelCleanText(label.title || "Produs", 72))}</div>`);
   }
-  if (options.labelContent.sizeColor && label.size && label.size !== "-") {
-    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span></div>`);
+  if (sizeColorText) {
+    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(sizeColorText, 42))}</span></div>`);
   }
   if (options.labelContent.barcode) {
     html.push(`<div class="aifWhBarcodeSvgWrap">${label.render.ok ? label.render.svg : ""}</div>`);
@@ -3796,6 +3820,7 @@ function warehouseZebraProductCodeWithColor(label: WarehouseLabelPrintItem) {
 
 function warehouseZebraLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
   const priceParts = labelPriceParts(label.price);
+  const sizeColorText = warehouseLabelSizeColorText(label, options.labelContent);
   const productCodeWithColor = warehouseZebraProductCodeWithColor(label);
   const barsSvg = warehouseZebraBarcodeBarsSvg(label.render);
   const html: string[] = [];
@@ -3809,8 +3834,8 @@ function warehouseZebraLabelContentHtml(label: WarehouseLabelPrintItem, options:
   if (options.labelContent.title) {
     html.push(`<div class="aifWhLabelTitle">${labelEscapeHtml(labelCleanText(label.title || "Produs", 72))}</div>`);
   }
-  if (options.labelContent.sizeColor && label.size && label.size !== "-") {
-    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span></div>`);
+  if (sizeColorText) {
+    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(sizeColorText, 42))}</span></div>`);
   }
   if (options.labelContent.barcode) {
     html.push(`<div class="aifWhZebraBarcodeArea"><div class="aifWhBarcodeSvgWrap">${barsSvg}</div><div class="aifWhZebraBarcodeText">${labelEscapeHtml(labelCleanText(label.barcode, 64))}</div></div>`);
@@ -11993,6 +12018,9 @@ export default function AllInWarehouse() {
         (item as any).supplier_color_code,
         (item as any).supplierColorCode,
       );
+      const colorNameRo = resolvedColorRoForItem(mergedLabelItem) ||
+        officialColorFromTypes(firstWarehouseText(detailItem.color_name, item.color_name), colorTypes) ||
+        officialColorRo(firstWarehouseText(detailItem.color_name, item.color_name));
       const price = item.sell_price == null ? "" : String(item.sell_price);
       return {
         item,
@@ -12005,6 +12033,7 @@ export default function AllInWarehouse() {
         category: detailItem.subcategory_name_ro || item.subcategory_name_ro || detailItem.subcategory_name_hu || item.subcategory_name_hu || detailItem.product_type || item.product_type || "-",
         size: detailItem.size || item.size || "-",
         color: colorCode || "-",
+        colorNameRo: colorNameRo || "-",
         description: detailItem.material || item.material || "",
         productCode: labelProductCodeForItem(mergedLabelItem),
         snCod: itemSnCod(mergedLabelItem),
@@ -12013,7 +12042,7 @@ export default function AllInWarehouse() {
         render: labelCode128Svg(barcode, 52),
       };
     });
-  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
 
   const labelInvalidRows = useMemo(
     () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
@@ -12033,6 +12062,7 @@ export default function AllInWarehouse() {
           category: row.category,
           size: row.size,
           color: row.color,
+          colorNameRo: row.colorNameRo,
           description: row.description,
           productCode: row.productCode,
           snCod: row.snCod,
@@ -12134,6 +12164,7 @@ export default function AllInWarehouse() {
           category: row.category,
           size: row.size,
           color: row.color,
+          colorNameRo: row.colorNameRo,
           description: row.description,
           productCode: row.productCode,
           snCod: row.snCod,
@@ -12267,6 +12298,7 @@ export default function AllInWarehouse() {
 
   function WarehouseZebraLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
     const priceParts = labelPriceParts(label.price);
+    const sizeColorText = warehouseLabelSizeColorText(label, labelContent);
     const productCodeWithColor = warehouseZebraProductCodeWithColor(label);
     const barsSvg = warehouseZebraBarcodeBarsSvg(label.render);
     const hasInfo = Boolean(
@@ -12279,8 +12311,8 @@ export default function AllInWarehouse() {
         {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
         {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
         {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
-        {labelContent.sizeColor && label.size && label.size !== "-" && (
-          <div className="aifWhLabelMeta"><span>{labelCleanText(label.size, 16)}</span></div>
+        {sizeColorText && (
+          <div className="aifWhLabelMeta"><span>{labelCleanText(sizeColorText, 42)}</span></div>
         )}
         {labelContent.barcode && (
           <div className="aifWhZebraBarcodeArea">
@@ -12309,6 +12341,7 @@ export default function AllInWarehouse() {
 
   function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
     const priceParts = labelPriceParts(label.price);
+    const sizeColorText = warehouseLabelSizeColorText(label, labelContent);
     const productCodeWithColor = [label.productCode, label.color]
       .map((value) => String(value || "").trim())
       .filter((value) => value && value !== "-")
@@ -12319,9 +12352,9 @@ export default function AllInWarehouse() {
         {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
         {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
         {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
-        {labelContent.sizeColor && label.size && label.size !== "-" && (
+        {sizeColorText && (
           <div className="aifWhLabelMeta">
-            <span>{labelCleanText(label.size, 16)}</span>
+            <span>{labelCleanText(sizeColorText, 42)}</span>
           </div>
         )}
         {labelContent.barcode && <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />}
