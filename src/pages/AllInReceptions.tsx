@@ -3091,11 +3091,11 @@ export default function AllInReceptions(_props: Props) {
                       <button
                         type="button"
                         onClick={() => setRowNumberDescending((current) => !current)}
-                        className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/22"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
                         title={rowNumberDescending ? `Kattintás: 1 → ${visibleRows.length} számozás` : `Kattintás: ${visibleRows.length} → 1 számozás`}
                         aria-label="Terméksorok számozási irányának megfordítása"
                       >
-                        # {rowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                        {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
                       </button>
                       {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
@@ -3122,12 +3122,12 @@ export default function AllInReceptions(_props: Props) {
                       <span className="flex justify-center">
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/74 transition hover:bg-white/10 hover:text-white"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
                           onClick={() => setRowNumberDescending((current) => !current)}
                           title={rowNumberDescending ? `Kattintás: 1 → ${visibleRows.length} számozás` : `Kattintás: ${visibleRows.length} → 1 számozás`}
                           aria-label="Terméksorok számozási irányának megfordítása"
                         >
-                          Sor {rowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                          {rowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
                         </button>
                       </span>
                       <span>Termék / azonosítók</span>
