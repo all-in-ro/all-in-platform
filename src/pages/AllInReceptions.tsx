@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CheckCircle,
   Eye,
   FileText,
@@ -1715,6 +1716,7 @@ export default function AllInReceptions(_props: Props) {
   const [rowDrafts, setRowDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [receptionDraft, setReceptionDraft] = useState<Record<string, string>>({});
   const [rowStatusFilter, setRowStatusFilter] = useState("all");
+  const [rowNumberDescending, setRowNumberDescending] = useState(true);
   const [moveTarget, setMoveTarget] = useState<any | null>(null);
   const [moveToReceptionId, setMoveToReceptionId] = useState("");
   const [moveReceptionOptions, setMoveReceptionOptions] = useState<AifReceptionSummary[]>([]);
@@ -2002,6 +2004,11 @@ export default function AllInReceptions(_props: Props) {
     if (!detail) return null;
     return receptionBalance(detail.item, detail.rows || [], rowDrafts, receptionDraft);
   }, [detail, rowDrafts, receptionDraft]);
+
+  useEffect(() => {
+    if (!detail?.item?.id) return;
+    setRowNumberDescending(true);
+  }, [detail?.item?.id]);
 
   async function applyNoPurchaseVatAndSave() {
     if (!detail) return;
@@ -2803,6 +2810,15 @@ export default function AllInReceptions(_props: Props) {
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-[11px] uppercase tracking-[0.13em] text-[#d9fffd]/78">Terméksorok</p>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
+                      <button
+                        type="button"
+                        onClick={() => setRowNumberDescending((current) => !current)}
+                        className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/22"
+                        title={rowNumberDescending ? `Kattintás: 1 → ${visibleRows.length} számozás` : `Kattintás: ${visibleRows.length} → 1 számozás`}
+                        aria-label="Terméksorok számozási irányának megfordítása"
+                      >
+                        # {rowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                      </button>
                       {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
                     <p className="mt-1 text-[14px] text-white/90">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
@@ -2825,7 +2841,17 @@ export default function AllInReceptions(_props: Props) {
                   <div className="p-2.5">
                     <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(390px,2.2fr)_54px_126px_46px_104px_112px_106px_118px_98px] items-center gap-1.5 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] font-normal uppercase tracking-[0.055em] text-white/[0.74] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                       <span className="text-center">✓</span>
-                      <span className="text-center">Sor</span>
+                      <span className="flex justify-center">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/74 transition hover:bg-white/10 hover:text-white"
+                          onClick={() => setRowNumberDescending((current) => !current)}
+                          title={rowNumberDescending ? `Kattintás: 1 → ${visibleRows.length} számozás` : `Kattintás: ${visibleRows.length} → 1 számozás`}
+                          aria-label="Terméksorok számozási irányának megfordítása"
+                        >
+                          Sor {rowNumberDescending ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+                        </button>
+                      </span>
                       <span>Termék / azonosítók</span>
                       <span className="text-center">Méret</span>
                       <span>Szín</span>
@@ -2838,7 +2864,8 @@ export default function AllInReceptions(_props: Props) {
                     </div>
 
                     <div className="overflow-hidden rounded-b-[14px] border-x border-b border-white/[0.12] bg-[#30465a]">
-                      {visibleRows.map((r) => {
+                      {visibleRows.map((r, rowIndex) => {
+                        const displayRowNo = rowNumberDescending ? visibleRows.length - rowIndex : rowIndex + 1;
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
                         const editable = rowCanEdit(r);
                         const canCommitOrMove = rowCanWork(r);
@@ -2884,14 +2911,14 @@ export default function AllInReceptions(_props: Props) {
                                 checked={checked}
                                 disabled={!canCommitOrMove || hasRowError}
                                 onChange={() => toggleRow(r.id)}
-                                aria-label={`Sor ${r.row_no} kijelölése`}
+                                aria-label={`Sor ${displayRowNo} kijelölése`}
                               />
                             </div>
 
                             <div className="min-w-0 text-center">
                               <div className="flex items-center justify-center gap-1.5">
                                 <span className={`h-2 w-2 rounded-full ${statusDot}`} />
-                                <span className="text-[13px] tabular-nums text-white/[0.96]">{r.row_no}</span>
+                                <span className="text-[13px] tabular-nums text-white/[0.96]">{displayRowNo}</span>
                               </div>
                               {hasRowError ? (
                                 <button
@@ -3073,7 +3100,8 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="grid gap-2 bg-[#344b60] p-2.5 xl:hidden">
-                  {visibleRows.map((r) => {
+                  {visibleRows.map((r, rowIndex) => {
+                    const displayRowNo = rowNumberDescending ? visibleRows.length - rowIndex : rowIndex + 1;
                     const draft: any = rowDrafts[r.id] || r.normalized || {};
                     const editable = rowCanEdit(r);
                     const canCommitOrMove = rowCanWork(r);
@@ -3096,7 +3124,7 @@ export default function AllInReceptions(_props: Props) {
                     return (
                       <article key={r.id} className={`overflow-hidden rounded-[20px] border ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.12] bg-[#3a5268]"}`}>
                         <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-2.5">
-                          <label className="inline-flex items-center gap-2 text-[12px] text-white/92"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} /><span>Sor {r.row_no}</span></label>
+                          <label className="inline-flex items-center gap-2 text-[12px] text-white/92"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} /><span>Sor {displayRowNo}</span></label>
                           {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full border border-rose-300/20 bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/44">{statusText(r.status)}</span>}
                         </div>
                         <div className="p-3">
