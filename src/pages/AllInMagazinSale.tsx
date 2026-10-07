@@ -320,6 +320,7 @@ export default function AllInMagazinSale({
   const [success, setSuccess] = useState<AifShopSaleResult | null>(null);
   const requestKeyRef = useRef("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const cartScrollRef = useRef<HTMLDivElement | null>(null);
   const automaticLookupTimerRef = useRef<number | null>(null);
   const searchRequestIdRef = useRef(0);
   const administrationScanTimerRef = useRef<number | null>(null);
@@ -617,11 +618,22 @@ export default function AllInMagazinSale({
           setError(`Legfeljebb ${available} db adható a kosárhoz.`);
           return current;
         }
-        return current.map((line) =>
-          catalogIdentity(line) === id ? { ...line, quantity: line.quantity + 1 } : line,
-        );
+        const updated: CartLine = {
+          ...existing,
+          ...item,
+          quantity: existing.quantity + 1,
+          discountPercent: existing.discountPercent,
+        };
+        return [updated, ...current.filter((line) => catalogIdentity(line) !== id)];
       }
-      return [...current, { ...item, quantity: 1, discountPercent: 0 }];
+      return [{ ...item, quantity: 1, discountPercent: 0 }, ...current];
+    });
+
+    // A legutóbb csippantott / hozzáadott tétel mindig a kosár tetején legyen látható.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        cartScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      });
     });
   }
 
@@ -1100,7 +1112,7 @@ export default function AllInMagazinSale({
               )}
             </div>
 
-            <div className="mt-3 max-h-[43vh] space-y-2 overflow-y-auto pr-1">
+            <div ref={cartScrollRef} className="mt-3 max-h-[43vh] space-y-2 overflow-y-auto pr-1">
               {cart.length ? cart.map((line) => {
                 const listPrice = numberValue(line.sellPrice);
                 const discountedUnit = discountedUnitPrice(listPrice, line.discountPercent);
