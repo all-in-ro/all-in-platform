@@ -59,7 +59,7 @@ const DEFAULT_SALES_TVA_SETTINGS: SalesTvaSettings = {
 
 const OPEN_RECEPTION_HANDOFF_KEY = "allinfashion:reception-open:v1";
 const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
-const RECEPTIONS_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp";
+const RECEPTIONS_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
 async function fetchAifJsonLocal<T>(path: string, init?: RequestInit): Promise<T> {
   const requestHeaders = new Headers(init?.headers || {});
@@ -2769,8 +2769,8 @@ export default function AllInReceptions(_props: Props) {
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Receptiók</p><p className="mt-0.5 text-lg text-white">{totals.count}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Terméksor</p><p className="mt-0.5 text-lg text-white">{totals.lines}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-0.5 text-lg text-white">{totals.qty}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Törölhető</p><p className="mt-0.5 text-lg text-white">{totals.deletable}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white">{money(totals.value)}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Bruttó érték</p><p className="mt-0.5 text-lg text-[#d7fffd]">{money(totals.salesValueRon, "RON")}</p></div>
             <div className="rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 py-1.5"><p className="text-xs uppercase tracking-[0.06em] text-white/72">Eladási TVA</p><p className="mt-0.5 text-lg text-white">{salesTvaText}</p></div>
           </div>
         </section>
