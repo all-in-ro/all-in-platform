@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   Clock3,
   Filter,
@@ -1184,7 +1185,6 @@ function SalesVolumeCard({
       <div className="relative flex items-center justify-between gap-3">
         <div>
           <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">Eladások / termék</p>
-          <p className="mt-1 text-[10px] text-white/42">Külön kattintható: darabszám ↔ változás %</p>
         </div>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <ShoppingBag size={17} />
@@ -1488,6 +1488,7 @@ export default function AllInAdminMagazinDashboard({
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
+  const [eventLogRowNumberDescending, setEventLogRowNumberDescending] = useState(true);
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
   const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifAdminShopRecentSale | null>(null);
@@ -1768,6 +1769,23 @@ export default function AllInAdminMagazinDashboard({
     ),
     [data?.recentSales, showCreditRowsInEventLog],
   );
+  const eventLogProductCount = useMemo(
+    () => eventLogSales.filter((sale) => !isPaymentSettlement(sale)).length,
+    [eventLogSales],
+  );
+  const eventLogRowNumbers = useMemo(() => {
+    const numbers = new Map<string, number>();
+    let ordinal = 0;
+    for (const sale of eventLogSales) {
+      if (isPaymentSettlement(sale)) continue;
+      ordinal += 1;
+      numbers.set(
+        String(sale.lineId || sale.id || ordinal),
+        eventLogRowNumberDescending ? eventLogProductCount - ordinal + 1 : ordinal,
+      );
+    }
+    return numbers;
+  }, [eventLogProductCount, eventLogRowNumberDescending, eventLogSales]);
   const dayClosure = shiftDay?.dayClosure || null;
   const dayClosureAt = dayClosure?.closedAt || dayClosure?.createdAt || null;
   const dayClosureDate = shiftDay?.date || dayClosure?.date || applied.to;
@@ -2345,7 +2363,17 @@ export default function AllInAdminMagazinDashboard({
               <table className="w-full min-w-[1160px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
-                    <th className="w-[54px] min-w-[54px] px-2 py-3 text-center">#</th>
+                    <th className="w-[54px] min-w-[54px] px-2 py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setEventLogRowNumberDescending((current) => !current)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white shadow-[0_4px_12px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99]"
+                        title={eventLogRowNumberDescending ? `Kattintás: 1 → ${eventLogProductCount} számozás` : `Kattintás: ${eventLogProductCount} → 1 számozás`}
+                        aria-label="Eladott terméksorok számozási irányának megfordítása"
+                      >
+                        {eventLogRowNumberDescending ? <ChevronDown size={14} strokeWidth={2.4} /> : <ChevronUp size={14} strokeWidth={2.4} />}
+                      </button>
+                    </th>
                     <th className="px-3 py-3 text-left">Termék</th>
                     <th className="whitespace-nowrap px-3 py-3 text-left">Időpont</th>
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
@@ -2365,9 +2393,9 @@ export default function AllInAdminMagazinDashboard({
                     const settlementMeta = settlementInfo(sale);
                     const lineNoteThread = !settlement ? saleLineNoteThreads[String(sale.lineId || "")] || null : null;
                     const hasProductNote = Boolean(lineNoteThread?.saleNote || lineNoteThread?.notes?.length);
-                    const reverseRowNumber = settlement
+                    const rowNumber = settlement
                       ? null
-                      : eventLogSales.slice(index).filter((item) => !isPaymentSettlement(item)).length;
+                      : eventLogRowNumbers.get(String(sale.lineId || sale.id || index)) ?? null;
                     return (
                     <tr
                       key={sale.lineId}
@@ -2378,13 +2406,13 @@ export default function AllInAdminMagazinDashboard({
                       }`}
                     >
                       <td className="w-[54px] min-w-[54px] px-2 py-3 text-center align-middle">
-                        {reverseRowNumber !== null ? (
+                        {rowNumber !== null ? (
                           <span
                             className="inline-flex h-8 min-w-8 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/14 px-2 text-[12px] font-medium tabular-nums text-[#d7fffd]"
-                            title={`${reverseRowNumber}. eladott terméksor`}
-                            aria-label={`${reverseRowNumber}. eladott terméksor`}
+                            title={`${rowNumber}. eladott terméksor`}
+                            aria-label={`${rowNumber}. eladott terméksor`}
                           >
-                            {reverseRowNumber}
+                            {rowNumber}
                           </span>
                         ) : (
                           <span
