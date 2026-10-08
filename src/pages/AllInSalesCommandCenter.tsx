@@ -48,6 +48,7 @@ import {
 import {
   apiAifCreateSalesHistoryImport,
   apiAifSalesCommandCenterOverview,
+  apiAifShopCashOverview,
   type AifSalesCommandDetailItem,
   type AifSalesCommandDimensionItem,
   type AifSalesCommandDimensionKey,
@@ -102,6 +103,23 @@ type ManualHistoryDraft = {
   discountTotal: string;
   unpaidTotal: string;
   note: string;
+};
+
+
+type FinancialNoteItem = {
+  id: string;
+  kind: "day_close" | "cash_movement";
+  title: string;
+  note: string;
+  date: string;
+  happenedAt?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor?: string | null;
+  amount?: number | null;
+  status?: string | null;
+  reference?: string | null;
+  meta?: string | null;
 };
 
 
@@ -301,6 +319,19 @@ function dateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+
+function localDateKey(value?: string | null) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  const plain = raw.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (plain) return plain[1];
+  const isoPrefix = raw.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+  if (isoPrefix && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) return isoPrefix[1];
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw.slice(0, 10);
+  return date.toLocaleDateString("en-CA", { timeZone: "Europe/Bucharest" });
 }
 
 
@@ -2139,6 +2170,126 @@ function HistoryModal({
   );
 }
 
+
+function FinancialNotesModal({
+  open,
+  loading,
+  error,
+  items,
+  from,
+  to,
+  onClose,
+  onReload,
+}: {
+  open: boolean;
+  loading: boolean;
+  error: string;
+  items: FinancialNoteItem[];
+  from: string;
+  to: string;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  closeOnEscape(open, onClose);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [open]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[1180] flex items-center justify-center bg-[#0f172a]/88 p-3 backdrop-blur-md sm:p-5"
+      onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}
+    >
+      <section className="flex max-h-[92vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_44px_140px_rgba(0,0,0,0.72)]">
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#203d4c] via-[#246263] to-[#2a8d8b] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/10 text-white shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
+              <ReceiptText size={23} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/55">Vezetői pénzügyi audit</p>
+              <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">Pénzügyi megjegyzések</h3>
+              <p className="mt-1 text-[11px] text-white/58">{huDate(from)} – {huDate(to)} • a fejléc szűrését követi</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-white/18 bg-black/10 px-3 py-1.5 text-[10px] text-white/68">{items.length} megjegyzés</span>
+            <button type="button" onClick={onReload} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/20 bg-black/10 px-3 text-xs text-white transition hover:bg-white/10 disabled:opacity-45">
+              <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés
+            </button>
+            <button type="button" onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white transition hover:bg-white/10" aria-label="Pénzügyi megjegyzések bezárása">
+              <X size={18} />
+            </button>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {error ? (
+            <div className="mb-4 rounded-2xl border border-rose-300/35 bg-rose-500/14 px-4 py-3 text-sm text-rose-50">{error}</div>
+          ) : null}
+
+          {loading && !items.length ? (
+            <div className="flex min-h-[360px] items-center justify-center gap-3 text-white/55">
+              <Loader2 size={21} className="animate-spin text-[#8ee6e2]" /> Pénzügyi megjegyzések betöltése…
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {items.map((item) => (
+                <article key={`${item.kind}:${item.id}`} className="overflow-hidden rounded-[22px] border border-[#9be9e5]/18 bg-[#344055] shadow-[0_12px_30px_rgba(15,23,42,0.16)]">
+                  <div className="grid gap-3 p-4 md:grid-cols-[220px_minmax(0,1fr)_190px] md:items-start">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                          item.kind === "day_close"
+                            ? "border-[#8ce7e2]/32 bg-[#2a8d8b]/18 text-[#d7fffd]"
+                            : "border-amber-200/24 bg-amber-400/10 text-amber-50"
+                        }`}>
+                          {item.title}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-white">{huDate(item.date)}</p>
+                      <p className="mt-1 text-[11px] text-white/48">{item.happenedAt ? dateTime(item.happenedAt) : ""}</p>
+                    </div>
+
+                    <div className="min-w-0 rounded-2xl border border-white/10 bg-[#293548] px-4 py-3.5">
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-[#bff8f5]/55">Megjegyzés</p>
+                      <p className="mt-2 whitespace-pre-wrap break-words text-[14px] leading-6 text-white">{item.note}</p>
+                      {item.meta ? <p className="mt-2 border-t border-white/8 pt-2 text-[10px] text-white/46">{item.meta}</p> : null}
+                    </div>
+
+                    <div className="min-w-0 md:text-right">
+                      <p className="text-[10px] text-[#d7fffd]">{friendlyLocationLabel(item.locationCode, item.locationName)}</p>
+                      <p className="mt-1 text-[12px] text-white/78">{item.actor || "–"}</p>
+                      {item.amount != null ? <p className="mt-2 text-lg tabular-nums text-white">{money(item.amount)}</p> : null}
+                      {item.reference ? <p className="mt-1 truncate text-[10px] text-white/40">Ref.: {item.reference}</p> : null}
+                    </div>
+                  </div>
+                </article>
+              ))}
+
+              {!loading && !items.length ? (
+                <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/12 text-center text-white/42">
+                  <ReceiptText size={32} className="text-[#7bd7d4]/65" />
+                  <p className="mt-3 text-sm text-white/64">A kiválasztott időszakban nincs pénzügyi megjegyzés.</p>
+                  <p className="mt-1 text-xs text-white/36">A napzárási, készpénzátadási és bankbefizetési megjegyzések jelennek meg itt.</p>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+
 export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: string; role?: "admin" | "shop" }) {
   const initial = useMemo<FiltersState>(() => ({
     ...presetFilters("month"),
@@ -2170,6 +2321,10 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const [heatmapMetric, setHeatmapMetric] = useState<"revenue" | "itemsSold" | "transactions" | "grossProfit">("revenue");
   const [detailTarget, setDetailTarget] = useState<AifSalesCommandDetailItem | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [financialNotesOpen, setFinancialNotesOpen] = useState(false);
+  const [financialNotesLoading, setFinancialNotesLoading] = useState(false);
+  const [financialNotesError, setFinancialNotesError] = useState("");
+  const [financialNotes, setFinancialNotes] = useState<FinancialNoteItem[]>([]);
   const filterSectionRef = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
@@ -2186,6 +2341,92 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   }, [applied]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadFinancialNotes = useCallback(async () => {
+    setFinancialNotesLoading(true);
+    setFinancialNotesError("");
+    try {
+      const serverLocations = (data?.filterOptions.locations || [])
+        .filter((location) => SALES_STORE_CODES.has(String(location.code || "")));
+      const requestedCodes = applied.location && applied.location !== "all"
+        ? [applied.location]
+        : serverLocations.map((location) => String(location.code || "")).filter(Boolean);
+      const locationCodes = Array.from(new Set(requestedCodes.length ? requestedCodes : ["main_warehouse", "magazin_targu_secuiesc"]));
+
+      const results = await Promise.all(
+        locationCodes.map((location) =>
+          apiAifShopCashOverview({
+            location,
+            limit: 500,
+            month: String(applied.to || localIsoDate()).slice(0, 7),
+          }),
+        ),
+      );
+
+      const wantedEmployee = normalizedFilterValue(applied.employee);
+      const inRange = (date: string) => Boolean(date) && date >= applied.from && date <= applied.to;
+      const next: FinancialNoteItem[] = [];
+
+      for (const result of results) {
+        for (const closure of result.closures || []) {
+          const note = String(closure.note || "").trim();
+          const date = String(closure.date || "").slice(0, 10) || localDateKey(closure.closedAt);
+          if (!note || !inRange(date)) continue;
+          if (wantedEmployee && normalizedFilterValue(closure.actor) !== wantedEmployee) continue;
+          next.push({
+            id: String(closure.id),
+            kind: "day_close",
+            title: "Napi kasszazárás",
+            note,
+            date,
+            happenedAt: closure.closedAt || closure.createdAt || null,
+            locationCode: closure.locationCode || result.location?.code || null,
+            locationName: closure.locationName || result.location?.name || null,
+            actor: closure.actor || null,
+            meta: `Záró kassza: ${money(closure.countedCash)} • Eltérés: ${money(closure.cashDifference)}`,
+          });
+        }
+
+        for (const movement of result.movements || []) {
+          const note = String(movement.note || "").trim();
+          const date = localDateKey(movement.requestedAt || movement.createdAt);
+          if (!note || !inRange(date)) continue;
+          if (wantedEmployee && normalizedFilterValue(movement.requestedBy) !== wantedEmployee) continue;
+          next.push({
+            id: String(movement.id),
+            kind: "cash_movement",
+            title: movement.type === "manager_handover" ? "Készpénzátadás" : "Bankbefizetés",
+            note,
+            date,
+            happenedAt: movement.requestedAt || movement.createdAt || null,
+            locationCode: movement.locationCode || result.location?.code || null,
+            locationName: movement.locationName || result.location?.name || null,
+            actor: movement.requestedBy || null,
+            amount: numberValue(movement.amount),
+            status: movement.status || null,
+            reference: movement.reference || null,
+          });
+        }
+      }
+
+      next.sort((a, b) => {
+        const left = new Date(a.happenedAt || `${a.date}T12:00:00`).getTime();
+        const right = new Date(b.happenedAt || `${b.date}T12:00:00`).getTime();
+        return right - left;
+      });
+      setFinancialNotes(next);
+    } catch (caught: any) {
+      setFinancialNotes([]);
+      setFinancialNotesError(caught?.message || "A pénzügyi megjegyzések nem tölthetők be.");
+    } finally {
+      setFinancialNotesLoading(false);
+    }
+  }, [applied.employee, applied.from, applied.location, applied.to, data?.filterOptions.locations]);
+
+  function openFinancialNotes() {
+    setFinancialNotesOpen(true);
+    void loadFinancialNotes();
+  }
 
   // A szűrők azonnal élnek. Szöveges keresésnél csak egy rövid debounce van,
   // hogy gépelés közben ne lőjünk ki minden billentyűre külön lekérdezést.
@@ -2350,6 +2591,11 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               <span className="hidden rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-white/46 xl:inline-flex xl:items-center xl:gap-2"><Zap size={13} className="text-[#8ee6e2]" />{data?.generatedAt ? `Frissítve: ${dateTime(data.generatedAt)}` : actor}</span>
+              <button type="button" className={primaryButton} onClick={openFinancialNotes}>
+                <ReceiptText size={15} />
+                Pénzügyi megjegyzések
+                {financialNotes.length ? <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-white/20 bg-black/10 px-1.5 text-[9px]">{financialNotes.length}</span> : null}
+              </button>
               <button type="button" className={primaryButton} onClick={() => setHistoryOpen(true)}><Database size={15} />Eladási előzmények</button>
               <button type="button" className={neutralButton} onClick={() => void load()} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />Frissítés</button>
               <button type="button" className={neutralButton} onClick={() => { window.location.hash = "#allin"; }}><Home size={15} />Kezdőlap</button>
@@ -2470,6 +2716,16 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
       </div>
 
       <DetailDrawer item={detailTarget} onClose={() => setDetailTarget(null)} />
+      <FinancialNotesModal
+        open={financialNotesOpen}
+        loading={financialNotesLoading}
+        error={financialNotesError}
+        items={financialNotes}
+        from={applied.from}
+        to={applied.to}
+        onClose={() => setFinancialNotesOpen(false)}
+        onReload={() => void loadFinancialNotes()}
+      />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} data={data} onChanged={load} />
 
       {loading ? <div className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]"><div className="flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/24 bg-[#142033] px-5 py-4 text-sm text-white shadow-2xl"><Loader2 className="animate-spin text-[#8ee6e2]" size={22} />Vezetői adatok betöltése...</div></div> : null}
