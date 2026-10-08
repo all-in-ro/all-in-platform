@@ -2271,13 +2271,20 @@ export default function AllInShopOperations({
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi befolyt összeg</p>
-                    <span className="rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                    <div className="min-w-0">
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi befolyt összeg</p>
+                      <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCollectedTotal)}</p>
+                    </div>
+                    <div className="sm:min-w-[170px] sm:text-right">
+                      <span className="inline-flex rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
+                      <div className="mt-2">
+                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">Bruttó</p>
+                        <p className="mt-1 text-xl tracking-tight text-white">{formatMoney(daySummary.salesBeforeDiscount)}</p>
+                      </div>
+                    </div>
                   </div>
-                  <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCollectedTotal)}</p>
-                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-4">
-                    <span>Bruttó: <strong className="font-normal text-white">{formatMoney(daySummary.salesBeforeDiscount)}</strong></span>
+                  <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-3">
                     <span>Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
                     <span>Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
