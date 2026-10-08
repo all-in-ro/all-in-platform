@@ -66,6 +66,7 @@ import {
   type AifShopSaleLineNoteThread,
   type AifShopSaleDetailResponse,
   type AifShopShiftDayOverview,
+  type AifShopShiftDayEmployee,
   type AifShopShiftHandover,
   type AifShopShiftSnapshot,
   type AifShopStockOverviewResponse,
@@ -1004,6 +1005,121 @@ function DailySaleDetailModal({
   );
 }
 
+function EmployeeDaySalesModal({
+  employee,
+  date,
+  data,
+  loading,
+  error,
+  onClose,
+  onOpenSale,
+}: {
+  employee: AifShopShiftDayEmployee;
+  date: string;
+  data: AifShopDailySummaryResponse | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+  onOpenSale: (sale: AifShopDailySaleItem) => void;
+}) {
+  const summary = data?.summary;
+  const lines = (data?.productLines?.length ? data.productLines : data?.products || [])
+    .filter((item) => String(item.recordType || "sale") !== "payment_settlement");
+  const collected = numberValue(summary?.collectedTotal ?? summary?.revenue);
+  const gross = numberValue(summary?.salesBeforeDiscount);
+  const discount = numberValue(summary?.discountTotal);
+  const discountPercent = gross > 0.005 ? discount / gross * 100 : 0;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[455] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5"
+      onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}
+    >
+      <section className="flex max-h-[94vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.70)]">
+        <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/26 bg-white/10 text-white"><UserRound size={23} /></span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/58">Dolgozó napi eladásai</p>
+              <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{employee.name}</h3>
+              <p className="mt-1 text-[11px] text-white/62">{formatDate(date)} • kattints egy termékre a bizonylat részleteihez</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white transition hover:bg-white/10"><X size={18} /></button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b] p-3">
+              <p className="text-[9px] uppercase tracking-[0.11em] text-white/66">Bruttó érték</p>
+              <p className="mt-2 text-xl text-white">{formatMoney(gross)}</p>
+              <p className="mt-1 text-[9px] text-white/62">rendes eladási ár × db</p>
+            </div>
+            <div className="rounded-2xl border border-amber-200/20 bg-amber-400/10 p-3">
+              <p className="text-[9px] uppercase tracking-[0.11em] text-amber-100/62">Kedvezmény</p>
+              <p className="mt-2 text-xl text-amber-50">{formatMoney(discount)}</p>
+              <p className="mt-1 text-[9px] text-amber-100/62">{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+              <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Befolyt összeg</p>
+              <p className="mt-2 text-xl text-[#d7fffd]">{formatMoney(collected)}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+              <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Eladás / db</p>
+              <p className="mt-2 text-xl text-white">{summary?.transactions || 0} / {summary?.itemsSold || 0} db</p>
+            </div>
+            <div className="rounded-2xl border border-[#7bd7d4]/20 bg-[#244f55] p-3">
+              <p className="text-[9px] uppercase tracking-[0.11em] text-[#cffffd]/58">Kezdő kassza</p>
+              <p className="mt-2 text-xl text-[#d7fffd]">{employee.openingCash == null ? "–" : formatMoney(employee.openingCash)}</p>
+              <p className="mt-1 text-[9px] text-white/46">{employee.openingCashSource === "shift_handover" ? "műszakátvételből" : employee.openingCash != null ? "napi nyitó kassza" : "nincs műszakadat"}</p>
+            </div>
+          </div>
+
+          {error ? <div className="mt-4 rounded-2xl border border-red-300/45 bg-red-600/18 px-4 py-3 text-sm text-red-50">{error}</div> : null}
+          {loading ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-3 text-white/58"><Loader2 size={22} className="animate-spin text-[#8ee6e2]" /> Eladások betöltése…</div>
+          ) : (
+            <div className="mt-4 space-y-2">
+              {lines.map((item, index) => {
+                const linkedSale = (data?.sales || []).find((sale) => String(sale.id) === String(item.saleId || "") && String(sale.recordType || "sale") === String(item.recordType || "sale"));
+                const listTotal = numberValue(item.listTotal) > 0.005 ? numberValue(item.listTotal) : Math.max(0, numberValue(item.revenue) + numberValue(item.discountTotal));
+                const discountValue = Math.max(0, numberValue(item.discountTotal));
+                const lineDiscountPercent = listTotal > 0.005 ? discountValue / listTotal * 100 : 0;
+                return (
+                  <button
+                    key={`${item.recordType || "sale"}-${item.lineId || item.key}-${index}`}
+                    type="button"
+                    disabled={!linkedSale}
+                    onClick={() => linkedSale && onOpenSale(linkedSale)}
+                    className="grid w-full gap-3 rounded-[20px] border border-white/11 bg-[#344154] p-3 text-left transition hover:border-[#9be9e5]/38 hover:bg-[#3a495e] disabled:cursor-default sm:grid-cols-[72px_minmax(0,1fr)_250px] sm:items-center"
+                  >
+                    <ProductImage src={item.imageUrl} title={item.title} compact />
+                    <div className="min-w-0">
+                      <p className="truncate text-[15px] text-white">{item.title}</p>
+                      <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
+                      <p className="mt-2 text-[10px] text-white/38">{item.saleNumber || "–"} • {item.soldAt ? formatExactDateTime(item.soldAt) : "–"}</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-right sm:grid-cols-1 sm:gap-1">
+                      <p className="text-[11px] text-white/54">{item.qty} db</p>
+                      <p className="text-[12px] text-white/78">Bruttó {formatMoney(listTotal)}</p>
+                      <p className={discountValue > 0.005 ? "text-[11px] text-amber-100" : "text-[11px] text-white/32"}>{discountValue > 0.005 ? `Kedv. ${lineDiscountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • ${formatMoney(discountValue)}` : "Kedvezmény nincs"}</p>
+                    </div>
+                  </button>
+                );
+              })}
+              {!lines.length ? <div className="flex min-h-[260px] items-center justify-center rounded-[22px] border border-dashed border-white/12 text-sm text-white/42">Ezen a napon nincs megjeleníthető termékeladás.</div> : null}
+            </div>
+          )}
+        </div>
+        <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-5 py-3.5">
+          <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"><X size={16} /> Bezárás</button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export default function AllInShopOperations({
   open,
   mode,
@@ -1044,6 +1160,10 @@ export default function AllInShopOperations({
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
   const [saleDetailError, setSaleDetailError] = useState("");
+  const [employeeSalesTarget, setEmployeeSalesTarget] = useState<AifShopShiftDayEmployee | null>(null);
+  const [employeeSalesData, setEmployeeSalesData] = useState<AifShopDailySummaryResponse | null>(null);
+  const [employeeSalesLoading, setEmployeeSalesLoading] = useState(false);
+  const [employeeSalesError, setEmployeeSalesError] = useState("");
   const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
   const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifShopDailyProductItem | null>(null);
   const [saleLineNoteDraft, setSaleLineNoteDraft] = useState("");
@@ -1415,6 +1535,28 @@ export default function AllInShopOperations({
     }
   }
 
+  function closeEmployeeSales() {
+    setEmployeeSalesTarget(null);
+    setEmployeeSalesData(null);
+    setEmployeeSalesError("");
+    setEmployeeSalesLoading(false);
+  }
+
+  async function openEmployeeSales(employee: AifShopShiftDayEmployee) {
+    setEmployeeSalesTarget(employee);
+    setEmployeeSalesData(null);
+    setEmployeeSalesError("");
+    setEmployeeSalesLoading(true);
+    try {
+      const response = await apiAifShopDailySummary({ location: locationCode, date: summaryDate, employee: employee.name });
+      setEmployeeSalesData(response);
+    } catch (caught) {
+      setEmployeeSalesError(caught instanceof Error ? caught.message : "A dolgozó napi eladásai nem tölthetők be.");
+    } finally {
+      setEmployeeSalesLoading(false);
+    }
+  }
+
   function closeSaleLineNote() {
     if (saleLineNoteSaving) return;
     setSaleLineNoteTarget(null);
@@ -1778,6 +1920,10 @@ export default function AllInShopOperations({
     setSaleDetail(null);
     setSaleDetailError("");
     setSaleDetailLoading(false);
+    setEmployeeSalesTarget(null);
+    setEmployeeSalesData(null);
+    setEmployeeSalesError("");
+    setEmployeeSalesLoading(false);
     setSaleLineNoteThreads({});
     setSaleLineNoteTarget(null);
     setSaleLineNoteDraft("");
@@ -1851,6 +1997,10 @@ export default function AllInShopOperations({
           closeSaleDetail();
           return;
         }
+        if (employeeSalesTarget) {
+          closeEmployeeSales();
+          return;
+        }
         if (dayCloseOpen && !dayCloseSaving) {
           setDayCloseOpen(false);
           return;
@@ -1876,7 +2026,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2126,8 +2276,10 @@ export default function AllInShopOperations({
                     <span className="rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
                   </div>
                   <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCollectedTotal)}</p>
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-white/16 pt-2 text-[10px] text-white/72">
-                    <span>Mai eladási forgalom: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-4">
+                    <span>Bruttó: <strong className="font-normal text-white">{formatMoney(daySummary.salesBeforeDiscount)}</strong></span>
+                    <span>Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
+                    <span>Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
                 </div>
@@ -2241,6 +2393,7 @@ export default function AllInShopOperations({
                                   Időszak: {pendingHandover.handoverFromDate || pendingHandover.handoverToDate} → {pendingHandover.handoverToDate || pendingHandover.handoverFromDate}
                                 </p>
                               ) : null}
+                              {pendingHandover.grossSales != null ? <p className="mt-1 text-[10px] text-white/52">Bruttó: {formatMoney(pendingHandover.grossSales)} • Kedvezmény: {formatMoney(pendingHandover.discountTotal || 0)}</p> : null}
                             </div>
                           </div>
                           <button
@@ -2442,6 +2595,7 @@ export default function AllInShopOperations({
                         <div>
                           <p className="text-sm text-amber-50">Átadás vár {currentOutgoingHandover.toActor} átvételére</p>
                           <p className="mt-1 text-xs text-white/52">A pillanatkép {formatTime(currentOutgoingHandover.cutoffAt)}-kor lezárult. Addig új eladás nem rögzíthető a saját neveden.</p>
+                          <p className="mt-1 text-[10px] text-amber-50/72">Átadandó kassza: {formatMoney(currentOutgoingHandover.expectedCash)} • Bruttó: {formatMoney(currentOutgoingHandover.snapshot?.shift?.salesBeforeDiscount || 0)} • Kedvezmény: {formatMoney(currentOutgoingHandover.snapshot?.shift?.discountTotal || 0)}</p>
                         </div>
                       </div>
                       <button
@@ -2462,6 +2616,7 @@ export default function AllInShopOperations({
                       <div>
                         <p className="text-sm text-white">{currentIncomingHandover.fromActor} műszakátadása rád vár.</p>
                         <p className="mt-1 text-xs text-white/55">A kassza átvételét a belépéskor megjelenő átadási ablakban kell jóváhagyni.</p>
+                        <p className="mt-1 text-[10px] text-[#d7fffd]/78">Ezzel a kasszával kezdesz: {formatMoney(currentIncomingHandover.expectedCash)} • Előző műszak bruttó: {formatMoney(currentIncomingHandover.snapshot?.shift?.salesBeforeDiscount || 0)} • Kedvezmény: {formatMoney(currentIncomingHandover.snapshot?.shift?.discountTotal || 0)}</p>
                       </div>
                     </div>
                   ) : null}
@@ -2491,9 +2646,12 @@ export default function AllInShopOperations({
                         <div className="text-right">
                           <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi befolyt összeg</p>
                           <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(shiftData?.totals))}</p>
-                          <p className="mt-1 text-[9px] text-white/38">
-                            Eladás {formatMoney(shiftData?.totals.revenue || 0)} • Tartozásrendezés {formatMoney(shiftCustomerPaymentTotal(shiftData?.totals))}
-                          </p>
+                          <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-white/44">
+                            <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(shiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
+                            <span>Kedvezmény <strong className="font-normal text-amber-100/86">{formatMoney(shiftData?.totals.discountTotal || 0)}</strong></span>
+                            <span>Eladás <strong className="font-normal text-white/78">{formatMoney(shiftData?.totals.revenue || 0)}</strong></span>
+                            <span>Nyitó kassza <strong className="font-normal text-[#d7fffd]">{shiftData?.totals.openingCash == null ? "–" : formatMoney(shiftData.totals.openingCash)}</strong></span>
+                          </div>
                         </div>
                       </div>
 
@@ -2520,7 +2678,7 @@ export default function AllInShopOperations({
                         </div>
                         <UserRound size={22} className="text-[#8ee6e2]" />
                       </div>
-                      <div className="mt-3 grid grid-cols-3 gap-2">
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5">
                           <p className="text-[9px] text-white/38">Befolyt összeg</p>
                           <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(shiftCollectedTotal(currentEmployeeDay))}</p>
@@ -2530,6 +2688,7 @@ export default function AllInShopOperations({
                         </div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-sm">{currentEmployeeDay?.transactions || 0}</p></div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-sm">{currentEmployeeDay?.itemsSold || 0}</p></div>
+                        <div className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 p-2.5"><p className="text-[9px] text-[#cffffd]/48">Kezdő kassza</p><p className="mt-1 text-sm text-[#d7fffd]">{currentEmployeeDay?.openingCash == null ? "–" : formatMoney(currentEmployeeDay.openingCash)}</p></div>
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><p className="text-[9px] text-white/38">Készpénz</p><p className="mt-1 text-sm">{formatMoney(shiftPayment(currentEmployeeDay, "cash").amount)}</p></div>
@@ -2551,7 +2710,7 @@ export default function AllInShopOperations({
                         {(shiftData?.employees || []).map((employee) => {
                           const active = employeeKey(employee.name) === employeeKey(actor);
                           return (
-                            <div key={employee.name} className={`rounded-2xl border p-3.5 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`}>
+                            <button type="button" onClick={() => void openEmployeeSales(employee)} key={employee.name} className={`rounded-2xl border p-3.5 text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/48 hover:shadow-[0_10px_24px_rgba(0,0,0,0.18)] active:translate-y-0 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`} title={`${employee.name} napi termékeinek megnyitása`}>
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                   <p className="truncate text-base text-white">{employee.name}</p>
@@ -2564,7 +2723,12 @@ export default function AllInShopOperations({
                               <p className="mt-1 text-[9px] text-white/36">
                                 Eladás {formatMoney(employee.revenue)}{shiftCustomerPaymentTotal(employee) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(employee))}` : ""}
                               </p>
-                              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                              <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
+                                <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2"><p className="text-white/40">Bruttó</p><p className="mt-1 text-[12px] text-white">{formatMoney(employee.salesBeforeDiscount)}</p></div>
+                                <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2"><p className="text-white/40">Kedvezmény</p><p className="mt-1 text-[12px] text-amber-100">{formatMoney(employee.discountTotal)}</p></div>
+                                <div className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2.5 py-2"><p className="text-[#cffffd]/46">Kezdő kassza</p><p className="mt-1 text-[12px] text-[#d7fffd]">{employee.openingCash == null ? "–" : formatMoney(employee.openingCash)}</p></div>
+                              </div>
+                              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                                 <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
                                   <p className="text-white/40">Készpénz</p>
                                   <p className="mt-1 text-sm text-white">{formatMoney(shiftPayment(employee, "cash").amount)}</p>
@@ -2574,7 +2738,8 @@ export default function AllInShopOperations({
                                   <p className="mt-1 text-sm text-white">{formatMoney(shiftPayment(employee, "card").amount)}</p>
                                 </div>
                               </div>
-                            </div>
+                              <p className="mt-2 text-right text-[9px] text-[#bdf8f5]/56">Kattints a termékekhez →</p>
+                            </button>
                           );
                         })}
                         {!shiftLoading && !(shiftData?.employees || []).length ? <div className="col-span-full rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">Ezen a napon még nincs dolgozóhoz kötött forgalom.</div> : null}
@@ -2602,8 +2767,11 @@ export default function AllInShopOperations({
                                 </div>
                                 <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${pending ? "border-amber-200/30 bg-amber-300/12 text-amber-50" : accepted ? "border-[#9be9e5]/30 bg-[#2a8d8b] text-white" : "border-white/12 bg-black/10 text-white/50"}`}>{shiftStatusLabel(item.status)}</span>
                               </div>
-                              <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                              <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
                                 {[
+                                  ["Nyitó kassza", item.snapshot?.openingCash == null ? "–" : formatMoney(item.snapshot.openingCash)],
+                                  ["Bruttó érték", formatMoney(item.snapshot?.shift?.salesBeforeDiscount || 0)],
+                                  ["Kedvezmény", formatMoney(item.snapshot?.shift?.discountTotal || 0)],
                                   ["Műszak befolyt", formatMoney(shiftCollectedTotal(item.snapshot?.shift))],
                                   ["Műszak KP", formatMoney(shiftPayment(item.snapshot?.shift, "cash").amount)],
                                   ["Műszak kártya", formatMoney(shiftPayment(item.snapshot?.shift, "card").amount)],
@@ -2986,6 +3154,18 @@ export default function AllInShopOperations({
           />
         ) : null}
 
+        {employeeSalesTarget ? (
+          <EmployeeDaySalesModal
+            employee={employeeSalesTarget}
+            date={summaryDate}
+            data={employeeSalesData}
+            loading={employeeSalesLoading}
+            error={employeeSalesError}
+            onClose={closeEmployeeSales}
+            onOpenSale={(sale) => void openSaleDetail(sale)}
+          />
+        ) : null}
+
         {selectedDailySale ? (
           <DailySaleDetailModal
             sale={selectedDailySale}
@@ -3205,6 +3385,12 @@ export default function AllInShopOperations({
                             <div className="w-full text-left sm:text-right">
                               <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Összeg</p>
                               <p className="mt-1 whitespace-nowrap text-[20px] tabular-nums text-white">{formatMoney(movement.amount)}</p>
+                              {movement.type === "manager_handover" && movement.grossSales != null ? (
+                                <div className="mt-2 space-y-0.5 text-[9px] text-white/46">
+                                  <p>Bruttó: <span className="text-white/72">{formatMoney(movement.grossSales)}</span></p>
+                                  <p>Kedvezmény: <span className="text-amber-100/80">{formatMoney(movement.discountTotal || 0)}</span></p>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -3590,6 +3776,11 @@ export default function AllInShopOperations({
                                 </span>
                               ) : null}
                             </div>
+                            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[#243044]/18 pt-3 text-[10px]">
+                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Bruttó érték</p><p className="mt-1 text-[12px] font-medium">{formatMoney(selectedCashHandoverDay.grossSales || 0)}</p></div>
+                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény</p><p className="mt-1 text-[12px] font-medium">{formatMoney(selectedCashHandoverDay.discountTotal || 0)}</p></div>
+                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény %</p><p className="mt-1 text-[12px] font-medium">{(numberValue(selectedCashHandoverDay.grossSales) > 0.005 ? numberValue(selectedCashHandoverDay.discountTotal) / numberValue(selectedCashHandoverDay.grossSales) * 100 : 0).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</p></div>
+                            </div>
                           </>
                         ) : (
                           <p className="mt-3 text-xs leading-relaxed text-white/55">A naptárban kattints egy sárga karikás napra. Az adott nap záró készpénze azonnal itt jelenik meg.</p>
@@ -3826,12 +4017,14 @@ export default function AllInShopOperations({
                 <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
                   <div className="rounded-[22px] border border-[#9be9e5]/25 bg-[#263345] p-4">
                     <p className="text-[10px] uppercase tracking-[0.13em] text-[#bdf8f5]/55">Amit most lezársz</p>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <div className="rounded-xl border border-white/10 bg-black/10 p-3">
-                        <p className="text-[9px] text-white/38">Műszak befolyt összeg</p>
-                        <p className="mt-1 text-base text-[#d7fffd]">{formatMoney(shiftCollectedTotal(handoverShiftPreview))}</p>
-                        <p className="mt-1 text-[8px] text-white/36">Eladás {formatMoney(handoverShiftPreview?.revenue || 0)}{shiftCustomerPaymentTotal(handoverShiftPreview) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(handoverShiftPreview))}` : ""}</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="col-span-2 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 p-3">
+                        <p className="text-[9px] text-[#cffffd]/55">Műszak befolyt összeg</p>
+                        <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(shiftCollectedTotal(handoverShiftPreview))}</p>
+                        <p className="mt-1 text-[8px] text-white/40">Eladás {formatMoney(handoverShiftPreview?.revenue || 0)}{shiftCustomerPaymentTotal(handoverShiftPreview) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(handoverShiftPreview))}` : ""}</p>
                       </div>
+                      <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Bruttó érték</p><p className="mt-1 text-base">{formatMoney(handoverShiftPreview?.salesBeforeDiscount || 0)}</p></div>
+                      <div className="rounded-xl border border-amber-200/16 bg-amber-400/8 p-3"><p className="text-[9px] text-amber-100/58">Kedvezmény</p><p className="mt-1 text-base text-amber-50">{formatMoney(handoverShiftPreview?.discountTotal || 0)}</p></div>
                       <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-base">{handoverShiftPreview?.transactions || 0}</p></div>
                       <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-base">{handoverShiftPreview?.itemsSold || 0}</p></div>
                     </div>
