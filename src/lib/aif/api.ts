@@ -3553,6 +3553,9 @@ export type AifShopShiftSnapshot = {
   fromAt?: string | null;
   toAt?: string | null;
   actor?: string | null;
+  shiftStartAt?: string | null;
+  openingCash?: number | null;
+  openingCashSource?: "day_start" | "shift_handover" | string | null;
   revenue: number;
   salesBeforeDiscount: number;
   transactions: number;
@@ -3675,6 +3678,9 @@ export type AifShopCashMovement = {
   handoverFromDate?: string | null;
   handoverToDate?: string | null;
   coveredDayCount?: number;
+  grossSales?: number | null;
+  discountTotal?: number | null;
+  netSales?: number | null;
   confirmedBy?: string | null;
   confirmedAt?: string | null;
   effectiveAt?: string | null;
@@ -3688,6 +3694,12 @@ export type AifShopCashMovement = {
 export type AifShopCashHandoverDay = {
   date: string;
   amount: number;
+  /** A kiválasztott átadási időszak kumulált rendes eladási ára (listaár × db). */
+  grossSales?: number;
+  /** A kiválasztott átadási időszak kumulált kedvezménye. */
+  discountTotal?: number;
+  /** A kiválasztott átadási időszak kedvezmény utáni eladási értéke. */
+  netSales?: number;
   closed: boolean;
   closingCash?: number | null;
   closedAt?: string | null;
