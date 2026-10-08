@@ -27720,7 +27720,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         items: result.rows.map((row) => ({
           id: text(row.id),
           kind: text(row.kind),
-          date: row.note_date ? cleanAifDocumentDate(row.note_date) : null,
+          date: row.note_date
+            ? (row.note_date instanceof Date
+                ? row.note_date.toISOString().slice(0, 10)
+                : (cleanAifDocumentDate(String(row.note_date).slice(0, 10)) || null))
+            : null,
           happenedAt: row.happened_at ? new Date(row.happened_at).toISOString() : null,
           locationCode: row.location_code || null,
           locationName: row.location_name || null,
