@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Settings,
   MoveRight,
   MoreVertical,
   Trash2,
@@ -24,9 +25,13 @@ import {
   AifMeta,
   AifReceptionDetail,
   AifReceptionSummary,
+  AifReceptionAvizSettings,
   apiAifCommitReceptionRows,
   apiAifDeleteReception,
   apiAifGetReception,
+  apiAifGetReceptionAvizSettings,
+  apiAifSaveReceptionAvizSettings,
+  apiAifEnsureReceptionAvizNumber,
   apiAifIgnoreImportRow,
   apiAifListReceptions,
   apiAifMeta,
@@ -60,6 +65,18 @@ const DEFAULT_SALES_TVA_SETTINGS: SalesTvaSettings = {
 const OPEN_RECEPTION_HANDOFF_KEY = "allinfashion:reception-open:v1";
 const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
 const RECEPTIONS_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
+const DEFAULT_RECEPTION_AVIZ_SETTINGS: AifReceptionAvizSettings = {
+  series: "AVZ",
+  nextNumber: 1,
+  digits: 6,
+  includeYear: true,
+  yearlyReset: true,
+  sequenceYear: new Date().getFullYear(),
+  previewNumber: `AVZ/${new Date().getFullYear()}/000001`,
+  updatedAt: null,
+  updatedBy: null,
+};
+
 
 async function fetchAifJsonLocal<T>(path: string, init?: RequestInit): Promise<T> {
   const requestHeaders = new Headers(init?.headers || {});
@@ -1333,6 +1350,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
   const totalQty = lines.reduce((sum, x) => sum + x.qty, 0);
   const totalRon = lines.reduce((sum, x) => sum + x.valueRon, 0);
   const totalSellRon = lines.reduce((sum, x) => sum + x.sellValueRon, 0);
+  const avizNumber = String(item.aviz_number || item.avizNumber || "").trim() || "-";
   const nrIntern = `REC-${String(item.invoice_number || item.id || "").replace(/[^a-zA-Z0-9-]+/g, "").slice(0, 18) || "-"}`;
   const title = `Receptie ${item.invoice_number || nrIntern}`;
   const today = new Date().toLocaleDateString("ro-RO");
@@ -1370,7 +1388,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     .title { text-align: right; }
     .title h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: .05em; text-transform: uppercase; }
     .title .nr { font-size: 12px; }
-    .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
+    .meta { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 10px; }
     .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 5px 6px; min-height: 34px; }
     .box .label { color: #6b7280; text-transform: uppercase; font-size: 8px; letter-spacing: .05em; margin-bottom: 2px; }
     .box .value { font-size: 10px; }
@@ -1406,16 +1424,18 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
       </div>
       <div class="title">
         <h1>Receptie marfa</h1>
-        <div class="nr">Nr. intern: ${pdfEscape(nrIntern)}</div>
-        <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
+        <div class="nr">Aviz: ${pdfEscape(avizNumber)}</div>
+        <div>Data recepției: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
       </div>
     </div>
 
     <div class="meta">
       <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
       <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Aviz</div><div class="value">${pdfEscape(avizNumber)}</div></div>
       <div class="box"><div class="label">Cod UIT</div><div class="value uit">${pdfEscape(item.uit_code || item.uitCode || "-")}</div></div>
       <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
+      <div class="box"><div class="label">Data recepției</div><div class="value">${pdfEscape(pdfDate(item.reception_date) || today)}</div></div>
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Deviza factura</div><div class="value">${pdfEscape(currency)}</div></div>
       <div class="box"><div class="label">Curs RON</div><div class="value">${pdfNumber(rate, 4)}</div></div>
@@ -1595,6 +1615,7 @@ function buildReceptionVerificationHtml(
   const salesTva = normalizeSalesTvaSettings(salesSettings);
   const title = `Fisa verificare marfa ${item.invoice_number || item.id || ""}`;
   const today = new Date().toLocaleDateString("ro-RO");
+  const avizNumber = String(item.aviz_number || item.avizNumber || "").trim() || "-";
 
   const preparedRows = rows.map((row: any, index: number) => {
     const draft = rowDraft(row, drafts);
@@ -1812,7 +1833,9 @@ function buildReceptionVerificationHtml(
       <div class="docBoxBody">
         <div class="docLine"><span>Furnizor</span><strong>${pdfEscape(item.supplier_name || "-")}</strong></div>
         <div class="docLine"><span>Factura</span><strong>${pdfEscape(item.invoice_number || "-")}</strong></div>
+        <div class="docLine"><span>Aviz</span><strong>${pdfEscape(avizNumber)}</strong></div>
         <div class="docLine"><span>Data facturii</span><strong>${pdfEscape(pdfDate(item.invoice_date))}</strong></div>
+        <div class="docLine"><span>Data recepției</span><strong>${pdfEscape(pdfDate(item.reception_date) || today)}</strong></div>
         <div class="docLine"><span>Gestiune</span><strong>${pdfEscape(item.location_name || "-")}</strong></div>
       </div>
     </div>
@@ -1955,6 +1978,16 @@ export default function AllInReceptions(_props: Props) {
   const [salesPriceIncludesTva, setSalesPriceIncludesTva] = useState(true);
   const [salesTvaUpdatedAt, setSalesTvaUpdatedAt] = useState<string | null>(null);
   const [salesTvaUpdatedBy, setSalesTvaUpdatedBy] = useState<string | null>(null);
+  const [avizSettings, setAvizSettings] = useState<AifReceptionAvizSettings>(DEFAULT_RECEPTION_AVIZ_SETTINGS);
+  const [avizSettingsOpen, setAvizSettingsOpen] = useState(false);
+  const [avizSettingsLoading, setAvizSettingsLoading] = useState(false);
+  const [avizSettingsSaving, setAvizSettingsSaving] = useState(false);
+  const [avizSeries, setAvizSeries] = useState(DEFAULT_RECEPTION_AVIZ_SETTINGS.series);
+  const [avizNextNumber, setAvizNextNumber] = useState(String(DEFAULT_RECEPTION_AVIZ_SETTINGS.nextNumber));
+  const [avizDigits, setAvizDigits] = useState(String(DEFAULT_RECEPTION_AVIZ_SETTINGS.digits));
+  const [avizIncludeYear, setAvizIncludeYear] = useState(DEFAULT_RECEPTION_AVIZ_SETTINGS.includeYear);
+  const [avizYearlyReset, setAvizYearlyReset] = useState(DEFAULT_RECEPTION_AVIZ_SETTINGS.yearlyReset);
+
 
   function applySalesTvaSettings(settings: SalesTvaSettings) {
     const normalized = normalizeSalesTvaSettings(settings);
@@ -1996,6 +2029,66 @@ export default function AllInReceptions(_props: Props) {
     }
   }
 
+  function applyAvizSettings(settings?: AifReceptionAvizSettings | null) {
+    const next = settings || DEFAULT_RECEPTION_AVIZ_SETTINGS;
+    setAvizSettings(next);
+    setAvizSeries(String(next.series || "AVZ"));
+    setAvizNextNumber(String(next.nextNumber || 1));
+    setAvizDigits(String(next.digits || 6));
+    setAvizIncludeYear(next.includeYear !== false);
+    setAvizYearlyReset(next.yearlyReset !== false);
+  }
+
+  async function loadAvizSettings() {
+    setAvizSettingsLoading(true);
+    try {
+      const result = await apiAifGetReceptionAvizSettings();
+      applyAvizSettings(result.settings || result.item || DEFAULT_RECEPTION_AVIZ_SETTINGS);
+    } catch {
+      applyAvizSettings(DEFAULT_RECEPTION_AVIZ_SETTINGS);
+    } finally {
+      setAvizSettingsLoading(false);
+    }
+  }
+
+  async function saveAvizSettings() {
+    if (avizSettingsSaving) return;
+    setAvizSettingsSaving(true);
+    setMessage("");
+    try {
+      const result = await apiAifSaveReceptionAvizSettings({
+        series: avizSeries,
+        nextNumber: Math.max(1, Number.parseInt(avizNextNumber || "1", 10) || 1),
+        digits: Math.min(10, Math.max(3, Number.parseInt(avizDigits || "6", 10) || 6)),
+        includeYear: avizIncludeYear,
+        yearlyReset: avizYearlyReset,
+        sequenceYear: avizSettings.sequenceYear || new Date().getFullYear(),
+      });
+      applyAvizSettings(result.settings || result.item || DEFAULT_RECEPTION_AVIZ_SETTINGS);
+      setAvizSettingsOpen(false);
+      setMessage("Aviz számozás beállításai mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "Az Aviz számozás beállításai nem menthetők.");
+    } finally {
+      setAvizSettingsSaving(false);
+    }
+  }
+
+  async function ensureReceptionAviz(id: string) {
+    const result = await apiAifEnsureReceptionAvizNumber(id);
+    const patch = result.item || {
+      aviz_number: result.avizNumber,
+      aviz_series: result.avizSeries,
+      aviz_sequence_number: result.avizSequenceNumber,
+      aviz_sequence_year: result.avizSequenceYear,
+    };
+    setDetail((prev) => prev && String(prev.item?.id) === String(id)
+      ? { ...prev, item: { ...prev.item, ...patch } }
+      : prev);
+    setItems((prev) => prev.map((item) => String(item.id) === String(id) ? { ...item, ...patch } : item));
+    return patch;
+  }
+
   async function load() {
     setBusy(true);
     setMessage("");
@@ -2015,7 +2108,7 @@ export default function AllInReceptions(_props: Props) {
 
   useEffect(() => {
     void (async () => {
-      await Promise.all([load(), loadSalesTvaSettings()]);
+      await Promise.all([load(), loadSalesTvaSettings(), loadAvizSettings()]);
       let receptionId = "";
       try {
         receptionId = window.sessionStorage.getItem(OPEN_RECEPTION_HANDOFF_KEY) || "";
@@ -2103,6 +2196,15 @@ export default function AllInReceptions(_props: Props) {
     setMessage("");
     try {
       const next = await apiAifGetReception(id);
+      const avizPatch = await apiAifEnsureReceptionAvizNumber(id).catch(() => null);
+      if (avizPatch?.item) next.item = { ...next.item, ...avizPatch.item } as any;
+      else if (avizPatch?.avizNumber) next.item = {
+        ...next.item,
+        aviz_number: avizPatch.avizNumber,
+        aviz_series: avizPatch.avizSeries,
+        aviz_sequence_number: avizPatch.avizSequenceNumber,
+        aviz_sequence_year: avizPatch.avizSequenceYear,
+      } as any;
       setDetail(next);
       setReceptionDraft(buildReceptionDraft(next.item));
       setRowDrafts(buildDrafts(next.rows || []));
@@ -2142,7 +2244,8 @@ export default function AllInReceptions(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const data = detail?.item?.id === id ? detail : await apiAifGetReception(id);
+      await ensureReceptionAviz(id);
+      const data = await apiAifGetReception(id);
       if (!data) throw new Error("A receptió nem tölthető be PDF exporthoz.");
       const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
       openOfficialReceptionPdf(data, drafts, salesTvaSettings);
@@ -2158,7 +2261,8 @@ export default function AllInReceptions(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const data = detail?.item?.id === id ? detail : await apiAifGetReception(id);
+      await ensureReceptionAviz(id);
+      const data = await apiAifGetReception(id);
       if (!data) throw new Error("A receptió nem tölthető be ellenőrző PDF exporthoz.");
       const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
       openReceptionVerificationPdf(data, drafts, salesTvaSettings);
@@ -2688,6 +2792,9 @@ export default function AllInReceptions(_props: Props) {
                 <img src={RECEPTIONS_PDF_ICON_URL} alt="" className="h-[17px] w-[17px] shrink-0 object-contain" /> PDF
               </button>
               <button className={headerBtnSoft} onClick={load} disabled={busy} type="button"><RefreshCw size={15} /> Frissítés</button>
+              <button className={headerBtnSoft} onClick={() => setAvizSettingsOpen(true)} disabled={avizSettingsLoading} type="button" title={`Következő Aviz: ${avizSettings.previewNumber || "-"}`}>
+                <Settings size={15} /> Aviz
+              </button>
               <button className={headerBtnSoft} onClick={() => setSalesTvaModalOpen(true)} disabled={salesTvaSettingsLoading} type="button">Eladási TVA {salesTvaShort(salesTvaSettings)}</button>
               <button className={headerPrimaryBtn} onClick={() => (window.location.hash = "#allinincoming")} type="button"><FileText size={15} /> Új bevételezés</button>
               <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={() => (window.location.hash = "#allin")} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
@@ -2948,6 +3055,12 @@ export default function AllInReceptions(_props: Props) {
                       <span>{cell(detail.item.location_name)}</span>
                       <span className="text-white/25">•</span>
                       <span>{dateText(detail.item.reception_date)}</span>
+                      {(detail.item as any).aviz_number ? (
+                        <>
+                          <span className="text-white/25">•</span>
+                          <span className="font-mono text-[#d7fffd]">AVIZ {String((detail.item as any).aviz_number)}</span>
+                        </>
+                      ) : null}
                       {((detail.item as any).uit_code || (detail.item as any).uitCode) ? (
                         <>
                           <span className="text-white/25">•</span>
@@ -3067,6 +3180,11 @@ export default function AllInReceptions(_props: Props) {
                 <div className="border-t border-white/8 bg-[#2b3749]/76 p-4">
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                     <label className={lightLabel}>Számlaszám<input className={lightInput} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
+                    <label className={lightLabel}>Aviz szám
+                      <div className="flex h-10 items-center rounded-xl border border-[#7bd7d4]/22 bg-[#253e48] px-3 font-mono text-xs text-[#d7fffd]">
+                        {String((detail.item as any).aviz_number || "PDF készítéskor automatikus")}
+                      </div>
+                    </label>
                     <label className={lightLabel}>UIT kód<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
                     <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
                     <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
@@ -3740,6 +3858,68 @@ export default function AllInReceptions(_props: Props) {
           </div>
         );
       })()}
+
+      {avizSettingsOpen && (
+        <div className="fixed inset-0 z-[78] grid place-items-center bg-slate-950/66 p-3 backdrop-blur-[5px]" role="dialog" aria-modal="true" aria-labelledby="aviz-settings-title">
+          <div className="w-full max-w-2xl overflow-hidden rounded-[22px] border border-[#8fe9e5]/32 bg-[#2d394b] text-white shadow-[0_32px_95px_rgba(0,0,0,0.68)] ring-1 ring-white/[0.05]">
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#233747] via-[#24575c] to-[#2a8d8b] px-4 py-4">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.08] text-[#dffffd]">
+                  <Settings size={20} />
+                </span>
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-white/55">Receptió dokumentum</p>
+                  <h2 id="aviz-settings-title" className="mt-1 text-xl text-white">Aviz számozás</h2>
+                  <p className="mt-1 text-xs text-white/62">A kiosztott szám a receptióhoz rögzül, később ugyanaz marad mindkét PDF-en.</p>
+                </div>
+              </div>
+              <button className={neutralBtn} onClick={() => setAvizSettingsOpen(false)} type="button"><X size={14} /> Bezárás</button>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#234750] p-4">
+                <p className="text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/55">Következő bizonylatszám</p>
+                <p className="mt-1 font-mono text-2xl tracking-tight text-[#eaffff]">{avizSettings.previewNumber || "-"}</p>
+                <p className="mt-1 text-[11px] text-white/50">A már kiosztott Aviz számokat ez a beállítás nem írja át.</p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className={label}>Széria
+                  <input className={input} value={avizSeries} onChange={(e) => setAvizSeries(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20))} placeholder="AVZ" />
+                </label>
+                <label className={label}>Következő szám
+                  <input className={input} inputMode="numeric" value={avizNextNumber} onChange={(e) => setAvizNextNumber(e.target.value.replace(/[^0-9]/g, "").slice(0, 12))} placeholder="1" />
+                </label>
+                <label className={label}>Számjegyek
+                  <input className={input} inputMode="numeric" value={avizDigits} onChange={(e) => setAvizDigits(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="6" />
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#354153] px-3 py-3 text-sm text-white/82">
+                  <input className="h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={avizIncludeYear} onChange={(e) => setAvizIncludeYear(e.target.checked)} />
+                  Év szerepeljen a számban
+                </label>
+                <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#354153] px-3 py-3 text-sm text-white/82">
+                  <input className="h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={avizYearlyReset} onChange={(e) => setAvizYearlyReset(e.target.checked)} />
+                  Év elején induljon újra 1-ről
+                </label>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[11px] leading-5 text-white/55">
+                A számla dátuma és a receptió dátuma külön adat. A PDF-ek a <strong className="text-white/82">Receptió dátuma</strong> mezőt használják az áru tényleges átvételi dátumaként.
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-white/10 bg-[#263246] px-4 py-3">
+              <button className={neutralBtn} onClick={() => setAvizSettingsOpen(false)} disabled={avizSettingsSaving} type="button">Mégse</button>
+              <button className={primaryBtn} onClick={() => void saveAvizSettings()} disabled={avizSettingsSaving || avizSettingsLoading} type="button">
+                <Save size={14} /> {avizSettingsSaving ? "Mentés..." : "Beállítás mentése"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {salesTvaModalOpen && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
