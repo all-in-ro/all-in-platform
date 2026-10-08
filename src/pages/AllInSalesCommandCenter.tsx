@@ -47,8 +47,8 @@ import {
 } from "lucide-react";
 import {
   apiAifCreateSalesHistoryImport,
+  apiAifFinancialNotes,
   apiAifSalesCommandCenterOverview,
-  apiAifShopCashOverview,
   type AifSalesCommandDetailItem,
   type AifSalesCommandDimensionItem,
   type AifSalesCommandDimensionKey,
@@ -2346,74 +2346,37 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     setFinancialNotesLoading(true);
     setFinancialNotesError("");
     try {
-      const serverLocations = (data?.filterOptions.locations || [])
-        .filter((location) => SALES_STORE_CODES.has(String(location.code || "")));
-      const requestedCodes = applied.location && applied.location !== "all"
-        ? [applied.location]
-        : serverLocations.map((location) => String(location.code || "")).filter(Boolean);
-      const locationCodes = Array.from(new Set(requestedCodes.length ? requestedCodes : ["main_warehouse", "magazin_targu_secuiesc"]));
-
-      const results = await Promise.all(
-        locationCodes.map((location) =>
-          apiAifShopCashOverview({
-            location,
-            limit: 500,
-            month: String(applied.to || localIsoDate()).slice(0, 7),
-          }),
-        ),
-      );
-
-      const wantedEmployee = normalizedFilterValue(applied.employee);
-      const inRange = (date: string) => Boolean(date) && date >= applied.from && date <= applied.to;
-      const next: FinancialNoteItem[] = [];
-
-      for (const result of results) {
-        for (const closure of result.closures || []) {
-          const note = String(closure.note || "").trim();
-          const date = String(closure.date || "").slice(0, 10) || localDateKey(closure.closedAt);
-          if (!note || !inRange(date)) continue;
-          if (wantedEmployee && normalizedFilterValue(closure.actor) !== wantedEmployee) continue;
-          next.push({
-            id: String(closure.id),
-            kind: "day_close",
-            title: "Napi kasszazárás",
-            note,
-            date,
-            happenedAt: closure.closedAt || closure.createdAt || null,
-            locationCode: closure.locationCode || result.location?.code || null,
-            locationName: closure.locationName || result.location?.name || null,
-            actor: closure.actor || null,
-            meta: `Záró kassza: ${money(closure.countedCash)} • Eltérés: ${money(closure.cashDifference)}`,
-          });
-        }
-
-        for (const movement of result.movements || []) {
-          const note = String(movement.note || "").trim();
-          const date = localDateKey(movement.requestedAt || movement.createdAt);
-          if (!note || !inRange(date)) continue;
-          if (wantedEmployee && normalizedFilterValue(movement.requestedBy) !== wantedEmployee) continue;
-          next.push({
-            id: String(movement.id),
-            kind: "cash_movement",
-            title: movement.type === "manager_handover" ? "Készpénzátadás" : "Bankbefizetés",
-            note,
-            date,
-            happenedAt: movement.requestedAt || movement.createdAt || null,
-            locationCode: movement.locationCode || result.location?.code || null,
-            locationName: movement.locationName || result.location?.name || null,
-            actor: movement.requestedBy || null,
-            amount: numberValue(movement.amount),
-            status: movement.status || null,
-            reference: movement.reference || null,
-          });
-        }
-      }
-
-      next.sort((a, b) => {
-        const left = new Date(a.happenedAt || `${a.date}T12:00:00`).getTime();
-        const right = new Date(b.happenedAt || `${b.date}T12:00:00`).getTime();
-        return right - left;
+      const response = await apiAifFinancialNotes({
+        from: applied.from,
+        to: applied.to,
+        location: applied.location || "all",
+        employee: applied.employee || undefined,
       });
+
+      const next: FinancialNoteItem[] = (response.items || [])
+        .map((item) => ({
+          id: String(item.id || ""),
+          kind: item.kind === "day_close" ? "day_close" : "cash_movement",
+          title:
+            item.kind === "day_close" ? "Napi kasszazárás"
+              : item.kind === "shift_handover" ? "Műszakátadás"
+                : item.kind === "shift_acceptance" ? "Műszakátvétel"
+                  : item.kind === "customer_payment" ? "Tartozásrendezés"
+                    : item.meta === "Bankbefizetés" ? "Bankbefizetés"
+                      : "Készpénzátadás",
+          note: String(item.note || "").trim(),
+          date: String(item.date || "").slice(0, 10),
+          happenedAt: item.happenedAt || null,
+          locationCode: item.locationCode || null,
+          locationName: item.locationName || null,
+          actor: item.actor || null,
+          amount: item.amount == null ? null : numberValue(item.amount),
+          status: item.status || null,
+          reference: item.reference || null,
+          meta: item.meta || null,
+        }))
+        .filter((item) => item.id && item.note && item.date);
+
       setFinancialNotes(next);
     } catch (caught: any) {
       setFinancialNotes([]);
@@ -2421,7 +2384,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     } finally {
       setFinancialNotesLoading(false);
     }
-  }, [applied.employee, applied.from, applied.location, applied.to, data?.filterOptions.locations]);
+  }, [applied.employee, applied.from, applied.location, applied.to]);
 
   function openFinancialNotes() {
     setFinancialNotesOpen(true);
