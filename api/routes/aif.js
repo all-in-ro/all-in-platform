@@ -20942,6 +20942,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function aifCashMovementResponse(row = {}) {
     const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+    const selectedDay = raw.selectedDay && typeof raw.selectedDay === "object" ? raw.selectedDay : {};
+    const metricValue = (...values) => {
+      const value = values.find((item) => item !== undefined && item !== null && item !== "");
+      if (value === undefined) return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? aifRoundMoney(numeric) : null;
+    };
     const handoverFromDate = row.handover_from_date
       ? String(row.handover_from_date).slice(0, 10)
       : (raw.handoverFromDate || raw.handover_from_date || null);
@@ -20963,6 +20970,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       handoverFromDate: handoverFromDate ? String(handoverFromDate).slice(0, 10) : null,
       handoverToDate: handoverToDate ? String(handoverToDate).slice(0, 10) : null,
       coveredDayCount: aifNumber(row.covered_day_count || raw.coveredDayCount || raw.covered_day_count),
+      grossSales: metricValue(raw.grossSales, raw.gross_sales, selectedDay.grossSales, selectedDay.gross_sales),
+      discountTotal: metricValue(raw.discountTotal, raw.discount_total, selectedDay.discountTotal, selectedDay.discount_total),
+      netSales: metricValue(raw.netSales, raw.net_sales, selectedDay.netSales, selectedDay.net_sales),
       confirmedBy: row.confirmed_by || null,
       confirmedAt: row.confirmed_at ? new Date(row.confirmed_at).toISOString() : null,
       effectiveAt: row.effective_at ? new Date(row.effective_at).toISOString() : null,
@@ -21278,6 +21288,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return (periods || []).some((period) => period.from <= workDate && workDate <= period.to);
   }
 
+  async function aifShopCashDailySalesMetrics(client, { locationId, fromDate, toDate }) {
+    const from = cleanAifDocumentDate(fromDate);
+    const to = cleanAifDocumentDate(toDate);
+    if (!from || !to || from > to) return new Map();
+    const result = await client.query(
+      `SELECT
+         (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date::text AS work_date,
+         COALESCE(sum(s.subtotal) FILTER (WHERE s.sale_type <> 'credit'),0)::numeric AS gross_sales,
+         COALESCE(sum(s.discount_total) FILTER (WHERE s.sale_type <> 'credit'),0)::numeric AS discount_total,
+         COALESCE(sum(s.total) FILTER (WHERE s.sale_type <> 'credit'),0)::numeric AS net_sales
+       FROM aif_shop_sales s
+       WHERE s.location_id=$1
+         AND s.status='completed'
+         AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+       GROUP BY (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date
+       ORDER BY work_date ASC`,
+      [locationId, from, to]
+    );
+    return new Map((result.rows || []).map((row) => [String(row.work_date).slice(0, 10), {
+      grossSales: aifRoundMoney(row.gross_sales),
+      discountTotal: aifRoundMoney(row.discount_total),
+      netSales: aifRoundMoney(row.net_sales),
+    }]));
+  }
+
   async function aifShopCashHandoverPlan(client, { locationId, afterDate = null }) {
     const today = aifBucharestIsoDate();
     const requestedAfterDate = afterDate ? cleanAifDocumentDate(afterDate) : null;
@@ -21362,8 +21397,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const closuresByDate = new Map(
       closuresResult.rows.map((row) => [String(row.work_date).slice(0, 10), row])
     );
+    const dailySalesMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
 
     const days = [];
+    let cumulativeGrossSales = 0;
+    let cumulativeDiscountTotal = 0;
+    let cumulativeNetSales = 0;
     let cursor = periodFrom;
     let guard = 0;
     while (cursor <= today && guard < 1500) {
@@ -21372,10 +21411,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const pendingReserved = aifShopCashPendingReservedThrough(pendingPeriods, cursor);
       const pendingCovered = aifShopCashPendingCoversDate(pendingPeriods, cursor);
       const amount = Math.max(0, aifRoundMoney(calc.amount - pendingReserved));
+      const salesMetrics = dailySalesMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
+      cumulativeGrossSales = aifRoundMoney(cumulativeGrossSales + aifNumber(salesMetrics.grossSales));
+      cumulativeDiscountTotal = aifRoundMoney(cumulativeDiscountTotal + aifNumber(salesMetrics.discountTotal));
+      cumulativeNetSales = aifRoundMoney(cumulativeNetSales + aifNumber(salesMetrics.netSales));
 
       days.push({
         date: cursor,
         amount,
+        grossSales: cumulativeGrossSales,
+        discountTotal: cumulativeDiscountTotal,
+        netSales: cumulativeNetSales,
         closed: Boolean(closure),
         closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
         closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
@@ -21439,8 +21485,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [locationId, periodFrom, today]
     );
     const closuresByDate = new Map(closureRows.rows.map((row) => [String(row.work_date).slice(0, 10), row]));
+    let dailySalesMetrics = new Map();
+    try {
+      dailySalesMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
+    } catch (metricsError) {
+      console.error('AIF cash handover sales metrics warning', metricsError);
+    }
 
     const days = [];
+    let cumulativeGrossSales = 0;
+    let cumulativeDiscountTotal = 0;
+    let cumulativeNetSales = 0;
     let cursor = periodFrom;
     let guard = 0;
     while (cursor <= today && guard < 1500) {
@@ -21457,9 +21512,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const amount = Math.max(0, aifRoundMoney(baseAmount - pendingReserved));
+      const salesMetrics = dailySalesMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
+      cumulativeGrossSales = aifRoundMoney(cumulativeGrossSales + aifNumber(salesMetrics.grossSales));
+      cumulativeDiscountTotal = aifRoundMoney(cumulativeDiscountTotal + aifNumber(salesMetrics.discountTotal));
+      cumulativeNetSales = aifRoundMoney(cumulativeNetSales + aifNumber(salesMetrics.netSales));
       days.push({
         date: cursor,
         amount,
+        grossSales: cumulativeGrossSales,
+        discountTotal: cumulativeDiscountTotal,
+        netSales: cumulativeNetSales,
         closed: Boolean(closure),
         closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
         closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
@@ -25969,7 +26031,38 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const handoverRows = handoversResult.rows || [];
       const dayClosure = dayClosureResult.rows[0] || null;
-      const cashBalance = await aifShopCashBalanceAt(pool, { locationId: location.id, at: until });
+      const [cashBalance, dayOpeningBalance] = await Promise.all([
+        aifShopCashBalanceAt(pool, { locationId: location.id, at: until }),
+        aifShopCashBalanceAt(pool, { locationId: location.id, at: bounds.start }),
+      ]);
+      const employeeSnapshotsWithOpening = employeeSnapshots.map((employee) => {
+        const acceptedIncoming = handoverRows
+          .filter((row) => row.status === "accepted" && aifEmployeeKey(row.to_actor) === aifEmployeeKey(employee.name))
+          .sort((a, b) => new Date(a.accepted_at || a.cutoff_at || a.created_at || 0).getTime() - new Date(b.accepted_at || b.cutoff_at || b.created_at || 0).getTime())[0] || null;
+        const hasActivity = aifNumber(employee.transactions) !== 0
+          || aifNumber(employee.itemsSold) !== 0
+          || (employee.payments || []).some((payment) => Math.abs(aifNumber(payment.amount)) > 0.005);
+        if (acceptedIncoming) {
+          return {
+            ...employee,
+            shiftStartAt: acceptedIncoming.accepted_at || acceptedIncoming.cutoff_at || acceptedIncoming.created_at || null,
+            openingCash: aifRoundMoney(acceptedIncoming.counted_cash ?? acceptedIncoming.expected_cash),
+            openingCashSource: "shift_handover",
+          };
+        }
+        return {
+          ...employee,
+          shiftStartAt: hasActivity ? bounds.start : null,
+          openingCash: hasActivity ? aifRoundMoney(dayOpeningBalance.availableCash) : null,
+          openingCashSource: hasActivity ? "day_start" : null,
+        };
+      });
+      const totalsWithOpening = {
+        ...totals,
+        shiftStartAt: bounds.start,
+        openingCash: aifRoundMoney(dayOpeningBalance.availableCash),
+        openingCashSource: "day_start",
+      };
       let handoverPreview = null;
       if (date === today) {
         const requester = actorFrom(req);
@@ -26025,7 +26118,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           expectedCash: aifRoundMoney(cutoffBalance?.availableCash ?? openingCash + newCashDuringShift),
           cashBalance: cutoffBalance,
           shift: currentShift,
-          day: totals,
+          day: totalsWithOpening,
         };
       }
 
@@ -26077,8 +26170,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         generatedAt: new Date().toISOString(),
         date,
         location: { id: String(location.id), code: location.code, name: location.name },
-        totals,
-        employees: employeeSnapshots,
+        totals: totalsWithOpening,
+        employees: employeeSnapshotsWithOpening,
         handovers: handoverResponses,
         handoverPreview,
         dayClosure: dayClosure ? aifDayClosureResponse(dayClosure) : null,
@@ -26480,6 +26573,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             days: [{
               date: today,
               amount: Math.max(0, aifRoundMoney(aifRoundMoney(balance?.availableCash) - aifRoundMoney(balance?.pendingOut))),
+              grossSales: 0,
+              discountTotal: 0,
+              netSales: 0,
               closed: Boolean(todayClosureResult.rowCount),
               closingCash: todayClosureResult.rowCount ? aifRoundMoney(todayClosureResult.rows[0]?.counted_cash) : null,
               closedAt: todayClosureResult.rowCount && todayClosureResult.rows[0]?.closed_at
@@ -26893,6 +26989,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               days: [{
                 date: today,
                 amount: Math.max(0, aifRoundMoney(aifRoundMoney(currentBalanceForFallback.availableCash) - aifRoundMoney(currentBalanceForFallback.pendingOut))),
+                grossSales: 0,
+                discountTotal: 0,
+                netSales: 0,
                 closed: false,
                 closingCash: null,
                 closedAt: null,
@@ -26937,6 +27036,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           handoverToDate,
           coveredDayCount,
           amount,
+          grossSales: aifRoundMoney(selectedDay.grossSales || 0),
+          discountTotal: aifRoundMoney(selectedDay.discountTotal || 0),
+          netSales: aifRoundMoney(selectedDay.netSales || 0),
           selectedDay,
           lastConfirmedTo: plan.lastConfirmedTo || null,
           calculatedAt: new Date().toISOString(),
@@ -27554,11 +27656,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const date = aifValidIsoDate(req.query.date, aifBucharestIsoDate());
       const sessionRole = normCode(req.session?.role);
-      const employee = sessionRole === "shop"
-        ? actorFrom(req)
-        : text(req.query.employee || req.query.actor || actorFrom(req));
+      const sessionActor = actorFrom(req);
+      const requestedEmployee = text(req.query.employee || req.query.actor);
+      let employee = requestedEmployee || sessionActor;
       if (!employee) {
         return res.status(400).json({ error: "Az eladó azonosítása nem sikerült." });
+      }
+      if (sessionRole === "shop" && requestedEmployee && aifEmployeeKey(requestedEmployee) !== aifEmployeeKey(sessionActor)) {
+        const activeEmployees = await aifListActiveShopEmployees(pool, location.code);
+        const activeMatch = activeEmployees.find((name) => aifEmployeeKey(name) === aifEmployeeKey(requestedEmployee));
+        if (activeMatch) {
+          employee = activeMatch;
+        } else {
+          const workedHere = await pool.query(
+            `SELECT 1
+             FROM (
+               SELECT s.actor AS actor
+               FROM aif_shop_sales s
+               WHERE s.location_id=$1
+                 AND s.status='completed'
+                 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+               UNION ALL
+               SELECT cp.actor AS actor
+               FROM aif_shop_customer_payments cp
+               WHERE cp.location_id=$1
+                 AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+               UNION ALL
+               SELECT e.actor AS actor
+               FROM aif_shop_exchanges e
+               WHERE e.location_id=$1
+                 AND e.status='completed'
+                 AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+             ) activity
+             WHERE lower(regexp_replace(btrim(COALESCE(actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+             LIMIT 1`,
+            [location.id, date, requestedEmployee]
+          );
+          if (!workedHere.rowCount) {
+            return res.status(403).json({ error: "A kiválasztott dolgozó ehhez az üzlethez és naphoz nem tartozik." });
+          }
+          employee = requestedEmployee;
+        }
+      } else if (sessionRole === "shop") {
+        employee = sessionActor;
       }
 
       const baseArgs = [location.id, date, employee];
