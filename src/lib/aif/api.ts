@@ -139,6 +139,8 @@ export type AifBrandSizeCode = {
 
 export type AifReceptionInput = {
   invoiceNumber?: string;
+  avizNumber?: string | null;
+  aviz_number?: string | null;
   uitCode?: string | null;
   uit_code?: string | null;
   invoiceDate?: string;
@@ -191,6 +193,10 @@ export type AifReceptionSummary = {
   purchase_order_id?: string | null;
   purchase_order_number?: string | null;
   invoice_number?: string | null;
+  aviz_number?: string | null;
+  aviz_series?: string | null;
+  aviz_sequence_number?: number | string | null;
+  aviz_sequence_year?: number | string | null;
   uit_code?: string | null;
   uitCode?: string | null;
   invoice_date?: string | null;
@@ -2127,6 +2133,53 @@ export function apiAifNormalizeMaterial(material: string) {
     body: JSON.stringify({ material }),
   });
 }
+
+export type AifReceptionAvizSettings = {
+  series: string;
+  nextNumber: number;
+  digits: number;
+  includeYear: boolean;
+  yearlyReset: boolean;
+  sequenceYear: number;
+  previewNumber: string;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+};
+
+export function apiAifGetReceptionAvizSettings() {
+  return fetchAifJSON<{ ok: true; settings: AifReceptionAvizSettings; item?: AifReceptionAvizSettings }>("/receptions/settings/aviz");
+}
+
+export function apiAifSaveReceptionAvizSettings(settings: Partial<AifReceptionAvizSettings>) {
+  return fetchAifJSON<{ ok: true; settings: AifReceptionAvizSettings; item?: AifReceptionAvizSettings }>("/receptions/settings/aviz", {
+    method: "PATCH",
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export function apiAifEnsureReceptionAvizNumber(id: string) {
+  return fetchAifJSON<{
+    ok: true;
+    avizNumber: string;
+    avizSeries?: string | null;
+    avizSequenceNumber?: number | null;
+    avizSequenceYear?: number | null;
+    allocated?: boolean;
+    item?: {
+      id?: string;
+      aviz_number?: string | null;
+      aviz_series?: string | null;
+      aviz_sequence_number?: number | string | null;
+      aviz_sequence_year?: number | string | null;
+      reception_date?: string | null;
+      invoice_date?: string | null;
+    } | null;
+  }>(`/receptions/${encodeURIComponent(id)}/aviz/ensure`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 
 export function apiAifListReceptions(options?: {
   limit?: number;
