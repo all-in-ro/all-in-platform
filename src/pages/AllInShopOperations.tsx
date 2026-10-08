@@ -2549,9 +2549,17 @@ export default function AllInShopOperations({
                       <h3 className="mt-1 text-lg text-white">Kassza és pénzátadás</h3>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Rendszer szerint az üzletben</p>
-                    <p className="mt-1 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                  <div className="flex flex-wrap items-stretch justify-end gap-y-3 text-right">
+                    <div className="pr-4 sm:pr-5">
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Napi kezdő kassza</p>
+                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">
+                        {shiftData?.totals.openingCash == null ? "–" : formatMoney(shiftData.totals.openingCash)}
+                      </p>
+                    </div>
+                    <div className="border-l border-white/40 pl-4 sm:pl-5">
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Rendszer szerint az üzletben</p>
+                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                    </div>
                   </div>
                 </div>
 
