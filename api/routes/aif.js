@@ -21003,61 +21003,57 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           id: String(row?.id || ""),
           from: cleanAifDocumentDate(current.handoverFromDate),
           to: cleanAifDocumentDate(current.handoverToDate),
-          current,
+          amount: aifRoundMoney(row?.amount),
         };
       })
       .filter((item) => item.from && item.to && item.from <= item.to);
 
-    const missing = periods.filter((item) =>
-      item.current.grossSales === null
-      || item.current.discountTotal === null
-      || item.current.netSales === null
-    );
-    if (!missing.length) return sourceRows;
+    if (!periods.length) return sourceRows;
 
-    const fromDate = missing.reduce((min, item) => !min || item.from < min ? item.from : min, null);
-    const toDate = missing.reduce((max, item) => !max || item.to > max ? item.to : max, null);
+    const fromDate = periods.reduce((min, item) => !min || item.from < min ? item.from : min, null);
+    const toDate = periods.reduce((max, item) => !max || item.to > max ? item.to : max, null);
     if (!fromDate || !toDate) return sourceRows;
 
     let dailyMetrics = new Map();
     try {
-      dailyMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate, toDate });
+      dailyMetrics = await aifShopCashDailyTransferMetrics(client, { locationId, fromDate, toDate });
     } catch (error) {
-      console.error("AIF cash movement historical sales metrics warning", error);
+      console.error("AIF cash movement historical transfer gross warning", error);
       return sourceRows;
     }
 
     const calculatedById = new Map();
-    for (const period of missing) {
-      let grossSales = 0;
-      let discountTotal = 0;
-      let netSales = 0;
+    for (const period of periods) {
+      let cashNet = 0;
+      let cashGross = 0;
       let cursor = period.from;
       let guard = 0;
       while (cursor <= period.to && guard < 1500) {
-        const metrics = dailyMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
-        grossSales = aifRoundMoney(grossSales + aifNumber(metrics.grossSales));
-        discountTotal = aifRoundMoney(discountTotal + aifNumber(metrics.discountTotal));
-        netSales = aifRoundMoney(netSales + aifNumber(metrics.netSales));
+        const metrics = dailyMetrics.get(cursor) || { cashNet: 0, cashGross: 0 };
+        cashNet = aifRoundMoney(cashNet + aifNumber(metrics.cashNet));
+        cashGross = aifRoundMoney(cashGross + aifNumber(metrics.cashGross));
         cursor = aifShiftIsoDate(cursor, 1);
         guard += 1;
       }
-      calculatedById.set(period.id, { grossSales, discountTotal, netSales });
+      calculatedById.set(period.id, aifShopCashTransferGrossMetrics(period.amount, { cashNet, cashGross }));
     }
 
     return sourceRows.map((row) => {
       const metrics = calculatedById.get(String(row?.id || ""));
       if (!metrics) return row;
       const raw = row?.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
-      const current = aifCashMovementResponse(row);
       return {
         ...row,
         raw: {
           ...raw,
-          grossSales: current.grossSales === null ? metrics.grossSales : current.grossSales,
-          discountTotal: current.discountTotal === null ? metrics.discountTotal : current.discountTotal,
-          netSales: current.netSales === null ? metrics.netSales : current.netSales,
-          historicalSalesMetricsCalculated: true,
+          grossSales: metrics.grossSales,
+          discountTotal: metrics.discountTotal,
+          netSales: metrics.netSales,
+          grossMetricBasis: "transferred_cash_amount",
+          grossMetricVersion: 2,
+          sourceCashNet: metrics.sourceCashNet,
+          sourceCashGross: metrics.sourceCashGross,
+          historicalTransferMetricsCalculated: true,
         },
       };
     });
@@ -21392,6 +21388,137 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }]));
   }
 
+
+  // A főnöknek átadott készpénz "bruttója" nem a teljes napi forgalom.
+  // Csak azt a bruttó listaértéket számoljuk, amely a készpénzben ténylegesen
+  // befolyt összeghez tartozik. Vegyes (KP + kártya) fizetésnél a sale teljes
+  // kedvezményét a fizetési arány szerint osztjuk fel. Korábbi tartozás készpénzes
+  // rendezésénél az allokált eredeti bizonylatok kedvezményarányát használjuk.
+  async function aifShopCashDailyTransferMetrics(client, { locationId, fromDate, toDate }) {
+    const from = cleanAifDocumentDate(fromDate);
+    const to = cleanAifDocumentDate(toDate);
+    if (!from || !to || from > to) return new Map();
+
+    const result = await client.query(
+      `WITH sale_cash AS (
+         SELECT
+           (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date,
+           COALESCE(sum(p.amount),0)::numeric AS cash_net,
+           COALESCE(sum(
+             CASE
+               WHEN COALESCE(s.total,0) > 0
+                 THEN p.amount::numeric * COALESCE(s.subtotal,0)::numeric / s.total::numeric
+               ELSE p.amount::numeric
+             END
+           ),0)::numeric AS cash_gross
+         FROM aif_shop_sale_payments p
+         JOIN aif_shop_sales s ON s.id=p.sale_id
+         WHERE s.location_id=$1
+           AND s.status='completed'
+           AND p.method='cash'
+           AND p.customer_payment_id IS NULL
+           AND (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+         GROUP BY (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date
+       ), customer_payment_alloc AS (
+         SELECT
+           cp.id,
+           (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date,
+           cp.amount::numeric AS payment_amount,
+           COALESCE(sum(a.amount),0)::numeric AS allocated_net,
+           COALESCE(sum(
+             CASE
+               WHEN COALESCE(s.total,0) > 0
+                 THEN a.amount::numeric * COALESCE(s.subtotal,0)::numeric / s.total::numeric
+               ELSE a.amount::numeric
+             END
+           ),0)::numeric AS allocated_gross
+         FROM aif_shop_customer_payments cp
+         LEFT JOIN aif_shop_customer_payment_allocations a ON a.customer_payment_id=cp.id
+         LEFT JOIN aif_shop_sales s ON s.id=a.sale_id
+         WHERE cp.location_id=$1
+           AND cp.method='cash'
+           AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+         GROUP BY cp.id, (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date, cp.amount
+       ), customer_cash AS (
+         SELECT
+           work_date,
+           COALESCE(sum(payment_amount),0)::numeric AS cash_net,
+           COALESCE(sum(
+             allocated_gross + GREATEST(payment_amount - allocated_net, 0::numeric)
+           ),0)::numeric AS cash_gross
+         FROM customer_payment_alloc
+         GROUP BY work_date
+       ), exchange_cash AS (
+         SELECT
+           (es.created_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date,
+           COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS cash_net,
+           COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS cash_gross
+         FROM aif_shop_exchange_settlements es
+         JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+         WHERE es.location_id=$1
+           AND es.method='cash'
+           AND (es.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+         GROUP BY (es.created_at AT TIME ZONE 'Europe/Bucharest')::date
+       ), combined AS (
+         SELECT work_date, cash_net, cash_gross FROM sale_cash
+         UNION ALL
+         SELECT work_date, cash_net, cash_gross FROM customer_cash
+         UNION ALL
+         SELECT work_date, cash_net, cash_gross FROM exchange_cash
+       )
+       SELECT
+         work_date::text AS work_date,
+         COALESCE(sum(cash_net),0)::numeric AS cash_net,
+         GREATEST(
+           COALESCE(sum(cash_gross),0)::numeric,
+           COALESCE(sum(cash_net),0)::numeric
+         ) AS cash_gross
+       FROM combined
+       GROUP BY work_date
+       ORDER BY work_date ASC`,
+      [locationId, from, to]
+    );
+
+    return new Map((result.rows || []).map((row) => {
+      const cashNet = aifRoundMoney(row.cash_net);
+      const cashGross = Math.max(cashNet, aifRoundMoney(row.cash_gross));
+      return [String(row.work_date).slice(0, 10), {
+        cashNet,
+        cashGross,
+        discountTotal: aifRoundMoney(Math.max(0, cashGross - cashNet)),
+      }];
+    }));
+  }
+
+  function aifShopCashTransferGrossMetrics(amountValue, sourceMetrics = {}) {
+    const amount = Math.max(0, aifRoundMoney(amountValue));
+    const cashNet = Math.max(0, aifRoundMoney(sourceMetrics.cashNet || 0));
+    const cashGross = Math.max(cashNet, aifRoundMoney(sourceMetrics.cashGross || cashNet));
+
+    if (amount <= 0.005) {
+      return { grossSales: 0, discountTotal: 0, netSales: 0, sourceCashNet: cashNet, sourceCashGross: cashGross };
+    }
+
+    let grossSales = amount;
+    if (cashNet > 0.005) {
+      if (amount <= cashNet + 0.005) {
+        grossSales = aifRoundMoney(amount * (cashGross / cashNet));
+      } else {
+        // Ha a kasszában régebbről megmaradt / nyitó pénz is van, annak nincs
+        // termék-kedvezménye. Csak a tényleges cash-forgalom részét bruttósítjuk.
+        grossSales = aifRoundMoney(cashGross + (amount - cashNet));
+      }
+    }
+    grossSales = Math.max(amount, aifRoundMoney(grossSales));
+    return {
+      grossSales,
+      discountTotal: aifRoundMoney(Math.max(0, grossSales - amount)),
+      netSales: amount,
+      sourceCashNet: cashNet,
+      sourceCashGross: cashGross,
+    };
+  }
+
   async function aifShopCashHandoverPlan(client, { locationId, afterDate = null }) {
     const today = aifBucharestIsoDate();
     const requestedAfterDate = afterDate ? cleanAifDocumentDate(afterDate) : null;
@@ -21476,12 +21603,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const closuresByDate = new Map(
       closuresResult.rows.map((row) => [String(row.work_date).slice(0, 10), row])
     );
-    const dailySalesMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
+    const dailyTransferMetrics = await aifShopCashDailyTransferMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
 
     const days = [];
-    let cumulativeGrossSales = 0;
-    let cumulativeDiscountTotal = 0;
-    let cumulativeNetSales = 0;
+    let cumulativeCashNet = 0;
+    let cumulativeCashGross = 0;
     let cursor = periodFrom;
     let guard = 0;
     while (cursor <= today && guard < 1500) {
@@ -21490,17 +21616,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const pendingReserved = aifShopCashPendingReservedThrough(pendingPeriods, cursor);
       const pendingCovered = aifShopCashPendingCoversDate(pendingPeriods, cursor);
       const amount = Math.max(0, aifRoundMoney(calc.amount - pendingReserved));
-      const salesMetrics = dailySalesMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
-      cumulativeGrossSales = aifRoundMoney(cumulativeGrossSales + aifNumber(salesMetrics.grossSales));
-      cumulativeDiscountTotal = aifRoundMoney(cumulativeDiscountTotal + aifNumber(salesMetrics.discountTotal));
-      cumulativeNetSales = aifRoundMoney(cumulativeNetSales + aifNumber(salesMetrics.netSales));
+      const transferMetrics = dailyTransferMetrics.get(cursor) || { cashNet: 0, cashGross: 0 };
+      cumulativeCashNet = aifRoundMoney(cumulativeCashNet + aifNumber(transferMetrics.cashNet));
+      cumulativeCashGross = aifRoundMoney(cumulativeCashGross + aifNumber(transferMetrics.cashGross));
+      const amountMetrics = aifShopCashTransferGrossMetrics(amount, {
+        cashNet: cumulativeCashNet,
+        cashGross: cumulativeCashGross,
+      });
 
       days.push({
         date: cursor,
         amount,
-        grossSales: cumulativeGrossSales,
-        discountTotal: cumulativeDiscountTotal,
-        netSales: cumulativeNetSales,
+        grossSales: amountMetrics.grossSales,
+        discountTotal: amountMetrics.discountTotal,
+        netSales: amountMetrics.netSales,
         closed: Boolean(closure),
         closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
         closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
@@ -21564,17 +21693,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [locationId, periodFrom, today]
     );
     const closuresByDate = new Map(closureRows.rows.map((row) => [String(row.work_date).slice(0, 10), row]));
-    let dailySalesMetrics = new Map();
+    let dailyTransferMetrics = new Map();
     try {
-      dailySalesMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
+      dailyTransferMetrics = await aifShopCashDailyTransferMetrics(client, { locationId, fromDate: periodFrom, toDate: today });
     } catch (metricsError) {
       console.error('AIF cash handover sales metrics warning', metricsError);
     }
 
     const days = [];
-    let cumulativeGrossSales = 0;
-    let cumulativeDiscountTotal = 0;
-    let cumulativeNetSales = 0;
+    let cumulativeCashNet = 0;
+    let cumulativeCashGross = 0;
     let cursor = periodFrom;
     let guard = 0;
     while (cursor <= today && guard < 1500) {
@@ -21591,16 +21719,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const amount = Math.max(0, aifRoundMoney(baseAmount - pendingReserved));
-      const salesMetrics = dailySalesMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
-      cumulativeGrossSales = aifRoundMoney(cumulativeGrossSales + aifNumber(salesMetrics.grossSales));
-      cumulativeDiscountTotal = aifRoundMoney(cumulativeDiscountTotal + aifNumber(salesMetrics.discountTotal));
-      cumulativeNetSales = aifRoundMoney(cumulativeNetSales + aifNumber(salesMetrics.netSales));
+      const transferMetrics = dailyTransferMetrics.get(cursor) || { cashNet: 0, cashGross: 0 };
+      cumulativeCashNet = aifRoundMoney(cumulativeCashNet + aifNumber(transferMetrics.cashNet));
+      cumulativeCashGross = aifRoundMoney(cumulativeCashGross + aifNumber(transferMetrics.cashGross));
+      const amountMetrics = aifShopCashTransferGrossMetrics(amount, {
+        cashNet: cumulativeCashNet,
+        cashGross: cumulativeCashGross,
+      });
       days.push({
         date: cursor,
         amount,
-        grossSales: cumulativeGrossSales,
-        discountTotal: cumulativeDiscountTotal,
-        netSales: cumulativeNetSales,
+        grossSales: amountMetrics.grossSales,
+        discountTotal: amountMetrics.discountTotal,
+        netSales: amountMetrics.netSales,
         closed: Boolean(closure),
         closingCash: closure ? aifRoundMoney(closure.counted_cash) : null,
         closedAt: closure?.closed_at ? new Date(closure.closed_at).toISOString() : null,
@@ -27122,6 +27253,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           grossSales: aifRoundMoney(selectedDay.grossSales || 0),
           discountTotal: aifRoundMoney(selectedDay.discountTotal || 0),
           netSales: aifRoundMoney(selectedDay.netSales || 0),
+          grossMetricBasis: "transferred_cash_amount",
+          grossMetricVersion: 2,
           selectedDay,
           lastConfirmedTo: plan.lastConfirmedTo || null,
           calculatedAt: new Date().toISOString(),
