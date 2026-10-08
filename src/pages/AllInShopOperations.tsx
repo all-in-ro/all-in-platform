@@ -48,6 +48,7 @@ import {
   apiAifCreateShopSaleLineNote,
   apiAifCreateShopShiftHandover,
   apiAifGetShopCustomer,
+  apiAifListLocations,
   apiAifShopCashOverview,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
@@ -70,6 +71,7 @@ import {
   type AifShopShiftHandover,
   type AifShopShiftSnapshot,
   type AifShopStockOverviewResponse,
+  type AifLocationDetail,
 } from "../lib/aif/api";
 
 export type AllInShopOperationMode = "search" | "stock" | "summary";
@@ -85,7 +87,7 @@ type Props = {
 
 const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string; icon: typeof Search }> = {
   search: { title: "Termék keresése", eyebrow: "Gyors termékellenőrzés", icon: Search },
-  stock: { title: "Üzleti készlet", eyebrow: "Aktuális bolti készlet", icon: Boxes },
+  stock: { title: "Készlet", eyebrow: "Aktuális helyszíni készlet", icon: Boxes },
   summary: { title: "Napi összesítés", eyebrow: "Saját műszak és eladások", icon: Receipt },
 };
 
@@ -1154,6 +1156,20 @@ export default function AllInShopOperations({
   const [stockLoading, setStockLoading] = useState(false);
   const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
   const [productFilters, setProductFilters] = useState<ProductFilters>(() => emptyProductFilters());
+  const [browseLocations, setBrowseLocations] = useState<AifLocationDetail[]>([]);
+  const [browseLocationsLoading, setBrowseLocationsLoading] = useState(false);
+  const [browseLocationCode, setBrowseLocationCode] = useState(locationCode);
+  const searchRequestIdRef = useRef(0);
+  const stockRequestIdRef = useRef(0);
+
+  const browseLocation = useMemo(
+    () => browseLocations.find((item) => String(item.code) === String(browseLocationCode)) || null,
+    [browseLocationCode, browseLocations],
+  );
+  const browseLocationName = browseLocation?.name || (browseLocationCode === locationCode ? locationName : browseLocationCode);
+  const browsingInventory = mode === "search" || mode === "stock";
+  const browsingOtherLocation = browsingInventory && String(browseLocationCode) !== String(locationCode);
+  const displayLocationName = browsingInventory ? browseLocationName : locationName;
 
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
@@ -1451,43 +1467,105 @@ export default function AllInShopOperations({
     }
   }
 
-  async function runProductSearch(value = searchQuery) {
+  async function loadBrowseLocations() {
+    setBrowseLocationsLoading(true);
+    try {
+      const response = await apiAifListLocations();
+      const items = (response.items || []).filter((item) => item.is_active !== false);
+      const currentFallback: AifLocationDetail = {
+        id: `current:${locationCode}`,
+        code: locationCode,
+        name: locationName,
+        location_type: "shop",
+        is_active: true,
+      };
+      const hasCurrent = items.some((item) => String(item.code) === String(locationCode));
+      const next = hasCurrent ? items : [currentFallback, ...items];
+      setBrowseLocations(next);
+      if (!next.some((item) => String(item.code) === String(browseLocationCode))) {
+        setBrowseLocationCode(locationCode);
+      }
+    } catch (caught) {
+      setBrowseLocations([{
+        id: `current:${locationCode}`,
+        code: locationCode,
+        name: locationName,
+        location_type: "shop",
+        is_active: true,
+      }]);
+      setBrowseLocationCode(locationCode);
+      setError(caught instanceof Error ? caught.message : "A helyszínek listája nem tölthető be.");
+    } finally {
+      setBrowseLocationsLoading(false);
+    }
+  }
+
+  async function changeBrowseLocation(nextCode: string) {
+    const code = String(nextCode || "").trim();
+    if (!code || code === browseLocationCode) return;
+    setBrowseLocationCode(code);
+    setProductFilters(emptyProductFilters());
+    setError("");
+
+    if (mode === "search") {
+      if (searchQuery.trim()) {
+        await runProductSearch(searchQuery, code);
+      } else {
+        searchRequestIdRef.current += 1;
+        setSearchItems([]);
+        setSearchRan(false);
+      }
+      return;
+    }
+
+    if (mode === "stock") {
+      await loadStock(stockQuery, code);
+    }
+  }
+
+  async function runProductSearch(value = searchQuery, targetLocation = browseLocationCode) {
     const query = value.trim();
     if (!query) {
       setSearchItems([]);
       setSearchRan(false);
       return;
     }
+    const requestId = ++searchRequestIdRef.current;
     setSearchLoading(true);
     setSearchRan(true);
     setError("");
     try {
-      const response = await apiAifShopSaleCatalog({ location: locationCode, search: query, limit: 5000 });
+      const response = await apiAifShopSaleCatalog({ location: targetLocation, search: query, limit: 5000 });
+      if (requestId !== searchRequestIdRef.current) return;
       const exact = (response.items || []).filter((item) => exactCatalogMatch(item, query));
       setSearchItems(exact.length === 1 ? exact : response.items || []);
     } catch (caught) {
+      if (requestId !== searchRequestIdRef.current) return;
       setError(caught instanceof Error ? caught.message : "A termékkeresés nem sikerült.");
       setSearchItems([]);
     } finally {
-      setSearchLoading(false);
+      if (requestId === searchRequestIdRef.current) setSearchLoading(false);
     }
   }
 
-  async function loadStock(value = stockQuery) {
+  async function loadStock(value = stockQuery, targetLocation = browseLocationCode) {
+    const requestId = ++stockRequestIdRef.current;
     setStockLoading(true);
     setError("");
     try {
       const response = await apiAifShopStockOverview({
-        location: locationCode,
+        location: targetLocation,
         search: value.trim() || undefined,
         full: true,
       });
+      if (requestId !== stockRequestIdRef.current) return;
       setStockData(response);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Az üzleti készlet nem tölthető be.");
+      if (requestId !== stockRequestIdRef.current) return;
+      setError(caught instanceof Error ? caught.message : "A kiválasztott hely készlete nem tölthető be.");
       setStockData(null);
     } finally {
-      setStockLoading(false);
+      if (requestId === stockRequestIdRef.current) setStockLoading(false);
     }
   }
 
@@ -1985,6 +2063,7 @@ export default function AllInShopOperations({
   useEffect(() => {
     if (!open) return;
     setError("");
+    setBrowseLocationCode(locationCode);
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
     setOutstandingOnly(false);
@@ -2007,14 +2086,19 @@ export default function AllInShopOperations({
     setSaleLineNoteDraft("");
     setSaleLineNoteError("");
     setCashHistoryOpen(false);
+    if (mode === "search" || mode === "stock") {
+      void loadBrowseLocations();
+    }
     if (mode === "search") {
+      searchRequestIdRef.current += 1;
       setSearchQuery("");
       setSearchItems([]);
       setSearchRan(false);
       window.setTimeout(() => searchInputRef.current?.focus(), 0);
     } else if (mode === "stock") {
+      stockRequestIdRef.current += 1;
       setStockQuery("");
-      void loadStock("");
+      void loadStock("", locationCode);
     } else {
       const today = todayIso();
       const currentMonth = today.slice(0, 7);
@@ -2173,7 +2257,7 @@ export default function AllInShopOperations({
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.16em] text-white/62">{meta.eyebrow}</p>
               <h2 className="mt-1 truncate text-xl">{meta.title}</h2>
-              <p className="mt-1 truncate text-xs text-white/68">{actor} • {locationName}</p>
+              <p className="mt-1 truncate text-xs text-white/68">{actor} • {displayLocationName}{browsingOtherLocation ? " • csak megtekintés" : ""}</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white hover:bg-white/12">
@@ -2182,6 +2266,45 @@ export default function AllInShopOperations({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3.5 sm:p-4">
+          {browsingInventory ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-[#9be9e5]/24 bg-[#273243]/82 p-3 shadow-[0_10px_26px_rgba(15,23,42,0.14)]">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/20 text-[#d7fffd]">
+                  <MapPin size={20} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Megtekintett készlethely</p>
+                  <p className="mt-1 truncate text-base text-white">{browseLocationName}</p>
+                </div>
+                {!browsingOtherLocation ? (
+                  <span className="hidden rounded-full border border-[#9be9e5]/26 bg-[#2a8d8b]/16 px-2.5 py-1 text-[9px] text-[#d7fffd] sm:inline">Saját hely</span>
+                ) : (
+                  <span className="hidden rounded-full border border-sky-200/24 bg-sky-400/10 px-2.5 py-1 text-[9px] text-sky-50 sm:inline">Csak megtekintés</span>
+                )}
+              </div>
+
+              <label className="relative min-w-[260px] flex-1 sm:max-w-[430px]">
+                <Store className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={17} />
+                <select
+                  value={browseLocationCode}
+                  onChange={(event) => void changeBrowseLocation(event.target.value)}
+                  disabled={browseLocationsLoading}
+                  className="h-12 w-full appearance-none rounded-2xl border border-[#9be9e5]/38 bg-[#2a8d8b] pl-11 pr-11 text-sm text-white outline-none transition hover:bg-[#319c99] focus:border-[#c8fffc] disabled:cursor-wait disabled:opacity-60"
+                  aria-label="Megtekintett készlethely"
+                >
+                  {browseLocations.map((item) => (
+                    <option key={item.id || item.code} value={item.code} className="bg-[#303a4c] text-white">
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                {browseLocationsLoading
+                  ? <Loader2 className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-white/80" size={17} />
+                  : <ChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/80" size={17} />}
+              </label>
+            </div>
+          ) : null}
+
           {error ? <div className="mb-4 rounded-2xl border border-red-300/50 bg-red-600/22 px-4 py-3 text-sm text-red-50">{error}</div> : null}
 
           {mode === "search" ? (
@@ -2301,7 +2424,7 @@ export default function AllInShopOperations({
                       {filteredStockItems.length !== stockItems.length ? ` • ${stockItems.length} betöltött találatból` : ""}
                     </span>
                     <span>
-                      Teljes eladható üzleti készlet: <strong className="font-normal text-white">{stockSummary.variantCount} variáns</strong>
+                      Teljes eladható készlet • {browseLocationName}: <strong className="font-normal text-white">{stockSummary.variantCount} variáns</strong>
                     </span>
                   </div>
                   {!stockQuery.trim() && stockData?.complete === true && stockItems.length !== numberValue(stockSummary.variantCount) ? (
