@@ -20949,12 +20949,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const numeric = Number(value);
       return Number.isFinite(numeric) ? aifRoundMoney(numeric) : null;
     };
-    const handoverFromDate = row.handover_from_date
-      ? String(row.handover_from_date).slice(0, 10)
-      : (raw.handoverFromDate || raw.handover_from_date || null);
-    const handoverToDate = row.handover_to_date
-      ? String(row.handover_to_date).slice(0, 10)
-      : (raw.handoverToDate || raw.handover_to_date || null);
+    const dateOnly = (value) => {
+      if (!value) return null;
+      if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+      const rawValue = String(value).trim();
+      const direct = rawValue.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (direct) return direct[1];
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+    };
+    const handoverFromDate = dateOnly(row.handover_from_date)
+      || dateOnly(raw.handoverFromDate || raw.handover_from_date)
+      || null;
+    const handoverToDate = dateOnly(row.handover_to_date)
+      || dateOnly(raw.handoverToDate || raw.handover_to_date)
+      || null;
     return {
       id: String(row.id || ""),
       locationId: row.location_id ? String(row.location_id) : null,
@@ -20982,6 +20991,76 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     };
+  }
+
+  async function aifEnrichCashMovementRowsWithSalesMetrics(client, { locationId, rows = [] }) {
+    const sourceRows = Array.isArray(rows) ? rows : [];
+    const periods = sourceRows
+      .filter((row) => String(row?.movement_type || "") === "manager_handover")
+      .map((row) => {
+        const current = aifCashMovementResponse(row);
+        return {
+          id: String(row?.id || ""),
+          from: cleanAifDocumentDate(current.handoverFromDate),
+          to: cleanAifDocumentDate(current.handoverToDate),
+          current,
+        };
+      })
+      .filter((item) => item.from && item.to && item.from <= item.to);
+
+    const missing = periods.filter((item) =>
+      item.current.grossSales === null
+      || item.current.discountTotal === null
+      || item.current.netSales === null
+    );
+    if (!missing.length) return sourceRows;
+
+    const fromDate = missing.reduce((min, item) => !min || item.from < min ? item.from : min, null);
+    const toDate = missing.reduce((max, item) => !max || item.to > max ? item.to : max, null);
+    if (!fromDate || !toDate) return sourceRows;
+
+    let dailyMetrics = new Map();
+    try {
+      dailyMetrics = await aifShopCashDailySalesMetrics(client, { locationId, fromDate, toDate });
+    } catch (error) {
+      console.error("AIF cash movement historical sales metrics warning", error);
+      return sourceRows;
+    }
+
+    const calculatedById = new Map();
+    for (const period of missing) {
+      let grossSales = 0;
+      let discountTotal = 0;
+      let netSales = 0;
+      let cursor = period.from;
+      let guard = 0;
+      while (cursor <= period.to && guard < 1500) {
+        const metrics = dailyMetrics.get(cursor) || { grossSales: 0, discountTotal: 0, netSales: 0 };
+        grossSales = aifRoundMoney(grossSales + aifNumber(metrics.grossSales));
+        discountTotal = aifRoundMoney(discountTotal + aifNumber(metrics.discountTotal));
+        netSales = aifRoundMoney(netSales + aifNumber(metrics.netSales));
+        cursor = aifShiftIsoDate(cursor, 1);
+        guard += 1;
+      }
+      calculatedById.set(period.id, { grossSales, discountTotal, netSales });
+    }
+
+    return sourceRows.map((row) => {
+      const metrics = calculatedById.get(String(row?.id || ""));
+      if (!metrics) return row;
+      const raw = row?.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+      const current = aifCashMovementResponse(row);
+      return {
+        ...row,
+        raw: {
+          ...raw,
+          grossSales: current.grossSales === null ? metrics.grossSales : current.grossSales,
+          discountTotal: current.discountTotal === null ? metrics.discountTotal : current.discountTotal,
+          netSales: current.netSales === null ? metrics.netSales : current.netSales,
+          historicalSalesMetricsCalculated: true,
+        },
+      };
+    });
   }
 
   async function aifShopCashBalanceAt(client, { locationId, at = new Date() }) {
@@ -26590,8 +26669,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      const movements = movementsResult.rows.map(aifCashMovementResponse);
-      const managerHandoverHistory = managerHistoryResult.rows.map(aifCashMovementResponse);
+      const [movementRowsWithMetrics, historyRowsWithMetrics] = await Promise.all([
+        aifEnrichCashMovementRowsWithSalesMetrics(pool, { locationId: location.id, rows: movementsResult.rows }),
+        aifEnrichCashMovementRowsWithSalesMetrics(pool, { locationId: location.id, rows: managerHistoryResult.rows }),
+      ]);
+      const movements = movementRowsWithMetrics.map(aifCashMovementResponse);
+      const managerHandoverHistory = historyRowsWithMetrics.map(aifCashMovementResponse);
       const handoverHistoryMonths = managerHistoryMonthsResult.rows
         .map((row) => text(row.month))
         .filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month));
