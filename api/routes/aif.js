@@ -63,6 +63,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   let aifPurchaseOrderSchemaPromise = null;
   let aifShopSalesSchemaPromise = null;
   let aifConsumptionDocumentsSchemaPromise = null;
+  let aifPriceChangeSchemaPromise = null;
+  let aifPriceChangeSchemaReady = false;
+  let aifRetailBookSchemaPromise = null;
+  let aifRetailBookSchemaReady = false;
 
   function ensureAifStockTransferIdempotencySchema() {
     if (!aifStockTransferIdempotencySchemaPromise) {
@@ -1382,6 +1386,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     next();
   });
 
+  router.use(async (_req, res, next) => {
+    try {
+      await Promise.all([
+        ensureAifRetailBookSchema(pool),
+        ensureAifPriceChangeSchema(pool),
+      ]);
+      next();
+    } catch (error) {
+      console.error("AIF accounting support schema initialization failed", error);
+      res.status(500).json({ error: "A készletérték / árváltozás nyilvántartás inicializálása nem sikerült.", code: error?.code || null });
+    }
+  });
+
   const text = (v) => String(v ?? "").trim();
   const emptyToNull = (v) => {
     const s = text(v);
@@ -1461,6 +1478,625 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return directRaw
       || cleanAifDocumentDate(text(raw.documentDate || raw.document_date || raw.avizDate || raw.aviz_date).slice(0, 10))
       || aifBucharestDateKey(item?.created_at);
+  }
+
+  function aifPriceNumber(value) {
+    const parsed = toMoney(value);
+    return parsed === null || !Number.isFinite(Number(parsed)) ? null : Number(parsed);
+  }
+
+  function aifPriceChanged(before, after) {
+    const a = aifPriceNumber(before);
+    const b = aifPriceNumber(after);
+    if (a === null || b === null) return false;
+    return Math.abs(a - b) >= 0.005;
+  }
+
+  async function ensureAifPriceChangeSchema(client = pool) {
+    if (aifPriceChangeSchemaReady) return true;
+    const run = async () => {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_price_change_document_settings (
+        id smallint PRIMARY KEY DEFAULT 1 CHECK (id=1),
+        series text NOT NULL DEFAULT 'PMP',
+        next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+        yearly_reset boolean NOT NULL DEFAULT true,
+        sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`INSERT INTO aif_price_change_document_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_price_change_documents (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_number text NOT NULL UNIQUE,
+        series text NOT NULL DEFAULT 'PMP',
+        sequence_number bigint NOT NULL,
+        sequence_year integer NOT NULL,
+        document_date date NOT NULL DEFAULT ((now() AT TIME ZONE 'Europe/Bucharest')::date),
+        source_type text NOT NULL DEFAULT 'manual_edit',
+        source_id text NULL,
+        reception_id uuid NULL,
+        import_batch_id uuid NULL,
+        invoice_number text NULL,
+        supplier_id uuid NULL,
+        supplier_name text NULL,
+        location_id uuid NULL,
+        location_name text NULL,
+        actor text NULL,
+        status text NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','cancelled')),
+        note text NULL,
+        tva_rate numeric(7,3) NOT NULL DEFAULT 21,
+        line_count integer NOT NULL DEFAULT 0,
+        total_qty numeric(14,3) NOT NULL DEFAULT 0,
+        old_total numeric(16,2) NOT NULL DEFAULT 0,
+        new_total numeric(16,2) NOT NULL DEFAULT 0,
+        difference_total numeric(16,2) NOT NULL DEFAULT 0,
+        difference_tva numeric(16,2) NOT NULL DEFAULT 0,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_price_change_documents_source_uq
+        ON aif_price_change_documents (source_type, source_id)
+        WHERE source_id IS NOT NULL AND status='issued'`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_price_change_documents_date_idx
+        ON aif_price_change_documents (document_date DESC, created_at DESC)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_price_change_documents_reception_idx
+        ON aif_price_change_documents (reception_id) WHERE reception_id IS NOT NULL`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_price_change_document_lines (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_id uuid NOT NULL REFERENCES aif_price_change_documents(id) ON DELETE CASCADE,
+        source_import_row_id uuid NULL,
+        variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+        product_title text NULL,
+        product_code text NULL,
+        barcode text NULL,
+        brand_name text NULL,
+        color_name text NULL,
+        size text NULL,
+        image_url text NULL,
+        um text NOT NULL DEFAULT 'buc',
+        affected_qty numeric(14,3) NOT NULL DEFAULT 0,
+        old_sell_price numeric(14,2) NOT NULL,
+        new_sell_price numeric(14,2) NOT NULL,
+        old_value numeric(16,2) NOT NULL DEFAULT 0,
+        new_value numeric(16,2) NOT NULL DEFAULT 0,
+        difference_value numeric(16,2) NOT NULL DEFAULT 0,
+        tva_rate numeric(7,3) NOT NULL DEFAULT 21,
+        old_tva numeric(16,2) NOT NULL DEFAULT 0,
+        new_tva numeric(16,2) NOT NULL DEFAULT 0,
+        difference_tva numeric(16,2) NOT NULL DEFAULT 0,
+        location_breakdown jsonb NOT NULL DEFAULT '[]'::jsonb,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (document_id, variant_id)
+      )`);
+      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_price_change_lines_import_row_uq
+        ON aif_price_change_document_lines (source_import_row_id)
+        WHERE source_import_row_id IS NOT NULL`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_price_change_lines_variant_idx
+        ON aif_price_change_document_lines (variant_id, created_at DESC)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_price_change_meta (
+        key text PRIMARY KEY,
+        value jsonb NOT NULL DEFAULT '{}'::jsonb,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      aifPriceChangeSchemaReady = true;
+      return true;
+    };
+    if (client === pool) {
+      if (!aifPriceChangeSchemaPromise) {
+        aifPriceChangeSchemaPromise = run().catch((error) => {
+          aifPriceChangeSchemaPromise = null;
+          aifPriceChangeSchemaReady = false;
+          throw error;
+        });
+      }
+      return aifPriceChangeSchemaPromise;
+    }
+    return run();
+  }
+
+  async function allocateAifPriceChangeDocumentNumber(client, documentDate = null) {
+    await ensureAifPriceChangeSchema(client);
+    const dateKey = cleanAifDocumentDate(documentDate) || aifBucharestDateKey() || String(new Date().getFullYear());
+    const year = Number(String(dateKey).slice(0, 4)) || new Date().getFullYear();
+    const locked = await client.query(`SELECT * FROM aif_price_change_document_settings WHERE id=1 FOR UPDATE`);
+    const row = locked.rows[0] || { series: 'PMP', next_number: 1, digits: 6, yearly_reset: true, sequence_year: year };
+    let next = Math.max(1, Number(row.next_number || 1));
+    let sequenceYear = Number(row.sequence_year || year);
+    if (row.yearly_reset !== false && sequenceYear !== year) {
+      next = 1;
+      sequenceYear = year;
+    }
+    const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
+    const series = cleanAifTransferDocumentSeries(row.series || 'PMP') || 'PMP';
+    const number = `${series}/${sequenceYear}/${String(next).padStart(digits, '0')}`;
+    await client.query(
+      `UPDATE aif_price_change_document_settings SET next_number=$1, sequence_year=$2, updated_at=now() WHERE id=1`,
+      [next + 1, sequenceYear]
+    );
+    return { documentNumber: number, series, sequenceNumber: next, sequenceYear };
+  }
+
+  async function readAifVariantStockBreakdown(client, variantId, beforeAt = null) {
+    if (beforeAt) {
+      const r = await client.query(
+        `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                GREATEST(COALESCE(sum(sm.qty_delta),0),0)::numeric AS qty
+         FROM aif_locations l
+         JOIN aif_stock_movements sm ON sm.location_id=l.id AND sm.variant_id=$1
+         WHERE sm.created_at < $2::timestamptz
+         GROUP BY l.id,l.code,l.name
+         HAVING GREATEST(COALESCE(sum(sm.qty_delta),0),0) > 0
+         ORDER BY l.name ASC`,
+        [variantId, beforeAt]
+      );
+      return r.rows;
+    }
+    const r = await client.query(
+      `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+              GREATEST(COALESCE(s.qty,0),0)::numeric AS qty
+       FROM aif_stock s
+       JOIN aif_locations l ON l.id=s.location_id
+       WHERE s.variant_id=$1 AND COALESCE(s.qty,0)>0
+       ORDER BY l.name ASC`,
+      [variantId]
+    );
+    return r.rows;
+  }
+
+  async function refreshAifPriceChangeDocumentTotals(client, documentId) {
+    await client.query(
+      `UPDATE aif_price_change_documents d
+       SET line_count=x.line_count,
+           total_qty=x.total_qty,
+           old_total=x.old_total,
+           new_total=x.new_total,
+           difference_total=x.difference_total,
+           difference_tva=x.difference_tva,
+           updated_at=now()
+       FROM (
+         SELECT document_id,
+                count(*)::int AS line_count,
+                COALESCE(sum(affected_qty),0)::numeric AS total_qty,
+                round(COALESCE(sum(old_value),0)::numeric,2) AS old_total,
+                round(COALESCE(sum(new_value),0)::numeric,2) AS new_total,
+                round(COALESCE(sum(difference_value),0)::numeric,2) AS difference_total,
+                round(COALESCE(sum(difference_tva),0)::numeric,2) AS difference_tva
+         FROM aif_price_change_document_lines
+         WHERE document_id=$1
+         GROUP BY document_id
+       ) x
+       WHERE d.id=x.document_id`,
+      [documentId]
+    );
+  }
+
+  async function recordAifPriceChangeDocumentLine(client, args = {}) {
+    await ensureAifPriceChangeSchema(client);
+    const variantId = text(args.variantId || args.variant_id);
+    const oldPrice = aifPriceNumber(args.oldSellPrice ?? args.old_sell_price);
+    const newPrice = aifPriceNumber(args.newSellPrice ?? args.new_sell_price);
+    if (!variantId || oldPrice === null || newPrice === null || !aifPriceChanged(oldPrice, newPrice)) return null;
+
+    const stockRows = Array.isArray(args.stockRows)
+      ? args.stockRows
+      : await readAifVariantStockBreakdown(client, variantId, args.beforeAt || null);
+    const locationBreakdown = stockRows
+      .map((row) => ({
+        locationId: row.location_id ? String(row.location_id) : null,
+        locationCode: row.location_code || null,
+        locationName: row.location_name || null,
+        qty: Math.max(0, Number(row.qty || 0)),
+      }))
+      .filter((row) => row.qty > 0);
+    const affectedQty = locationBreakdown.reduce((sum, row) => sum + row.qty, 0);
+    if (affectedQty <= 0) return null;
+
+    const sourceType = text(args.sourceType || args.source_type || 'manual_edit') || 'manual_edit';
+    const sourceId = text(args.sourceId || args.source_id) || null;
+    const documentDate = cleanAifDocumentDate(args.documentDate || args.document_date) || aifBucharestDateKey(args.beforeAt || new Date()) || aifBucharestDateKey();
+    const tvaSettings = await readSalesTvaSettings(client).catch(() => ({ salesTvaRate: 21 }));
+    const tvaRate = Math.max(0, Math.min(100, aifPriceNumber(args.tvaRate ?? args.tva_rate ?? tvaSettings?.salesTvaRate ?? 21) ?? 21));
+
+    let document = null;
+    if (sourceId) {
+      const existing = await client.query(
+        `SELECT * FROM aif_price_change_documents WHERE source_type=$1 AND source_id=$2 AND status='issued' LIMIT 1`,
+        [sourceType, sourceId]
+      );
+      document = existing.rows[0] || null;
+    }
+    if (!document) {
+      const seq = await allocateAifPriceChangeDocumentNumber(client, documentDate);
+      const inserted = await client.query(
+        `INSERT INTO aif_price_change_documents (
+           document_number,series,sequence_number,sequence_year,document_date,
+           source_type,source_id,reception_id,import_batch_id,invoice_number,
+           supplier_id,supplier_name,location_id,location_name,actor,tva_rate,note,raw
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
+         RETURNING *`,
+        [
+          seq.documentNumber, seq.series, seq.sequenceNumber, seq.sequenceYear, documentDate,
+          sourceType, sourceId, args.receptionId || args.reception_id || null, args.importBatchId || args.import_batch_id || null,
+          args.invoiceNumber || args.invoice_number || null, args.supplierId || args.supplier_id || null,
+          args.supplierName || args.supplier_name || null, args.locationId || args.location_id || null,
+          args.locationName || args.location_name || null, text(args.actor || 'system') || 'system', tvaRate,
+          args.note || null, JSON.stringify(args.raw || {}),
+        ]
+      );
+      document = inserted.rows[0];
+    }
+
+    const product = await client.query(
+      `SELECT v.id,v.internal_sku,v.barcode,v.size,v.color_name,v.image_url,
+              COALESCE(NULLIF(m.title_ro,''),NULLIF(m.shopify_title,''),m.model_code,v.internal_sku) AS product_title,
+              m.model_code,b.name AS brand_name,
+              sc.supplier_product_code
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code
+         FROM aif_variant_supplier_codes
+         WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE v.id::text=$1 LIMIT 1`,
+      [variantId]
+    );
+    const item = product.rows[0] || {};
+    const qty = Number(affectedQty);
+    const oldValue = Math.round(oldPrice * qty * 100) / 100;
+    const newValue = Math.round(newPrice * qty * 100) / 100;
+    const differenceValue = Math.round((newValue - oldValue) * 100) / 100;
+    const tvaPart = (value) => tvaRate > 0 ? Math.round((value - value / (1 + tvaRate / 100)) * 100) / 100 : 0;
+    const oldTva = tvaPart(oldValue);
+    const newTva = tvaPart(newValue);
+    const differenceTva = Math.round((newTva - oldTva) * 100) / 100;
+
+    const line = await client.query(
+      `INSERT INTO aif_price_change_document_lines (
+         document_id,source_import_row_id,variant_id,product_title,product_code,barcode,
+         brand_name,color_name,size,image_url,affected_qty,old_sell_price,new_sell_price,
+         old_value,new_value,difference_value,tva_rate,old_tva,new_tva,difference_tva,
+         location_breakdown,raw
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22::jsonb)
+       ON CONFLICT (document_id,variant_id) DO UPDATE SET
+         new_sell_price=EXCLUDED.new_sell_price,
+         new_value=EXCLUDED.new_value,
+         difference_value=EXCLUDED.difference_value,
+         new_tva=EXCLUDED.new_tva,
+         difference_tva=EXCLUDED.difference_tva,
+         location_breakdown=EXCLUDED.location_breakdown,
+         raw=COALESCE(aif_price_change_document_lines.raw,'{}'::jsonb) || EXCLUDED.raw
+       RETURNING *`,
+      [
+        document.id, args.sourceImportRowId || args.source_import_row_id || null, variantId,
+        args.productTitle || args.product_title || item.product_title || null,
+        args.productCode || args.product_code || item.supplier_product_code || item.model_code || item.internal_sku || null,
+        args.barcode || item.barcode || null, args.brandName || args.brand_name || item.brand_name || null,
+        args.colorName || args.color_name || item.color_name || null, args.size || item.size || null,
+        args.imageUrl || args.image_url || item.image_url || null, qty, oldPrice, newPrice,
+        oldValue, newValue, differenceValue, tvaRate, oldTva, newTva, differenceTva,
+        JSON.stringify(locationBreakdown), JSON.stringify({ ...(args.rawLine || args.raw_line || {}), sourceType, sourceId }),
+      ]
+    );
+    await refreshAifPriceChangeDocumentTotals(client, document.id);
+    return { document, line: line.rows[0], affectedQty, locationBreakdown };
+  }
+
+  async function backfillAifPriceChangeDocuments(client = pool) {
+    await ensureAifPriceChangeSchema(client);
+    const markerKey = 'import_price_change_backfill_v1';
+    const marker = await client.query(`SELECT value FROM aif_price_change_meta WHERE key=$1 LIMIT 1`, [markerKey]);
+    if (marker.rowCount) return { already: true, created: 0 };
+
+    const changes = await client.query(`
+      WITH import_history AS (
+        SELECT
+          rw.id AS import_row_id,
+          rw.variant_id,
+          rw.sell_price_ron AS new_price,
+          lag(rw.sell_price_ron) OVER (
+            PARTITION BY rw.variant_id
+            ORDER BY COALESCE(anchor.created_at,b.committed_at,b.created_at), rw.row_no, rw.id
+          ) AS old_price,
+          b.id AS batch_id,
+          b.reception_id,
+          COALESCE(r.invoice_number,b.invoice_number) AS invoice_number,
+          b.supplier_id,
+          s.name AS supplier_name,
+          b.target_location_id AS location_id,
+          l.name AS location_name,
+          COALESCE(r.reception_date,r.invoice_date,(COALESCE(anchor.created_at,b.committed_at,b.created_at) AT TIME ZONE 'Europe/Bucharest')::date) AS document_date,
+          COALESCE(anchor.created_at,b.committed_at,b.created_at) AS change_at
+        FROM aif_import_rows rw
+        JOIN aif_import_batches b ON b.id=rw.batch_id
+        LEFT JOIN aif_receptions r ON r.id=b.reception_id
+        LEFT JOIN aif_suppliers s ON s.id=b.supplier_id
+        LEFT JOIN aif_locations l ON l.id=b.target_location_id
+        LEFT JOIN LATERAL (
+          SELECT min(sm.created_at) AS created_at
+          FROM aif_stock_movements sm
+          WHERE sm.variant_id=rw.variant_id
+            AND sm.source_type='import_batch'
+            AND sm.source_id=b.id::text
+        ) anchor ON true
+        WHERE rw.status='committed'
+          AND rw.variant_id IS NOT NULL
+          AND rw.sell_price_ron IS NOT NULL
+      )
+      SELECT * FROM import_history
+      WHERE old_price IS NOT NULL
+        AND abs(new_price-old_price) >= 0.005
+      ORDER BY change_at ASC, import_row_id ASC
+    `);
+
+    let created = 0;
+    for (const row of changes.rows || []) {
+      const exists = await client.query(`SELECT 1 FROM aif_price_change_document_lines WHERE source_import_row_id=$1 LIMIT 1`, [row.import_row_id]);
+      if (exists.rowCount) continue;
+      const stockRows = await readAifVariantStockBreakdown(client, row.variant_id, row.change_at);
+      if (!stockRows.length) continue;
+      const result = await recordAifPriceChangeDocumentLine(client, {
+        variantId: row.variant_id,
+        oldSellPrice: row.old_price,
+        newSellPrice: row.new_price,
+        stockRows,
+        beforeAt: row.change_at,
+        sourceType: 'incoming_reception',
+        sourceId: row.reception_id ? `reception:${row.reception_id}` : `batch:${row.batch_id}`,
+        receptionId: row.reception_id,
+        importBatchId: row.batch_id,
+        sourceImportRowId: row.import_row_id,
+        invoiceNumber: row.invoice_number,
+        supplierId: row.supplier_id,
+        supplierName: row.supplier_name,
+        locationId: row.location_id,
+        locationName: row.location_name,
+        documentDate: row.document_date ? String(row.document_date).slice(0,10) : null,
+        actor: 'SYSTEM BACKFILL',
+        raw: { backfilled: true, changeAt: row.change_at },
+      });
+      if (result) created += 1;
+    }
+
+    const manualChanges = await client.query(`
+      SELECT sm.id,sm.variant_id,sm.actor,sm.created_at,sm.raw,
+             NULLIF(sm.raw->>'sellPriceBefore','')::numeric AS old_price,
+             NULLIF(sm.raw->>'sellPriceAfter','')::numeric AS new_price,
+             sm.location_id,l.name AS location_name
+      FROM aif_stock_movements sm
+      LEFT JOIN aif_locations l ON l.id=sm.location_id
+      WHERE (sm.source_type='price_change' OR sm.raw->>'reason'='price_change')
+        AND NULLIF(sm.raw->>'sellPriceBefore','') IS NOT NULL
+        AND NULLIF(sm.raw->>'sellPriceAfter','') IS NOT NULL
+        AND abs(NULLIF(sm.raw->>'sellPriceAfter','')::numeric - NULLIF(sm.raw->>'sellPriceBefore','')::numeric) >= 0.005
+      ORDER BY sm.created_at ASC,sm.id ASC
+    `);
+    for (const row of manualChanges.rows || []) {
+      const duplicate = await client.query(
+        `SELECT 1
+         FROM aif_price_change_document_lines l
+         JOIN aif_price_change_documents d ON d.id=l.document_id
+         WHERE l.variant_id=$1
+           AND l.old_sell_price IS NOT DISTINCT FROM $2::numeric
+           AND l.new_sell_price IS NOT DISTINCT FROM $3::numeric
+           AND abs(EXTRACT(EPOCH FROM (d.created_at-$4::timestamptz))) < 120
+         LIMIT 1`,
+        [row.variant_id,row.old_price,row.new_price,row.created_at]
+      );
+      if (duplicate.rowCount) continue;
+      const stockRows = await readAifVariantStockBreakdown(client,row.variant_id,row.created_at);
+      if (!stockRows.length) continue;
+      const result = await recordAifPriceChangeDocumentLine(client,{
+        variantId: row.variant_id,
+        oldSellPrice: row.old_price,
+        newSellPrice: row.new_price,
+        stockRows,
+        beforeAt: row.created_at,
+        sourceType: 'manual_edit',
+        sourceId: `movement:${row.id}`,
+        locationId: row.location_id || null,
+        locationName: row.location_name || null,
+        documentDate: aifBucharestDateKey(row.created_at),
+        actor: row.actor || 'SYSTEM BACKFILL',
+        raw: { backfilled: true, movementId: String(row.id), source: 'price_change_movement' },
+      });
+      if (result) created += 1;
+    }
+
+    await client.query(
+      `INSERT INTO aif_price_change_meta (key,value,updated_at)
+       VALUES ($1,$2::jsonb,now())
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`,
+      [markerKey, JSON.stringify({ completedAt: new Date().toISOString(), created })]
+    );
+    return { already: false, created };
+  }
+
+  async function ensureAifRetailBookSchema(client = pool) {
+    if (aifRetailBookSchemaReady) return true;
+    const run = async () => {
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_stock_retail_book (
+        location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE CASCADE,
+        variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE CASCADE,
+        qty numeric(14,3) NOT NULL DEFAULT 0,
+        book_value numeric(18,2) NOT NULL DEFAULT 0,
+        seeded boolean NOT NULL DEFAULT false,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (location_id,variant_id)
+      )`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_stock_retail_transfer_buffer (
+        transfer_key text NOT NULL,
+        variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE CASCADE,
+        qty numeric(14,3) NOT NULL DEFAULT 0,
+        book_value numeric(18,2) NOT NULL DEFAULT 0,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (transfer_key,variant_id)
+      )`);
+      await client.query(`INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
+        SELECT s.location_id,s.variant_id,COALESCE(s.qty,0),round(COALESCE(s.qty,0)::numeric * COALESCE(v.sell_price,0)::numeric,2),true,now()
+        FROM aif_stock s
+        JOIN aif_product_variants v ON v.id=s.variant_id
+        ON CONFLICT (location_id,variant_id) DO NOTHING`);
+      aifRetailBookSchemaReady = true;
+      return true;
+    };
+    if (client === pool) {
+      if (!aifRetailBookSchemaPromise) {
+        aifRetailBookSchemaPromise = run().catch((error) => {
+          aifRetailBookSchemaPromise = null;
+          aifRetailBookSchemaReady = false;
+          throw error;
+        });
+      }
+      return aifRetailBookSchemaPromise;
+    }
+    return run();
+  }
+
+  function aifRetailTransferKey(sourceType, sourceId, raw = {}) {
+    if (String(sourceType || '').toLowerCase() !== 'stock_transfer') return null;
+    return text(raw.movementGroupId || raw.movement_group_id || raw.documentOperationId || raw.document_operation_id || raw.transferId || raw.transfer_id || raw.documentId || raw.document_id || sourceId) || null;
+  }
+
+  async function aifRetailIncomingUnitPrice(client, { sourceType, sourceId, variantId, raw = {} }) {
+    const direct = aifPriceNumber(raw.unitPrice ?? raw.unit_price ?? raw.listPrice ?? raw.list_price ?? raw.sellPrice ?? raw.sell_price);
+    if (direct !== null) return direct;
+    if (String(sourceType || '').toLowerCase() === 'import_batch') {
+      const rowId = text(raw.rowId || raw.row_id);
+      if (rowId) {
+        const row = await client.query(`SELECT COALESCE(sell_price_ron,sell_price) AS price FROM aif_import_rows WHERE id::text=$1 LIMIT 1`, [rowId]);
+        const price = aifPriceNumber(row.rows[0]?.price);
+        if (price !== null) return price;
+      }
+      if (sourceId) {
+        const row = await client.query(
+          `SELECT COALESCE(sell_price_ron,sell_price) AS price
+           FROM aif_import_rows
+           WHERE batch_id::text=$1 AND variant_id::text=$2 AND status='committed'
+           ORDER BY row_no DESC,id DESC LIMIT 1`,
+          [String(sourceId), String(variantId)]
+        );
+        const price = aifPriceNumber(row.rows[0]?.price);
+        if (price !== null) return price;
+      }
+    }
+    const variant = await client.query(`SELECT sell_price FROM aif_product_variants WHERE id=$1 LIMIT 1`, [variantId]);
+    return aifPriceNumber(variant.rows[0]?.sell_price) ?? 0;
+  }
+
+  async function applyAifRetailBookMovement(client, args = {}) {
+    await ensureAifRetailBookSchema(client);
+    const locationId = args.locationId;
+    const variantId = args.variantId;
+    const qtyBefore = Number(args.qtyBefore || 0);
+    const qtyAfter = Number(args.qtyAfter || 0);
+    const qtyDelta = Number(args.qtyDelta || 0);
+    const current = await client.query(
+      `SELECT qty,book_value FROM aif_stock_retail_book WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+      [locationId, variantId]
+    );
+    let bookQty = current.rowCount ? Number(current.rows[0].qty || 0) : qtyBefore;
+    let beforeValue = current.rowCount ? Number(current.rows[0].book_value || 0) : 0;
+    if (!current.rowCount) {
+      const baselinePrice = await aifRetailIncomingUnitPrice(client, args);
+      beforeValue = Math.round(Math.max(0, qtyBefore) * baselinePrice * 100) / 100;
+      await client.query(
+        `INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
+         VALUES ($1,$2,$3,$4,true,now())
+         ON CONFLICT (location_id,variant_id) DO NOTHING`,
+        [locationId, variantId, qtyBefore, beforeValue]
+      );
+      bookQty = qtyBefore;
+    }
+    if (Math.abs(bookQty - qtyBefore) > 0.0001) {
+      const avg = bookQty > 0 ? beforeValue / bookQty : await aifRetailIncomingUnitPrice(client, args);
+      beforeValue = Math.round(Math.max(0, qtyBefore) * Math.max(0, avg) * 100) / 100;
+      bookQty = qtyBefore;
+    }
+
+    const transferKey = aifRetailTransferKey(args.sourceType, args.sourceId, args.raw || {});
+    let movementValue = 0;
+    let unitBookValue = bookQty > 0 ? beforeValue / bookQty : 0;
+    let afterValue = beforeValue;
+
+    if (qtyDelta < 0) {
+      const outQty = Math.min(Math.abs(qtyDelta), Math.max(0, bookQty));
+      unitBookValue = bookQty > 0 ? beforeValue / bookQty : await aifRetailIncomingUnitPrice(client, args);
+      movementValue = Math.round(outQty * unitBookValue * 100) / 100;
+      afterValue = Math.max(0, Math.round((beforeValue - movementValue) * 100) / 100);
+      if (transferKey && outQty > 0) {
+        await client.query(
+          `INSERT INTO aif_stock_retail_transfer_buffer (transfer_key,variant_id,qty,book_value,updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (transfer_key,variant_id) DO UPDATE SET
+             qty=aif_stock_retail_transfer_buffer.qty+EXCLUDED.qty,
+             book_value=aif_stock_retail_transfer_buffer.book_value+EXCLUDED.book_value,
+             updated_at=now()`,
+          [transferKey, variantId, outQty, movementValue]
+        );
+      }
+    } else if (qtyDelta > 0) {
+      const inQty = qtyDelta;
+      if (transferKey) {
+        const buffer = await client.query(
+          `SELECT qty,book_value FROM aif_stock_retail_transfer_buffer WHERE transfer_key=$1 AND variant_id=$2 FOR UPDATE`,
+          [transferKey, variantId]
+        );
+        const bufferedQty = Number(buffer.rows[0]?.qty || 0);
+        const bufferedValue = Number(buffer.rows[0]?.book_value || 0);
+        if (bufferedQty > 0.0001) {
+          const takeQty = Math.min(inQty, bufferedQty);
+          const bufferedUnit = bufferedValue / bufferedQty;
+          const takenValue = Math.round(takeQty * bufferedUnit * 100) / 100;
+          const remainingQty = Math.max(0, bufferedQty - takeQty);
+          const remainingValue = Math.max(0, Math.round((bufferedValue - takenValue) * 100) / 100);
+          movementValue += takenValue;
+          if (remainingQty <= 0.0001) {
+            await client.query(`DELETE FROM aif_stock_retail_transfer_buffer WHERE transfer_key=$1 AND variant_id=$2`, [transferKey, variantId]);
+          } else {
+            await client.query(
+              `UPDATE aif_stock_retail_transfer_buffer SET qty=$3,book_value=$4,updated_at=now() WHERE transfer_key=$1 AND variant_id=$2`,
+              [transferKey, variantId, remainingQty, remainingValue]
+            );
+          }
+          if (takeQty < inQty) {
+            const extraPrice = await aifRetailIncomingUnitPrice(client, args);
+            movementValue += Math.round((inQty - takeQty) * extraPrice * 100) / 100;
+          }
+        } else {
+          const price = await aifRetailIncomingUnitPrice(client, args);
+          movementValue = Math.round(inQty * price * 100) / 100;
+        }
+      } else {
+        const price = await aifRetailIncomingUnitPrice(client, args);
+        movementValue = Math.round(inQty * price * 100) / 100;
+      }
+      unitBookValue = inQty > 0 ? movementValue / inQty : 0;
+      afterValue = Math.round((beforeValue + movementValue) * 100) / 100;
+    }
+
+    if (qtyAfter <= 0.0001) afterValue = 0;
+    await client.query(
+      `INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
+       VALUES ($1,$2,$3,$4,false,now())
+       ON CONFLICT (location_id,variant_id) DO UPDATE SET qty=EXCLUDED.qty,book_value=EXCLUDED.book_value,seeded=false,updated_at=now()`,
+      [locationId, variantId, qtyAfter, afterValue]
+    );
+    return {
+      retailBookQtyBefore: qtyBefore,
+      retailBookQtyAfter: qtyAfter,
+      retailBookValueBefore: Math.round(beforeValue * 100) / 100,
+      retailBookValueAfter: Math.round(afterValue * 100) / 100,
+      retailBookMovementValue: Math.round(movementValue * 100) / 100,
+      retailBookUnitValue: Math.round(unitBookValue * 100) / 100,
+      retailBookMethod: transferKey ? 'weighted_average_transfer' : 'weighted_average',
+    };
   }
 
   const uuidTextRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2507,7 +3143,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0].id;
   }
 
-  async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active" }) {
+  async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active", priceChangeContext = null }) {
     const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
     const colorName = text(normalized.colorName || "");
     const size = text(normalized.size);
@@ -2619,6 +3255,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const updateVariantById = async (id, { preserveExistingColor = false } = {}) => {
       const barcodeConflict = barcode ? await findBarcodeOwner(barcode, id) : null;
       if (barcodeConflict) throwBarcodeConflict(barcodeConflict);
+
+      const previousPriceRow = await client.query(
+        `SELECT sell_price FROM aif_product_variants WHERE id=$1 FOR UPDATE`,
+        [id]
+      );
+      const previousSellPrice = previousPriceRow.rows[0]?.sell_price;
+      if (priceChangeContext && normalized.sellPrice !== null && normalized.sellPrice !== undefined && aifPriceChanged(previousSellPrice, normalized.sellPrice)) {
+        await recordAifPriceChangeDocumentLine(client, {
+          ...priceChangeContext,
+          variantId: id,
+          oldSellPrice: previousSellPrice,
+          newSellPrice: normalized.sellPrice,
+        });
+      }
 
       await client.query(
         `UPDATE aif_product_variants SET
@@ -7241,7 +7891,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const result = await client.query(
       `SELECT
-         v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name, v.status, v.attributes,
+         v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name, v.sell_price, v.status, v.attributes,
          m.model_code, m.title_ro AS model_title_ro, m.status AS model_status, m.brand_id,
          b.code AS brand_code, b.name AS brand_name,
          current_sc.supplier_product_code AS previous_supplier_product_code
@@ -7370,7 +8020,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return null;
   }
 
-  async function refreshLegacyBarcodeStockTarget(client, { owner, normalized, supplierCode }) {
+  async function refreshLegacyBarcodeStockTarget(client, { owner, normalized, supplierCode, priceChangeContext = null }) {
     const oldModelId = owner.model_id;
     const oldModelCode = owner.model_code || null;
     const oldModelTitle = owner.model_title_ro || null;
@@ -7453,6 +8103,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     // Refresh commercial/current receipt data and normalize the model relation.
     // internal_sku / barcode / color / size stay untouched.
+    if (priceChangeContext && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(owner?.sell_price, normalized.sellPrice)) {
+      await recordAifPriceChangeDocumentLine(client, {
+        ...priceChangeContext,
+        variantId: owner.id,
+        oldSellPrice: owner.sell_price,
+        newSellPrice: normalized.sellPrice,
+        productTitle: normalized?.titleRo || owner?.model_title_ro || null,
+        barcode: owner?.barcode || normalized?.barcode || null,
+        colorName: owner?.color_name || normalized?.colorName || null,
+        size: owner?.size || normalized?.size || null,
+      });
+    }
     await client.query(
       `UPDATE aif_product_variants SET
          model_id=$2,
@@ -7537,9 +8199,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     await ensureSnCodSchema(client);
     const batchRes = await client.query(
-      `SELECT b.*, s.code AS supplier_code
+      `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
+              r.invoice_number AS reception_invoice_number,
+              r.invoice_date AS reception_invoice_date,
+              r.reception_date AS reception_date,
+              l.name AS target_location_name
        FROM aif_import_batches b
        JOIN aif_suppliers s ON s.id=b.supplier_id
+       LEFT JOIN aif_receptions r ON r.id=b.reception_id
+       LEFT JOIN aif_locations l ON l.id=b.target_location_id
        WHERE b.id::text=$1
        FOR UPDATE OF b`,
       [batchId]
@@ -7616,6 +8284,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const qty = Number(row.qty ?? normalized.qty ?? 0);
         if (!Number.isFinite(qty) || qty <= 0) throw new Error("a mennyiség hiányzik vagy nem pozitív");
 
+        const priceChangeContext = {
+          sourceType: "incoming_reception",
+          sourceId: batch.reception_id ? `reception:${batch.reception_id}` : `batch:${batch.id}`,
+          receptionId: batch.reception_id || null,
+          importBatchId: batch.id,
+          sourceImportRowId: row.id,
+          invoiceNumber: batch.reception_invoice_number || batch.invoice_number || null,
+          supplierId: batch.supplier_id || null,
+          supplierName: batch.supplier_name || null,
+          locationId: batch.target_location_id || null,
+          locationName: batch.target_location_name || null,
+          documentDate: batch.reception_date || batch.reception_invoice_date || null,
+          actor,
+          tvaRate: salesTvaSettings?.salesTvaRate ?? 21,
+          raw: {
+            source: "incoming_reception",
+            batchId: String(batch.id),
+            receptionId: batch.reception_id ? String(batch.reception_id) : null,
+            rowNo: row.row_no || null,
+          },
+        };
+
         if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
           normalized.buyPriceOriginal = row.buy_price;
           normalized.buyPrice = Number(row.buy_price_ron);
@@ -7670,6 +8360,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             owner: legacyBarcodeTarget,
             normalized,
             supplierCode: batch.supplier_code,
+            priceChangeContext,
           });
           variantId = legacyNormalization.variantId;
           await upsertSupplierCode(client, {
@@ -7701,6 +8392,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             normalized,
             createStatus: "active",
             updateStatus: "active",
+            priceChangeContext,
           });
           await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         }
@@ -8519,6 +9211,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     sourceId = null,
   }) {
     const insertOnce = async (safeSourceType, safeSourcePrefix, explicitSourceId = sourceId) => {
+      const effectiveSourceId = explicitSourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId);
+      const retailBook = await applyAifRetailBookMovement(client, {
+        sourceType: safeSourceType,
+        sourceId: effectiveSourceId,
+        locationId,
+        variantId,
+        qtyDelta,
+        qtyBefore,
+        qtyAfter,
+        raw: raw || {},
+      });
+      const movementRaw = { ...(raw || {}), ...retailBook };
       await client.query(
         `INSERT INTO aif_stock_movements (
            movement_type, source_type, source_id, location_id, variant_id,
@@ -8528,14 +9232,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [
           movementType,
           safeSourceType,
-          explicitSourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
+          effectiveSourceId,
           locationId,
           variantId,
           qtyDelta,
           qtyBefore,
           qtyAfter,
           actor,
-          JSON.stringify(raw || {}),
+          JSON.stringify(movementRaw),
         ]
       );
     };
@@ -12397,6 +13101,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
+      if (changedPriceFields.includes("sell_price") && aifPriceChanged(previousSellPrice, nextSellPrice)) {
+        await recordAifPriceChangeDocumentLine(client, {
+          variantId,
+          oldSellPrice: previousSellPrice,
+          newSellPrice: nextSellPrice,
+          sourceType: "manual_edit",
+          sourceId: `manual:${variantId}:${Date.now()}`,
+          actor: actorFrom(req),
+          documentDate: aifBucharestDateKey(),
+          note: "Módosítás a raktári termékadatlapon",
+          raw: { source: "variant_detail_edit", changedFields: changedPriceFields },
+        });
+      }
+
       if (changedPriceFields.length) {
         const stockLocation = await client.query(
           `SELECT location_id, qty
@@ -13363,6 +14081,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!items.length) return res.json({ ok: true, items: [] });
 
     try {
+      await ensureAifPriceChangeSchema(pool);
+      try { await backfillAifPriceChangeDocuments(pool); } catch (backfillError) { console.error("AIF price change backfill warning", backfillError); }
       const result = await pool.query(
         `WITH input AS (
            SELECT x.variant_id,
@@ -13466,10 +14186,151 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           invoice_qty: item.invoiceQty,
         })))]
       );
-      return res.json({ ok: true, items: result.rows });
+
+      const priceRows = await pool.query(
+        `WITH input AS (
+           SELECT x.variant_id, NULLIF(x.reception_id,'') AS reception_id
+           FROM jsonb_to_recordset($1::jsonb) AS x(variant_id text,reception_id text)
+         )
+         SELECT
+           i.variant_id AS "variantId",
+           i.reception_id AS "receptionId",
+           d.id::text AS "priceChangeDocumentId",
+           d.document_number AS "priceChangeDocumentNumber",
+           d.document_date AS "priceChangeDocumentDate",
+           l.affected_qty AS "affectedQty",
+           l.old_sell_price AS "oldSellPrice",
+           l.new_sell_price AS "newSellPrice",
+           l.location_breakdown AS "locationBreakdown",
+           l.product_title AS "productTitle",
+           l.product_code AS "productCode",
+           l.barcode,
+           l.brand_name AS "brandName",
+           l.color_name AS "colorName",
+           l.size,
+           l.image_url AS "imageUrl"
+         FROM input i
+         JOIN aif_price_change_documents d
+           ON d.reception_id::text=i.reception_id
+          AND d.status='issued'
+         JOIN aif_price_change_document_lines l
+           ON l.document_id=d.id
+          AND l.variant_id::text=i.variant_id
+         ORDER BY d.document_date DESC,d.created_at DESC`,
+        [JSON.stringify(items.map((item) => ({ variant_id: item.variantId, reception_id: item.receptionId })))]
+      );
+      const priceByKey = new Map();
+      for (const row of priceRows.rows || []) {
+        const key = `${row.variantId}|${row.receptionId || ''}`;
+        if (!priceByKey.has(key)) priceByKey.set(key, row);
+      }
+      const responseItems = result.rows.map((row) => {
+        const key = `${row.variantId}|${row.receptionId || ''}`;
+        const priceChange = priceByKey.get(key) || null;
+        const currentQty = Math.max(0, Math.floor(Number(row.currentQty || 0)));
+        const baseMaxCopies = Math.max(0, Math.floor(Number(row.maxCopies || 0)));
+        const affectedQty = Math.max(0, Math.floor(Number(priceChange?.affectedQty || 0)));
+        const relabelMaxCopies = priceChange
+          ? Math.max(0, Math.min(affectedQty, currentQty - baseMaxCopies))
+          : 0;
+        return {
+          ...row,
+          baseMaxCopies,
+          relabelRequired: Boolean(priceChange && relabelMaxCopies > 0),
+          relabelMaxCopies,
+          priceChange: priceChange ? {
+            documentId: priceChange.priceChangeDocumentId,
+            documentNumber: priceChange.priceChangeDocumentNumber,
+            documentDate: priceChange.priceChangeDocumentDate,
+            affectedQty: Number(priceChange.affectedQty || 0),
+            oldSellPrice: Number(priceChange.oldSellPrice || 0),
+            newSellPrice: Number(priceChange.newSellPrice || 0),
+            locationBreakdown: priceChange.locationBreakdown || [],
+            productTitle: priceChange.productTitle || null,
+            productCode: priceChange.productCode || null,
+            barcode: priceChange.barcode || null,
+            brandName: priceChange.brandName || null,
+            colorName: priceChange.colorName || null,
+            size: priceChange.size || null,
+            imageUrl: priceChange.imageUrl || null,
+          } : null,
+        };
+      });
+      return res.json({ ok: true, items: responseItems });
     } catch (error) {
       console.error("AIF label stock check failed", error);
       return res.status(500).json({ error: "A címkenyomtatás előtti készletellenőrzés nem sikerült.", code: error?.code || null });
+    }
+  });
+
+  router.get("/price-change-documents", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifPriceChangeSchema(pool);
+      try { await backfillAifPriceChangeDocuments(pool); } catch (backfillError) { console.error("AIF price change backfill warning", backfillError); }
+      const q = text(req.query.q || req.query.search);
+      const from = cleanAifDocumentDate(req.query.from);
+      const to = cleanAifDocumentDate(req.query.to);
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
+      const offset = Math.max(0, Number(req.query.offset || 0));
+      const args = [];
+      const where = [`d.status='issued'`];
+      const push = (value) => { args.push(value); return `$${args.length}`; };
+      if (q) {
+        const p = push(`%${q}%`);
+        where.push(`(
+          d.document_number ILIKE ${p}
+          OR COALESCE(d.invoice_number,'') ILIKE ${p}
+          OR COALESCE(d.supplier_name,'') ILIKE ${p}
+          OR COALESCE(d.location_name,'') ILIKE ${p}
+          OR EXISTS (
+            SELECT 1 FROM aif_price_change_document_lines l
+            WHERE l.document_id=d.id
+              AND (
+                COALESCE(l.product_title,'') ILIKE ${p}
+                OR COALESCE(l.product_code,'') ILIKE ${p}
+                OR COALESCE(l.barcode,'') ILIKE ${p}
+                OR COALESCE(l.brand_name,'') ILIKE ${p}
+              )
+          )
+        )`);
+      }
+      if (from) { const p = push(from); where.push(`d.document_date >= ${p}::date`); }
+      if (to) { const p = push(to); where.push(`d.document_date <= ${p}::date`); }
+      args.push(limit); const limitP = `$${args.length}`;
+      args.push(offset); const offsetP = `$${args.length}`;
+      const result = await pool.query(
+        `SELECT d.*,
+                count(*) OVER()::int AS total_count
+         FROM aif_price_change_documents d
+         WHERE ${where.join(' AND ')}
+         ORDER BY d.document_date DESC,d.created_at DESC
+         LIMIT ${limitP} OFFSET ${offsetP}`,
+        args
+      );
+      const total = Number(result.rows[0]?.total_count || 0);
+      const items = result.rows.map(({ total_count, ...row }) => row);
+      return res.json({ ok: true, items, total, limit, offset, hasMore: offset + items.length < total });
+    } catch (error) {
+      console.error("AIF price change documents list failed", error);
+      return res.status(500).json({ error: "Az árváltozási bizonylatok nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+  router.get("/price-change-documents/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "Árváltozási bizonylat azonosító szükséges." });
+    try {
+      await ensureAifPriceChangeSchema(pool);
+      const item = await pool.query(`SELECT * FROM aif_price_change_documents WHERE id::text=$1 OR document_number=$1 LIMIT 1`, [id]);
+      if (!item.rowCount) return res.status(404).json({ error: "Az árváltozási bizonylat nem található." });
+      const lines = await pool.query(
+        `SELECT * FROM aif_price_change_document_lines WHERE document_id=$1 ORDER BY product_title ASC,size ASC,color_name ASC,id ASC`,
+        [item.rows[0].id]
+      );
+      return res.json({ ok: true, item: item.rows[0], lines: lines.rows });
+    } catch (error) {
+      console.error("AIF price change document detail failed", error);
+      return res.status(500).json({ error: "Az árváltozási bizonylat nem tölthető be.", code: error?.code || null });
     }
   });
 
@@ -25476,6 +26337,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-operations/stock", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifRetailBookSchema(pool);
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
       const full = ["1", "true", "yes", "all"].includes(text(req.query.full || req.query.all).toLowerCase());
@@ -25522,11 +26384,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              COALESCE(sum(s.qty),0)::numeric AS total_qty,
              COALESCE(sum(s.reserved_qty),0)::numeric AS reserved_qty,
              COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0)::numeric AS available_qty,
-             COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) * COALESCE(v.sell_price,0)),0)::numeric AS retail_value,
+             COALESCE(sum(
+               GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) *
+               CASE
+                 WHEN COALESCE(rb.qty,0) > 0 THEN COALESCE(rb.book_value,0) / rb.qty
+                 ELSE COALESCE(v.sell_price,0)
+               END
+             ),0)::numeric AS retail_value,
              count(*) FILTER (WHERE COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) BETWEEN 1 AND 2)::int AS low_stock_variants
            FROM aif_stock s
            JOIN aif_product_variants v ON v.id=s.variant_id
            JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_stock_retail_book rb ON rb.location_id=s.location_id AND rb.variant_id=s.variant_id
            WHERE s.location_id=$1
              AND COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) > 0
              AND COALESCE(v.status,'active')='active'
