@@ -1653,6 +1653,7 @@ function printDetail(detail: DocumentDetail, inventoryItems: InventoryItem[] = [
 
 
 function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: string[]) {
+  const totalLines = items.reduce((sum, item) => sum + n(item.line_count), 0);
   const totalQty = items.reduce((sum, item) => sum + n(item.total_qty), 0);
   const totalValue = items.reduce((sum, item) => sum + n(item.total_value), 0);
   const generatedAt = new Intl.DateTimeFormat("hu-HU", {
@@ -1670,14 +1671,14 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
     return `<tr>
       <td class="nr">${index + 1}</td>
       <td class="doc"><strong>${escapeHtml(displayDocumentNumber(item))}</strong><span>${escapeHtml(documentBadge(item).label)}</span></td>
-      <td>${escapeHtml(typeLabel)}</td>
-      <td class="date">${escapeHtml(dateOnlyHu(documentDateKey(item)))}</td>
-      <td>${escapeHtml(item.from_location_summary || "-")}</td>
-      <td>${escapeHtml(incoming || "-")}</td>
+      <td class="nowrap">${escapeHtml(typeLabel)}</td>
+      <td class="date nowrap">${escapeHtml(dateOnlyHu(documentDateKey(item)))}</td>
+      <td class="routeCell">${escapeHtml(item.from_location_summary || "-")}</td>
+      <td class="routeCell">${escapeHtml(incoming || "-")}</td>
       <td class="num">${escapeHtml(quantity(item.line_count))}</td>
       <td class="num">${escapeHtml(quantity(item.total_qty))}</td>
       <td class="money">${escapeHtml(moneyRon(item.total_value || 0, false))}</td>
-      <td>${escapeHtml(displayActorName(item.actor))}</td>
+      <td class="actorCell">${escapeHtml(displayActorName(item.actor))}</td>
     </tr>`;
   }).join("");
 
@@ -1691,39 +1692,49 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
 <meta charset="utf-8" />
 <title>Szűrt készletbizonylatok</title>
 <style>
-  @page { size:A4 landscape; margin:10mm; }
+  @page { size:A4 landscape; margin:9mm; }
   * { box-sizing:border-box; }
-  body { margin:0; color:#172033; background:#fff; font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12mm; padding-bottom:4mm; border-bottom:2px solid #108D8B; }
-  .brand { color:#108D8B; font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
-  h1 { margin:1.4mm 0 0; font-size:19px; line-height:1.15; color:#172033; }
-  .meta { text-align:right; color:#64748b; line-height:1.5; }
-  .filters { display:flex; flex-wrap:wrap; gap:1.5mm; margin:4mm 0 3mm; }
-  .filters span { border:1px solid #c8d5d3; border-radius:999px; background:#f1f7f6; padding:1.2mm 2.3mm; color:#285d58; font-size:8px; }
-  .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:2.5mm; margin-bottom:3.5mm; }
-  .summary div { border:1px solid #d5dfdd; border-radius:2mm; background:#f7faf9; padding:2.2mm 2.6mm; }
-  .summary span { display:block; color:#6b7785; font-size:7.5px; text-transform:uppercase; letter-spacing:.08em; }
-  .summary strong { display:block; margin-top:1mm; color:#172033; font-size:13px; }
+  html, body { width:100%; margin:0; padding:0; background:#fff; color:#172033; }
+  body { font-family:Arial,Helvetica,sans-serif; font-size:8.4px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .top { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10mm; padding:0 0 3mm; border-bottom:2px solid #108D8B; }
+  .brand { color:#108D8B; font-size:9px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; }
+  h1 { margin:1mm 0 0; font-size:18px; line-height:1.08; color:#172033; letter-spacing:-.015em; }
+  .meta { min-width:58mm; text-align:right; color:#64748b; font-size:7.4px; line-height:1.45; }
+  .filters { display:flex; min-height:7mm; flex-wrap:wrap; align-items:center; gap:1.2mm; margin:2.6mm 0 2.4mm; }
+  .filters span { border:1px solid #bed3cf; border-radius:999px; background:#edf7f5; padding:1mm 2.1mm; color:#245e58; font-size:7.3px; line-height:1; white-space:nowrap; }
+  .summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2mm; margin-bottom:2.8mm; }
+  .summary div { min-height:12mm; border:1px solid #cfdbd9; border-radius:2.2mm; background:#f7faf9; padding:2mm 2.5mm; }
+  .summary span { display:block; color:#6b7785; font-size:7px; line-height:1; text-transform:uppercase; letter-spacing:.09em; }
+  .summary strong { display:block; margin-top:1.4mm; color:#172033; font-size:12px; line-height:1; }
   table { width:100%; border-collapse:collapse; table-layout:fixed; }
-  th { background:#354153; color:#fff; border:1px solid #354153; padding:1.9mm 1.4mm; font-size:7.5px; text-align:left; text-transform:uppercase; letter-spacing:.04em; }
-  td { border:1px solid #d7dfe2; padding:1.55mm 1.35mm; vertical-align:middle; line-height:1.25; overflow-wrap:anywhere; }
+  col.nr { width:8mm; }
+  col.doc { width:33mm; }
+  col.type { width:24mm; }
+  col.date { width:19mm; }
+  col.route { width:38mm; }
+  col.lines { width:12mm; }
+  col.qty { width:12mm; }
+  col.value { width:25mm; }
+  col.actor { width:28mm; }
+  thead { display:table-header-group; }
+  tr { break-inside:avoid; page-break-inside:avoid; }
+  th { height:7.5mm; background:#354153; color:#fff; border:1px solid #354153; padding:1.45mm 1.2mm; font-size:7px; line-height:1.1; text-align:left; text-transform:uppercase; letter-spacing:.045em; vertical-align:middle; }
+  td { height:8.8mm; border:1px solid #d6dfe2; padding:1.25mm 1.2mm; vertical-align:middle; line-height:1.15; color:#243044; overflow:hidden; }
   tbody tr:nth-child(even) td { background:#f8fafb; }
-  th:nth-child(1),td:nth-child(1){width:8mm;text-align:center}
-  th:nth-child(2),td:nth-child(2){width:34mm}
-  th:nth-child(3),td:nth-child(3){width:25mm}
-  th:nth-child(4),td:nth-child(4){width:20mm}
-  th:nth-child(5),td:nth-child(5){width:37mm}
-  th:nth-child(6),td:nth-child(6){width:37mm}
-  th:nth-child(7),td:nth-child(7){width:12mm;text-align:center}
-  th:nth-child(8),td:nth-child(8){width:12mm;text-align:center}
-  th:nth-child(9),td:nth-child(9){width:24mm;text-align:right}
-  th:nth-child(10),td:nth-child(10){width:26mm}
-  .doc strong { display:block; font-size:9px; color:#172033; }
-  .doc span { display:block; margin-top:.6mm; color:#64748b; font-size:7px; }
-  .money { font-weight:700; color:#183d36; white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .num { font-variant-numeric:tabular-nums; }
-  tfoot td { background:#eaf5f3; border-color:#bfd5d1; font-weight:700; }
-  .footer { display:flex; justify-content:space-between; gap:8mm; margin-top:3mm; padding-top:2mm; border-top:1px solid #d7dfdd; color:#7a8792; font-size:7.5px; }
+  .nr, .num { text-align:center; font-variant-numeric:tabular-nums; }
+  .date { font-variant-numeric:tabular-nums; }
+  .nowrap, .routeCell, .actorCell { white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+  .routeCell { font-size:7.7px; }
+  .actorCell { font-size:7.8px; }
+  .doc strong { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:8.5px; line-height:1.05; color:#172033; }
+  .doc span { display:inline-block; margin-top:.75mm; border:1px solid #c7d5d2; border-radius:999px; background:#f2f7f6; padding:.45mm 1.25mm; color:#64748b; font-size:6.4px; line-height:1; white-space:nowrap; }
+  .money { text-align:right; font-weight:700; color:#183d36; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  tfoot { display:table-row-group; }
+  tfoot td { height:8mm; background:#e8f4f2; border-color:#b9d0cc; font-weight:700; color:#183d36; }
+  tfoot .totalLabel { text-align:right; padding-right:2mm; letter-spacing:.08em; font-size:7px; }
+  tfoot .totalNum { text-align:center; font-size:8px; font-variant-numeric:tabular-nums; }
+  tfoot .totalValue { text-align:right; background:#108D8B; color:#fff; font-size:9px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .footer { display:flex; justify-content:space-between; align-items:center; gap:8mm; margin-top:2.8mm; padding-top:1.8mm; border-top:1px solid #d7dfdd; color:#7a8792; font-size:7px; }
 </style>
 </head>
 <body>
@@ -1732,7 +1743,7 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
       <div class="brand">AllInFashion</div>
       <h1>Szűrt készletbizonylatok</h1>
     </div>
-    <div class="meta">Nyomtatás ideje: ${escapeHtml(generatedAt)}<br/>A lista az aktív fejléc-szűrést követi.</div>
+    <div class="meta">Nyomtatás ideje: ${escapeHtml(generatedAt)}<br/>A lista pontosan az aktív fejléc-szűrést követi.</div>
   </div>
   ${filters}
   <div class="summary">
@@ -1741,16 +1752,28 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
     <div><span>Összérték</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
   </div>
   <table>
+    <colgroup>
+      <col class="nr" /><col class="doc" /><col class="type" /><col class="date" />
+      <col class="route" /><col class="route" /><col class="lines" /><col class="qty" />
+      <col class="value" /><col class="actor" />
+    </colgroup>
     <thead><tr>
-      <th>Nr.</th><th>Bizonylat</th><th>Típus</th><th>Dátum</th><th>Kimenő / forrás</th><th>Bejövő / partner</th><th>Sor</th><th>Db</th><th>Érték RON</th><th>Rögzítette</th>
+      <th style="text-align:center">Nr.</th><th>Bizonylat</th><th>Típus</th><th>Dátum</th><th>Kimenő / forrás</th><th>Bejövő / partner</th><th style="text-align:center">Sor</th><th style="text-align:center">Db</th><th style="text-align:right">Érték RON</th><th>Rögzítette</th>
     </tr></thead>
     <tbody>${rows || `<tr><td colspan="10" style="text-align:center;padding:8mm;color:#64748b">Nincs találat a kiválasztott szűrésre.</td></tr>`}</tbody>
-    <tfoot><tr><td colspan="6" style="text-align:right">ÖSSZESEN</td><td>${escapeHtml(quantity(items.reduce((sum, item) => sum + n(item.line_count), 0)))}</td><td>${escapeHtml(quantity(totalQty))}</td><td class="money">${escapeHtml(moneyRon(totalValue, false))}</td><td></td></tr></tfoot>
+    <tfoot><tr>
+      <td></td><td></td><td></td><td></td><td></td><td class="totalLabel">ÖSSZESEN</td>
+      <td class="totalNum">${escapeHtml(quantity(totalLines))}</td>
+      <td class="totalNum">${escapeHtml(quantity(totalQty))}</td>
+      <td class="totalValue">${escapeHtml(moneyRon(totalValue, false))}</td>
+      <td></td>
+    </tr></tfoot>
   </table>
   <div class="footer"><span>AllInFashion • készletbizonylati archívum</span><span>${escapeHtml(quantity(items.length))} találat</span></div>
 </body>
 </html>`;
 }
+
 
 function printFilteredArchive(items: DocumentListItem[], filterSummary: string[]) {
   const iframe = document.createElement("iframe");
