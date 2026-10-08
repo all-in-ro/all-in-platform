@@ -285,6 +285,158 @@ function TouchFilterBar({
   );
 }
 
+/** AllIn-stílusú helyszínválasztó, natív böngészős <select> nélkül. */
+function AllInLocationPicker({
+  locations,
+  selectedCode,
+  selectedName,
+  ownLocationCode,
+  loading,
+  onSelect,
+}: {
+  locations: AifLocationDetail[];
+  selectedCode: string;
+  selectedName: string;
+  ownLocationCode: string;
+  loading: boolean;
+  onSelect: (code: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!expanded) return;
+
+    const selectedIndex = Math.max(0, locations.findIndex((item) => String(item.code) === String(selectedCode)));
+    const focusFrame = window.requestAnimationFrame(() => optionRefs.current[selectedIndex]?.focus());
+
+    const onOutsidePointer = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setExpanded(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // A külső Napi összesítés / Készlet ablak ESC-kezelője ne zárja be
+      // az egész modalt, amikor csak ezt a listát szeretnénk becsukni.
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setExpanded(false);
+      triggerRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", onOutsidePointer, true);
+    window.addEventListener("keydown", onEscape, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
+      window.removeEventListener("keydown", onEscape, true);
+    };
+  }, [expanded, locations, selectedCode]);
+
+  const focusOption = (index: number) => {
+    if (!locations.length) return;
+    optionRefs.current[(index + locations.length) % locations.length]?.focus();
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className={`relative w-full min-w-0 flex-1 sm:max-w-[430px] ${expanded ? "z-[90]" : "z-10"}`}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setExpanded(false);
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={loading || locations.length === 0}
+        onClick={() => setExpanded((current) => !current)}
+        onKeyDown={(event) => {
+          if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+            event.preventDefault();
+            if (!expanded) setExpanded(true);
+            else focusOption(event.key === "ArrowUp" ? locations.length - 1 : 0);
+          }
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={expanded}
+        aria-label={`Megtekintett készlethely: ${selectedName}`}
+        className={`group flex h-12 w-full touch-manipulation items-center gap-3 rounded-2xl border px-3 text-left text-sm text-white outline-none transition disabled:cursor-wait disabled:opacity-65 focus-visible:ring-2 focus-visible:ring-[#b9f5f2]/75 ${
+          expanded
+            ? "border-[#c8fffc]/75 bg-[#319c99] shadow-[0_10px_28px_rgba(42,141,139,0.20)]"
+            : "border-[#9be9e5]/38 bg-[#2a8d8b] hover:border-[#b9f5f2]/55 hover:bg-[#319c99]"
+        }`}
+      >
+        <Store size={17} className="shrink-0 text-[#c9fffc]" />
+        <span className="min-w-0 flex-1 truncate">{selectedName}</span>
+        {loading ? (
+          <Loader2 size={18} className="shrink-0 animate-spin text-white/80" />
+        ) : (
+          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/16 bg-white/10 transition-transform ${expanded ? "rotate-180" : ""}`}>
+            <ChevronDown size={17} className="text-white/90" />
+          </span>
+        )}
+      </button>
+
+      {expanded ? (
+        <div className="absolute inset-x-0 top-full z-[100] mt-2 overflow-hidden rounded-[20px] border border-[#9be9e5]/45 bg-[#29384b] p-2 shadow-[0_24px_55px_rgba(9,18,35,0.55)]">
+          <div className="flex items-center gap-2 px-3 pb-2 pt-1">
+            <MapPin size={14} className="text-[#8ee6e2]" />
+            <span className="text-[10px] uppercase tracking-[0.13em] text-[#bdf8f5]/75">Készlethely kiválasztása</span>
+          </div>
+          <div role="listbox" aria-label="Készlethely kiválasztása" className="max-h-64 space-y-1 overflow-y-auto overscroll-contain">
+            {locations.map((item, index) => {
+              const selected = String(item.code) === String(selectedCode);
+              const isOwn = String(item.code) === String(ownLocationCode);
+              const warehouse = String(item.location_type || "").toLowerCase().includes("warehouse") || String(item.name || "").toLocaleLowerCase("hu-HU").includes("raktár");
+              const PlaceIcon = warehouse ? Boxes : Store;
+              return (
+                <button
+                  key={item.id || item.code}
+                  ref={(element) => { optionRefs.current[index] = element; }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => {
+                    setExpanded(false);
+                    if (!selected) onSelect(String(item.code));
+                    triggerRef.current?.focus();
+                  }}
+                  onKeyDown={(event) => {
+                    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                      event.preventDefault();
+                      if (event.key === "Home") focusOption(0);
+                      else if (event.key === "End") focusOption(locations.length - 1);
+                      else focusOption(index + (event.key === "ArrowDown" ? 1 : -1));
+                    }
+                  }}
+                  className={`group flex min-h-[56px] w-full touch-manipulation items-center gap-3 rounded-[14px] border px-3 py-2 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-[#b9f5f2]/70 ${
+                    selected
+                      ? "border-[#9be9e5]/65 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.18)]"
+                      : "border-white/10 bg-[#344358] text-white/85 hover:border-[#9be9e5]/40 hover:bg-[#40536a] hover:text-white"
+                  }`}
+                >
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${selected ? "border-white/26 bg-white/15 text-white" : "border-[#9be9e5]/20 bg-[#2a8d8b]/16 text-[#8ee6e2]"}`}>
+                    <PlaceIcon size={17} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px]">{item.name}</span>
+                    <span className={`mt-0.5 block text-[10px] ${selected ? "text-white/70" : "text-white/42"}`}>{isOwn ? "Saját hely" : "Csak megtekintés"}</span>
+                  </span>
+                  {selected ? <CheckCircle2 size={19} className="shrink-0 text-[#d7fffd]" /> : <ChevronRight size={16} className="shrink-0 text-white/28 group-hover:text-[#bff8f5]" />}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mx-1 mt-2 border-t border-white/10 px-2 pt-2 text-[10px] text-white/42">Másik hely készlete csak megtekinthető.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -2283,25 +2435,14 @@ export default function AllInShopOperations({
                 )}
               </div>
 
-              <label className="relative min-w-[260px] flex-1 sm:max-w-[430px]">
-                <Store className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={17} />
-                <select
-                  value={browseLocationCode}
-                  onChange={(event) => void changeBrowseLocation(event.target.value)}
-                  disabled={browseLocationsLoading}
-                  className="h-12 w-full appearance-none rounded-2xl border border-[#9be9e5]/38 bg-[#2a8d8b] pl-11 pr-11 text-sm text-white outline-none transition hover:bg-[#319c99] focus:border-[#c8fffc] disabled:cursor-wait disabled:opacity-60"
-                  aria-label="Megtekintett készlethely"
-                >
-                  {browseLocations.map((item) => (
-                    <option key={item.id || item.code} value={item.code} className="bg-[#303a4c] text-white">
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-                {browseLocationsLoading
-                  ? <Loader2 className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-white/80" size={17} />
-                  : <ChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/80" size={17} />}
-              </label>
+              <AllInLocationPicker
+                locations={browseLocations}
+                selectedCode={browseLocationCode}
+                selectedName={browseLocationName}
+                ownLocationCode={locationCode}
+                loading={browseLocationsLoading}
+                onSelect={(code) => { void changeBrowseLocation(code); }}
+              />
             </div>
           ) : null}
 
