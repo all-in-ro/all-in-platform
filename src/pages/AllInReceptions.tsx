@@ -1982,6 +1982,7 @@ export default function AllInReceptions(_props: Props) {
   const [avizSettingsOpen, setAvizSettingsOpen] = useState(false);
   const [avizSettingsLoading, setAvizSettingsLoading] = useState(false);
   const [avizSettingsSaving, setAvizSettingsSaving] = useState(false);
+  const [receptionDocumentEditOpen, setReceptionDocumentEditOpen] = useState(false);
   const [avizSeries, setAvizSeries] = useState(DEFAULT_RECEPTION_AVIZ_SETTINGS.series);
   const [avizNextNumber, setAvizNextNumber] = useState(String(DEFAULT_RECEPTION_AVIZ_SETTINGS.nextNumber));
   const [avizDigits, setAvizDigits] = useState(String(DEFAULT_RECEPTION_AVIZ_SETTINGS.digits));
@@ -2196,15 +2197,6 @@ export default function AllInReceptions(_props: Props) {
     setMessage("");
     try {
       const next = await apiAifGetReception(id);
-      const avizPatch = await apiAifEnsureReceptionAvizNumber(id).catch(() => null);
-      if (avizPatch?.item) next.item = { ...next.item, ...avizPatch.item } as any;
-      else if (avizPatch?.avizNumber) next.item = {
-        ...next.item,
-        aviz_number: avizPatch.avizNumber,
-        aviz_series: avizPatch.avizSeries,
-        aviz_sequence_number: avizPatch.avizSequenceNumber,
-        aviz_sequence_year: avizPatch.avizSequenceYear,
-      } as any;
       setDetail(next);
       setReceptionDraft(buildReceptionDraft(next.item));
       setRowDrafts(buildDrafts(next.rows || []));
@@ -2323,6 +2315,7 @@ export default function AllInReceptions(_props: Props) {
       : (item.invoice_gross ?? (item as any).invoice_net ?? "");
     return {
       invoiceNumber: String(item.invoice_number || ""),
+      avizNumber: String((item as any).aviz_number || (item as any).avizNumber || ""),
       uitCode: String((item as any).uit_code || (item as any).uitCode || ""),
       invoiceDate: dateText(item.invoice_date) === "-" ? "" : dateText(item.invoice_date),
       receptionDate: dateText(item.reception_date) === "-" ? "" : dateText(item.reception_date),
@@ -2408,6 +2401,7 @@ export default function AllInReceptions(_props: Props) {
       );
       const saved = await apiAifUpdateReception(detail.item.id, {
         invoiceNumber: receptionDraft.invoiceNumber,
+        avizNumber: receptionDraft.avizNumber,
         uitCode: receptionDraft.uitCode,
         invoiceDate: receptionDraft.invoiceDate,
         receptionDate: receptionDraft.receptionDate,
@@ -2426,6 +2420,7 @@ export default function AllInReceptions(_props: Props) {
         setReceptionDraft((prev) => ({
           ...prev,
           invoiceNumber: String(saved.item?.invoice_number ?? prev.invoiceNumber ?? ""),
+          avizNumber: String(saved.item?.aviz_number ?? saved.item?.avizNumber ?? prev.avizNumber ?? ""),
           uitCode: String(saved.item?.uit_code ?? saved.item?.uitCode ?? prev.uitCode ?? ""),
           invoiceDate: dateOnly(saved.item?.invoice_date) || prev.invoiceDate,
           receptionDate: dateOnly(saved.item?.reception_date) || prev.receptionDate,
@@ -2447,6 +2442,31 @@ export default function AllInReceptions(_props: Props) {
       setMessage("Receptió fejadatai mentve.");
     } catch (e: any) {
       setMessage(e?.message || "A receptió fejadatai nem menthetők.");
+    } finally {
+      setSavingHeader(false);
+    }
+  }
+
+  async function saveReceptionDocumentIdentity() {
+    if (!detail || savingHeader) return;
+    setSavingHeader(true);
+    setMessage("");
+    try {
+      const avizNumber = String(receptionDraft.avizNumber || "").trim();
+      const receptionDate = String(receptionDraft.receptionDate || "").trim();
+      const saved = await apiAifUpdateReception(detail.item.id, {
+        avizNumber: avizNumber || null,
+        receptionDate: receptionDate || null,
+      } as any);
+      if (saved?.item) {
+        setDetail((prev) => prev ? { ...prev, item: { ...prev.item, ...saved.item } } : prev);
+      }
+      await reloadDetail(detail.item.id);
+      await load();
+      setReceptionDocumentEditOpen(false);
+      setMessage("Aviz szám és receptió dátuma mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "Az Aviz szám és receptió dátuma nem menthető.");
     } finally {
       setSavingHeader(false);
     }
@@ -3072,6 +3092,15 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] transition hover:bg-[#319c99]"
+                    onClick={() => setReceptionDocumentEditOpen(true)}
+                    disabled={busy || savingHeader}
+                    type="button"
+                    title="Aviz szám és tényleges receptió dátuma"
+                  >
+                    <CalendarDays size={15} /> Aviz / dátum
+                  </button>
                   <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button">
                     <CheckCircle size={15} /> Ellenőrző PDF
                   </button>
@@ -3181,9 +3210,12 @@ export default function AllInReceptions(_props: Props) {
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                     <label className={lightLabel}>Számlaszám<input className={lightInput} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
                     <label className={lightLabel}>Aviz szám
-                      <div className="flex h-10 items-center rounded-xl border border-[#7bd7d4]/22 bg-[#253e48] px-3 font-mono text-xs text-[#d7fffd]">
-                        {String((detail.item as any).aviz_number || "PDF készítéskor automatikus")}
-                      </div>
+                      <input
+                        className={`${lightInput} font-mono tracking-[0.03em]`}
+                        value={receptionDraft.avizNumber || ""}
+                        onChange={(e) => updateReceptionDraft("avizNumber", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 80))}
+                        placeholder={avizSettings.previewNumber || "pl. AVZ/2026/000001"}
+                      />
                     </label>
                     <label className={lightLabel}>UIT kód<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
                     <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
@@ -3571,6 +3603,60 @@ export default function AllInReceptions(_props: Props) {
                   {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-white/42">Nincs sor ebben a nézetben.</div> : null}
                 </div>
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {detail && receptionDocumentEditOpen && (
+        <div
+          className="fixed inset-0 z-[115] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-[5px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reception-document-edit-title"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setReceptionDocumentEditOpen(false); }}
+        >
+          <div className="w-full max-w-xl overflow-hidden rounded-[24px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_30px_100px_rgba(0,0,0,0.68)] ring-1 ring-white/[0.05]" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#203244] via-[#24525a] to-[#2a8d8b] px-5 py-4">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.16em] text-white/52">Receptió bizonylat</p>
+                <h2 id="reception-document-edit-title" className="mt-1 text-xl text-white">Aviz szám és receptió dátuma</h2>
+                <p className="mt-1 text-xs text-white/62">Régebben készletre vett receptiónál is módosítható. A számla dátuma ettől külön marad.</p>
+              </div>
+              <button className={neutralBtn} type="button" onClick={() => setReceptionDocumentEditOpen(false)}><X size={14} /> Bezárás</button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="rounded-2xl border border-white/10 bg-[#263246] px-4 py-3 text-xs text-white/68">
+                <span className="text-white/42">Számla:</span> <strong className="text-white">{cell(detail.item.invoice_number)}</strong>
+                <span className="mx-2 text-white/22">•</span>
+                <span className="text-white/42">Számla dátuma:</span> <strong className="text-white">{pdfDate(detail.item.invoice_date)}</strong>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className={lightLabel}>
+                  Aviz szám
+                  <input
+                    className={`${lightInput} font-mono tracking-[0.035em]`}
+                    value={receptionDraft.avizNumber || ""}
+                    onChange={(e) => updateReceptionDraft("avizNumber", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 80))}
+                    placeholder={avizSettings.previewNumber || "pl. AVZ/2026/000001"}
+                    autoFocus
+                  />
+                </label>
+                <label className={lightLabel}>
+                  Receptió dátuma
+                  <input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} />
+                </label>
+              </div>
+              <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-4 py-3 text-xs leading-5 text-white/72">
+                Ez a dátum kerül a PDF-ekre <strong className="text-white">Data recepției</strong> néven. Nem írja át a számla keltezését.
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-white/10 bg-[#293548] px-5 py-4">
+              <button className={neutralBtn} type="button" onClick={() => setReceptionDocumentEditOpen(false)} disabled={savingHeader}>Mégse</button>
+              <button className={primaryBtn} type="button" onClick={() => void saveReceptionDocumentIdentity()} disabled={savingHeader}>
+                {savingHeader ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                {savingHeader ? "Mentés…" : "Mentés"}
+              </button>
             </div>
           </div>
         </div>
