@@ -42,6 +42,10 @@ import {
   apiAifAddItemsToOpenPurchaseOrders,
   apiAifGetPurchaseOrder,
   apiAifListPurchaseOrders,
+  apiAifListPriceChangeDocuments,
+  apiAifGetPriceChangeDocument,
+  type AifPriceChangeDocumentSummary,
+  type AifPriceChangeDocumentDetail,
 } from "../lib/aif/api";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
@@ -2453,6 +2457,76 @@ function money(v: unknown) {
   return x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function warehouseActorDisplay(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  return raw.toLowerCase() === "admin" ? "Kerekes Zsolt" : raw;
+}
+
+function warehousePriceChangeDate(value: unknown) {
+  const raw = String(value ?? "").slice(0, 10);
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : raw || "-";
+}
+
+function warehousePriceChangePrintDocumentHtml(detail: AifPriceChangeDocumentDetail) {
+  const item = detail.item || ({} as AifPriceChangeDocumentSummary);
+  const lines = Array.isArray(detail.lines) ? detail.lines : [];
+  const num = (v: unknown) => Number.isFinite(Number(v)) ? Number(v) : 0;
+  const esc = (v: unknown) => labelEscapeHtml(String(v ?? ""));
+  const qtyText = (v: unknown) => num(v).toLocaleString("ro-RO", { maximumFractionDigits: 3 });
+  const moneyText = (v: unknown) => num(v).toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totalOld = lines.reduce((sum, line) => sum + num(line.old_value), 0);
+  const totalNew = lines.reduce((sum, line) => sum + num(line.new_value), 0);
+  const totalOldTva = lines.reduce((sum, line) => sum + num(line.old_tva), 0);
+  const totalNewTva = lines.reduce((sum, line) => sum + num(line.new_tva), 0);
+  const totalDiff = totalNew - totalOld;
+  const totalDiffTva = totalNewTva - totalOldTva;
+  const rows = lines.map((line, index) => `
+    <tr>
+      <td class="nr">${index + 1}</td>
+      <td class="product"><strong>${esc(line.product_title || line.product_code || "Produs")}</strong><span>${esc([line.brand_name, line.product_code, line.color_name, line.size].filter(Boolean).join(" • "))}</span></td>
+      <td class="center">${esc(line.um || "buc")}</td>
+      <td class="center">${qtyText(line.affected_qty)}</td>
+      <td class="money">${moneyText(line.old_sell_price)}</td>
+      <td class="money">${moneyText(line.old_value)}</td>
+      <td class="center">${moneyText(line.tva_rate || item.tva_rate || 21)}%</td>
+      <td class="money">${moneyText(line.old_tva)}</td>
+      <td class="money strong">${moneyText(line.new_sell_price)}</td>
+      <td class="money strong">${moneyText(line.new_value)}</td>
+      <td class="center">${moneyText(line.tva_rate || item.tva_rate || 21)}%</td>
+      <td class="money">${moneyText(line.new_tva)}</td>
+    </tr>`).join("");
+
+  return `<!doctype html><html><head><meta charset="utf-8" /><title>${esc(item.document_number || "PMP")}</title><style>
+  @page { size:A4 landscape; margin:10mm; }
+  *{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#172033;background:#fff;font-size:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .head{display:grid;grid-template-columns:1fr auto;gap:12mm;align-items:start;border-bottom:2px solid #108D8B;padding-bottom:4mm}
+  .brand{font-size:9px;letter-spacing:.17em;text-transform:uppercase;color:#108D8B;font-weight:700}.title{margin-top:1.5mm;font-size:20px;font-weight:700}.subtitle{margin-top:1mm;color:#667085;font-size:9px}
+  .meta{min-width:72mm;border:1px solid #d6dfdf;border-radius:2.5mm;overflow:hidden}.meta-row{display:grid;grid-template-columns:25mm 1fr;border-bottom:1px solid #e3e8e8}.meta-row:last-child{border:0}.meta-row b{background:#f0f6f5;padding:1.7mm 2mm;color:#52616f}.meta-row span{padding:1.7mm 2mm}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:5mm} th,td{border:1px solid #c9d2d4;padding:1.5mm 1.2mm;vertical-align:middle} thead th{background:#354153;color:#fff;font-size:7px;text-transform:uppercase;letter-spacing:.03em;text-align:center}.group-old{background:#4b586c!important}.group-new{background:#108D8B!important}.nr{width:8mm;text-align:center}.product{width:65mm}.product strong{display:block;font-size:8.5px}.product span{display:block;margin-top:.6mm;color:#71808d;font-size:6.8px}.center{text-align:center}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.strong{font-weight:700;color:#0c5e5c}
+  tbody tr:nth-child(even) td{background:#f8fafb} tfoot td{background:#eef7f6;font-weight:700}.totals{display:grid;grid-template-columns:1fr 70mm;gap:8mm;margin-top:4mm}.diff{border:1px solid #c8d8d5;border-radius:2.5mm;background:#f3f8f7;padding:3mm}.diff h3{margin:0 0 2mm;font-size:10px}.diff-grid{display:grid;grid-template-columns:1fr auto;gap:1.5mm 5mm}.diff-grid strong{text-align:right;font-size:11px}.note{color:#667085;line-height:1.45}
+  .signatures{display:grid;grid-template-columns:1fr 1fr;gap:20mm;margin-top:11mm}.sig{padding-top:2mm}.sig h4{margin:0 0 7mm;font-size:9px}.sig-row{display:grid;grid-template-columns:25mm 1fr;gap:3mm;margin-top:3mm}.line{border-bottom:1px solid #7b8791;min-height:5mm}
+  .footer{margin-top:8mm;padding-top:2mm;border-top:1px solid #d7dfdf;display:flex;justify-content:space-between;color:#87919b;font-size:7px}
+  </style></head><body>
+  <div class="head"><div><div class="brand">ALLINFASHION • TITAN EURO-COM SRL</div><div class="title">PROCES-VERBAL DE MODIFICARE PREȚURI</div><div class="subtitle">Document intern pentru evidența modificării prețurilor de vânzare și reetichetarea stocului existent.</div></div>
+  <div class="meta">
+    <div class="meta-row"><b>Unitatea:</b><span>TITAN EURO-COM SRL</span></div>
+    <div class="meta-row"><b>Magazia:</b><span>${esc(item.location_name || "Gestiune")}</span></div>
+    <div class="meta-row"><b>Nr. doc.:</b><span>${esc(item.document_number || "-")}</span></div>
+    <div class="meta-row"><b>Data:</b><span>${esc(warehousePriceChangeDate(item.document_date))}</span></div>
+    <div class="meta-row"><b>Factura:</b><span>${esc(item.invoice_number || "-")}</span></div>
+  </div></div>
+  <table><thead>
+    <tr><th rowspan="2" style="width:8mm">Nr.</th><th rowspan="2" style="width:65mm">Denumire articol</th><th rowspan="2" style="width:12mm">U.M.</th><th rowspan="2" style="width:14mm">Cant.</th><th colspan="4" class="group-old">Preț vechi</th><th colspan="4" class="group-new">Preț nou</th></tr>
+    <tr><th>Unitar</th><th>Valoarea</th><th>Cota T.V.A.</th><th>T.V.A.</th><th>Unitar</th><th>Valoarea</th><th>Cota T.V.A.</th><th>T.V.A.</th></tr>
+  </thead><tbody>${rows}</tbody><tfoot><tr><td colspan="5" style="text-align:right">TOTAL</td><td class="money">${moneyText(totalOld)}</td><td></td><td class="money">${moneyText(totalOldTva)}</td><td></td><td class="money">${moneyText(totalNew)}</td><td></td><td class="money">${moneyText(totalNewTva)}</td></tr></tfoot></table>
+  <div class="totals"><div class="note">Sursa modificării: ${esc(item.invoice_number ? `recepție / factura ${item.invoice_number}` : item.source_type || "modificare manuală")}<br/>Înregistrat de: ${esc(warehouseActorDisplay(item.actor))}. Cantitățile reprezintă stocul existent afectat în momentul modificării prețului.</div><div class="diff"><h3>Diferențe</h3><div class="diff-grid"><span>Valoarea:</span><strong>${moneyText(totalDiff)} RON</strong><span>T.V.A.:</span><strong>${moneyText(totalDiffTva)} RON</strong></div></div></div>
+  <div class="signatures"><div class="sig"><h4>Contabilitate:</h4><div class="sig-row"><span>Numele:</span><div class="line"></div></div><div class="sig-row"><span>Semnătura:</span><div class="line"></div></div></div><div class="sig"><h4>Gestionar:</h4><div class="sig-row"><span>Numele:</span><div class="line"></div></div><div class="sig-row"><span>Semnătura:</span><div class="line"></div></div></div></div>
+  <div class="footer"><span>AllInFashion • evidență modificări de preț</span><span>${esc(item.document_number || "")}</span></div>
+  </body></html>`;
+}
+
 function priceNumber(value: unknown) {
   if (value === null || value === undefined || String(value).trim() === "") return null;
   const parsed = Number(String(value).replace(",", "."));
@@ -3148,6 +3222,23 @@ type WarehouseLabelStockCheckItem = {
   invoiceQty?: number | null;
 };
 
+type WarehouseLabelPriceChange = {
+  documentId?: string | null;
+  documentNumber?: string | null;
+  documentDate?: string | null;
+  affectedQty?: number | string | null;
+  oldSellPrice?: number | string | null;
+  newSellPrice?: number | string | null;
+  locationBreakdown?: Array<{ locationId?: string | null; locationCode?: string | null; locationName?: string | null; qty?: number | string | null }> | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+};
+
 type WarehouseLabelStockCheckRow = {
   variantId: string;
   receptionId?: string | null;
@@ -3156,7 +3247,18 @@ type WarehouseLabelStockCheckRow = {
   currentLocationQty?: number | string | null;
   outgoingSinceReception?: number | string | null;
   maxCopies?: number | string | null;
+  baseMaxCopies?: number | string | null;
+  relabelRequired?: boolean | null;
+  relabelMaxCopies?: number | string | null;
+  priceChange?: WarehouseLabelPriceChange | null;
   mode?: string | null;
+};
+
+type WarehouseRelabelPromptRow = {
+  variantId: string;
+  relabelMaxCopies: number;
+  priceChange: WarehouseLabelPriceChange;
+  selected: boolean;
 };
 
 type WarehouseLabelTemplate = {
@@ -7168,6 +7270,16 @@ export default function AllInWarehouse() {
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [labelPrintFlow, setLabelPrintFlow] = useState<WarehouseLabelPrintFlow | null>(null);
   const [labelStockLimitById, setLabelStockLimitById] = useState<Record<string, number>>({});
+  const [labelRelabelExtraById, setLabelRelabelExtraById] = useState<Record<string, number>>({});
+  const [labelRelabelPromptRows, setLabelRelabelPromptRows] = useState<WarehouseRelabelPromptRow[]>([]);
+  const [labelRelabelPromptOpen, setLabelRelabelPromptOpen] = useState(false);
+  const [priceChangeArchiveOpen, setPriceChangeArchiveOpen] = useState(false);
+  const [priceChangeArchiveBusy, setPriceChangeArchiveBusy] = useState(false);
+  const [priceChangeArchiveSearch, setPriceChangeArchiveSearch] = useState("");
+  const [priceChangeDocuments, setPriceChangeDocuments] = useState<AifPriceChangeDocumentSummary[]>([]);
+  const [priceChangeDocumentTotal, setPriceChangeDocumentTotal] = useState(0);
+  const [priceChangeDetail, setPriceChangeDetail] = useState<AifPriceChangeDocumentDetail | null>(null);
+  const [priceChangeDetailBusy, setPriceChangeDetailBusy] = useState(false);
   const [labelClearConfirmOpen, setLabelClearConfirmOpen] = useState(false);
   const [labelCleanupBusy, setLabelCleanupBusy] = useState(false);
   const [barcodeScanner, setBarcodeScanner] = useState<BarcodeScannerSession | null>(null);
@@ -11804,7 +11916,11 @@ export default function AllInWarehouse() {
     return { variantId, receptionId, invoiceQty: invoiceQty || null };
   }
 
-  async function refreshLabelStockLimits(itemsToCheck: InventoryItem[], preserveExistingCopies: boolean) {
+  async function refreshLabelStockLimits(
+    itemsToCheck: InventoryItem[],
+    preserveExistingCopies: boolean,
+    relabelExtraOverride: Record<string, number> = labelRelabelExtraById,
+  ) {
     const requestItems = itemsToCheck
       .map(labelStockCheckItemFor)
       .filter((row): row is WarehouseLabelStockCheckItem => Boolean(row?.variantId));
@@ -11814,6 +11930,7 @@ export default function AllInWarehouse() {
         zeroStockVariantIds: [] as string[],
         reducedProducts: 0,
         removedLabels: 0,
+        priceChanges: [] as WarehouseLabelStockCheckRow[],
       };
     }
 
@@ -11836,13 +11953,18 @@ export default function AllInWarehouse() {
       if (!id) continue;
       const row = byId.get(id);
       if (!row) continue;
-      const maxCopies = Math.max(0, Math.floor(n(row.maxCopies)));
+      const baseMaxCopies = Math.max(0, Math.floor(n(row.baseMaxCopies ?? row.maxCopies)));
+      const relabelMaxCopies = Math.max(0, Math.floor(n(row.relabelMaxCopies)));
+      const relabelRequested = Math.max(0, Math.floor(n(relabelExtraOverride[id])));
+      const relabelCopies = Math.min(relabelRequested, relabelMaxCopies);
+      const maxCopies = baseMaxCopies + relabelCopies;
       limitsById[id] = maxCopies;
 
-      const fallbackRequested = Math.max(
+      const baseRequested = Math.max(
         0,
         invoiceLabelCopiesForItem(item) || Math.floor(n(item.total_qty || item.available_qty)),
       );
+      const fallbackRequested = baseRequested + relabelCopies;
       const requested = preserveExistingCopies && labelCopies[id] !== undefined
         ? labelInt(labelCopies[id], fallbackRequested, 0, 999)
         : fallbackRequested;
@@ -11863,7 +11985,8 @@ export default function AllInWarehouse() {
       return next;
     });
 
-    return { copiesById, zeroStockVariantIds, reducedProducts, removedLabels };
+    const priceChanges = rows.filter((row) => Boolean(row.relabelRequired && n(row.relabelMaxCopies) > 0 && row.priceChange));
+    return { copiesById, zeroStockVariantIds, reducedProducts, removedLabels, priceChanges };
   }
 
   function barcodeForLabelItem(item: InventoryItem, detailItem?: Record<string, any> | null) {
@@ -11914,6 +12037,19 @@ export default function AllInWarehouse() {
         return !barcodeForLabelItem(item, resolvedDetailMap[id]?.item || null);
       });
 
+      if (stockCheck.priceChanges.length) {
+        setLabelRelabelPromptRows(stockCheck.priceChanges.map((row) => ({
+          variantId: String(row.variantId || ""),
+          relabelMaxCopies: Math.max(0, Math.floor(n(row.relabelMaxCopies))),
+          priceChange: row.priceChange || {},
+          selected: true,
+        })).filter((row) => row.variantId && row.relabelMaxCopies > 0));
+        setLabelRelabelPromptOpen(true);
+        setLabelComposerOpen(false);
+        return;
+      }
+
+      setLabelRelabelExtraById({});
       setLabelComposerOpen(true);
       if (stockCheck.removedLabels > 0) {
         setMessage(`A friss készlet alapján ${stockCheck.removedLabels} címkét kihagytam ${stockCheck.reducedProducts} terméknél.`);
@@ -11928,6 +12064,114 @@ export default function AllInWarehouse() {
     } finally {
       setLabelDetailsBusy(false);
     }
+  }
+
+  async function continueLabelComposerAfterRelabel(includeSelected: boolean) {
+    const extraMap: Record<string, number> = {};
+    if (includeSelected) {
+      for (const row of labelRelabelPromptRows) {
+        if (row.selected) extraMap[row.variantId] = row.relabelMaxCopies;
+      }
+    }
+    setLabelRelabelExtraById(extraMap);
+    setLabelRelabelPromptOpen(false);
+    setLabelDetailsBusy(true);
+    try {
+      const checked = await refreshLabelStockLimits(selectedLabelItems, false, extraMap);
+      setLabelComposerOpen(true);
+      const extraLabels = Object.values(extraMap).reduce((sum, value) => sum + Math.max(0, Math.floor(n(value))), 0);
+      if (extraLabels > 0) {
+        setMessage(`${extraLabels} régi címkét hozzáadtam az új ár miatt. A nyomtatási lista már az aktuális eladási árat használja.`);
+      } else if (checked.removedLabels > 0) {
+        setMessage(`A friss készlet alapján ${checked.removedLabels} címkét kihagytam ${checked.reducedProducts} terméknél.`);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? `A címkelista frissítése nem sikerült: ${error.message}` : "A címkelista frissítése nem sikerült.");
+    } finally {
+      setLabelDetailsBusy(false);
+    }
+  }
+
+  async function loadPriceChangeArchive(searchValue = priceChangeArchiveSearch) {
+    setPriceChangeArchiveBusy(true);
+    try {
+      const response = await apiAifListPriceChangeDocuments({ search: searchValue.trim(), limit: 250, offset: 0 });
+      const docs = Array.isArray(response.items) ? response.items : [];
+      setPriceChangeDocuments(docs);
+      setPriceChangeDocumentTotal(Number(response.total || docs.length));
+      if (priceChangeDetail && !docs.some((doc) => String(doc.id) === String(priceChangeDetail.item?.id))) {
+        setPriceChangeDetail(null);
+      }
+      return docs;
+    } catch (error) {
+      setMessage(error instanceof Error ? `Az árváltozási lista nem tölthető be: ${error.message}` : "Az árváltozási lista nem tölthető be.");
+      return [] as AifPriceChangeDocumentSummary[];
+    } finally {
+      setPriceChangeArchiveBusy(false);
+    }
+  }
+
+  async function openPriceChangeArchive() {
+    setPriceChangeArchiveOpen(true);
+    const docs = await loadPriceChangeArchive("");
+    setPriceChangeArchiveSearch("");
+    if (docs[0]?.id) void openPriceChangeDocumentDetail(String(docs[0].id));
+  }
+
+  async function openPriceChangeDocumentDetail(id: string) {
+    if (!id) return;
+    setPriceChangeDetailBusy(true);
+    try {
+      const detailData = await apiAifGetPriceChangeDocument(id);
+      setPriceChangeDetail(detailData);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Az árváltozási bizonylat nem tölthető be: ${error.message}` : "Az árváltozási bizonylat nem tölthető be.");
+    } finally {
+      setPriceChangeDetailBusy(false);
+    }
+  }
+
+  function printPriceChangeDocument(detailData = priceChangeDetail) {
+    if (!detailData?.item) {
+      setMessage("Nincs megnyitott árváltozási bizonylat.");
+      return;
+    }
+    const html = warehousePriceChangePrintDocumentHtml(detailData);
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-10000px";
+    iframe.style.top = "0";
+    iframe.style.width = "297mm";
+    iframe.style.height = "210mm";
+    iframe.style.border = "0";
+    iframe.style.opacity = "0";
+    iframe.style.pointerEvents = "none";
+    document.body.appendChild(iframe);
+    const printWindow = iframe.contentWindow;
+    const printDocument = printWindow?.document;
+    if (!printWindow || !printDocument) {
+      iframe.remove();
+      setMessage("A böngésző nem engedte megnyitni a nyomtatási keretet.");
+      return;
+    }
+    let cleaned = false;
+    let timer: number | undefined;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (timer) window.clearTimeout(timer);
+      iframe.remove();
+    };
+    printWindow.addEventListener("afterprint", cleanup, { once: true });
+    printDocument.open();
+    printDocument.write(html);
+    printDocument.close();
+    printWindow.requestAnimationFrame(() => printWindow.requestAnimationFrame(() => {
+      printWindow.focus();
+      printWindow.print();
+      timer = window.setTimeout(cleanup, 60000);
+    }));
   }
 
   useEffect(() => {
@@ -12021,7 +12265,8 @@ export default function AllInWarehouse() {
       const colorNameRo = resolvedColorRoForItem(mergedLabelItem) ||
         officialColorFromTypes(firstWarehouseText(detailItem.color_name, item.color_name), colorTypes) ||
         officialColorRo(firstWarehouseText(detailItem.color_name, item.color_name));
-      const price = item.sell_price == null ? "" : String(item.sell_price);
+      const currentPrice = firstWarehouseValue(detailItem.sell_price, detailItem.sellPrice, item.sell_price, (item as any).sellPrice);
+      const price = currentPrice == null ? "" : String(currentPrice);
       return {
         item,
         id,
@@ -14468,6 +14713,9 @@ export default function AllInWarehouse() {
               <button className={headerBtnSoft} onClick={() => void focusLatestCommittedImportBatch()} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
                 <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
               </button>
+              <button className={headerBtnSoft} onClick={() => void openPriceChangeArchive()} type="button" title="Árváltozási bizonylatok és hivatalos PDF">
+                <Receipt size={15} /> Árváltozások
+              </button>
               <button className={headerBtnSoft} onClick={() => void load()} disabled={busy}><RefreshCw size={15} className={busy ? "animate-spin" : ""} /> Frissítés</button>
               <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
             </div>
@@ -14505,6 +14753,124 @@ export default function AllInWarehouse() {
             </div>
           </div>
         )}
+        {labelRelabelPromptOpen && (
+          <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#071019]/84 px-4 py-6 backdrop-blur-md">
+            <div className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/35 bg-[#354153] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
+              <div className="flex items-start justify-between gap-4 border-b border-white/12 bg-[linear-gradient(135deg,rgba(42,141,139,.34),rgba(31,48,67,.96))] px-5 py-5">
+                <div className="flex min-w-0 items-start gap-4">
+                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#b9fffb]/30 bg-[#2a8d8b] text-white shadow-[0_12px_30px_rgba(42,141,139,.28)]"><RefreshCw size={21} /></span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/72">Árváltozás • régi készlet</p>
+                    <h3 className="mt-1 text-xl text-white">Új címke kell a korábban beérkezett darabokra is</h3>
+                    <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/64">Az új számla címkéi már benne vannak a listában. Az alábbi régi készlet ugyanebből a variánsból még a korábbi árral van felcímkézve. A kijelölteket hozzáadom az új áras nyomtatáshoz.</p>
+                  </div>
+                </div>
+                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.07] text-white hover:bg-white/[0.12]" type="button" onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Bezárás"><X size={17} /></button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="space-y-2.5">
+                  {labelRelabelPromptRows.map((row) => {
+                    const change = row.priceChange || {};
+                    const locationText = (change.locationBreakdown || []).map((loc) => `${loc.locationName || loc.locationCode || "Hely"}: ${Math.floor(n(loc.qty))} db`).join(" • ");
+                    return (
+                      <button
+                        key={row.variantId}
+                        type="button"
+                        onClick={() => setLabelRelabelPromptRows((current) => current.map((item) => item.variantId === row.variantId ? { ...item, selected: !item.selected } : item))}
+                        className={`grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-3.5 py-3 text-left transition ${row.selected ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : "border-white/12 bg-[#3e495b] hover:bg-[#465266]"}`}
+                      >
+                        <div className="h-11 w-11 overflow-hidden rounded-xl border border-white/12 bg-[#2b3547]">
+                          {change.imageUrl ? <img src={String(change.imageUrl)} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[9px] text-white/38">Nincs kép</div>}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="truncate text-[13px] text-white">{change.productTitle || change.productCode || row.variantId}</span>
+                            <span className="rounded-full border border-white/15 bg-black/10 px-2 py-0.5 text-[9px] text-white/62">{change.documentNumber || "Árváltozás"}</span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/52">
+                            <span>{[change.brandName, change.colorName, change.size].filter(Boolean).join(" • ")}</span>
+                            {locationText ? <span>{locationText}</span> : null}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <div className="text-[10px] text-white/46"><span className="line-through">{money(change.oldSellPrice)} RON</span> <span className="mx-1 text-white/28">→</span> <span className="text-[#bff8f5]">{money(change.newSellPrice)} RON</span></div>
+                            <div className="mt-1 text-[16px] tabular-nums text-white">+{row.relabelMaxCopies} db <span className="text-[10px] text-white/52">régi címke</span></div>
+                          </div>
+                          <span className={`inline-flex h-6 w-6 items-center justify-center rounded-lg border ${row.selected ? "border-[#9ff4ef]/55 bg-[#2a8d8b] text-white" : "border-white/22 bg-[#2d3749] text-white/28"}`}>{row.selected ? <CheckCircle2 size={14} /> : null}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#2b3547] px-5 py-4">
+                <div className="text-[11px] text-white/58">Kijelölve: <span className="text-white">{labelRelabelPromptRows.filter((row) => row.selected).length} termék</span> • <span className="text-[#bff8f5]">{labelRelabelPromptRows.filter((row) => row.selected).reduce((sum, row) => sum + row.relabelMaxCopies, 0)} extra címke</span></div>
+                <div className="flex gap-2">
+                  <button className={btnSoft} type="button" onClick={() => void continueLabelComposerAfterRelabel(false)}>Csak az új áru</button>
+                  <button className={primaryBtn} type="button" onClick={() => void continueLabelComposerAfterRelabel(true)}><Printer size={15} /> Kijelöltek hozzáadása</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {priceChangeArchiveOpen && (
+          <div className="fixed inset-0 z-[135] flex items-center justify-center bg-[#071019]/84 p-4 backdrop-blur-md">
+            <div className="flex h-[min(820px,calc(100vh-28px))] w-[min(1460px,calc(100vw-28px))] flex-col overflow-hidden rounded-[28px] border border-white/18 bg-[#263246] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[linear-gradient(135deg,#26364b,#2a8d8b)] px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/22 bg-white/[0.08] text-[#d7fffd]"><Receipt size={20} /></span>
+                  <div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/70">Hivatalos árváltozási nyilvántartás</p><h2 className="mt-0.5 text-xl text-white">Árváltozások</h2><p className="mt-0.5 text-[11px] text-white/58">{priceChangeDocumentTotal} bizonylat • visszamenőleges importtörténettel</p></div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className={btnSoft} type="button" disabled={!priceChangeDetail || priceChangeDetailBusy} onClick={() => printPriceChangeDocument()}><Printer size={15} /> PDF / Nyomtatás</button>
+                  <button className={btnSoft} type="button" onClick={() => setPriceChangeArchiveOpen(false)}><X size={15} /> Bezárás</button>
+                </div>
+              </div>
+              <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[430px_minmax(0,1fr)]">
+                <section className="flex min-h-0 flex-col border-r border-white/10 bg-[#2d394c]">
+                  <div className="border-b border-white/10 p-3">
+                    <div className="flex gap-2">
+                      <div className="relative min-w-0 flex-1"><Search size={15} className="absolute left-3 top-2.5 text-white/38" /><input className={`${input} h-9 w-full pl-9`} value={priceChangeArchiveSearch} onChange={(e) => setPriceChangeArchiveSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void loadPriceChangeArchive(); }} placeholder="Bizonylat, számla, termék..." /></div>
+                      <button className={primaryBtn} type="button" disabled={priceChangeArchiveBusy} onClick={() => void loadPriceChangeArchive()}>{priceChangeArchiveBusy ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />} Keresés</button>
+                    </div>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+                    <div className="space-y-2">
+                      {priceChangeDocuments.map((doc) => {
+                        const active = String(priceChangeDetail?.item?.id || "") === String(doc.id);
+                        return <button key={doc.id} type="button" onClick={() => void openPriceChangeDocumentDetail(String(doc.id))} className={`w-full rounded-2xl border px-3 py-3 text-left transition ${active ? "border-[#7bd7d4]/55 bg-[#244e56]" : "border-white/10 bg-[#354153] hover:bg-[#3d495b]"}`}>
+                          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-[13px] text-white">{doc.document_number}</div><div className="mt-1 truncate text-[10px] text-white/48">{doc.invoice_number ? `Számla: ${doc.invoice_number}` : "Kézi árváltozás"} • {doc.supplier_name || doc.location_name || "AllInFashion"}</div></div><div className="text-right"><div className="text-[10px] text-white/52">{warehousePriceChangeDate(doc.document_date)}</div><div className="mt-1 text-[12px] tabular-nums text-[#bff8f5]">{money(doc.difference_total)} RON</div></div></div>
+                          <div className="mt-2 flex items-center gap-2 text-[9px] text-white/46"><span>{Math.floor(n(doc.line_count))} sor</span><span>•</span><span>{Math.floor(n(doc.total_qty))} db</span><span>•</span><span>{warehouseActorDisplay(doc.actor)}</span></div>
+                        </button>;
+                      })}
+                      {!priceChangeArchiveBusy && !priceChangeDocuments.length ? <div className="rounded-2xl border border-white/10 bg-[#354153] p-5 text-center text-sm text-white/48">Nincs árváltozási bizonylat a szűrésre.</div> : null}
+                    </div>
+                  </div>
+                </section>
+                <section className="min-h-0 overflow-y-auto bg-[#263246] p-4">
+                  {priceChangeDetailBusy ? <div className="flex h-full items-center justify-center text-sm text-white/55"><RefreshCw size={17} className="mr-2 animate-spin" /> Bizonylat betöltése...</div> : priceChangeDetail ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
+                        <div><p className="text-[10px] uppercase tracking-[0.16em] text-[#bff8f5]/70">PROCES-VERBAL DE MODIFICARE PREȚURI</p><h3 className="mt-1 text-[22px] text-white">{priceChangeDetail.item.document_number}</h3><p className="mt-1 text-[11px] text-white/50">{warehousePriceChangeDate(priceChangeDetail.item.document_date)} • {priceChangeDetail.item.invoice_number ? `Számla ${priceChangeDetail.item.invoice_number}` : "Kézi módosítás"} • {priceChangeDetail.item.location_name || "AllInFashion"}</p></div>
+                        <div className="grid grid-cols-3 gap-2 text-right"><div className="rounded-xl border border-white/10 bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase text-white/42">Régi érték</p><p className="mt-1 text-[15px] tabular-nums text-white">{money(priceChangeDetail.item.old_total)} RON</p></div><div className="rounded-xl border border-[#7bd7d4]/20 bg-[#21464e] px-3 py-2"><p className="text-[9px] uppercase text-[#bff8f5]/58">Új érték</p><p className="mt-1 text-[15px] tabular-nums text-[#d7fffd]">{money(priceChangeDetail.item.new_total)} RON</p></div><div className="rounded-xl border border-orange-300/18 bg-orange-500/[0.10] px-3 py-2"><p className="text-[9px] uppercase text-orange-100/58">Különbözet</p><p className="mt-1 text-[15px] tabular-nums text-orange-100">{money(priceChangeDetail.item.difference_total)} RON</p></div></div>
+                      </div>
+                      <div className="overflow-hidden rounded-2xl border border-white/12 bg-[#303c50]">
+                        <div className="hidden grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] gap-2 border-b border-white/10 bg-[#202c3e] px-3 py-2 text-[9px] uppercase tracking-[0.08em] text-white/52 md:grid"><span></span><span>Termék</span><span className="text-center">Db</span><span className="text-right">Régi ár</span><span className="text-right">Új ár</span><span className="text-right">Különbözet</span></div>
+                        <div className="divide-y divide-white/[0.08]">
+                          {priceChangeDetail.lines.map((line) => <div key={line.id} className="grid gap-2 px-3 py-2.5 md:grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] md:items-center"><div className="h-10 w-10 overflow-hidden rounded-lg border border-white/10 bg-[#263246]">{line.image_url ? <img src={line.image_url} alt="" className="h-full w-full object-cover" /> : null}</div><div className="min-w-0"><div className="truncate text-[12px] text-white">{line.product_title || line.product_code || "Termék"}</div><div className="mt-0.5 truncate text-[9px] text-white/42">{[line.brand_name,line.product_code,line.color_name,line.size].filter(Boolean).join(" • ")}</div></div><div className="text-center text-[12px] tabular-nums text-white">{Math.floor(n(line.affected_qty))} db</div><div className="text-right text-[12px] tabular-nums text-white/64">{money(line.old_sell_price)} RON</div><div className="text-right text-[13px] tabular-nums text-[#bff8f5]">{money(line.new_sell_price)} RON</div><div className="text-right text-[12px] tabular-nums text-orange-100">{money(line.difference_value)} RON</div></div>)}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#303c50] px-4 py-3 text-[11px] text-white/52"><span>Rögzítette: <strong className="font-normal text-white">{warehouseActorDisplay(priceChangeDetail.item.actor)}</strong></span><span>TVA különbözet: <strong className="font-normal text-white">{money(priceChangeDetail.item.difference_tva)} RON</strong></span><button className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail)}><Printer size={14} /> Hivatalos PDF</button></div>
+                    </div>
+                  ) : <div className="flex h-full items-center justify-center text-sm text-white/45">Válassz egy árváltozási bizonylatot.</div>}
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
+
         <datalist id="warehouse-standard-size-options">
           {sizeTypes.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
         </datalist>
