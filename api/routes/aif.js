@@ -67,6 +67,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   let aifPriceChangeSchemaReady = false;
   let aifRetailBookSchemaPromise = null;
   let aifRetailBookSchemaReady = false;
+  let aifReceptionDocumentSchemaPromise = null;
+  let aifReceptionDocumentSchemaReady = false;
 
   function ensureAifStockTransferIdempotencySchema() {
     if (!aifStockTransferIdempotencySchemaPromise) {
@@ -1441,6 +1443,210 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const compact = text(value).toUpperCase().replace(/\s+/g, "");
     if (!compact) return null;
     return compact.replace(/[^A-Z0-9-]/g, "").slice(0, 64) || null;
+  }
+
+  const AIF_RECEPTION_AVIZ_DEFAULTS = Object.freeze({
+    series: "AVZ",
+    nextNumber: 1,
+    digits: 6,
+    includeYear: true,
+    yearlyReset: true,
+  });
+
+  function cleanAifReceptionAvizSeries(value) {
+    return cleanAifTransferDocumentSeries(value || AIF_RECEPTION_AVIZ_DEFAULTS.series) || AIF_RECEPTION_AVIZ_DEFAULTS.series;
+  }
+
+  function aifReceptionAvizNumber(settings, sequenceNumber, year) {
+    return aifTransferDocumentNumber(
+      {
+        series: cleanAifReceptionAvizSeries(settings?.series),
+        digits: Math.min(10, Math.max(3, Number(settings?.digits || AIF_RECEPTION_AVIZ_DEFAULTS.digits))),
+        include_year: settings?.include_year !== undefined
+          ? settings.include_year !== false
+          : settings?.includeYear !== false,
+      },
+      sequenceNumber,
+      year,
+    );
+  }
+
+  function aifReceptionAvizSettingsResponse(row = {}) {
+    const currentYear = Number(row.sequence_year || new Date().getFullYear());
+    const nextNumber = Math.max(1, Number(row.next_number || AIF_RECEPTION_AVIZ_DEFAULTS.nextNumber));
+    const digits = Math.min(10, Math.max(3, Number(row.digits || AIF_RECEPTION_AVIZ_DEFAULTS.digits)));
+    const includeYear = row.include_year !== false;
+    const yearlyReset = row.yearly_reset !== false;
+    const series = cleanAifReceptionAvizSeries(row.series);
+    return {
+      series,
+      nextNumber,
+      digits,
+      includeYear,
+      yearlyReset,
+      sequenceYear: currentYear,
+      previewNumber: aifReceptionAvizNumber(
+        { series, digits, includeYear },
+        nextNumber,
+        currentYear,
+      ),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedBy: row.updated_by || null,
+    };
+  }
+
+  async function ensureAifReceptionDocumentSchema(client = pool) {
+    if (aifReceptionDocumentSchemaReady) return true;
+
+    const run = async () => {
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_reception_document_settings (
+        id smallint PRIMARY KEY DEFAULT 1 CHECK (id=1),
+        series text NOT NULL DEFAULT 'AVZ',
+        next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+        include_year boolean NOT NULL DEFAULT true,
+        yearly_reset boolean NOT NULL DEFAULT true,
+        sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+        updated_by text NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`INSERT INTO aif_reception_document_settings (id)
+        VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+      await client.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS aviz_number text NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS aviz_series text NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS aviz_sequence_number bigint NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS aviz_sequence_year integer NULL`);
+      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_receptions_aviz_number_uq
+        ON aif_receptions (aviz_number) WHERE aviz_number IS NOT NULL`);
+
+      aifReceptionDocumentSchemaReady = true;
+      return true;
+    };
+
+    if (client === pool) {
+      if (!aifReceptionDocumentSchemaPromise) {
+        aifReceptionDocumentSchemaPromise = run().catch((error) => {
+          aifReceptionDocumentSchemaPromise = null;
+          aifReceptionDocumentSchemaReady = false;
+          throw error;
+        });
+      }
+      return aifReceptionDocumentSchemaPromise;
+    }
+
+    return run();
+  }
+
+  async function readAifReceptionAvizSettings(client = pool) {
+    await ensureAifReceptionDocumentSchema(client);
+    const result = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 LIMIT 1`);
+    return aifReceptionAvizSettingsResponse(result.rows[0] || {});
+  }
+
+  async function saveAifReceptionAvizSettings(client, input = {}, actor = "system") {
+    await ensureAifReceptionDocumentSchema(client);
+    const locked = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
+    const current = locked.rows[0] || {};
+    const currentYearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+    const currentYear = Number(currentYearResult.rows[0]?.year || new Date().getFullYear());
+
+    const series = cleanAifReceptionAvizSeries(input.series ?? current.series ?? AIF_RECEPTION_AVIZ_DEFAULTS.series);
+    const nextNumber = Math.max(1, Number.parseInt(String(input.nextNumber ?? input.next_number ?? current.next_number ?? 1), 10) || 1);
+    const digits = Math.min(10, Math.max(3, Number.parseInt(String(input.digits ?? current.digits ?? 6), 10) || 6));
+    const includeYear = boolFrom(input.includeYear ?? input.include_year, current.include_year !== false);
+    const yearlyReset = boolFrom(input.yearlyReset ?? input.yearly_reset, current.yearly_reset !== false);
+    let sequenceYear = Number.parseInt(String(input.sequenceYear ?? input.sequence_year ?? current.sequence_year ?? currentYear), 10) || currentYear;
+    if (yearlyReset && sequenceYear !== currentYear) sequenceYear = currentYear;
+
+    const updated = await client.query(
+      `UPDATE aif_reception_document_settings
+       SET series=$1, next_number=$2, digits=$3, include_year=$4,
+           yearly_reset=$5, sequence_year=$6, updated_by=$7, updated_at=now()
+       WHERE id=1
+       RETURNING *`,
+      [series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, text(actor || "system") || "system"]
+    );
+    return aifReceptionAvizSettingsResponse(updated.rows[0] || {});
+  }
+
+  async function allocateAifReceptionAvizNumber(client, receptionId, actor = "system") {
+    await ensureAifReceptionDocumentSchema(client);
+
+    const reception = await client.query(
+      `SELECT id,aviz_number,aviz_series,aviz_sequence_number,aviz_sequence_year
+       FROM aif_receptions
+       WHERE id::text=$1
+       FOR UPDATE`,
+      [String(receptionId)]
+    );
+    if (!reception.rowCount) {
+      const error = new Error("Receptió nem található.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const existing = reception.rows[0];
+    if (text(existing.aviz_number)) {
+      return {
+        avizNumber: existing.aviz_number,
+        avizSeries: existing.aviz_series || null,
+        avizSequenceNumber: existing.aviz_sequence_number == null ? null : Number(existing.aviz_sequence_number),
+        avizSequenceYear: existing.aviz_sequence_year == null ? null : Number(existing.aviz_sequence_year),
+        allocated: false,
+      };
+    }
+
+    const currentYearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+    const currentYear = Number(currentYearResult.rows[0]?.year || new Date().getFullYear());
+    const locked = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
+    const settings = locked.rows[0] || {};
+
+    let nextNumber = Math.max(1, Number(settings.next_number || 1));
+    let sequenceYear = Number(settings.sequence_year || currentYear);
+    if (settings.yearly_reset !== false && sequenceYear !== currentYear) {
+      nextNumber = 1;
+      sequenceYear = currentYear;
+    }
+
+    let avizNumber = "";
+    let guard = 0;
+    while (!avizNumber && guard < 100000) {
+      const candidate = aifReceptionAvizNumber(settings, nextNumber, sequenceYear);
+      const conflict = await client.query(
+        `SELECT 1 FROM aif_receptions WHERE aviz_number=$1 AND id::text<>$2 LIMIT 1`,
+        [candidate, String(existing.id)]
+      );
+      if (!conflict.rowCount) avizNumber = candidate;
+      else nextNumber += 1;
+      guard += 1;
+    }
+    if (!avizNumber) {
+      throw Object.assign(new Error("Nem sikerült szabad Aviz számot kiosztani."), { statusCode: 409 });
+    }
+
+    const series = cleanAifReceptionAvizSeries(settings.series || AIF_RECEPTION_AVIZ_DEFAULTS.series);
+    await client.query(
+      `UPDATE aif_receptions
+       SET aviz_number=$2,aviz_series=$3,aviz_sequence_number=$4,aviz_sequence_year=$5,updated_at=now()
+       WHERE id=$1`,
+      [existing.id, avizNumber, series, nextNumber, sequenceYear]
+    );
+    await client.query(
+      `UPDATE aif_reception_document_settings
+       SET next_number=$1,sequence_year=$2,updated_at=now(),updated_by=$3
+       WHERE id=1`,
+      [nextNumber + 1, sequenceYear, text(actor || "system") || "system"]
+    );
+
+    return {
+      avizNumber,
+      avizSeries: series,
+      avizSequenceNumber: nextNumber,
+      avizSequenceYear: sequenceYear,
+      allocated: true,
+    };
   }
 
   function cleanAifDocumentDate(value) {
@@ -4494,7 +4700,60 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return values.map(csvCell).join(";");
   }
 
+  router.get("/receptions/settings/aviz", requireAuthed, async (_req, res) => {
+    try {
+      const settings = await readAifReceptionAvizSettings(pool);
+      res.json({ ok: true, settings, item: settings });
+    } catch (error) {
+      console.error("AIF reception aviz settings read failed", error);
+      res.status(500).json({ error: error?.message || "Az Aviz számozás beállításai nem tölthetők be." });
+    }
+  });
+
+  router.patch("/receptions/settings/aviz", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureAifReceptionDocumentSchema();
+      await client.query("BEGIN");
+      const input = req.body?.settings && typeof req.body.settings === "object" ? req.body.settings : (req.body || {});
+      const settings = await saveAifReceptionAvizSettings(client, input, actorFrom(req));
+      await client.query("COMMIT");
+      res.json({ ok: true, settings, item: settings });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF reception aviz settings save failed", error);
+      res.status(error?.statusCode || 500).json({ error: error?.message || "Az Aviz számozás beállításai nem menthetők." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/receptions/:id/aviz/ensure", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "reception id required" });
+    const client = await pool.connect();
+    try {
+      await ensureAifReceptionDocumentSchema();
+      await client.query("BEGIN");
+      const aviz = await allocateAifReceptionAvizNumber(client, id, actorFrom(req));
+      const itemResult = await client.query(
+        `SELECT r.id,r.aviz_number,r.aviz_series,r.aviz_sequence_number,r.aviz_sequence_year,r.reception_date,r.invoice_date
+         FROM aif_receptions r WHERE r.id::text=$1 LIMIT 1`,
+        [id]
+      );
+      await client.query("COMMIT");
+      res.json({ ok: true, ...aviz, item: itemResult.rows[0] || null });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF reception aviz allocation failed", error);
+      res.status(error?.statusCode || 500).json({ error: error?.message || "Az Aviz szám kiosztása nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/receptions", requireAuthed, async (req, res) => {
+    await ensureAifReceptionDocumentSchema();
     const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 80)));
     const search = text(req.query.q || req.query.search);
     const supplier = text(req.query.supplier || req.query.supplier_id || req.query.supplierId);
@@ -4555,6 +4814,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const sql = `
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
+        r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
         r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
         r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -4626,6 +4886,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
   async function handleReceptionHeaderUpdate(req, res) {
+    await ensureAifReceptionDocumentSchema();
     const id = text(req.params.id);
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
@@ -4795,6 +5056,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const updated = await pool.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
+                r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -4823,6 +5085,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/receptions/:id/update", requireAuthed, handleReceptionHeaderUpdate);
 
   router.get("/receptions/:id/export.csv", requireAuthed, async (req, res) => {
+    await ensureAifReceptionDocumentSchema();
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "reception id required" });
     try {
@@ -4853,6 +5116,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const head = rec.rows[0];
       const lines = [];
       lines.push(csvLine(["Receptio", head.invoice_number || ""]));
+      lines.push(csvLine(["Aviz", head.aviz_number || ""]));
       lines.push(csvLine(["UIT kod", head.uit_code || ""]));
       lines.push(csvLine(["Beszallito", head.supplier_name || ""]));
       lines.push(csvLine(["Cel hely", head.location_name || ""]));
@@ -4901,11 +5165,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/receptions/:id", requireAuthed, async (req, res) => {
+    await ensureAifReceptionDocumentSchema();
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "reception id required" });
     try {
       const item = await pool.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
+                r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -6891,6 +7157,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const client = await pool.connect();
     try {
+      await ensureAifReceptionDocumentSchema();
       const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplierCode || body.supplier);
       if (!supplier) return res.status(400).json({ error: "supplier required or unknown" });
       if (supplier.is_active === false) return res.status(400).json({ error: "supplier is inactive" });
@@ -6963,6 +7230,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ]
       );
 
+      await allocateAifReceptionAvizNumber(client, receptionRes.rows[0].id, actorFrom(req));
+
       const r = await client.query(
         `INSERT INTO aif_import_batches (
            supplier_id, profile_id, target_location_id, reception_id, source_file_name,
@@ -7006,6 +7275,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const client = await pool.connect();
     try {
+      await ensureAifReceptionDocumentSchema();
       const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplierCode || body.supplier);
       if (!supplier) return res.status(400).json({ error: "Beszállító kiválasztása kötelező." });
       if (supplier.is_active === false) return res.status(400).json({ error: "A kiválasztott beszállító inaktív." });
@@ -7186,6 +7456,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         );
         receptionId = receptionRes.rows[0].id;
       }
+
+      await allocateAifReceptionAvizNumber(client, receptionId, actorFrom(req));
 
       const batchRes = await client.query(
         `INSERT INTO aif_import_batches (
