@@ -2374,6 +2374,8 @@ export default function AllInShopOperations({
   const daySalesRevenue = numberValue(daySummary.salesRevenue ?? daySummary.revenue);
   const dayCollectedTotal = numberValue(daySummary.collectedTotal ?? daySummary.revenue);
   const dayCustomerPaymentTotal = numberValue(daySummary.customerPaymentTotal);
+  // A napi bruttó forgalomhoz a ma rendezett korábbi tartozások is hozzátartoznak.
+  const dayGrossTurnover = numberValue(daySummary.salesBeforeDiscount) + dayCustomerPaymentTotal;
   const dailyProductLines = summaryData?.productLines?.length
     ? summaryData.productLines
     : (summaryData?.products || []);
@@ -2621,8 +2623,8 @@ export default function AllInShopOperations({
                     <div className="sm:min-w-[170px] sm:text-right">
                       <span className="inline-flex rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
                       <div className="mt-2">
-                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">Bruttó</p>
-                        <p className="mt-1 text-xl tracking-tight text-white">{formatMoney(daySummary.salesBeforeDiscount)}</p>
+                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">Bruttó forgalom</p>
+                        <p className="mt-1 text-xl tracking-tight text-white">{formatMoney(dayGrossTurnover)}</p>
                       </div>
                     </div>
                   </div>
