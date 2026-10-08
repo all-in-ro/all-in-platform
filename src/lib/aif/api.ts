@@ -707,6 +707,76 @@ export type AifVariantHistoryResponse = {
   events: AifVariantHistoryEvent[];
 };
 
+export type AifPriceChangeDocumentSummary = {
+  id: string;
+  document_number: string;
+  series?: string | null;
+  sequence_number?: number | string | null;
+  sequence_year?: number | string | null;
+  document_date: string;
+  source_type?: string | null;
+  source_id?: string | null;
+  reception_id?: string | null;
+  import_batch_id?: string | null;
+  invoice_number?: string | null;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
+  location_id?: string | null;
+  location_name?: string | null;
+  actor?: string | null;
+  status?: string | null;
+  note?: string | null;
+  tva_rate?: number | string | null;
+  line_count?: number | string | null;
+  total_qty?: number | string | null;
+  old_total?: number | string | null;
+  new_total?: number | string | null;
+  difference_total?: number | string | null;
+  difference_tva?: number | string | null;
+  raw?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AifPriceChangeDocumentLine = {
+  id: string;
+  document_id: string;
+  source_import_row_id?: string | null;
+  variant_id: string;
+  product_title?: string | null;
+  product_code?: string | null;
+  barcode?: string | null;
+  brand_name?: string | null;
+  color_name?: string | null;
+  size?: string | null;
+  image_url?: string | null;
+  um?: string | null;
+  affected_qty: number | string;
+  old_sell_price: number | string;
+  new_sell_price: number | string;
+  old_value: number | string;
+  new_value: number | string;
+  difference_value: number | string;
+  tva_rate?: number | string | null;
+  old_tva?: number | string | null;
+  new_tva?: number | string | null;
+  difference_tva?: number | string | null;
+  location_breakdown?: Array<{
+    locationId?: string | null;
+    locationCode?: string | null;
+    locationName?: string | null;
+    qty?: number | string | null;
+  }> | null;
+  raw?: Record<string, unknown> | null;
+  created_at?: string | null;
+};
+
+export type AifPriceChangeDocumentDetail = {
+  ok: true;
+  item: AifPriceChangeDocumentSummary;
+  lines: AifPriceChangeDocumentLine[];
+};
+
 const AIF_BASE = "/api/aif";
 
 function inferAifShopLocationFromBrowser() {
@@ -1541,6 +1611,33 @@ export function apiAifVariantHistory(variantId: string, limit = 500) {
   if (limit) q.set("limit", String(limit));
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<AifVariantHistoryResponse>(`/variants/${encodeURIComponent(variantId)}/history${suffix}`);
+}
+
+export function apiAifListPriceChangeDocuments(options?: {
+  search?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.search?.trim()) q.set("q", options.search.trim());
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  q.set("limit", String(options?.limit || 200));
+  q.set("offset", String(options?.offset || 0));
+  return fetchAifJSON<{
+    ok: true;
+    items: AifPriceChangeDocumentSummary[];
+    total: number;
+    limit: number;
+    offset: number;
+    hasMore?: boolean;
+  }>(`/price-change-documents?${q.toString()}`);
+}
+
+export function apiAifGetPriceChangeDocument(id: string) {
+  return fetchAifJSON<AifPriceChangeDocumentDetail>(`/price-change-documents/${encodeURIComponent(id)}`);
 }
 
 export function apiAifDeleteStockMovement(id: string) {
