@@ -21793,6 +21793,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return result.rows[0];
   }
 
+  // Kizárólag készlet/termék MEGTEKINTÉSHEZ használható helyfeloldás.
+  // A shop munkamenet itt szándékosan megnézheti bármely aktív adatbázis-hely készletét,
+  // de minden író/eladási route továbbra is aifResolveShopLocation()-t használ,
+  // ezért másik hely készlete ebből a felületből nem módosítható és nem adható el.
+  async function aifResolveInventoryReadLocation(req, client = pool, requestedLocation = null) {
+    const requested = aifShopLocationCode(requestedLocation || req.query?.location || req.body?.location);
+    if (!requested) return aifResolveShopLocation(req, client, requestedLocation);
+
+    const result = await client.query(
+      `SELECT id, code, name
+       FROM aif_locations
+       WHERE (id::text=$1 OR code=$1 OR lower(name)=lower($1))
+         AND COALESCE(is_active,true)=true
+       LIMIT 1`,
+      [requested]
+    );
+    if (!result.rowCount) {
+      const error = new Error("A kiválasztott készlethely nem található vagy inaktív.");
+      error.statusCode = 404;
+      throw error;
+    }
+    return result.rows[0];
+  }
+
+
   function aifRoundMoney(value) {
     return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   }
@@ -26498,7 +26523,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
-      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const location = await aifResolveInventoryReadLocation(req, pool, req.query.location);
       const openingInventory = await aifActiveOpeningInventorySession(pool, location.id);
       const search = text(req.query.q || req.query.search);
       const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
@@ -26676,7 +26701,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await ensureAifShopSalesSchema();
       await ensureAifRetailBookSchema(pool);
-      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const location = await aifResolveInventoryReadLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
       const full = ["1", "true", "yes", "all"].includes(text(req.query.full || req.query.all).toLowerCase());
       const limit = Math.min(10000, Math.max(1, Number(req.query.limit || 600)));
