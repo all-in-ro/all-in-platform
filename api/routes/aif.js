@@ -27563,6 +27563,184 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  // Könnyű vezetői pénzügyi megjegyzés-lista. Szándékosan nem a teljes
+  // /shop-cash/overview route-ot használja, mert az készpénzegyenleget,
+  // átadási tervet és történeti bruttó-visszaszámolást is épít. Egy egyszerű
+  // auditlista kedvéért az fölösleges és nagy időszaknál Render gateway timeoutot
+  // tud okozni.
+  router.get("/admin/financial-notes", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const today = aifBucharestIsoDate();
+      let from = aifValidIsoDate(req.query.from, `${today.slice(0, 7)}-01`);
+      let to = aifValidIsoDate(req.query.to, today);
+      if (from > to) [from, to] = [to, from];
+
+      const requestedLocation = text(req.query.location || req.query.locationCode || req.query.location_code);
+      const requestedEmployee = text(req.query.employee || req.query.actor);
+      const aliasMap = {
+        csikszereda: "main_warehouse",
+        ciuc: "main_warehouse",
+        miercurea_ciuc: "main_warehouse",
+        kezdivasarhely: "magazin_targu_secuiesc",
+        kezdi: "magazin_targu_secuiesc",
+        targu_secuiesc: "magazin_targu_secuiesc",
+      };
+      const normalizedLocation = requestedLocation && requestedLocation !== "all"
+        ? (aliasMap[normCode(requestedLocation)] || requestedLocation)
+        : "";
+
+      const result = await pool.query(
+        `WITH selected_locations AS (
+           SELECT id, code, name
+           FROM aif_locations
+           WHERE code IN ('main_warehouse','magazin_targu_secuiesc')
+             AND ($3::text='' OR id::text=$3 OR code=$3 OR lower(name)=lower($3))
+         ), notes AS (
+           SELECT
+             'day_close'::text AS kind,
+             c.id::text AS id,
+             c.work_date::date AS note_date,
+             c.closed_at AS happened_at,
+             l.code AS location_code,
+             l.name AS location_name,
+             c.actor::text AS actor,
+             NULL::numeric AS amount,
+             'closed'::text AS status,
+             NULL::text AS reference,
+             c.note::text AS note,
+             format('Záró kassza: %s RON • Eltérés: %s RON',
+               trim(to_char(COALESCE(c.counted_cash,0), 'FM9999999990.00')),
+               trim(to_char(COALESCE(c.cash_difference,0), 'FM9999999990.00'))
+             )::text AS meta
+           FROM aif_shop_day_closures c
+           JOIN selected_locations l ON l.id=c.location_id
+           WHERE c.work_date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(c.note,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT
+             'cash_movement'::text,
+             m.id::text,
+             (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date,
+             m.requested_at,
+             l.code,
+             l.name,
+             m.requested_by::text,
+             COALESCE(m.amount,0)::numeric,
+             m.status::text,
+             m.reference::text,
+             m.note::text,
+             CASE
+               WHEN m.movement_type='manager_handover' THEN 'Készpénzátadás a főnöknek'
+               WHEN m.movement_type='bank_deposit' THEN 'Bankbefizetés'
+               ELSE m.movement_type::text
+             END
+           FROM aif_shop_cash_movements m
+           JOIN selected_locations l ON l.id=m.location_id
+           WHERE (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(m.note,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT
+             'shift_handover'::text,
+             h.id::text || ':note',
+             h.work_date::date,
+             h.created_at,
+             l.code,
+             l.name,
+             h.from_actor::text,
+             COALESCE(h.counted_cash,h.expected_cash,0)::numeric,
+             h.status::text,
+             NULL::text,
+             h.note::text,
+             format('Műszakátadás: %s → %s', COALESCE(h.from_actor,'–'), COALESCE(h.to_actor,'–'))::text
+           FROM aif_shop_shift_handovers h
+           JOIN selected_locations l ON l.id=h.location_id
+           WHERE h.work_date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(h.note,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT
+             'shift_acceptance'::text,
+             h.id::text || ':accept',
+             h.work_date::date,
+             COALESCE(h.accepted_at,h.created_at),
+             l.code,
+             l.name,
+             COALESCE(h.accepted_by,h.to_actor)::text,
+             COALESCE(h.counted_cash,h.expected_cash,0)::numeric,
+             h.status::text,
+             NULL::text,
+             h.acceptance_note::text,
+             format('Műszakátvétel: %s → %s', COALESCE(h.from_actor,'–'), COALESCE(h.to_actor,'–'))::text
+           FROM aif_shop_shift_handovers h
+           JOIN selected_locations l ON l.id=h.location_id
+           WHERE h.work_date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(h.acceptance_note,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT
+             'customer_payment'::text,
+             cp.id::text,
+             (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date,
+             cp.paid_at,
+             l.code,
+             l.name,
+             cp.actor::text,
+             COALESCE(cp.amount,0)::numeric,
+             'paid'::text,
+             cp.reference::text,
+             cp.note::text,
+             'Kliens tartozásrendezése'::text
+           FROM aif_shop_customer_payments cp
+           JOIN selected_locations l ON l.id=cp.location_id
+           WHERE (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(cp.note,'')),'') IS NOT NULL
+         )
+         SELECT *
+         FROM notes
+         WHERE ($4::text='' OR lower(btrim(COALESCE(actor,'')))=lower(btrim($4)))
+         ORDER BY note_date DESC, happened_at DESC NULLS LAST, id DESC
+         LIMIT 2000`,
+        [from, to, normalizedLocation, requestedEmployee]
+      );
+
+      return res.json({
+        ok: true,
+        from,
+        to,
+        location: normalizedLocation || "all",
+        employee: requestedEmployee || null,
+        count: result.rowCount,
+        items: result.rows.map((row) => ({
+          id: text(row.id),
+          kind: text(row.kind),
+          date: row.note_date ? cleanAifDocumentDate(row.note_date) : null,
+          happenedAt: row.happened_at ? new Date(row.happened_at).toISOString() : null,
+          locationCode: row.location_code || null,
+          locationName: row.location_name || null,
+          actor: row.actor || null,
+          amount: aifRoundMoney(row.amount),
+          status: row.status || null,
+          reference: row.reference || null,
+          note: row.note || null,
+          meta: row.meta || null,
+        })),
+      });
+    } catch (error) {
+      console.error("AIF admin financial notes failed", error);
+      return res.status(500).json({
+        error: error?.message || "A pénzügyi megjegyzések nem tölthetők be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
   router.get("/shop-cash/overview", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
