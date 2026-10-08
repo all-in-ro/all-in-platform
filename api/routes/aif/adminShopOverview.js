@@ -9,10 +9,37 @@ export default function createAifAdminShopOverviewRouter(deps) {
     readSalesTvaSettings,
   } = deps;
   const router = express.Router();
+  let retailBookSchemaPromise = null;
+  async function ensureRetailBookSchema() {
+    if (!retailBookSchemaPromise) {
+      retailBookSchemaPromise = (async () => {
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_retail_book (
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE CASCADE,
+          variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE CASCADE,
+          qty numeric(14,3) NOT NULL DEFAULT 0,
+          book_value numeric(18,2) NOT NULL DEFAULT 0,
+          seeded boolean NOT NULL DEFAULT false,
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (location_id,variant_id)
+        )`);
+        await pool.query(`INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
+          SELECT s.location_id,s.variant_id,COALESCE(s.qty,0),round(COALESCE(s.qty,0)::numeric * COALESCE(v.sell_price,0)::numeric,2),true,now()
+          FROM aif_stock s
+          JOIN aif_product_variants v ON v.id=s.variant_id
+          ON CONFLICT (location_id,variant_id) DO NOTHING`);
+        return true;
+      })().catch((error) => {
+        retailBookSchemaPromise = null;
+        throw error;
+      });
+    }
+    return retailBookSchemaPromise;
+  }
 
   router.get("/overview", requireAdminOrSecret, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureRetailBookSchema();
 
       const requestedLocation = text(req.query.location || req.query.locationCode || req.query.location_code);
       const aliasMap = {
@@ -670,7 +697,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
                   )
                   ELSE 0::numeric
                 END AS snapshot_reserved_qty,
-                COALESCE(v.sell_price,0)::numeric AS sell_price
+                CASE
+                  WHEN $2::date >= ((now() AT TIME ZONE 'Europe/Bucharest')::date)
+                       AND COALESCE(rb.qty,0) > 0
+                    THEN COALESCE(rb.book_value,0)::numeric / rb.qty::numeric
+                  WHEN hist.book_value_after IS NOT NULL AND COALESCE(hist.qty_after,0) > 0
+                    THEN hist.book_value_after::numeric / hist.qty_after::numeric
+                  ELSE COALESCE(v.sell_price,0)::numeric
+                END AS book_unit_value
               FROM candidate_variants cv
               LEFT JOIN aif_stock s
                 ON s.location_id=$1
@@ -680,6 +714,21 @@ export default function createAifAdminShopOverviewRouter(deps) {
               JOIN aif_product_models m ON m.id=v.model_id
               LEFT JOIN aif_brands b ON b.id=m.brand_id
               LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+              LEFT JOIN aif_stock_retail_book rb
+                ON rb.location_id=$1
+               AND rb.variant_id=cv.variant_id
+              LEFT JOIN LATERAL (
+                SELECT
+                  NULLIF(sm.raw->>'retailBookValueAfter','')::numeric AS book_value_after,
+                  COALESCE(sm.qty_after,0)::numeric AS qty_after
+                FROM aif_stock_movements sm
+                WHERE sm.location_id=$1
+                  AND sm.variant_id=cv.variant_id
+                  AND (sm.created_at AT TIME ZONE 'Europe/Bucharest')::date <= $2::date
+                  AND NULLIF(sm.raw->>'retailBookValueAfter','') IS NOT NULL
+                ORDER BY sm.created_at DESC, sm.id DESC
+                LIMIT 1
+              ) hist ON true
               WHERE ${where.join(" AND ")}
             )
             SELECT
@@ -688,7 +737,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
               COALESCE(sum(snapshot_reserved_qty),0)::numeric AS reserved_qty,
               COALESCE(sum(GREATEST(snapshot_qty - snapshot_reserved_qty,0)),0)::numeric AS available_qty,
               COALESCE(sum(
-                GREATEST(snapshot_qty - snapshot_reserved_qty,0) * sell_price
+                GREATEST(snapshot_qty - snapshot_reserved_qty,0) * book_unit_value
               ),0)::numeric AS retail_value,
               count(*) FILTER (
                 WHERE GREATEST(snapshot_qty - snapshot_reserved_qty,0) > 0
