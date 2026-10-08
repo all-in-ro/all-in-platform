@@ -2285,8 +2285,8 @@ export default function AllInShopOperations({
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-3">
-                    <span className="text-[11px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
-                    <span className="text-[11px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
+                    <span className="text-[12px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
+                    <span className="text-[12px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
                 </div>
@@ -3390,13 +3390,18 @@ export default function AllInShopOperations({
 
                           <div className="flex min-w-0 items-center border-t border-white/8 pt-2 sm:w-[190px] sm:min-w-[190px] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
                             <div className="w-full text-left sm:text-right">
+                              {movement.type === "manager_handover" && movement.grossSales != null ? (
+                                <div className="mb-2 border-b border-white/8 pb-2">
+                                  <p className="text-[9px] uppercase tracking-[0.1em] text-[#bdf8f5]/58">Bruttó</p>
+                                  <p className="mt-1 whitespace-nowrap text-[15px] tabular-nums text-[#d7fffd]">{formatMoney(movement.grossSales)}</p>
+                                </div>
+                              ) : null}
                               <p className="text-[9px] uppercase tracking-[0.1em] text-white/36">Összeg</p>
                               <p className="mt-1 whitespace-nowrap text-[20px] tabular-nums text-white">{formatMoney(movement.amount)}</p>
                               {movement.type === "manager_handover" && movement.grossSales != null ? (
-                                <div className="mt-2 space-y-0.5 text-[9px] text-white/46">
-                                  <p>Bruttó: <span className="text-white/72">{formatMoney(movement.grossSales)}</span></p>
-                                  <p>Kedvezmény: <span className="text-amber-100/80">{formatMoney(movement.discountTotal || 0)}</span></p>
-                                </div>
+                                <p className="mt-1.5 text-[9px] text-white/46">
+                                  Kedvezmény: <span className="text-amber-100/80">{formatMoney(movement.discountTotal || 0)}</span>
+                                </p>
                               ) : null}
                             </div>
                           </div>
