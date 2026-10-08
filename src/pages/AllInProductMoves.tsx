@@ -60,6 +60,7 @@ const API_BASE = "/api/aif";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const UIT_WARNING_THRESHOLD_RON = 10000;
+const FILTERED_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
 function notifyStockMovesChanged() {
   if (typeof window === "undefined") return;
@@ -350,6 +351,12 @@ function moneyRon(value: unknown, includeCurrency = true) {
   if (parsed === null) return "-";
   const formatted = new Intl.NumberFormat("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parsed);
   return includeCurrency ? `${formatted} RON` : formatted;
+}
+
+function displayActorName(value: unknown) {
+  const actor = String(value ?? "").trim();
+  if (!actor) return "-";
+  return actor.toLowerCase() === "admin" ? "Kerekes Zsolt" : actor;
 }
 
 function displayDocumentNumber(item?: Partial<DocumentListItem> | null) {
@@ -1644,6 +1651,147 @@ function printDetail(detail: DocumentDetail, inventoryItems: InventoryItem[] = [
   }));
 }
 
+
+function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: string[]) {
+  const totalQty = items.reduce((sum, item) => sum + n(item.total_qty), 0);
+  const totalValue = items.reduce((sum, item) => sum + n(item.total_value), 0);
+  const generatedAt = new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date());
+
+  const rows = items.map((item, index) => {
+    const typeLabel = documentMeta(documentTypeOf(item)).shortLabel;
+    const incoming = item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text);
+    return `<tr>
+      <td class="nr">${index + 1}</td>
+      <td class="doc"><strong>${escapeHtml(displayDocumentNumber(item))}</strong><span>${escapeHtml(documentBadge(item).label)}</span></td>
+      <td>${escapeHtml(typeLabel)}</td>
+      <td class="date">${escapeHtml(dateOnlyHu(documentDateKey(item)))}</td>
+      <td>${escapeHtml(item.from_location_summary || "-")}</td>
+      <td>${escapeHtml(incoming || "-")}</td>
+      <td class="num">${escapeHtml(quantity(item.line_count))}</td>
+      <td class="num">${escapeHtml(quantity(item.total_qty))}</td>
+      <td class="money">${escapeHtml(moneyRon(item.total_value || 0, false))}</td>
+      <td>${escapeHtml(displayActorName(item.actor))}</td>
+    </tr>`;
+  }).join("");
+
+  const filters = filterSummary.length
+    ? `<div class="filters">${filterSummary.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>`
+    : `<div class="filters"><span>Minden bizonylat</span></div>`;
+
+  return `<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8" />
+<title>Szűrt készletbizonylatok</title>
+<style>
+  @page { size:A4 landscape; margin:10mm; }
+  * { box-sizing:border-box; }
+  body { margin:0; color:#172033; background:#fff; font-family:Arial,Helvetica,sans-serif; font-size:9px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12mm; padding-bottom:4mm; border-bottom:2px solid #108D8B; }
+  .brand { color:#108D8B; font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
+  h1 { margin:1.4mm 0 0; font-size:19px; line-height:1.15; color:#172033; }
+  .meta { text-align:right; color:#64748b; line-height:1.5; }
+  .filters { display:flex; flex-wrap:wrap; gap:1.5mm; margin:4mm 0 3mm; }
+  .filters span { border:1px solid #c8d5d3; border-radius:999px; background:#f1f7f6; padding:1.2mm 2.3mm; color:#285d58; font-size:8px; }
+  .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:2.5mm; margin-bottom:3.5mm; }
+  .summary div { border:1px solid #d5dfdd; border-radius:2mm; background:#f7faf9; padding:2.2mm 2.6mm; }
+  .summary span { display:block; color:#6b7785; font-size:7.5px; text-transform:uppercase; letter-spacing:.08em; }
+  .summary strong { display:block; margin-top:1mm; color:#172033; font-size:13px; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th { background:#354153; color:#fff; border:1px solid #354153; padding:1.9mm 1.4mm; font-size:7.5px; text-align:left; text-transform:uppercase; letter-spacing:.04em; }
+  td { border:1px solid #d7dfe2; padding:1.55mm 1.35mm; vertical-align:middle; line-height:1.25; overflow-wrap:anywhere; }
+  tbody tr:nth-child(even) td { background:#f8fafb; }
+  th:nth-child(1),td:nth-child(1){width:8mm;text-align:center}
+  th:nth-child(2),td:nth-child(2){width:34mm}
+  th:nth-child(3),td:nth-child(3){width:25mm}
+  th:nth-child(4),td:nth-child(4){width:20mm}
+  th:nth-child(5),td:nth-child(5){width:37mm}
+  th:nth-child(6),td:nth-child(6){width:37mm}
+  th:nth-child(7),td:nth-child(7){width:12mm;text-align:center}
+  th:nth-child(8),td:nth-child(8){width:12mm;text-align:center}
+  th:nth-child(9),td:nth-child(9){width:24mm;text-align:right}
+  th:nth-child(10),td:nth-child(10){width:26mm}
+  .doc strong { display:block; font-size:9px; color:#172033; }
+  .doc span { display:block; margin-top:.6mm; color:#64748b; font-size:7px; }
+  .money { font-weight:700; color:#183d36; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .num { font-variant-numeric:tabular-nums; }
+  tfoot td { background:#eaf5f3; border-color:#bfd5d1; font-weight:700; }
+  .footer { display:flex; justify-content:space-between; gap:8mm; margin-top:3mm; padding-top:2mm; border-top:1px solid #d7dfdd; color:#7a8792; font-size:7.5px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="brand">AllInFashion</div>
+      <h1>Szűrt készletbizonylatok</h1>
+    </div>
+    <div class="meta">Nyomtatás ideje: ${escapeHtml(generatedAt)}<br/>A lista az aktív fejléc-szűrést követi.</div>
+  </div>
+  ${filters}
+  <div class="summary">
+    <div><span>Találat</span><strong>${escapeHtml(quantity(items.length))} bizonylat</strong></div>
+    <div><span>Összes darab</span><strong>${escapeHtml(quantity(totalQty))} db</strong></div>
+    <div><span>Összérték</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Nr.</th><th>Bizonylat</th><th>Típus</th><th>Dátum</th><th>Kimenő / forrás</th><th>Bejövő / partner</th><th>Sor</th><th>Db</th><th>Érték RON</th><th>Rögzítette</th>
+    </tr></thead>
+    <tbody>${rows || `<tr><td colspan="10" style="text-align:center;padding:8mm;color:#64748b">Nincs találat a kiválasztott szűrésre.</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="6" style="text-align:right">ÖSSZESEN</td><td>${escapeHtml(quantity(items.reduce((sum, item) => sum + n(item.line_count), 0)))}</td><td>${escapeHtml(quantity(totalQty))}</td><td class="money">${escapeHtml(moneyRon(totalValue, false))}</td><td></td></tr></tfoot>
+  </table>
+  <div class="footer"><span>AllInFashion • készletbizonylati archívum</span><span>${escapeHtml(quantity(items.length))} találat</span></div>
+</body>
+</html>`;
+}
+
+function printFilteredArchive(items: DocumentListItem[], filterSummary: string[]) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "0";
+  iframe.style.width = "297mm";
+  iframe.style.height = "210mm";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  document.body.appendChild(iframe);
+
+  const win = iframe.contentWindow;
+  const doc = win?.document;
+  if (!win || !doc) {
+    iframe.remove();
+    throw new Error("A böngésző nem engedte megnyitni a nyomtatási keretet.");
+  }
+
+  let cleaned = false;
+  let timer: number | undefined;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (timer) window.clearTimeout(timer);
+    iframe.remove();
+  };
+
+  win.addEventListener("afterprint", cleanup, { once: true });
+  doc.open();
+  doc.write(filteredArchivePrintHtml(items, filterSummary));
+  doc.close();
+  win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
+    win.focus();
+    win.print();
+    timer = window.setTimeout(cleanup, 60000);
+  }));
+}
+
 let zxingPromise: Promise<Window["ZXingBrowser"] | null> | null = null;
 function loadZxing() {
   if (window.ZXingBrowser?.BrowserMultiFormatReader) return Promise.resolve(window.ZXingBrowser);
@@ -1688,6 +1836,7 @@ export default function AllInProductMoves() {
   const [type, setType] = useState<ArchiveFilter>("all");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [filteredPdfBusy, setFilteredPdfBusy] = useState(false);
   const [baseLoading, setBaseLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -2809,6 +2958,76 @@ export default function AllInProductMoves() {
     setPageNo(1);
   }
 
+  async function printFilteredList() {
+    if (filteredPdfBusy) return;
+    setFilteredPdfBusy(true);
+    setError("");
+    try {
+      const makeQuery = (page: number) => {
+        const query = new URLSearchParams();
+        query.set("page", String(page));
+        query.set("limit", "100");
+        if (search.trim()) query.set("search", search.trim());
+        if (from) query.set("from", from);
+        if (to) query.set("to", to);
+        if (fromLocation) query.set("fromLocation", fromLocation);
+        if (toLocation) query.set("toLocation", toLocation);
+        if (type !== "all") query.set("type", type);
+        return query;
+      };
+
+      const first = await fetchJson<ListResponse>(`/stock-transfer-documents?${makeQuery(1).toString()}`);
+      const totalPages = Math.max(1, Number(first.pages || 1));
+      const extraPages = totalPages > 1
+        ? await Promise.all(
+            Array.from({ length: totalPages - 1 }, (_, index) =>
+              fetchJson<ListResponse>(`/stock-transfer-documents?${makeQuery(index + 2).toString()}`),
+            ),
+          )
+        : [];
+      const filteredItems = [
+        ...(first.items || []),
+        ...extraPages.flatMap((result) => result.items || []),
+      ];
+
+      const filterSummary: string[] = [];
+      if (search.trim()) filterSummary.push(`Keresés: ${search.trim()}`);
+      if (from || to) filterSummary.push(`Dátum: ${from ? dateOnlyHu(from) : "…"} – ${to ? dateOnlyHu(to) : "…"}`);
+      if (fromLocation) filterSummary.push(`Forrás: ${locationById(fromLocation)?.name || fromLocation}`);
+      if (toLocation) {
+        if (toLocation.startsWith("location:")) {
+          const id = toLocation.slice("location:".length);
+          filterSummary.push(`Cél: ${locationById(id)?.name || id}`);
+        } else if (toLocation.startsWith("supplier:")) {
+          const id = toLocation.slice("supplier:".length);
+          filterSummary.push(`Partner: ${suppliers.find((row) => String(row.id) === id)?.name || id}`);
+        } else {
+          filterSummary.push(`Cél / partner: ${toLocation}`);
+        }
+      }
+      if (type !== "all") {
+        const typeLabel = type === "preparation"
+          ? "Előkészítés"
+          : type === "legacy"
+            ? "Régi archívum"
+            : type === "cancelled"
+              ? "Sztornózott"
+              : type === "official"
+                ? "Hivatalos"
+                : type === "draft"
+                  ? "Piszkozat"
+                  : documentMeta(type as DocumentType).shortLabel;
+        filterSummary.push(`Típus: ${typeLabel}`);
+      }
+
+      printFilteredArchive(filteredItems, filterSummary);
+    } catch (printError: any) {
+      setError(printError?.message || "A szűrt PDF / nyomtatási lista elkészítése nem sikerült.");
+    } finally {
+      setFilteredPdfBusy(false);
+    }
+  }
+
   function openSettings(typeToOpen: DocumentType = "internal_transfer") {
     const row = settings?.[typeToOpen] || null;
     setSettingsType(typeToOpen);
@@ -3097,16 +3316,54 @@ export default function AllInProductMoves() {
         <section className={panel}>
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#303b4d] px-3 py-3 lg:hidden">
             <div className="min-w-0"><p className="text-[8px] uppercase tracking-[0.14em] text-white/38">Bizonylati archívum</p><h2 className="mt-0.5 truncate text-base text-white">{quantity(totals.total)} bizonylat</h2></div>
-            <div className="flex items-center gap-1.5"><CompactSelect className="w-[104px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} /><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]"><FileText size={16} /></span></div>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => void printFilteredList()} disabled={filteredPdfBusy || loading} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white disabled:opacity-45" aria-label="Szűrt lista PDF / nyomtatás">
+                {filteredPdfBusy ? <RefreshCw size={15} className="animate-spin" /> : <img src={FILTERED_PDF_ICON_URL} alt="" className="h-5 w-5 object-contain" />}
+              </button>
+              <CompactSelect className="w-[104px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} />
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#bff8f5]"><FileText size={16} /></span>
+            </div>
           </div>
           <div className={`${panelHead} hidden lg:flex`}>
             <div><p className="text-[10px] uppercase tracking-[0.17em] text-white/40">Bizonylati archívum</p><h2 className="mt-1 flex items-center gap-2 text-base"><FileText size={17} /> Hivatalos készletbizonylatok és előzmények</h2></div>
-            <div className="flex items-center gap-2 text-xs text-white/55"><span>{quantity(totals.total)} találat</span><CompactSelect className="w-[112px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} /></div>
+            <div className="flex items-center gap-2 text-xs text-white/55">
+              <span>{quantity(totals.total)} találat</span>
+              <button
+                type="button"
+                onClick={() => void printFilteredList()}
+                disabled={filteredPdfBusy || loading}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/18 bg-white/[0.07] px-2.5 text-xs text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45"
+                title="Szűrt lista PDF / nyomtatás"
+              >
+                {filteredPdfBusy ? <RefreshCw size={15} className="animate-spin" /> : <img src={FILTERED_PDF_ICON_URL} alt="" className="h-5 w-5 object-contain" />}
+                PDF
+              </button>
+              <CompactSelect className="w-[112px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} />
+            </div>
           </div>
 
           <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full min-w-[1260px] border-collapse text-sm">
-              <thead className="bg-[#293448] text-[9px] font-normal uppercase tracking-[0.08em] text-white/60"><tr><th className="px-3 py-2.5 text-left font-normal">Bizonylat</th><th className="px-3 py-2.5 text-left font-normal">Típus</th><th className="px-3 py-2.5 text-left font-normal">Dátum</th><th className="px-3 py-2.5 text-left font-normal">Útvonal / partner</th><th className="px-3 py-2.5 text-center font-normal">Sor / db / érték</th><th className="px-3 py-2.5 text-left font-normal">Rögzítette</th><th className="px-3 py-2.5 text-right font-normal">Művelet</th></tr></thead>
+            <table className="w-full min-w-[1320px] table-fixed border-collapse text-sm">
+              <colgroup>
+                <col className="w-[220px]" />
+                <col className="w-[150px]" />
+                <col className="w-[110px]" />
+                <col className="w-[310px]" />
+                <col className="w-[170px]" />
+                <col className="w-[140px]" />
+                <col className="w-[220px]" />
+              </colgroup>
+              <thead className="bg-[#293448] text-[9px] font-normal uppercase tracking-[0.08em] text-white/60">
+                <tr>
+                  <th className="px-3 py-2.5 text-left align-middle font-normal">Bizonylat</th>
+                  <th className="px-3 py-2.5 text-left align-middle font-normal">Típus</th>
+                  <th className="px-3 py-2.5 text-left align-middle font-normal">Dátum</th>
+                  <th className="px-3 py-2.5 text-left align-middle font-normal">Útvonal / partner</th>
+                  <th className="px-3 py-2.5 text-center align-middle text-[10px] font-normal text-white/72">Sor / db / érték</th>
+                  <th className="px-3 py-2.5 text-left align-middle font-normal">Rögzítette</th>
+                  <th className="px-3 py-2.5 text-right align-middle font-normal">Művelet</th>
+                </tr>
+              </thead>
               <tbody>
                 {items.map((item) => {
                   const badge = documentBadge(item);
@@ -3121,8 +3378,19 @@ export default function AllInProductMoves() {
                       <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateOnlyHu(documentDateKey(item))}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
-                      <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span></span></td>
-                      <td className="px-3 py-2 text-[11px] text-white/65">{item.actor || "-"}</td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="mx-auto w-[150px] rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 px-2.5 py-2 text-[#d7fffd] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+                          <div className="flex items-center justify-center gap-1.5 whitespace-nowrap text-[11px]">
+                            <span>{quantity(item.line_count)} sor</span>
+                            <span className="text-white/28">•</span>
+                            <span>{quantity(item.total_qty)} db</span>
+                          </div>
+                          <div className="mt-1.5 border-t border-[#7bd7d4]/18 pt-1.5 whitespace-nowrap text-[13px] tabular-nums text-white">
+                            {moneyRon(item.total_value || 0)}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-[11px] text-white/65">{displayActorName(item.actor)}</td>
                       <td className="px-3 py-2">{documentActionButtons(item)}</td>
                     </tr>
                   );
@@ -3145,7 +3413,7 @@ export default function AllInProductMoves() {
                   <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
                   <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
-                  <div className="mt-3 border-t border-white/10 pt-2.5"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-[9px] uppercase tracking-[0.08em] text-white/34">Rögzítette</span><span className="truncate text-[10px] text-white/56">{item.actor || "-"}</span></div>{documentActionButtons(item, true)}</div>
+                  <div className="mt-3 border-t border-white/10 pt-2.5"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-[9px] uppercase tracking-[0.08em] text-white/34">Rögzítette</span><span className="truncate text-[10px] text-white/56">{displayActorName(item.actor)}</span></div>{documentActionButtons(item, true)}</div>
                 </article>
               );
             })}
@@ -3271,7 +3539,7 @@ export default function AllInProductMoves() {
                   </div>
                   <div className="rounded-2xl border border-[#5eead4]/16 bg-[#2a8d8b]/[0.08] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Típus / rögzítette</p>
-                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{doc.actor || "-"}</p>
+                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{displayActorName(doc.actor)}</p>
                   </div>
                   <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Tartalom</p>
