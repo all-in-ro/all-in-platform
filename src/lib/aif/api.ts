@@ -3936,6 +3936,43 @@ export function apiAifCancelShopShiftHandover(id: string) {
   );
 }
 
+export type AifFinancialNoteItem = {
+  id: string;
+  kind: "day_close" | "cash_movement" | "shift_handover" | "shift_acceptance" | "customer_payment" | string;
+  date?: string | null;
+  happenedAt?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor?: string | null;
+  amount?: number | null;
+  status?: string | null;
+  reference?: string | null;
+  note?: string | null;
+  meta?: string | null;
+};
+
+export function apiAifFinancialNotes(options: {
+  from: string;
+  to: string;
+  location?: string;
+  employee?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("from", options.from);
+  q.set("to", options.to);
+  if (options.location && options.location !== "all") q.set("location", options.location);
+  if (options.employee?.trim()) q.set("employee", options.employee.trim());
+  return fetchAifJSON<{
+    ok: true;
+    from: string;
+    to: string;
+    location: string;
+    employee?: string | null;
+    count: number;
+    items: AifFinancialNoteItem[];
+  }>(`/admin/financial-notes?${q.toString()}`);
+}
+
 export function apiAifShopCashOverview(options: { location: string; limit?: number; month?: string; handoverAfterDate?: string | null }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
