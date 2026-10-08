@@ -408,6 +408,16 @@ function formatExactDateTime(value?: string | null) {
   });
 }
 
+function localDateKey(value?: string | null) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  const plain = raw.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (plain) return plain[1];
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw.slice(0, 10);
+  return date.toLocaleDateString("en-CA", { timeZone: "Europe/Bucharest" });
+}
+
 function formatCashPeriodDate(value?: string | null) {
   if (!value) return "–";
   const raw = String(value).trim();
@@ -1318,6 +1328,74 @@ export default function AllInShopOperations({
     [cashData?.movements],
   );
   const latestCashMovement = recentCashMovements[0] || null;
+  const financialAuditNotes = useMemo(() => {
+    const rows: Array<{
+      id: string;
+      title: string;
+      note: string;
+      actor: string;
+      date: string;
+      happenedAt?: string | null;
+      meta?: string | null;
+      tone: "green" | "amber" | "blue";
+    }> = [];
+
+    for (const closure of cashData?.closures || []) {
+      const note = String(closure.note || "").trim();
+      if (!note) continue;
+      rows.push({
+        id: `close:${closure.id}`,
+        title: "Napi kasszazárás",
+        note,
+        actor: closure.actor || "–",
+        date: String(closure.date || "").slice(0, 10) || localDateKey(closure.closedAt),
+        happenedAt: closure.closedAt || closure.createdAt || null,
+        meta: `Záró kassza: ${formatMoney(closure.countedCash)} • Eltérés: ${formatMoney(closure.cashDifference)}`,
+        tone: "green",
+      });
+    }
+
+    for (const movement of cashData?.movements || []) {
+      const note = String(movement.note || "").trim();
+      if (!note) continue;
+      rows.push({
+        id: `movement:${movement.id}`,
+        title: movement.type === "manager_handover" ? "Készpénzátadás" : "Bankbefizetés",
+        note,
+        actor: movement.requestedBy || "–",
+        date: localDateKey(movement.requestedAt || movement.createdAt),
+        happenedAt: movement.requestedAt || movement.createdAt || null,
+        meta: `${formatMoney(movement.amount)}${movement.reference ? ` • Ref.: ${movement.reference}` : ""}`,
+        tone: "amber",
+      });
+    }
+
+    for (const handover of shiftData?.handovers || []) {
+      const notes = [
+        { value: String(handover.note || "").trim(), label: "Műszakátadás megjegyzése" },
+        { value: String(handover.acceptanceNote || "").trim(), label: "Átvételi megjegyzés" },
+      ];
+      notes.forEach((entry, noteIndex) => {
+        if (!entry.value) return;
+        rows.push({
+          id: `handover:${handover.id}:${noteIndex}`,
+          title: entry.label,
+          note: entry.value,
+          actor: noteIndex === 0 ? (handover.fromActor || "–") : (handover.toActor || "–"),
+          date: String(handover.date || summaryDate).slice(0, 10),
+          happenedAt: noteIndex === 0 ? handover.createdAt : handover.acceptedAt,
+          meta: `${handover.fromActor} → ${handover.toActor}`,
+          tone: "blue",
+        });
+      });
+    }
+
+    return rows.sort((a, b) => {
+      const left = new Date(a.happenedAt || `${a.date}T12:00:00`).getTime();
+      const right = new Date(b.happenedAt || `${b.date}T12:00:00`).getTime();
+      return right - left;
+    });
+  }, [cashData?.closures, cashData?.movements, shiftData?.handovers, summaryDate]);
   const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
   const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
     ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
@@ -3302,7 +3380,51 @@ export default function AllInShopOperations({
               </header>
 
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5">
-                <section className="rounded-[22px] border border-white/12 bg-[#344055] p-3.5 sm:p-4">
+                <section className="rounded-[22px] border border-[#8ce7e2]/24 bg-[#2d394b] p-3.5 sm:p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.13em] text-[#bff8f5]/52">Pénzügyi jegyzetek</p>
+                      <h4 className="mt-1 text-base text-white">Napzárás, pénzátadás és műszakátadás megjegyzései</h4>
+                    </div>
+                    <span className="rounded-full border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 py-1.5 text-[10px] text-[#d7fffd]">
+                      {financialAuditNotes.length} megjegyzés
+                    </span>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {financialAuditNotes.map((item) => (
+                      <article key={item.id} className={`rounded-2xl border px-4 py-3 ${
+                        item.tone === "amber"
+                          ? "border-amber-200/22 bg-amber-400/[0.07]"
+                          : item.tone === "blue"
+                            ? "border-sky-200/20 bg-sky-400/[0.06]"
+                            : "border-[#8ce7e2]/20 bg-[#203f49]"
+                      }`}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-white/12 bg-black/10 px-2 py-0.5 text-[9px] text-white/62">{item.title}</span>
+                              <span className="text-[10px] text-white/42">{item.date ? formatCashPeriodDate(item.date) : "–"}</span>
+                            </div>
+                            <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-white">{item.note}</p>
+                            {item.meta ? <p className="mt-2 border-t border-white/8 pt-2 text-[10px] text-white/42">{item.meta}</p> : null}
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-[11px] text-[#d7fffd]">{item.actor}</p>
+                            <p className="mt-1 text-[9px] tabular-nums text-white/34">{item.happenedAt ? formatExactDateTime(item.happenedAt) : ""}</p>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                    {!financialAuditNotes.length ? (
+                      <div className="rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">
+                        Nincs rögzített pénzügyi megjegyzés a betöltött előzményekben.
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="mt-4 rounded-[22px] border border-white/12 bg-[#344055] p-3.5 sm:p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Legutóbbi mozgások</p>
@@ -3406,6 +3528,12 @@ export default function AllInShopOperations({
                             </div>
                           </div>
                         </div>
+                        {movement.note ? (
+                          <div className="mt-3 rounded-xl border border-[#8ce7e2]/20 bg-[#203f49] px-3.5 py-2.5">
+                            <p className="text-[9px] uppercase tracking-[0.11em] text-[#bff8f5]/52">Megjegyzés</p>
+                            <p className="mt-1.5 whitespace-pre-wrap break-words text-[12px] leading-5 text-white/82">{movement.note}</p>
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                     {!cashLoading && !recentCashMovements.length ? (
