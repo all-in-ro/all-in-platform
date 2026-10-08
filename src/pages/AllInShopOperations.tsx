@@ -2285,8 +2285,8 @@ export default function AllInShopOperations({
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-3">
-                    <span>Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
-                    <span>Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
+                    <span className="text-[11px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
+                    <span className="text-[11px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
                 </div>
