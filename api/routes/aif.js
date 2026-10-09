@@ -3077,11 +3077,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const map = {
       men: "men", man: "men", male: "men", masculin: "men", barbati: "men", barbat: "men", bărbat: "men", ferfi: "men", ffi: "men", herren: "men", homme: "men", uomo: "men",
       women: "women", woman: "women", female: "women", feminin: "women", femei: "women", femeie: "women", dama: "women", damă: "women", dame: "women", noi: "women", no: "women", ladies: "women", lady: "women", damen: "women", femme: "women",
-      kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", youth: "kids", child: "kids", children: "kids", copii_tineri: "kids",
-      fiu: "kids", lany: "kids", baiat: "kids", fata: "kids", boy: "kids", girl: "kids", juniori: "kids",
+      kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", youth: "kids", child: "kids", children: "kids", copii_tineri: "kids", juniori: "kids",
+      fiu: "boys", fiuk: "boys", baiat: "boys", baieti: "boys", boy: "boys", boys: "boys", gyerek_fiu: "boys", copii_baieti: "boys",
+      lany: "girls", lanyok: "girls", fata: "girls", fete: "girls", girl: "girls", girls: "girls", gyerek_lany: "girls", copii_fete: "girls",
       unisex: "unisex", universal: "unisex", mixt: "unisex", mixed: "unisex"
     };
-    return map[code] || (['men', 'women', 'kids', 'unisex'].includes(code) ? code : 'unisex');
+    // Egy admin által konfigurált nemtípus-kódot nem szabad ismeretlenül Unisexre írni.
+    return map[code] || code;
+  }
+
+  function aifGenderFamily(value) {
+    const mapped = canonicalGender(value);
+    if (["boys", "girls", "men", "women", "kids", "unisex"].includes(mapped)) return mapped;
+    const tokens = normCode(value).split("_");
+    if (tokens.some((token) => ["boy", "boys", "baiat", "baieti", "fiu", "fiuk"].includes(token))) return "boys";
+    if (tokens.some((token) => ["girl", "girls", "fata", "fete", "lany", "lanyok"].includes(token))) return "girls";
+    return "";
   }
 
   function normalizeRowInput(input, rowNo) {
@@ -3133,8 +3144,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title || rawTitle),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
       descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawDescription || rawProductType),
-      genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender),
+      genderRaw: emptyToNull(src.genderRaw || src.gender_raw || rawGender || src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name),
       gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender || "unisex"),
+      _manualGender: src._manualGender === true,
       productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
       season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
@@ -3255,7 +3267,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const raw = emptyToNull(
       normalized.subcategoryId || normalized.subcategory_id || normalized.subCategoryId || normalized.sub_category_id ||
       normalized.subcategoryCode || normalized.subcategory_code || normalized.subCategoryCode || normalized.sub_category_code ||
-      normalized.subcategoryName || normalized.subcategory_name || normalized.subCategoryName || normalized.sub_category_name
+      normalized.subcategoryName || normalized.subcategory_name || normalized.subCategoryName || normalized.sub_category_name ||
+      normalized.sourceSubCategory || normalized.sourceSubCategoryName
     );
     if (!raw) return null;
     const code = normCode(raw);
@@ -3275,7 +3288,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LIMIT 1`,
       args
     );
-    return r.rows[0]?.id || null;
+    if (r.rowCount) return r.rows[0].id;
+    const wanted = normCode(raw);
+    const hanoracAliases = new Set(["hanorac", "hanorace", "hanorak", "hanorakok", "hoodie", "hoodies", "sweatshirt", "sweatshirts"]);
+    if (hanoracAliases.has(wanted)) {
+      const available = await client.query(
+        `SELECT id,code,name_ro,name_hu FROM aif_categories
+         WHERE parent_id IS NOT NULL AND COALESCE(is_active,true)=true
+         ORDER BY sort_order ASC`
+      );
+      const match = available.rows.find((category) => [category.code, category.name_ro, category.name_hu]
+        .some((label) => ["hanorakok", "hanorak", "hanorac", "hanorace"].includes(normCode(label))));
+      if (match) return match.id;
+    }
+    return null;
   }
 
   function cleanModelLifecycleStatus(value, fallback = "active") {
@@ -3288,7 +3314,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return ["draft", "active", "inactive", "archived"].includes(raw) ? raw : fallback;
   }
 
-  async function upsertModel(client, { supplierCode, normalized, createStatus = "active", updateStatus = "active" }) {
+  async function upsertModel(client, { supplierCode, normalized, createStatus = "active", updateStatus = "active", preserveExistingClassification = false }) {
     const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
@@ -3312,12 +3338,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(
         `UPDATE aif_product_models SET
            brand_id = COALESCE($2, brand_id),
-           category_id = COALESCE($3, category_id),
-           subcategory_id = COALESCE($13, subcategory_id),
+           category_id = CASE WHEN $14::boolean THEN COALESCE(category_id, $3) ELSE COALESCE($3, category_id) END,
+           subcategory_id = CASE WHEN $14::boolean THEN COALESCE(subcategory_id, $13) ELSE COALESCE($13, subcategory_id) END,
            title_ro = $4,
            title_hu = COALESCE($5, title_hu),
            description_ro = COALESCE($6, description_ro),
-           gender = $7,
+           gender = CASE
+             WHEN NOT $14::boolean THEN $7
+             WHEN NULLIF(btrim(COALESCE(gender,'')), '') IS NULL THEN $7
+             WHEN lower(btrim(gender)) IN ('unisex','kids')
+                  AND lower(btrim(COALESCE($7,''))) NOT IN ('unisex','kids') THEN $7
+             ELSE gender
+           END,
            product_type = COALESCE($8, product_type),
            season = COALESCE($9, season),
            material = COALESCE($10, material),
@@ -3343,6 +3375,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           safeNormalized.titleRo,
           modelUpdateStatus,
           subcategoryId,
+          Boolean(preserveExistingClassification),
         ]
       );
       return id;
@@ -3947,15 +3980,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE is_active=true
          ORDER BY sort_order ASC, name ASC`
       );
-      const found = r.rows.find((g) => {
-        const aliases = Array.isArray(g.aliases) ? g.aliases : [];
-        return [g.code, g.name, ...aliases].filter(Boolean).some((x) => normCode(x) === rawKey);
-      });
+      const genderValues = (g) => [g.code, g.name, ...(Array.isArray(g.aliases) ? g.aliases : [])].filter(Boolean);
+      const found = r.rows.find((g) => genderValues(g).some((x) => normCode(x) === rawKey));
       if (found?.code) return found.code;
+      // A beszállító BAIAT/FETE szava nem általános KIDS; a tényleges AllIn-nemtípushoz rendeljük.
+      const family = aifGenderFamily(raw);
+      if (family) {
+        const semantic = r.rows.find((g) => genderValues(g).some((value) => aifGenderFamily(value) === family));
+        if (semantic?.code) return semantic.code;
+      }
     } catch (e) {
       if (e?.code !== "42P01" && e?.code !== "42703") console.error("AIF gender normalize warning", e);
     }
-    return canonicalGender(raw);
+    const fallback = canonicalGender(raw);
+    return ["men", "women", "kids", "unisex", "boys", "girls"].includes(fallback) ? fallback : "unisex";
   }
 
   function escapeRegex(value) {
@@ -4050,7 +4088,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       applyProductCodeSplit(nr.normalized);
       const brandColorMapped = await applyBrandColorCodeMapping(client, nr.normalized);
       if (!brandColorMapped && nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
-      nr.normalized.gender = await normalizeGenderCode(client, nr.normalized.genderRaw || nr.normalized.gender);
+      // Régi kliens még Unisex-et küldhet a GEN=BAIAT/FETE mellé.
+      // Csak a bizonyítottan specifikus forrásadat javíthatja a generikus alapértéket.
+      const importedGenderFamily = aifGenderFamily(nr.normalized.genderRaw);
+      const selectedGenderFamily = aifGenderFamily(nr.normalized.gender);
+      const useSourceGender = !nr.normalized._manualGender &&
+        ["boys", "girls"].includes(importedGenderFamily) &&
+        (!nr.normalized.gender || ["kids", "unisex"].includes(selectedGenderFamily));
+      nr.normalized.gender = await normalizeGenderCode(
+        client,
+        useSourceGender ? nr.normalized.genderRaw : (nr.normalized.gender || nr.normalized.genderRaw)
+      );
       const brandSizeMapped = await applyBrandSizeCodeMapping(client, nr.normalized);
       if (!brandSizeMapped && nr.normalized.size) nr.normalized.size = await normalizeSizeValue(client, nr.normalized.size);
       if (nr.normalized.material) nr.normalized.material = await normalizeMaterialText(client, nr.normalized.material);
@@ -8370,6 +8418,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       normalized,
       createStatus: "active",
       updateStatus: "active",
+      preserveExistingClassification: true,
     });
 
     const targetModelRes = await client.query(
@@ -8724,6 +8773,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             normalized,
             createStatus: "active",
             updateStatus: "active",
+            preserveExistingClassification: true,
           });
           variantId = await upsertVariant(client, {
             modelId,
