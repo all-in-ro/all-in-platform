@@ -301,7 +301,7 @@ const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VO
 const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
 const TITLE_HEADER_ALIASES = ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "TITLE", "NÉV", "NEV", "MEGNEVEZÉS", "MEGNEVEZES"];
 const PRODUCT_TYPE_HEADER_ALIASES = ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "MODEL TYPE"];
-const SUBCATEGORY_HEADER_ALIASES = ["COLECTIE", "COLECȚIE", "COLECTIA", "COLECȚIA", "COLECTIE PRODUS", "COLECȚIE PRODUS", "COLLECTION", "PRODUCT COLLECTION", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALCATEGORIA", "ALKATEGORIA", "ALKATEGÓRIA"];
+const SUBCATEGORY_HEADER_ALIASES = ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALCATEGORIA", "ALKATEGORIA", "ALKATEGÓRIA", "RODESCR", "RO DESCR", "RO_DESCR"];
 const BUY_PRICE_HEADER_ALIASES = ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PRET CUMPARARE", "PREȚ CUMPĂRARE", "PURCHASE PRICE", "BUY PRICE", "COST PRICE", "VÉTELÁR", "VETELAR"];
 const SELL_PRICE_HEADER_ALIASES = ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA", "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON", "ELADÁSI ÁR", "ELADASI AR"];
 const COLOR_CODE_HEADER_ALIASES = [
@@ -618,7 +618,7 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     "categoryCode", "category_code", "categoryName", "category_name", "parentCategoryCode", "parent_category_code", "parentCategoryName", "parent_category_name",
     "subCategoryCode", "sub_category_code", "subcategoryCode", "subcategory_code", "subCategoryName", "sub_category_name", "subcategoryName", "subcategory_name",
     "sourceCategory", "sourceCategoryCode", "sourceCategoryName", "sourceSubCategory", "sourceSubCategoryCode", "sourceSubCategoryName",
-    "gender", "genderRaw", "productType", "product_type", "season", "collection", "colectie",
+    "gender", "genderRaw", "_manualGender", "productType", "product_type", "season", "collection", "colectie",
     "descriptionRo", "description_ro", "description", "material", "composition", "imageUrl", "image_url", "barcode", "supplierBarcode",
     "colorCode", "color_code", "supplierColorCode", "colorName", "color_name", "colorHex", "color_hex", "brandColorCodeId", "colorTypeCode",
     "size", "sizeTypeCode", "brandSizeCodeId", "qty", "quantity", "buyPrice", "buy_price", "sellPrice", "sell_price",
@@ -1390,7 +1390,8 @@ const sourceCategoryAliases: Record<string, string[]> = {
   tricouri: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees"],
   pantaloni: ["pantaloni", "nadrag", "nadrág", "pants", "trousers"],
   shorts: ["shorts", "shorts cas", "short cas", "shorts fnk", "bermuda", "sorturi", "șorturi", "pantaloni scurti", "pantaloni scurți", "rövidnadrág", "rovidnadrag"],
-  hanorac: ["hanorac", "hoodie", "pulover", "sweatshirt", "kapucnis", "pulóver", "puloverek"],
+  hanorac: ["hanorac", "hanorace", "hanorák", "hanorákok", "hanorak", "hanorakok", "hoodie", "hoodies", "pulover", "sweatshirt", "sweatshirts", "kapucnis", "pulóver", "puloverek"],
+  polar: ["polar", "polare", "fleece", "polar fleece"],
   jacheta: ["jacheta", "jachetă", "geaca", "geacă", "jacket", "kabát", "dzseki"],
   vesta: ["vesta", "vestă", "vest", "melleny", "mellény"],
   incaltaminte: ["incaltaminte", "încălțăminte", "pantofi", "adidasi", "adidași", "shoes", "sneakers", "cipő", "cipo"],
@@ -1478,7 +1479,7 @@ const AIF_IMAGE_HEADERS = ["FOTO", "FOTÓ", "FOTO URL", "LINK FOTO", "URL FOTO",
 const AIF_COLLECTION_SUBCATEGORY_HEADERS = ["COLECTIE", "COLECȚIE", "COLECTIA", "COLECȚIA", "COLECTIE PRODUS", "COLECȚIE PRODUS", "COLLECTION", "PRODUCT COLLECTION"];
 const AIF_EXPLICIT_SUBCATEGORY_HEADERS = ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE"];
 const AIF_RODESCR_HEADERS = ["RODESCR", "RO DESCR", "RO_DESCR"];
-const AIF_SUBCATEGORY_HEADERS = [...AIF_COLLECTION_SUBCATEGORY_HEADERS, ...AIF_EXPLICIT_SUBCATEGORY_HEADERS, ...AIF_RODESCR_HEADERS];
+const AIF_SUBCATEGORY_HEADERS = [...AIF_EXPLICIT_SUBCATEGORY_HEADERS, ...AIF_RODESCR_HEADERS, ...AIF_COLLECTION_SUBCATEGORY_HEADERS];
 const AIF_PRODUCT_TYPE_HEADERS = ["TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", ...AIF_RODESCR_HEADERS];
 
 function rawDescriptionValue(row: any) {
@@ -1490,10 +1491,12 @@ function rawImageValue(row: any) {
 }
 
 function rawSubCategoryValue(row: any) {
+  // A 4F sablonban a COLECTIE=TRAINING gyűjtemény, a RODESCR=HANORAC a ruhatípus.
+  // Az explicit alkategória / RODESCR élvez elsőbbséget, a kollekció csak régi fallback.
   return firstNonEmptyText(
-    rawValueByHeader(row, AIF_COLLECTION_SUBCATEGORY_HEADERS),
     rawValueByHeader(row, AIF_EXPLICIT_SUBCATEGORY_HEADERS),
-    rawValueByHeader(row, AIF_RODESCR_HEADERS)
+    rawValueByHeader(row, AIF_RODESCR_HEADERS),
+    rawValueByHeader(row, AIF_COLLECTION_SUBCATEGORY_HEADERS)
   );
 }
 
@@ -1767,6 +1770,44 @@ function genderAliasValues(g: AifGenderOption) {
 function genderLabel(code: unknown, items: AifGenderOption[]) {
   const key = String(code ?? "").trim().toLowerCase();
   return items.find((g) => genderAliasValues(g).some((x) => x === key))?.name || String(code || "-");
+}
+
+// A forrás (pl. GEN=BAIAT/FETE) nemét a ténylegesen konfigurált AllIn nemtípus kódjára fordítjuk.
+// A "Gyerek" nem azonos a "Fiú" / "Lány" besorolással.
+const AIF_GENDER_IMPORT_ALIASES: Record<string, string[]> = {
+  boys: ["baiat", "baieti", "baiatul", "baietii", "fiu", "fiuk", "boy", "boys", "gyerek fiu", "copii baieti", "junior boys"],
+  girls: ["fata", "fete", "fetele", "lany", "lanyok", "girl", "girls", "gyerek lany", "copii fete", "junior girls"],
+  men: ["barbat", "barbati", "men", "mens", "man", "male", "ferfi", "ferfiak", "masculin"],
+  women: ["femeie", "femei", "dama", "dame", "women", "womens", "woman", "female", "no", "nok", "noi", "noi ruha", "feminin"],
+  kids: ["kids", "kid", "copii", "copil", "gyerek", "gyerekek", "junior", "juniors", "children", "youth"],
+  unisex: ["unisex", "mixt", "mixed", "universal"],
+};
+
+function incomingGenderFamily(value: unknown): string {
+  const key = normMatchKey(value);
+  if (!key) return "";
+  for (const [family, aliases] of Object.entries(AIF_GENDER_IMPORT_ALIASES)) {
+    if (family === key || aliases.some((alias) => normMatchKey(alias) === key)) return family;
+  }
+  // Kiegészítő szavak, pl. "Gyerek fiú" vagy "Băieți / Junior".
+  const tokens = key.split(" ");
+  if (tokens.some((word) => ["baiat", "baieti", "fiu", "fiuk", "boy", "boys"].includes(word))) return "boys";
+  if (tokens.some((word) => ["fata", "fete", "lany", "lanyok", "girl", "girls"].includes(word))) return "girls";
+  return "";
+}
+
+function resolveIncomingGenderCode(value: unknown, options: AifGenderOption[]): string {
+  const key = normMatchKey(value);
+  if (!key) return "";
+  const active = options.filter((option) => option.is_active !== false);
+  const values = (option: AifGenderOption) => [option.code, option.name, ...(Array.isArray(option.aliases) ? option.aliases : [])]
+    .filter(Boolean).map(normMatchKey);
+  const direct = active.find((option) => values(option).includes(key));
+  if (direct) return direct.code;
+  const family = incomingGenderFamily(key);
+  if (!family) return "";
+  const semantic = active.find((option) => values(option).some((label) => incomingGenderFamily(label) === family));
+  return semantic?.code || "";
 }
 
 function rowStatusText(value?: string | null) {
@@ -2564,6 +2605,17 @@ function AllInIncomingReception(_props: Props) {
       const nextSize = normalizeAifSizeValue(normalized.size || (rowWithCode as any).supplier_size);
       if (nextSize) normalized.size = nextSize;
 
+      // GEN=BAIAT vagy FETE: ne a régi "unisex/kids" fallback értékre bízzuk.
+      // A felhasználó által kézzel választott nem továbbra is elsőbbséget élvez.
+      const sourceGender = firstNonEmptyText(
+        normalized.genderRaw, rawValueByHeader(rowWithCode, ["GEN", "GENDER", "SEX", "NEM"]), normalized.gender
+      );
+      if (!normalized._manualGender) {
+        const chosenGender = resolveIncomingGenderCode(sourceGender, activeGenderTypes);
+        if (chosenGender) normalized.gender = chosenGender;
+        if (sourceGender) normalized.genderRaw = normalized.genderRaw || sourceGender;
+      }
+
       const mainCategoryRaw = firstNonEmptyText(mainCategoryRawValue(rowWithCode), normalized.parentCategoryCode, normalized.parentCategoryName);
       if (mainCategoryRaw) {
         normalized.sourceCategory = normalized.sourceCategory || mainCategoryRaw;
@@ -2762,6 +2814,7 @@ function AllInIncomingReception(_props: Props) {
         else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : toNumber(value);
         else if (field === "size") normalized[field] = normalizeAifSizeValue(value);
         else normalized[field] = value;
+        if (field === "gender") normalized._manualGender = Boolean(value);
 
         if (field === "brandCode") {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
