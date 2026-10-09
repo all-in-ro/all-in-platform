@@ -211,7 +211,7 @@ const RULES: FieldRule[] = [
   { field: "buyPrice", label: FIELD_LABELS.buyPrice, aliases: ["buy price", "pret achizitie", "preț achiziție", "pretachiz", "pret achiz", "pret furnizor", "cost", "net price", "purchase price", "whs ron", "whs euro", "whs usd", "whs ft", "whs"], sampleScore: (v) => sampleScore(v, isMoneyLike) },
   { field: "sellPrice", label: FIELD_LABELS.sellPrice, aliases: ["sell price", "pret vanzare", "preț vânzare", "pretvanz", "price", "pret", "rrp", "retail price", "prp"], sampleScore: (v) => sampleScore(v, isMoneyLike) },
   { field: "category", label: FIELD_LABELS.category, aliases: ["category", "categorie", "kategoria", "kategória", "product type", "tip produs", "clasificare"] },
-  { field: "subCategory", label: FIELD_LABELS.subCategory, aliases: ["subcategory", "sub category", "subcategorie", "subcategorie produs", "subkategoria", "subcategorie"] },
+  { field: "subCategory", label: FIELD_LABELS.subCategory, aliases: ["subcategory", "sub category", "subcategorie", "subcategorie produs", "subkategoria", "subcategorie", "rodescr", "ro descr", "ro_descr"] },
   { field: "gender", label: FIELD_LABELS.gender, aliases: ["gender", "gen", "sex", "departament", "department", "category gender"] },
   { field: "season", label: FIELD_LABELS.season, aliases: ["season", "sezon", "szezon"] },
   { field: "productType", label: FIELD_LABELS.productType, aliases: ["activitate", "activity", "sport", "product line", "linie", "collection", "colectie"] },
@@ -358,12 +358,16 @@ function valueByField(row: RawRow, columns: AifColumnAnalysis[], field: AifColum
   return clean(row[col.header]);
 }
 
-function normalizeGender(value: string): "men" | "women" | "kids" | "unisex" {
+function normalizeGender(value: string): string {
   const g = norm(value);
+  if (!g) return ""; // Nem kitalálunk nemet, hanem megőrizzük a forrást.
   if (["barbati", "barbat", "men", "mens", "male", "masculin", "m"].includes(g)) return "men";
   if (["femei", "femeie", "dama", "dame", "women", "womens", "female", "feminin", "f"].includes(g)) return "women";
-  if (["copii", "copil", "kids", "children", "junior", "juniors", "youth", "baieti", "fete"].includes(g)) return "kids";
-  return "unisex";
+  if (["baiat", "baieti", "baiatul", "boy", "boys", "fiu", "fiuk", "fiúk"].includes(g)) return "boys";
+  if (["fata", "fete", "girl", "girls", "lany", "lanyok", "lány", "lányok"].includes(g)) return "girls";
+  if (["copii", "copil", "kids", "children", "junior", "juniors", "youth", "gyerek"].includes(g)) return "kids";
+  if (["unisex", "mixt", "mixed", "universal"].includes(g)) return "unisex";
+  return clean(value); // A nem ismert nemtípust a szerver törzsadatai még felismerhetik.
 }
 
 function guessCategory(value: string): string | null {
@@ -380,6 +384,11 @@ function buildNormalized(row: RawRow, columns: AifColumnAnalysis[], supplier?: A
   const supplierCode = supplier?.code || "";
   const brandRaw = valueByField(row, columns, "brand");
   const categoryRaw = valueByField(row, columns, "category") || valueByField(row, columns, "subCategory");
+  const subCategoryRaw = valueByField(row, columns, "subCategory");
+  const genderRaw = valueByField(row, columns, "gender");
+  const collectionColumn = columns.find((column) => column.field === "productType" &&
+    /^(colectie|colectia|collection)(_|$)/.test(norm(column.header)));
+  const collectionRaw = collectionColumn ? clean(row[collectionColumn.header]) : "";
   const productCode = valueByField(row, columns, "productCode");
   const variantCode = valueByField(row, columns, "variantCode");
   const colorCode = valueByField(row, columns, "colorCode");
@@ -395,10 +404,16 @@ function buildNormalized(row: RawRow, columns: AifColumnAnalysis[], supplier?: A
     brandCode: brandRaw,
     brandName: brandRaw,
     categoryCode: guessCategory(categoryRaw),
+    sourceCategory: categoryRaw,
+    subCategoryCode: subCategoryRaw,
+    subCategoryName: subCategoryRaw,
+    sourceSubCategory: subCategoryRaw,
     modelCode: productCode || variantCode,
     titleRo: name,
-    gender: normalizeGender(valueByField(row, columns, "gender")),
+    genderRaw,
+    gender: normalizeGender(genderRaw),
     productType: valueByField(row, columns, "productType"),
+    collection: collectionRaw,
     season: valueByField(row, columns, "season"),
     composition: valueByField(row, columns, "composition"),
     country: valueByField(row, columns, "country"),
