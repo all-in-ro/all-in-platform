@@ -4026,6 +4026,28 @@ export function apiAifFinancialNotes(options: {
   }>(`/admin/financial-notes?${q.toString()}`);
 }
 
+// Közös pénzügyi megjegyzések az adott üzlet kiválasztott üzleti napjára.
+// A szerver a bejelentkezett bolti munkamenet helyét érvényesíti.
+export function apiAifShopFinancialNotes(options: { location: string; date: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("date", options.date);
+  return fetchAifJSON<{
+    ok: true;
+    date: string;
+    location: string;
+    count: number;
+    items: AifFinancialNoteItem[];
+  }>(`/shop-cash/financial-notes?${q.toString()}`);
+}
+
+export function apiAifAddShopFinancialNote(input: { location: string; date: string; note: string }) {
+  return fetchAifJSON<{ ok: true; item: AifFinancialNoteItem }>("/shop-cash/financial-notes", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export function apiAifShopCashOverview(options: { location: string; limit?: number; month?: string; handoverAfterDate?: string | null }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
