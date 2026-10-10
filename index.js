@@ -34,6 +34,18 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
 });
 
+// A pg.Pool a használaton kívüli (idle) adatbáziskapcsolatok váratlan
+// megszakadását 'error' eseménnyel jelzi. Kezelő nélkül a Node.js process
+// leállhat, az egész AllInFashion pedig átmenetileg 502-t ad.
+// A pool a hibás idle klienst eltávolítja; a következő lekérés új kapcsolatot nyit.
+pool.on("error", (error) => {
+  console.error("PostgreSQL: idle pool-kapcsolat megszakadt, a szerver tovább fut", {
+    message: String(error?.message || error),
+    code: error?.code || null,
+    severity: error?.severity || null,
+  });
+});
+
 // --- R2 (Cloudflare API / Bearer token) ---
 // Uploads go through Cloudflare's REST API (api.cloudflare.com). This matches the working CUPE flow.
 // Required env:
@@ -966,9 +978,18 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
 });
 
 // --- health ---
-app.get("/api/health", async (req, res) => {
-  const r = await pool.query("select 1");
-  res.json({ ok: true, db: r.rowCount === 1 });
+app.get("/api/health", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT 1");
+    return res.json({ ok: true, db: result.rowCount === 1 });
+  } catch (error) {
+    // A DB pillanatnyi kiesése nem lehet kezeletlen Promise-elutasítás.
+    console.error("PostgreSQL: health ellenőrzés sikertelen", {
+      message: String(error?.message || error),
+      code: error?.code || null,
+    });
+    return res.status(503).json({ ok: false, db: false });
+  }
 });
 
 
