@@ -460,6 +460,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_day_closures (location_id, work_date DESC, closed_at DESC)`);
 
 
+        // Önálló, üzlet és nap szerinti pénzügyi megjegyzések: a lezárt kasszák
+        // nem módosulnak, az új bejegyzések külön auditnyomként megmaradnak.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_daily_financial_notes (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          work_date date NOT NULL,
+          actor text NOT NULL,
+          note text NOT NULL CHECK (length(btrim(note)) BETWEEN 1 AND 2000),
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_daily_financial_notes_location_date_idx
+          ON aif_shop_daily_financial_notes (location_id, work_date DESC, created_at DESC)`);
+
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_shift_admin_repairs (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
@@ -27981,29 +27994,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   // átadási tervet és történeti bruttó-visszaszámolást is épít. Egy egyszerű
   // auditlista kedvéért az fölösleges és nagy időszaknál Render gateway timeoutot
   // tud okozni.
-  router.get("/admin/financial-notes", requireAdminOrSecret, async (req, res) => {
-    try {
-      await ensureAifShopSalesSchema();
-      const today = aifBucharestIsoDate();
-      let from = aifValidIsoDate(req.query.from, `${today.slice(0, 7)}-01`);
-      let to = aifValidIsoDate(req.query.to, today);
-      if (from > to) [from, to] = [to, from];
-
-      const requestedLocation = text(req.query.location || req.query.locationCode || req.query.location_code);
-      const requestedEmployee = text(req.query.employee || req.query.actor);
-      const aliasMap = {
-        csikszereda: "main_warehouse",
-        ciuc: "main_warehouse",
-        miercurea_ciuc: "main_warehouse",
-        kezdivasarhely: "magazin_targu_secuiesc",
-        kezdi: "magazin_targu_secuiesc",
-        targu_secuiesc: "magazin_targu_secuiesc",
-      };
-      const normalizedLocation = requestedLocation && requestedLocation !== "all"
-        ? (aliasMap[normCode(requestedLocation)] || requestedLocation)
-        : "";
-
-      const result = await pool.query(
+  // Ugyanaz a pénzügyi megjegyzésforrás a főnöknek és az adott üzletnek.
+  // Az üzleti végpont a saját helyét a munkamenetből oldja fel.
+  async function aifListFinancialNotes(from, to, location = "", employee = "") {
+    const result = await pool.query(
         `WITH selected_locations AS (
            SELECT id, code, name
            FROM aif_locations
@@ -28030,6 +28024,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            JOIN selected_locations l ON l.id=c.location_id
            WHERE c.work_date BETWEEN $1::date AND $2::date
              AND NULLIF(btrim(COALESCE(c.note,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT
+             'daily_note'::text,
+             n.id::text,
+             n.work_date::date,
+             n.created_at,
+             l.code,
+             l.name,
+             n.actor::text,
+             NULL::numeric,
+             'saved'::text,
+             NULL::text,
+             n.note::text,
+             'Szabad bolti megjegyzés'::text
+           FROM aif_shop_daily_financial_notes n
+           JOIN selected_locations l ON l.id=n.location_id
+           WHERE n.work_date BETWEEN $1::date AND $2::date
+             AND NULLIF(btrim(COALESCE(n.note,'')),'') IS NOT NULL
 
            UNION ALL
 
@@ -28120,17 +28134,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE ($4::text='' OR lower(btrim(COALESCE(actor,'')))=lower(btrim($4)))
          ORDER BY note_date DESC, happened_at DESC NULLS LAST, id DESC
          LIMIT 2000`,
-        [from, to, normalizedLocation, requestedEmployee]
+        [from, to, location, employee]
       );
 
-      return res.json({
-        ok: true,
-        from,
-        to,
-        location: normalizedLocation || "all",
-        employee: requestedEmployee || null,
-        count: result.rowCount,
-        items: result.rows.map((row) => ({
+      return result.rows.map((row) => ({
           id: text(row.id),
           kind: text(row.kind),
           date: row.note_date
@@ -28142,12 +28149,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           locationCode: row.location_code || null,
           locationName: row.location_name || null,
           actor: row.actor || null,
-          amount: aifRoundMoney(row.amount),
+          amount: row.amount == null ? null : aifRoundMoney(row.amount),
           status: row.status || null,
           reference: row.reference || null,
           note: row.note || null,
           meta: row.meta || null,
-        })),
+      }));
+  }
+
+  router.get("/admin/financial-notes", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const today = aifBucharestIsoDate();
+      let from = aifValidIsoDate(req.query.from, `${today.slice(0, 7)}-01`);
+      let to = aifValidIsoDate(req.query.to, today);
+      if (from > to) [from, to] = [to, from];
+
+      const requestedLocation = text(req.query.location || req.query.locationCode || req.query.location_code);
+      const requestedEmployee = text(req.query.employee || req.query.actor);
+      const aliasMap = {
+        csikszereda: "main_warehouse",
+        ciuc: "main_warehouse",
+        miercurea_ciuc: "main_warehouse",
+        kezdivasarhely: "magazin_targu_secuiesc",
+        kezdi: "magazin_targu_secuiesc",
+        targu_secuiesc: "magazin_targu_secuiesc",
+      };
+      const normalizedLocation = requestedLocation && requestedLocation !== "all"
+        ? (aliasMap[normCode(requestedLocation)] || requestedLocation)
+        : "";
+
+      const items = await aifListFinancialNotes(from, to, normalizedLocation, requestedEmployee);
+      return res.json({
+        ok: true,
+        from,
+        to,
+        location: normalizedLocation || "all",
+        employee: requestedEmployee || null,
+        count: items.length,
+        items,
       });
     } catch (error) {
       console.error("AIF admin financial notes failed", error);
@@ -28155,6 +28195,56 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error: error?.message || "A pénzügyi megjegyzések nem tölthetők be.",
         code: error?.code || null,
       });
+    }
+  });
+
+  // Napi pénzügyi megjegyzések: bolti szerepkörnél csak a bejelentkezett üzlet.
+  router.get("/shop-cash/financial-notes", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const rawDate = text(req.query.date);
+      const date = rawDate ? cleanAifDocumentDate(rawDate) : aifBucharestIsoDate();
+      if (!date) return res.status(400).json({ error: "Érvénytelen nap." });
+      const items = await aifListFinancialNotes(date, date, location.code, "");
+      return res.json({ ok: true, date, location: location.code, count: items.length, items });
+    } catch (error) {
+      console.error("AIF shop financial notes GET failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A megjegyzések nem tölthetők be." });
+    }
+  });
+
+  router.post("/shop-cash/financial-notes", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const date = cleanAifDocumentDate(req.body?.date);
+      const note = text(req.body?.note);
+      if (!date) return res.status(400).json({ error: "Érvénytelen nap." });
+      if (!note || note.length > 2000) return res.status(400).json({ error: "A megjegyzés 1–2000 karakter hosszú lehet." });
+      const location = await aifResolveShopLocation(req, pool, req.body?.location);
+      if (!["main_warehouse", "magazin_targu_secuiesc"].includes(location.code)) {
+        return res.status(400).json({ error: "Pénzügyi megjegyzés csak üzlethez rögzíthető." });
+      }
+      const actor = actorFrom(req);
+      const saved = await pool.query(
+        `INSERT INTO aif_shop_daily_financial_notes (location_id,work_date,actor,note)
+         VALUES ($1,$2::date,$3,$4)
+         RETURNING id,work_date,actor,note,created_at`,
+        [location.id,date,actor,note]
+      );
+      const row = saved.rows[0];
+      return res.status(201).json({ ok: true, item: {
+        id: text(row.id),kind: "daily_note",date,
+        happenedAt: new Date(row.created_at).toISOString(),
+        locationCode: location.code,locationName: location.name,
+        actor: row.actor,note: row.note,amount: null,
+        status: "saved",reference: null,meta: "Szabad bolti megjegyzés"
+      } });
+    } catch (error) {
+      console.error("AIF shop financial notes POST failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A megjegyzés mentése nem sikerült." });
     }
   });
 
