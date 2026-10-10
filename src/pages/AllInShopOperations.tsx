@@ -23,6 +23,7 @@ import {
   LockKeyhole,
   Loader2,
   Mail,
+  MessageSquareText,
   MapPin,
   PackageSearch,
   Phone,
@@ -41,6 +42,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiAifAddShopFinancialNote,
   apiAifCancelShopCashMovement,
   apiAifCancelShopShiftHandover,
   apiAifCloseShopDay,
@@ -50,6 +52,7 @@ import {
   apiAifGetShopCustomer,
   apiAifListLocations,
   apiAifShopCashOverview,
+  apiAifShopFinancialNotes,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
   apiAifShopSaleDetail,
@@ -57,6 +60,7 @@ import {
   apiAifShopShiftDayOverview,
   apiAifShopShiftEmployees,
   apiAifShopStockOverview,
+  type AifFinancialNoteItem,
   type AifShopCashMovementType,
   type AifShopCashOverview,
   type AifShopCustomerDetail,
@@ -1284,6 +1288,122 @@ function EmployeeDaySalesModal({
   );
 }
 
+function shopFinancialNoteTitle(item: AifFinancialNoteItem) {
+  if (item.kind === "daily_note") return "Bolti megjegyzés";
+  if (item.kind === "day_close") return "Napi kasszazárás";
+  if (item.kind === "shift_handover") return "Műszakátadás";
+  if (item.kind === "shift_acceptance") return "Műszakátvétel";
+  if (item.kind === "customer_payment") return "Tartozásrendezés";
+  return item.meta === "Bankbefizetés" ? "Bankbefizetés" : "Készpénzátadás";
+}
+
+function ShopFinancialNotesModal({
+  open, locationName, date, actor, items, loading, saving, error, draft,
+  onDraftChange, onClose, onReload, onSave,
+}: {
+  open: boolean;
+  locationName: string;
+  date: string;
+  actor: string;
+  items: AifFinancialNoteItem[];
+  loading: boolean;
+  saving: boolean;
+  error: string;
+  draft: string;
+  onDraftChange: (next: string) => void;
+  onClose: () => void;
+  onReload: () => void;
+  onSave: () => void;
+}) {
+  const draftInputRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (open && !loading && items.length === 0) draftInputRef.current?.focus();
+  }, [open, loading, items.length]);
+  if (!open || typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[690] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5"
+      onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) onClose(); }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="Bolti pénzügyi megjegyzések"
+        className="flex max-h-[92dvh] w-full max-w-[960px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.72)]"
+      >
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#234b52] via-[#276f70] to-[#2a8d8b] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/28 bg-white/12"><MessageSquareText size={21} /></span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.13em] text-white/55">Üzleti pénzügyi napló</p>
+              <h3 className="mt-1 text-lg sm:text-xl">Pénzügyi megjegyzések</h3>
+              <p className="mt-1 text-[11px] text-white/65">{locationName} • {formatDate(date)} • összes eladó</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-xl border border-white/18 bg-black/10 px-2.5 py-2 text-[11px] tabular-nums">{items.length} megjegyzés</span>
+            <button type="button" onClick={onReload} disabled={loading || saving} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/20 bg-black/10 px-3 text-[11px] text-white transition hover:bg-white/10 disabled:opacity-45"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+            <button type="button" onClick={onClose} disabled={saving} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white transition hover:bg-white/10 disabled:opacity-45" aria-label="Megjegyzések bezárása"><X size={18} /></button>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3.5 sm:p-5">
+          <section className="rounded-[22px] border border-[#9be9e5]/26 bg-[#283c4d] p-3.5 sm:p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-[13px] text-[#d7fffd]"><Plus size={17} /> Új bolti megjegyzés</div>
+              <span className="text-[10px] text-white/42">{actor}</span>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-white/48">A megjegyzés az adott naphoz és üzlethez kerül, és a főnöki pénzügyi auditban is látható. A korábbi bejegyzések megmaradnak.</p>
+            <textarea
+              ref={draftInputRef}
+              value={draft}
+              onChange={(event) => onDraftChange(event.target.value.slice(0, 2000))}
+              rows={3}
+              maxLength={2000}
+              placeholder="Írd ide az adott naphoz tartozó megjegyzést…"
+              className="mt-3 min-h-[90px] w-full resize-y rounded-2xl border border-white/16 bg-[#202c3d] px-4 py-3 text-[13px] leading-5 text-white outline-none placeholder:text-white/36 focus:border-[#8ce7e2]/65 focus:ring-2 focus:ring-[#7bd7d4]/12"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[10px] tabular-nums text-white/35">{draft.length}/2000 karakter</span>
+              <button type="button" onClick={onSave} disabled={saving || !draft.trim()} className="inline-flex h-11 min-w-[158px] items-center justify-center gap-2 rounded-xl border border-[#b9f5f2]/52 bg-[#2a8d8b] px-4 text-[13px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}
+                {saving ? "Mentés…" : "Megjegyzés mentése"}
+              </button>
+            </div>
+          </section>
+
+          {error ? <div role="alert" className="rounded-2xl border border-red-300/38 bg-red-600/14 px-4 py-3 text-xs leading-5 text-red-50">{error}</div> : null}
+
+          <div className="flex items-center justify-between gap-3 px-1">
+            <p className="text-[10px] uppercase tracking-[0.13em] text-white/45">A nap rögzített megjegyzései</p>
+            {loading ? <Loader2 size={16} className="animate-spin text-[#8ee6e2]" /> : null}
+          </div>
+          <div className="space-y-2.5">
+            {items.map((item) => (
+              <article key={`${item.kind}:${item.id}`} className="rounded-[19px] border border-white/12 bg-[#344055] px-4 py-3.5 shadow-[0_10px_24px_rgba(0,0,0,0.10)]">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span className={`rounded-lg border px-2.5 py-1 text-[10px] ${item.kind === "daily_note" ? "border-[#9be9e5]/40 bg-[#2a8d8b]/22 text-[#d7fffd]" : "border-white/16 bg-white/[0.06] text-white/74"}`}>{shopFinancialNoteTitle(item)}</span>
+                  <span className="text-[10px] text-white/47">{item.actor || "–"} • {item.happenedAt ? formatExactDateTime(item.happenedAt) : formatDate(date)}</span>
+                </div>
+                <p className="mt-2.5 whitespace-pre-wrap break-words text-[13px] leading-6 text-white">{item.note}</p>
+                {item.meta && item.kind !== "daily_note" ? <p className="mt-2 border-t border-white/9 pt-2 text-[10px] text-white/42">{item.meta}</p> : null}
+              </article>
+            ))}
+            {!items.length && !loading ? (
+              <div className="rounded-[20px] border border-dashed border-white/16 bg-[#263348]/40 px-4 py-10 text-center">
+                <MessageSquareText size={30} className="mx-auto text-[#7bd7d4]/48" />
+                <p className="mt-3 text-sm text-white/65">Erre a napra még nincs megjegyzés.</p>
+                <p className="mt-1 text-xs text-white/40">A fenti mezőbe máris beírhatod az elsőt.</p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export default function AllInShopOperations({
   open,
   mode,
@@ -1326,6 +1446,14 @@ export default function AllInShopOperations({
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [dailyFinancialNotes, setDailyFinancialNotes] = useState<AifFinancialNoteItem[]>([]);
+  const [dailyNotesLoadedKey, setDailyNotesLoadedKey] = useState("");
+  const [dailyNotesLoading, setDailyNotesLoading] = useState(false);
+  const [dailyNotesOpen, setDailyNotesOpen] = useState(false);
+  const [dailyNoteDraft, setDailyNoteDraft] = useState("");
+  const [dailyNotesSaving, setDailyNotesSaving] = useState(false);
+  const [dailyNotesError, setDailyNotesError] = useState("");
+  const dailyNotesRequestRef = useRef(0);
   const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [salesPanelOpen, setSalesPanelOpen] = useState(false);
   const [customerQuickId, setCustomerQuickId] = useState<string | null>(null);
@@ -1779,8 +1907,51 @@ export default function AllInShopOperations({
     }
   }
 
+  async function loadDailyFinancialNotes(date = summaryDate) {
+    const requestId = ++dailyNotesRequestRef.current;
+    const key = `${locationCode}|${date}`;
+    if (dailyNotesLoadedKey !== key) {
+      setDailyFinancialNotes([]);
+      setDailyNotesLoadedKey("");
+    }
+    setDailyNotesLoading(true);
+    setDailyNotesError("");
+    try {
+      const response = await apiAifShopFinancialNotes({ location: locationCode, date });
+      if (requestId !== dailyNotesRequestRef.current) return;
+      setDailyFinancialNotes((response.items || []).filter((item) => Boolean(String(item.note || "").trim())));
+      setDailyNotesLoadedKey(key);
+    } catch (caught) {
+      if (requestId !== dailyNotesRequestRef.current) return;
+      if (dailyNotesLoadedKey !== key) setDailyFinancialNotes([]);
+      setDailyNotesError(caught instanceof Error ? caught.message : "A pénzügyi megjegyzések nem tölthetők be.");
+    } finally {
+      if (requestId === dailyNotesRequestRef.current) setDailyNotesLoading(false);
+    }
+  }
+
+  async function saveDailyFinancialNote() {
+    const note = dailyNoteDraft.trim();
+    if (!note || dailyNotesSaving) return;
+    setDailyNotesSaving(true);
+    setDailyNotesError("");
+    try {
+      const response = await apiAifAddShopFinancialNote({ location: locationCode, date: summaryDate, note });
+      // A sikeres mentés azonnal megjelenik; egy régebbi GET-válasz nem írhatja felül.
+      dailyNotesRequestRef.current += 1;
+      setDailyNotesLoading(false);
+      setDailyNoteDraft("");
+      setDailyFinancialNotes((current) => [response.item, ...current]);
+      setDailyNotesLoadedKey(`${locationCode}|${summaryDate}`);
+    } catch (caught) {
+      setDailyNotesError(caught instanceof Error ? caught.message : "A megjegyzés mentése nem sikerült.");
+    } finally {
+      setDailyNotesSaving(false);
+    }
+  }
+
   async function refreshSummaryPage(date = summaryDate, month = cashHistoryMonth, handoverAfterDate = cashHandoverAfterDate) {
-    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext(month, handoverAfterDate)]);
+    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext(month, handoverAfterDate), loadDailyFinancialNotes(date)]);
   }
 
 
@@ -2238,6 +2409,12 @@ export default function AllInShopOperations({
     setSaleLineNoteDraft("");
     setSaleLineNoteError("");
     setCashHistoryOpen(false);
+    setDailyNotesOpen(false);
+    setDailyNoteDraft("");
+    setDailyFinancialNotes([]);
+    setDailyNotesLoadedKey("");
+    setDailyNotesError("");
+    dailyNotesRequestRef.current += 1;
     if (mode === "search" || mode === "stock") {
       void loadBrowseLocations();
     }
@@ -2291,6 +2468,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (dailyNotesOpen) {
+          if (!dailyNotesSaving) setDailyNotesOpen(false);
+          return;
+        }
         if (saleLineNoteTarget) {
           if (!saleLineNoteSaving) closeSaleLineNote();
           return;
@@ -2340,7 +2521,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2610,7 +2791,25 @@ export default function AllInShopOperations({
                   <button type="button" onClick={() => { const next = shiftIsoDate(summaryDate, 1); setSummaryDate(next); setHandoverNotice(""); void refreshSummaryPage(next); }} className="inline-flex h-14 items-center justify-center border-l border-white/12 hover:bg-white/[0.08]"><ArrowRight size={22} /></button>
                   <button type="button" onClick={() => { const next = todayIso(); setSummaryDate(next); setHandoverNotice(""); void refreshSummaryPage(next); }} className="h-14 border-l border-white/12 px-4 text-sm text-[#d7fffd] hover:bg-[#2a8d8b]/20">Ma</button>
                 </div>
-                <button type="button" onClick={() => void refreshSummaryPage()} disabled={summaryLoading || shiftLoading || cashLoading} className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-4 text-sm hover:bg-[#3e4d63] disabled:opacity-55"><RefreshCw className={summaryLoading || shiftLoading || cashLoading ? "animate-spin" : ""} size={17} /> Frissítés</button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setDailyNotesOpen(true); void loadDailyFinancialNotes(summaryDate); }}
+                    title={dailyNotesLoadedKey === `${locationCode}|${summaryDate}` && dailyFinancialNotes.length ? "A kiválasztott nap megjegyzéseinek megnyitása és új hozzáadása" : "Nincs megjegyzés. Kattints egy új megjegyzéshez."}
+                    className={`group inline-flex h-12 touch-manipulation items-center justify-center gap-2 rounded-xl border px-3.5 text-[12px] transition active:scale-[0.98] sm:px-4 sm:text-sm ${dailyNotesLoadedKey === `${locationCode}|${summaryDate}` && dailyFinancialNotes.length
+                      ? "border-[#9be9e5]/52 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.23)] hover:bg-[#319c99]"
+                      : "border-white/15 bg-[#293548] text-white/60 hover:border-[#9be9e5]/30 hover:bg-[#344055] hover:text-white"
+                    }`}
+                  >
+                    <MessageSquareText size={17} className="shrink-0" />
+                    <span>Megjegyzések</span>
+                    {dailyNotesLoading ? <Loader2 size={14} className="animate-spin" /> : dailyNotesLoadedKey === `${locationCode}|${summaryDate}` && dailyFinancialNotes.length > 0 ? (
+                      <span className="inline-flex min-w-6 items-center justify-center rounded-full border border-white/25 bg-black/10 px-1.5 text-[10px] tabular-nums">{dailyFinancialNotes.length}</span>
+                    ) : null}
+                    <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-white/18 bg-white/[0.09] group-hover:border-[#9be9e5]/35"><Plus size={16} strokeWidth={2.4} /></span>
+                  </button>
+                  <button type="button" onClick={() => void refreshSummaryPage()} disabled={summaryLoading || shiftLoading || cashLoading} className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-4 text-sm hover:bg-[#3e4d63] disabled:opacity-55"><RefreshCw className={summaryLoading || shiftLoading || cashLoading ? "animate-spin" : ""} size={17} /> Frissítés</button>
+                </div>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -3501,6 +3700,22 @@ export default function AllInShopOperations({
             </>
           ) : null}
         </div>
+
+        <ShopFinancialNotesModal
+          open={mode === "summary" && dailyNotesOpen}
+          locationName={locationName}
+          date={summaryDate}
+          actor={actor}
+          items={dailyNotesLoadedKey === `${locationCode}|${summaryDate}` ? dailyFinancialNotes : []}
+          loading={dailyNotesLoading}
+          saving={dailyNotesSaving}
+          error={dailyNotesError}
+          draft={dailyNoteDraft}
+          onDraftChange={setDailyNoteDraft}
+          onClose={() => { if (!dailyNotesSaving) setDailyNotesOpen(false); }}
+          onReload={() => void loadDailyFinancialNotes(summaryDate)}
+          onSave={() => void saveDailyFinancialNote()}
+        />
 
         {customerQuickId ? (
           <CustomerQuickViewModal

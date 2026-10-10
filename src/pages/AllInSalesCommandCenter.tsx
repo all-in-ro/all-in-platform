@@ -108,7 +108,7 @@ type ManualHistoryDraft = {
 
 type FinancialNoteItem = {
   id: string;
-  kind: "day_close" | "cash_movement";
+  kind: "day_close" | "daily_note" | "cash_movement" | "shift_handover" | "shift_acceptance" | "customer_payment";
   title: string;
   note: string;
   date: string;
@@ -2246,7 +2246,7 @@ function FinancialNotesModal({
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`rounded-full border px-2 py-1 text-[9px] ${
-                          item.kind === "day_close"
+                          item.kind === "day_close" || item.kind === "daily_note"
                             ? "border-[#8ce7e2]/32 bg-[#2a8d8b]/18 text-[#d7fffd]"
                             : "border-amber-200/24 bg-amber-400/10 text-amber-50"
                         }`}>
@@ -2277,7 +2277,7 @@ function FinancialNotesModal({
                 <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/12 text-center text-white/42">
                   <ReceiptText size={32} className="text-[#7bd7d4]/65" />
                   <p className="mt-3 text-sm text-white/64">A kiválasztott időszakban nincs pénzügyi megjegyzés.</p>
-                  <p className="mt-1 text-xs text-white/36">A napzárási, készpénzátadási és bankbefizetési megjegyzések jelennek meg itt.</p>
+                  <p className="mt-1 text-xs text-white/36">Napzárás, pénzmozgások, műszakok, tartozásrendezések és a boltok önálló megjegyzései.</p>
                 </div>
               ) : null}
             </div>
@@ -2356,9 +2356,10 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
       const next: FinancialNoteItem[] = (response.items || [])
         .map((item) => ({
           id: String(item.id || ""),
-          kind: item.kind === "day_close" ? "day_close" : "cash_movement",
+          kind: item.kind as FinancialNoteItem["kind"],
           title:
             item.kind === "day_close" ? "Napi kasszazárás"
+              : item.kind === "daily_note" ? "Bolti megjegyzés"
               : item.kind === "shift_handover" ? "Műszakátadás"
                 : item.kind === "shift_acceptance" ? "Műszakátvétel"
                   : item.kind === "customer_payment" ? "Tartozásrendezés"
