@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { aifImageGallery } from "./aifImageGallery.js";
 import {
   enqueueAifShopifyVariant,
   ensureAifShopifyTables,
@@ -924,17 +925,18 @@ function buildTags(row) {
 }
 
 function imageFromRow(row) {
-  const direct = text(row.image_url);
-  if (direct) return direct;
-  const images = row.images;
-  if (Array.isArray(images)) {
-    const found = images.map((item) => typeof item === "string" ? item : item?.url || item?.src).find((item) => text(item));
-    return text(found);
+  return aifImageGallery(row.images, row.image_url)[0] || '';
+}
+
+function productGalleryUrls(items) {
+  const images = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    for (const image of aifImageGallery(item.images || item.galleryImages, item.image_url || item.imageUrl)) {
+      if (!seen.has(image)) { seen.add(image); images.push(image); }
+    }
   }
-  if (images && typeof images === "object") {
-    return text(images.url || images.src || images[0]);
-  }
-  return "";
+  return images.slice(0, 200);
 }
 
 function variantSku(row) {
@@ -1548,7 +1550,8 @@ function productRowsForItems(items, productStatus) {
       }
       return text(a.size).localeCompare(text(b.size), "ro", { numeric: true, sensitivity: "base" });
     });
-    const firstImage = sortedItems.map((item) => item.image_url).find(Boolean) || "";
+    const productImages = productGalleryUrls(sortedItems);
+    const firstImage = productImages[0] || "";
     sortedItems.forEach((item, index) => {
       const first = index === 0;
       const title = text(item.shopify_title || item.title_ro);
@@ -1624,6 +1627,16 @@ function productRowsForItems(items, productStatus) {
       productRows.push(row);
       byVariant.set(item.variant_id, row);
     });
+    // A Shopify CSV több fotóhoz külön, csak Handle+Image mezőket tartalmazó sorokat vár.
+    // Ezek NEM termékvariánsok, SKU és készlet nélkül szerepelnek.
+    for (let imageIndex = 1; imageIndex < productImages.length; imageIndex += 1) {
+      const picture = Object.fromEntries(PRODUCT_HEADERS.map((header) => [header, ""]));
+      picture["URL handle"] = sortedItems[0]?.handle || "";
+      picture["Product image URL"] = productImages[imageIndex];
+      picture["Image position"] = imageIndex + 1;
+      picture["Image alt text"] = text(sortedItems[0]?.shopify_title || sortedItems[0]?.title_ro).slice(0, 125);
+      productRows.push(picture);
+    }
   }
   return { productRows, byVariant };
 }
@@ -1723,6 +1736,8 @@ export async function previewAifShopifyProductExport(client, options = {}) {
       size: item.size,
       sku: item.sku,
       imageUrl: item.image_url,
+      galleryImages: aifImageGallery(item.images, item.image_url),
+      imageCount: aifImageGallery(item.images, item.image_url).length,
       availableQty: item.export_available_qty,
       mapped: Boolean(item.shopify_mapped),
       state: item.export_state,
@@ -1820,6 +1835,7 @@ export async function createAifShopifyProductExport(client, options = {}) {
             internalSku: item.internal_sku,
             sku: item.sku,
             imageUrl: item.image_url,
+            galleryImages: aifImageGallery(item.images, item.image_url),
             availableQty: item.export_available_qty,
             mapped: Boolean(item.shopify_mapped),
           }),
@@ -1888,7 +1904,33 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
       const fallbackTitle = text(group[0].item?.snapshot?.title);
       if (fallbackTitle) group[0].productRow["Title"] = fallbackTitle;
     }
+    const pictureUrls=[];
+    const seenUrls=new Set();
+    for (const {item,productRow} of group) {
+      const gallery = aifImageGallery(item.snapshot?.galleryImages, item.snapshot?.imageUrl || productRow["Product image URL"]);
+      for (const url of gallery) if(!seenUrls.has(url)){ seenUrls.add(url);pictureUrls.push(url); }
+    }
+    if (pictureUrls.length) {
+      group[0].productRow["Product image URL"]=pictureUrls[0];
+      group[0].productRow["Image position"]=1;
+      if (!text(group[0].productRow["Image alt text"])) {
+        group[0].productRow["Image alt text"]=text(group[0].productRow["Title"]).slice(0,125);
+      }
+      for(let i=1;i<group.length;i++) {
+        group[i].productRow["Product image URL"]="";
+        group[i].productRow["Image position"]="";
+        group[i].productRow["Image alt text"]="";
+      }
+    }
     productRows.push(...group.map(({ productRow }) => productRow));
+    for(let i=1;i<pictureUrls.length;i++) {
+      const imageOnly=Object.fromEntries(PRODUCT_HEADERS.map((header)=>[header,""]));
+      imageOnly["URL handle"]=text(group[0].productRow["URL handle"]);
+      imageOnly["Product image URL"]=pictureUrls[i];
+      imageOnly["Image position"]=i+1;
+      imageOnly["Image alt text"]=text(group[0].productRow["Title"]).slice(0,125);
+      productRows.push(imageOnly);
+    }
   }
   const fileName = `allinfashion_shopify_products_${new Date(exportRow.created_at).toISOString().slice(0, 10)}_${String(exportRow.id).slice(0, 8)}.csv`;
   const csv = Buffer.from(csvFromRows(PRODUCT_HEADERS, productRows), "utf8");

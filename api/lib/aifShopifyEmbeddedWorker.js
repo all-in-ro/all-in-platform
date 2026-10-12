@@ -5,6 +5,7 @@ import {
   syncAifShopifyNewnessVisibility,
 } from "./aifShopify.js";
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
+import { processAifShopifyImageOutboxBatch } from "./aifShopifyImages.js";
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
@@ -80,6 +81,18 @@ async function tick(state) {
     if (outbound.lockSkipped) {
       schedule(state, state.idleDelayMs);
       return;
+    }
+
+    // A termékképek külön tartós soron követik a galéria-módosításokat.
+    // Nem érintik a készlethez használt Shopify outboxot.
+    let images = { processed: 0, errors: 0, waiting: 0 };
+    try {
+      images = await processAifShopifyImageOutboxBatch(state.pool, { limit: 3 });
+      if (images.processed || images.errors) {
+        console.log("AIF Shopify image sync batch", JSON.stringify({ instanceId: state.instanceId, ...images }));
+      }
+    } catch (error) {
+      console.error("AIF Shopify image sync batch error", error?.message || String(error));
     }
 
     let newness = null;
@@ -163,6 +176,7 @@ async function tick(state) {
         inbound.claimed ||
         orders.claimed ||
         outbound.processed ||
+        images.processed ||
         newness?.added ||
         newness?.removed ||
         newness?.visibility?.changed
