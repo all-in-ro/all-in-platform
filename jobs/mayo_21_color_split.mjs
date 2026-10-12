@@ -11,6 +11,9 @@ const key = value => txt(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 const qty = value => Number(value || 0);
 const same = (a,b) => key(a) === key(b);
 const sourceColor = row => txt(row.raw?.CULOARE || row.raw?.raw?.CULOARE || row.normalized?.colorName);
+const sourceTitle = row => txt(row.raw?.ARTICOL || row.raw?.['ARTICOL/ DENUMIRE PRODUS'] || row.raw?.raw?.ARTICOL || row.normalized?.titleRo);
+const sourceType = row => txt(row.raw?.RODESCR || row.raw?.raw?.RODESCR || row.normalized?.sourceSubCategory || '');
+const modelCodeFor = code => 'mayo_chix:' + txt(code).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
 const groupRows = rows => {
   const map = new Map();
   for (const row of rows) {
@@ -114,12 +117,118 @@ try {
     }
   }
   assert(plan.length===56 && plan.filter(x=>!x.keep).length===35,'Nem 35 új színvariáns lenne.');
-  // Ha ugyanez a modell/szín/méret már máshol létezik, ahelyett hogy összevonnánk,
-  // megállunk. A szétválasztás csak tiszta, egyértelmű forrásnál engedélyezett.
-  const related=await c.query(`SELECT id,model_id,color_code,color_name,size,status FROM aif_product_variants WHERE model_id=ANY($1::uuid[])`,[[...new Set(vRes.rows.map(x=>String(x.model_id)))]]);
+  // Az eredeti import 24 alapmodell alá rakta a 29 KÜLÖNBÖZŐ teljes cikkszámot.
+  // A javított backend már a teljes cikkszámra keres modellt. Itt a meglévő
+  // 76 variánst is az új, stabil modell-identitáshoz igazítjuk, ID és barcode cseréje nélkül.
+  const allOriginalIds=[...byVariant.keys()];
+  const allVResult=await c.query(`SELECT * FROM aif_product_variants WHERE id=ANY($1::uuid[]) FOR UPDATE`,[allOriginalIds]);
+  const allVById=byId(allVResult.rows);
+  assert(allVById.size===76,'A 76 számlavariánsból hiányzik legalább egy.');
+  const originalModelIds=[...new Set(allVResult.rows.map(v=>txt(v.model_id)))];
+  const allModelResult=await c.query(`SELECT * FROM aif_product_models WHERE id=ANY($1::uuid[]) FOR UPDATE`,[originalModelIds]);
+  const oldModels=byId(allModelResult.rows);
+  assert(oldModels.size===24,`Nem 24 Mayo alapmodell található, hanem ${oldModels.size}.`);
+  assert([...oldModels.values()].every(m=>txt(m.model_code).startsWith('mayo_chix:')),'Nem Mayo Chix modell is található a számlában.');
+  // A nem összevont régi variánsok beszállítói színkódját is rendezni kell.
+  // Új import már a valódi színt használja, tehát a régi -01/-03A kód nem maradhat
+  // színazonosítóként egyik készleten levő Mayo-variánsnál sem.
+  const allLinkRes=await c.query(`SELECT * FROM aif_variant_supplier_codes WHERE variant_id=ANY($1::uuid[]) FOR UPDATE`,[allOriginalIds]);
+  const allLinkByVariant=new Map();
+  for(const link of allLinkRes.rows){
+    const id=txt(link.variant_id);
+    assert(!allLinkByVariant.has(id),`Több beszállítói kapcsolat tartozik egy régi variánshoz: ${id}`);
+    allLinkByVariant.set(id,link);
+  }
+  assert(allLinkByVariant.size===76,`Nem pontosan 76 beszállítói variánshivatkozás található, hanem ${allLinkByVariant.size}.`);
+  const relatedAll=await c.query(`SELECT id::text AS id,model_id::text AS model_id,barcode,color_code,color_name,size,status FROM aif_product_variants WHERE model_id=ANY($1::uuid[])`,[originalModelIds]);
+  const outside=relatedAll.rows.filter(v=>!byVariant.has(v.id));
+  assert(!outside.length,`A 24 alapmodell valamelyikéhez másik számlán lévő / archivált variáns is tartozik: ${outside.slice(0,8).map(v=>v.id).join(', ')}. Kézi vizsgálat szükséges.`);
+  const externalImports=await c.query(`SELECT count(*)::int AS c FROM aif_import_rows WHERE variant_id=ANY($1::uuid[]) AND batch_id<>$2::uuid`,[allOriginalIds,BATCH]);
+  assert(Number(externalImports.rows[0].c)===0,'A 76 variáns közül valamelyik másik importnál is szerepel.');
+
+  const modelGroups=new Map();
+  const existingRowsByVariant=new Map();
+  for(const [id,group] of byVariant){
+    const v=allVById.get(id);
+    assert(v,`Nincs meg a régi variáns: ${id}`);
+    const codes=[...new Set(group.map(row=>key(row.supplier_product_code)))];
+    const titles=[...new Set(group.map(row=>key(sourceTitle(row))))];
+    const types=[...new Set(group.map(row=>key(sourceType(row))))];
+    assert(codes.length===1 && codes[0],`Egyetlen régi variáns több cikkszámot hordoz: ${id}`);
+    assert(titles.length===1 && titles[0],`Azonos cikkszám alatt eltérő nevek vannak: ${id}`);
+    assert(types.length===1 && types[0],`Egy cikkszámhoz eltérő RODESCR tartozik: ${id}`);
+    assert(group.every(row=>same(row.supplier_size,v.size)),`Méretütközés a(z) ${id} variánsnál.`);
+    if(groupRows(group).size===1){
+      assert(same(v.color_name,sourceColor(group[0])),`Nem összevont, de hibás színű variáns: ${id}. Nem írom át ellenőrzés nélkül.`);
+    }
+    const code=txt(group[0].supplier_product_code);
+    const link=allLinkByVariant.get(id);
+    assert(link && same(link.supplier_product_code,code) && same(link.supplier_size,v.size),`Nem a megfelelő beszállítói cikkszám/méret van a variánshoz kötve: ${id}`);
+    const descriptor={id,oldModelId:txt(v.model_id),code,name:sourceTitle(group[0]),type:sourceType(group[0]),rowQty:group.reduce((a,row)=>a+qty(row.qty),0)};
+    existingRowsByVariant.set(id,descriptor);
+    const k=descriptor.oldModelId;
+    if(!modelGroups.has(k))modelGroups.set(k,new Map());
+    const models=modelGroups.get(k);
+    const ident=modelCodeFor(code);
+    if(!models.has(ident))models.set(ident,[]);
+    models.get(ident).push(descriptor);
+  }
+  const modelPlan=[];
+  const modelPlanByCode=new Map();
+  for(const [oldModelId,codes] of modelGroups){
+    const oldModel=oldModels.get(oldModelId);
+    assert(oldModel,`Ismeretlen modell ${oldModelId}`);
+    const entries=[...codes].map(([code,vs])=>{
+      const names=[...new Set(vs.map(x=>key(x.name)))];
+      const types=[...new Set(vs.map(x=>key(x.type)))];
+      assert(names.length===1 && types.length===1,`Inkonzisztens név vagy típus: ${code}`);
+      return {oldModelId,oldModel,code,codeValue:vs[0].code,name:vs[0].name,type:vs[0].type,variants:vs,qty:vs.reduce((s,x)=>s+x.rowQty,0),keep:false,target:null};
+    });
+    entries.sort((a,b)=>(Number(same(b.name,oldModel.title_ro))-Number(same(a.name,oldModel.title_ro))) || b.qty-a.qty || a.code.localeCompare(b.code));
+    entries[0].keep=true;
+    for(const item of entries){
+      assert(!modelPlanByCode.has(item.code),`Ugyanaz a teljes cikkszám több modell alatt: ${item.code}`);
+      modelPlanByCode.set(item.code,item);
+      modelPlan.push(item);
+    }
+  }
+  assert(modelPlan.length===29 && modelPlan.filter(x=>!x.keep).length===5,'Nem 29 végleges és 5 új Mayo-modell adódik.');
+  const collisions=await c.query(`SELECT id::text AS id,model_code FROM aif_product_models WHERE model_code=ANY($1::text[])`,[modelPlan.map(p=>p.code)]);
+  for(const hit of collisions.rows){
+    const wanted=modelPlanByCode.get(hit.model_code);
+    assert(wanted?.keep && wanted.oldModelId===hit.id,`Már van másik modell ezzel a teljes cikkszámmal: ${hit.model_code} (${hit.id})`);
+  }
+  // A végleges modell + tényleges szín + méret egyértelmű legyen minden importsornál.
+  const expectedCombos=new Set();
+  for(const row of rows){
+    const combo=[modelCodeFor(row.supplier_product_code),key(sourceColor(row)),key(row.supplier_size)].join('|');
+    expectedCombos.add(combo);
+  }
+  assert(expectedCombos.size===111,`A tervezett modell/szín/méret variánsok száma ${expectedCombos.size}, nem 111.`);
+
+  // A korábbi, két téves "ütközés" (FULTON/FULTON HIMZES) ezzel megszűnik:
+  // más TELJES cikkszám --> más modell, az egyedi indexet sem sértjük.
+  const sourceModelForVariant=id=>{
+    const descriptor=existingRowsByVariant.get(id);
+    return descriptor && modelPlanByCode.get(modelCodeFor(descriptor.code));
+  };
+  // Eltérő teljes cikkszámok színnév-egyezése nem termékazonosság. Az
+  // adatbázis UNIQUE (model_id,color_code,size) kulcsát a külön modell védi.
+  // A már meglevő, pontosan ugyanilyen teljes cikkszám / szín / méret esetén
+  // továbbra is megszakítjuk az új variáns létrehozását.
+  const finalOriginalIdentities=new Set();
+  for(const [id,group] of byVariant){
+    if(groupRows(group).size!==1)continue;
+    const m=sourceModelForVariant(id);
+    const composite=[m.code,key(sourceColor(group[0])),key(allVById.get(id).size)].join('|');
+    assert(!finalOriginalIdentities.has(composite),`Duplikált meglévő termékazonosság: ${composite}`);
+    finalOriginalIdentities.add(composite);
+  }
   for(const p of plan.filter(x=>!x.keep)){
-    const duplicates=related.rows.filter(x=>String(x.model_id)===String(p.old.model_id) && same(x.size,p.old.size) && (same(x.color_name,p.label)||same(x.color_code,p.color)));
-    assert(!duplicates.length,`Létező azonos szín/méret: ${p.code} ${p.color} ${p.old.size}. ${duplicates.map(x=>x.id).join(',')}`);
+    const targetModel=modelPlanByCode.get(modelCodeFor(p.code));
+    assert(targetModel,`Nincs célmodell: ${p.code}`);
+    const composite=[targetModel.code,p.color,key(p.old.size)].join('|');
+    assert(!finalOriginalIdentities.has(composite),`Létező azonos termék/szín/méret: ${p.code} ${p.color} ${p.old.size}`);
   }
   // Beszállítói kapcsolatok sem duplikálódhatnak. Más cikkszámot nem írunk át.
   const linkConflicts=await c.query(`SELECT id,variant_id,supplier_id,supplier_product_code,supplier_color_code,supplier_size FROM aif_variant_supplier_codes WHERE supplier_id=ANY($1::uuid[])`,[[...new Set(scRes.rows.map(x=>String(x.supplier_id)))]]);
@@ -127,6 +236,9 @@ try {
     const x=linkConflicts.rows.find(l=>String(l.supplier_id)===String(p.oldLink.supplier_id) && same(l.supplier_product_code,p.code) && same(l.supplier_color_code,p.color) && same(l.supplier_size,p.old.size));
     assert(!x,`Beszállítói színazonosító már foglalt: ${p.code} ${p.color} ${p.old.size}`);
   }
+  console.log('\n=== TELJES CIKKSZÁM SZERINTI MODELLTERV ===');
+  console.table(modelPlan.filter(x=>!x.keep).map(x=>({uj_modell:x.code,termek:x.name,tipus:x.type,db:x.qty,eredeti_modell:x.oldModel.model_code})));
+  console.log(`Régi modell: ${oldModels.size}, végleges cikkszám szerinti modell: ${modelPlan.length}, új modell: ${modelPlan.filter(x=>!x.keep).length}.`);
   console.log(`\nMAYO CHIX SZÉTVÁLASZTÁS: ${APPLY?'ÉLES JAVÍTÁS':'PRÓBA / NEM MÓDOSÍT'}`);
   console.table([{szamla:batch.rows[0].invoice_number,importsor:rows.length,darab:192,hibas_varians:mixed.length,erintett_db:99,mozgassor:moves.length,uj_varians:35,meglevo_barcode_megmarad:21,arvaltozas_sor:priceRes.rows.length}]);
   console.table(plan.filter(x=>!x.keep).map(x=>({cikk:x.code,szin:x.color,meret:x.old.size,db:x.qty,eredeti:x.oldId.slice(0,8)})));
@@ -142,18 +254,62 @@ try {
   )`);
   const previous=await c.query(`SELECT id FROM aif_mayo_import_repair_audit WHERE batch_id=$1::uuid`,[BATCH]);
   assert(previous.rowCount===0,'Ez a számla már rendelkezik javítási naplóval.');
-  const backup={batch:batch.rows[0],variants:vRes.rows,importRows:mixedRows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows};
+  const backup={batch:batch.rows[0],variants:vRes.rows,allOriginalVariants:allVResult.rows,allSupplierLinks:allLinkRes.rows,originalModels:allModelResult.rows,modelPlan:modelPlan.map(p=>({oldModelId:p.oldModelId,modelCode:p.code,keep:p.keep,name:p.name,type:p.type})),importRows:mixedRows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows};
   const audit=await c.query(`INSERT INTO aif_mayo_import_repair_audit(batch_id,snapshot) VALUES($1,$2::jsonb) RETURNING id`,[BATCH,safeJson(backup)]);
   const auditId=audit.rows[0].id;
   const newIds=[];
+  const newModelIds=[];
 
-  // Az eredeti variáns mindig a saját, meglévő színéhez és BARCODE-jához marad kötve.
-  for(const [oldId,rs] of mixed){
-    const own=plan.find(x=>x.oldId===oldId && x.keep);
-    const update=await c.query(`UPDATE aif_product_variants SET color_code=$2,color_name=$3,updated_at=now() WHERE id=$1 RETURNING id,barcode`,[oldId,own.color,own.label]);
-    assert(update.rowCount===1 && txt(update.rows[0].barcode)===txt(own.old.barcode),`Régi vonalkód változna: ${oldId}`);
-    const supplier=await c.query(`UPDATE aif_variant_supplier_codes SET supplier_color_code=$2,supplier_color_name=$3,updated_at=now() WHERE id=$1 RETURNING id`,[own.oldLink.id,own.color,own.label]);
-    assert(supplier.rowCount===1,`Beszállítói kapcsolat nem frissíthető: ${oldId}`);
+  // Előbb a modelleket válasszuk szét TELJES cikkszámra (24 -> 29), majd az
+  // eredeti 76 variáns model_id-jét kössük a megfelelő modellhez.
+  // Sem az eredeti variáns-ID, sem a vonalkód nem változhat meg.
+  for(const mp of modelPlan.filter(x=>!x.keep)){
+    const insert=await c.query(`INSERT INTO aif_product_models (
+      brand_id,category_id,subcategory_id,model_code,title_ro,title_hu,
+      description_ro,gender,product_type,season,material,shopify_title,status
+    ) SELECT brand_id,category_id,subcategory_id,$2,$3,title_hu,
+        description_ro,gender,$4,season,material,$3,status
+      FROM aif_product_models WHERE id=$1 RETURNING id`,[
+      mp.oldModelId,mp.code,mp.name,mp.type
+    ]);
+    assert(insert.rowCount===1,`Új Mayo-modell létrehozása sikertelen: ${mp.code}`);
+    mp.target=String(insert.rows[0].id);newModelIds.push(mp.target);
+  }
+  for(const mp of modelPlan.filter(x=>x.keep)){
+    const updated=await c.query(`UPDATE aif_product_models
+      SET model_code=$2,title_ro=$3,shopify_title=$3,product_type=$4,updated_at=now()
+      WHERE id=$1 RETURNING id`,[mp.oldModelId,mp.code,mp.name,mp.type]);
+    assert(updated.rowCount===1,`Meglévő Mayo-modell azonosítója nem frissült: ${mp.code}`);
+    mp.target=mp.oldModelId;
+  }
+  let movedOriginalVariants=0;
+  for(const [id,v] of allVById){
+    const mp=sourceModelForVariant(id);
+    assert(mp?.target,`Nincs célmodell a variánshoz: ${id}`);
+    if(mp.target===txt(v.model_id))continue;
+    const updated=await c.query(`UPDATE aif_product_variants SET model_id=$2::uuid,updated_at=now()
+      WHERE id=$1::uuid AND model_id=$3::uuid RETURNING id,barcode`,[id,mp.target,v.model_id]);
+    assert(updated.rowCount===1 && txt(updated.rows[0].barcode)===txt(v.barcode),`Régi variáns vagy vonalkód sérülne: ${id}`);
+    movedOriginalVariants++;
+  }
+
+  // MIND a 76 régi variáns valódi Excel-színt kap a régi barcode változtatása nélkül.
+  // A 21 kevert változat a saját eddigi címkeszínét tartja meg, a többi 55
+  // egyszerűen a már korábban is helyes színnevet használja a kódmezőben is.
+  for(const [id,group] of byVariant){
+    const orig=allVById.get(id);
+    const colors=groupRows(group);
+    const kept=colors.size>1 ? plan.find(p=>p.oldId===id && p.keep) : null;
+    const desiredLabel=kept?.label || sourceColor(group[0]);
+    const desiredCode=key(desiredLabel);
+    assert(desiredCode && colors.has(desiredCode),`Az eredeti szín nem egyértelmű: ${id}`);
+    const update=await c.query(`UPDATE aif_product_variants SET color_code=$2,color_name=$3,updated_at=now()
+       WHERE id=$1::uuid RETURNING id,barcode`,[id,desiredCode,desiredLabel]);
+    assert(update.rowCount===1 && txt(update.rows[0].barcode)===txt(orig.barcode),`Régi vonalkód változna: ${id}`);
+    const link=allLinkByVariant.get(id);
+    const supplier=await c.query(`UPDATE aif_variant_supplier_codes SET supplier_color_code=$2,supplier_color_name=$3,updated_at=now()
+       WHERE id=$1 RETURNING id`,[link.id,desiredCode,desiredLabel]);
+    assert(supplier.rowCount===1,`Beszállítói kapcsolat nem frissíthető: ${id}`);
   }
 
   for(const p of plan.filter(x=>!x.keep)){
@@ -197,6 +353,21 @@ try {
       row.id,p.target,p.label,p.color,String(auditId),p.oldId
     ]);
     assert(upd.rowCount===1,`Import variánshivatkozás nem módosult: ${row.row_no}`);
+  }
+  // A már eleve különálló 56 importsornál is a valódi Excel-szín lesz a színkód;
+  // a variáns-azonosító és minden készletmozgás változatlan marad.
+  for(const row of rows.filter(row=>!mapping.has(String(row.id)))){
+    const actual=sourceColor(row), code=key(actual);
+    const originalId=txt(row.variant_id);
+    const updated=await c.query(`UPDATE aif_import_rows SET supplier_color_code=$2,
+       normalized=COALESCE(normalized,'{}'::jsonb) || jsonb_build_object(
+         'colorName',$3::text,'colorCode',$2::text,'supplierColorCode',$2::text,
+         'supplier_color_code',$2::text,'variantId',$4::text,'mayoColorRepairId',$5::text
+       ),updated_at=now()
+       WHERE id=$1 AND status='committed' AND variant_id=$4::uuid RETURNING id`,[
+      row.id,code,actual,originalId,String(auditId)
+    ]);
+    assert(updated.rowCount===1,`Nem lehetett javítani a különálló importsor színkódját: ${row.row_no}`);
   }
 
   // Az eladási áras készletérték teljes összege eredeti variánsonként változatlan marad.
@@ -277,20 +448,43 @@ try {
 
   const final=await c.query(`SELECT count(*)::int AS sorok,COALESCE(sum(qty),0)::int AS db,count(DISTINCT variant_id)::int AS variansok FROM aif_import_rows WHERE batch_id=$1 AND status='committed'`,[BATCH]);
   assert(final.rows[0].sorok===118 && final.rows[0].db===192 && final.rows[0].variansok===111,'Nem 118 sor / 192 db / 111 variáns az eredmény.');
+  const mappedModels=await c.query(`SELECT ir.row_no,ir.supplier_product_code,ir.variant_id::text AS variant_id,
+     v.model_id::text AS model_id,v.size,v.color_name,m.model_code,m.title_ro,m.product_type
+     FROM aif_import_rows ir JOIN aif_product_variants v ON v.id=ir.variant_id
+     JOIN aif_product_models m ON m.id=v.model_id WHERE ir.batch_id=$1::uuid`,[BATCH]);
+  assert(mappedModels.rows.length===118,`Nem 118 eredeti sorhoz tartozik modell.`);
+  for(const item of mappedModels.rows){
+    const original=rows.find(r=>Number(r.row_no)===Number(item.row_no));
+    assert(original && item.model_code===modelCodeFor(original.supplier_product_code),`Hibás cikkszám szerinti modell: ${item.row_no}, ${item.model_code}`);
+    assert(same(item.title_ro,sourceTitle(original)),`Hibás modellnév: ${item.row_no} ${item.title_ro}`);
+    assert(same(item.product_type,sourceType(original)),`Hibás ruhatípus: ${item.row_no} ${item.product_type}`);
+    assert(same(item.color_name,sourceColor(original)),`Hibás raktári szín: ${item.row_no}, ${item.color_name}`);
+    assert(same(item.size,original.supplier_size),`Hibás méret: ${item.row_no}`);
+  }
+  assert(new Set(mappedModels.rows.map(r=>r.model_id)).size===29,'Nem 29 külön modell jött létre.');
   const finalStock=await c.query(`SELECT COALESCE(sum(qty),0)::int AS db FROM aif_stock WHERE variant_id=ANY($1::uuid[])`,[[...new Set([...originalIds,...newIds])]]);
   const finalBook=await c.query(`SELECT COALESCE(sum(book_value),0)::numeric AS total FROM aif_stock_retail_book WHERE variant_id=ANY($1::uuid[])`,[[...new Set([...originalIds,...newIds])]]);
   const beforeBook=retailRes.rows.reduce((s,x)=>s+n2(x.book_value),0);
   assert(finalStock.rows[0].db===99 && n2(finalBook.rows[0].total)===beforeBook,'Összes készlet vagy eladási áras készletérték megváltozott.');
-  const finalBarcodes=await c.query(`SELECT id::text AS id,barcode FROM aif_product_variants WHERE id=ANY($1::uuid[])`,[originalIds]);
-  assert(finalBarcodes.rows.every(x=>txt(x.barcode)===txt(variants.get(x.id)?.barcode)),'Egy régi vonalkód megváltozott!');
-  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
+  const finalBarcodes=await c.query(`SELECT id::text AS id,barcode FROM aif_product_variants WHERE id=ANY($1::uuid[])`,[allOriginalIds]);
+  assert(finalBarcodes.rows.length===76 && finalBarcodes.rows.every(x=>txt(x.barcode)===txt(allVById.get(x.id)?.barcode)),'A 76 régi vonalkód közül valamelyik megváltozott!');
+  const finalLinks=await c.query(`SELECT variant_id::text AS variant_id,supplier_color_code,supplier_color_name FROM aif_variant_supplier_codes WHERE variant_id=ANY($1::uuid[])`,[allOriginalIds]);
+  assert(finalLinks.rows.length===76,'Nem 76 régi beszállítói azonosító maradt.');
+  for(const link of finalLinks.rows){
+    const originalRows=byVariant.get(link.variant_id);
+    const kept=originalRows && groupRows(originalRows).size>1 ? plan.find(p=>p.oldId===link.variant_id && p.keep) : null;
+    const color=kept?.label || (originalRows && sourceColor(originalRows[0]));
+    assert(color && same(link.supplier_color_code,color) && same(link.supplier_color_name,color),`A beszállítói színkód hibás: ${link.variant_id}`);
+  }
+  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,createdModels:newModelIds,movedOriginalVariants,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
   await c.query('COMMIT');
   console.log('\n✅ SIKER: 21 vegyes variáns szétválasztva, 35 új variáns létrehozva.');
-  console.log('✅ 118 importsor / 192 darab / 111 külön variáns.');
-  console.log('✅ 99 darab készlet, eredeti készletérték és minden régi vonalkód változatlan.');
+  console.log('✅ Modellazonosítás: 24 régi modellből 29 teljes cikkszám szerinti modell (5 új).');
+  console.log('✅ 118 importsor / 192 darab / 111 külön variáns, 29 külön modell.');
+  console.log('✅ 99 darab készlet, eredeti készletérték és mind a 76 régi vonalkód változatlan.');
   console.log('✅ Árváltozási sorok átkötve:',movedPriceRows);
   console.log('✅ Visszakereshető adatbázis-mentés azonosító:',auditId);
-  console.log('⚠️ Az új 35 variáns vonalkódja még üres. A következő lépés a modellnevek, kategóriák, majd az új kódok rendezése.');
+  console.log('⚠️ Az új 35 variáns vonalkódja üres. A terméknevek és a RODESCR terméktípusok javítva; az alkategóriák ellenőrzése és az új vonalkódok kiosztása még hátravan.');
 } catch(error){
   try{await c.query('ROLLBACK');}catch{}
   console.error('\n❌ JAVÍTÁS MEGSZAKÍTVA ÉS VISSZAVONVA:',error.message);
