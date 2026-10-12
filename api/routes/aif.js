@@ -12863,6 +12863,76 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       .slice(0, 64);
   }
 
+
+  // A Vonalkód központ (AllInBarcodes.tsx) belső AIF Code128 kódgenerátorával
+  // AZONOS FNV-1a / base36 algoritmus. A szín normalizálása is ugyanaz.
+  const AIF_QUICK_LABEL_COLORS_RO = Object.freeze({
+  black: "negru", schwarz: "negru", nero: "negru", noir: "negru", fekete: "negru", negru: "negru",
+  white: "alb", weiss: "alb", weiß: "alb", blanco: "alb", bianco: "alb", feher: "alb", fehér: "alb", alb: "alb",
+  red: "roșu", rot: "roșu", rosso: "roșu", rojo: "roșu", piros: "roșu", rosu: "roșu", roșu: "roșu",
+  blue: "albastru", blau: "albastru", bleu: "albastru", blu: "albastru", albastru: "albastru", kek: "albastru", kék: "albastru",
+  "dark blue": "bleumarin", navy: "bleumarin", marine: "bleumarin", bleumarin: "bleumarin", sotetkek: "bleumarin", "sotet kek": "bleumarin", "sötét kék": "bleumarin",
+  green: "verde", grun: "verde", grün: "verde", verde: "verde", zold: "verde", zöld: "verde",
+  yellow: "galben", gelb: "galben", giallo: "galben", galben: "galben", sarga: "galben", sárga: "galben",
+  grey: "gri", gray: "gri", grau: "gri", gri: "gri", szurke: "gri", szürke: "gri",
+  orange: "portocaliu", portocaliu: "portocaliu", narancs: "portocaliu",
+  brown: "maro", braun: "maro", marrone: "maro", maro: "maro", barna: "maro",
+  beige: "bej", bej: "bej", bezs: "bej", bézs: "bej",
+  purple: "mov", violet: "mov", lila: "mov", mov: "mov",
+  pink: "roz", rosa: "roz", roz: "roz",
+  gold: "auriu", golden: "auriu", auriu: "auriu", arany: "auriu",
+  silver: "argintiu", silber: "argintiu", argintiu: "argintiu", ezust: "argintiu", ezüst: "argintiu",
+  cream: "crem", crem: "crem", ivory: "fildeș", fildeş: "fildeș", fildes: "fildeș",
+  turquoise: "turcoaz", turkis: "turcoaz", türkis: "turcoaz", turcoaz: "turcoaz",
+  khaki: "kaki", kaki: "kaki",
+  multi: "multicolor", multicolor: "multicolor", multicolour: "multicolor",
+});
+
+  function quickLabelBarcodeColorKey(value) {
+    return String(value ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function quickLabelBarcodeRomanianColor(value, colorRows = []) {
+    const raw = text(value);
+    if (!raw) return "";
+    const key = quickLabelBarcodeColorKey(raw);
+    const valuesFor = (row) => [row.code, row.name_ro, row.name_hu, row.name_en, row.name_de,
+      ...(Array.isArray(row.aliases) ? row.aliases : [])];
+    const match = colorRows.find((row) => valuesFor(row).some((value) => value && quickLabelBarcodeColorKey(value) === key));
+    if (match?.name_ro) return match.name_ro;
+
+    const parts = key.split(/\s+/).filter(Boolean);
+    if (parts.length > 1) {
+      const translated = parts.map((part) => {
+        const color = colorRows.find((row) => valuesFor(row).some((value) => value && quickLabelBarcodeColorKey(value) === part));
+        return color?.name_ro || AIF_QUICK_LABEL_COLORS_RO[part];
+      }).filter(Boolean);
+      if (translated.length === parts.length) return Array.from(new Set(translated)).join(" / ");
+    }
+    if (AIF_QUICK_LABEL_COLORS_RO[key]) return AIF_QUICK_LABEL_COLORS_RO[key];
+    if (parts.length > 1) {
+      const translated = parts.map((part) => AIF_QUICK_LABEL_COLORS_RO[part]).filter(Boolean);
+      if (translated.length === parts.length) return Array.from(new Set(translated)).join(" / ");
+    }
+    return raw;
+  }
+
+  function quickLabelBarcodeCenterCode(parts) {
+    const source = parts.map((value) => String(value ?? "").trim()).filter(Boolean).join("|");
+    if (!source) return "";
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i += 1) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `AIF${(hash >>> 0).toString(36).toUpperCase().padStart(7, "0").slice(-7)}`;
+  }
+
   async function findVariantBarcodeConflict(client, barcode, excludeVariantId = null) {
     const candidate = assignedBarcodeValue(barcode);
     if (!candidate) return null;
@@ -13030,6 +13100,166 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   }
+
+
+  // Egylépéses raktári címkevonalkód: adatbázisban ellenőrizzük és generáljuk.
+  // KÜLÖN route a kézi PUT mellett: ez SOHA nem cserél le meglévő v.barcode-ot.
+  // Nem módosít készletet, árat, importot vagy Shopify kapcsolatot.
+  router.post("/variants/:id/barcode/generate-missing", requireAdminOrSecret, async (req, res) => {
+    const variantId = text(req.params.id);
+    if (!isUuidText(variantId)) {
+      return res.status(400).json({ error: "Érvénytelen termékvariáns-azonosító.", code: "invalid_variant_id" });
+    }
+
+    let client = null;
+    let candidate = "";
+    try {
+      // A pool.connect hibájának is ebbe a try-ba kell esnie: átmeneti DB-hiba
+      // miatt nem dobhat a route kezeletlen async kivételt (502/Node restart).
+      client = await pool.connect();
+      await client.query("BEGIN");
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      // Egyszerre csak egy generálás vagy vonalkódmentés módosíthatja ezt a variánst.
+      const current = await client.query(
+        `SELECT v.id, v.barcode, v.internal_sku, v.color_name, v.color_code, v.size,
+                m.model_code, m.title_ro, m.shopify_title, m.title_hu,
+                b.name AS brand_name, b.code AS brand_code
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         WHERE v.id=$1::uuid
+         FOR UPDATE OF v`,
+        [variantId]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A termékvariáns nem található.", code: "variant_not_found" });
+      }
+      const item = current.rows[0];
+      const oldBarcode = assignedBarcodeValue(item.barcode);
+      if (oldBarcode) {
+        // Stale frontend esetén is a tényleges régi kódot adjuk vissza; nem cseréljük le.
+        await client.query("COMMIT");
+        return res.json({ ok: true, unchanged: true, generated: false, source: "existing", variantId: item.id, barcode: oldBarcode });
+      }
+
+      // Pont ugyanaz a prioritás, mint a Vonalkód központ /variants/:id válaszában.
+      const supplierCodes = await client.query(
+        `SELECT sc.supplier_variant_code, sc.supplier_product_code, sc.supplier_sku,
+                sc.supplier_size, sc.supplier_color_name, sc.supplier_barcode
+         FROM aif_variant_supplier_codes sc
+         JOIN aif_suppliers s ON s.id=sc.supplier_id
+         WHERE sc.variant_id=$1::uuid
+         ORDER BY COALESCE(sc.is_active,true) DESC,
+                  sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST,
+                  sc.id::text DESC`,
+        [item.id]
+      );
+      const firstSupplier = supplierCodes.rows[0] || {};
+      const existingSupplierBarcode = supplierCodes.rows.map((row) => assignedBarcodeValue(row.supplier_barcode)).find(Boolean) || "";
+      const firstText = (...values) => values.map((value) => text(value)).find(Boolean) || "";
+      const modelCode = text(item.model_code);
+      const cleanedModelCode = modelCode.includes(":") ? modelCode.split(":").pop() || modelCode : modelCode;
+      const productCode = firstText(firstSupplier.supplier_variant_code, firstSupplier.supplier_product_code, firstSupplier.supplier_sku, cleanedModelCode, item.internal_sku);
+      const size = firstText(item.size, firstSupplier.supplier_size);
+      const brand = firstText(item.brand_name, item.brand_code);
+      const title = firstText(item.title_ro, item.shopify_title, item.title_hu);
+
+      // Ha a beszállítónál van régi, valódi kód, azt használjuk, nem generálunk helyette AIF-et.
+      // A szabad kódot csak a NULL/üres v.barcode mezőbe tesszük.
+      const colors = existingSupplierBarcode ? { rows: [] } : await client.query(
+        `SELECT code,name_ro,name_hu,name_en,name_de,aliases
+         FROM aif_color_types
+         WHERE is_active=true
+         ORDER BY sort_order ASC,name_ro ASC`
+      );
+      const normalizedColor = quickLabelBarcodeRomanianColor(
+        firstText(item.color_name, firstSupplier.supplier_color_name, item.color_code),
+        colors.rows
+      );
+      const seedParts = [String(item.id), productCode, size, normalizedColor, brand, title];
+
+      async function findAnyOwner(barcode) {
+        const found = await client.query(
+          `SELECT v.id, v.barcode, v.internal_sku, v.size, v.color_name, v.color_code,
+                  m.title_ro, m.shopify_title, m.model_code,
+                  b.name AS brand_name, b.code AS brand_code
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           WHERE v.id<>$2::uuid AND (
+             lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+             OR lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
+             OR EXISTS (
+               SELECT 1 FROM aif_variant_supplier_codes sc
+               WHERE sc.variant_id=v.id
+                 AND (lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1))
+                      OR lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1)))
+             )
+           )
+           LIMIT 1`,
+          [barcode, item.id]
+        );
+        return found.rows[0] || null;
+      }
+
+      const candidates = existingSupplierBarcode
+        ? [existingSupplierBarcode]
+        : Array.from({ length: 30 }, (_, index) => quickLabelBarcodeCenterCode(index === 0 ? seedParts : [...seedParts, `retry-${index}`]));
+      let source = existingSupplierBarcode ? "supplier_existing" : "generated";
+      let conflict = null;
+      for (const attempt of candidates) {
+        candidate = attempt;
+        if (!candidate) continue;
+        // A párhuzamos gyors-generálások azonos kódjelöltjei nem előzhetik meg egymást.
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_barcode_generate:${candidate.toLowerCase()}`]);
+        conflict = await findAnyOwner(candidate);
+        if (!conflict) break;
+        if (existingSupplierBarcode) {
+          await client.query("ROLLBACK");
+          return barcodeConflictResponse(res, candidate, conflict);
+        }
+      }
+      if (!candidate || conflict) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Nem találtam szabad belső vonalkódot. Nem módosítottam a terméket.", code: "barcode_conflict" });
+      }
+
+      const updated = await client.query(
+        `UPDATE aif_product_variants
+         SET barcode=$2,
+             attributes=COALESCE(attributes,'{}'::jsonb) || jsonb_build_object(
+               'barcodeAssignedAt', now()::text,
+               'barcodeAssignedBy', $3::text,
+               'barcodeSource', $4::text
+             ),
+             updated_at=now()
+         WHERE id=$1::uuid AND NULLIF(btrim(COALESCE(barcode,'')),'') IS NULL
+         RETURNING id,barcode,updated_at`,
+        [item.id, candidate, actorFrom(req), "warehouse_label_quick_generate"]
+      );
+      if (updated.rowCount !== 1) {
+        throw Object.assign(new Error("Időközben másik vonalkód került a termékhez. Nem cseréltem le."), { statusCode: 409, code: "barcode_already_exists" });
+      }
+      await client.query("COMMIT");
+      return res.json({
+        ok: true, unchanged: false, generated: source === "generated", source,
+        variantId: item.id, barcode: updated.rows[0].barcode,
+        updatedAt: updated.rows[0].updated_at,
+      });
+    } catch (error) {
+      if (client) try { await client.query("ROLLBACK"); } catch {}
+      if (error?.code === "23505") {
+        const conflict = await findVariantBarcodeConflict(pool, candidate, variantId).catch(() => null);
+        return barcodeConflictResponse(res, candidate, conflict);
+      }
+      if (error?.statusCode === 409) return res.status(409).json({ error: error.message, code: error.code || "barcode_already_exists" });
+      console.error("AIF warehouse quick label barcode failed", error);
+      return res.status(500).json({ error: "A vonalkód létrehozása / mentése nem sikerült.", code: error?.code || "barcode_generate_failed" });
+    } finally {
+      client?.release();
+    }
+  });
 
   router.put("/variants/:id/barcode", requireAdminOrSecret, handleVariantBarcodeAssignment);
   router.patch("/variants/:id/barcode", requireAdminOrSecret, handleVariantBarcodeAssignment);
