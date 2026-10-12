@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem } from "../components/ShopifyStatusIcon";
+import { aifRetailEanBarcodeSvg } from "../lib/aif/eanBarcode";
 
 const ShopifyProductExportModal = React.lazy(() => import("../components/ShopifyProductExportModal"));
 const ShopifySyncCenterModal = React.lazy(() => import("../components/ShopifySyncCenterModal"));
@@ -3189,6 +3190,7 @@ type WarehouseBarcodeRender = {
   svg: string;
   width: number;
   error?: string;
+  symbology?: "ean13" | "ean8" | "code128";
 };
 
 type WarehouseLabelContentKey =
@@ -4331,32 +4333,48 @@ function warehouseStockTransferPrintDocumentHtml(options: {
 </html>`;
 }
 
-function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
+function labelBarcodeSvg(value: string, height = 62): WarehouseBarcodeRender {
   const code = String(value || "").trim();
   if (!code) return { ok: false, svg: "", width: 0, error: "A vonalkód mező üres." };
 
+  // Gyári EAN-13/EAN-8: a valódi, ritkább kereskedelmi jelképet nyomtatjuk,
+  // nem a kétszer annyi modulból álló Code128B-t. A szám NEM változik.
+  const ean = aifRetailEanBarcodeSvg(code, height);
+  if (ean) return ean;
+
   const values: number[] = [];
-  for (const ch of code) {
-    const charCode = ch.charCodeAt(0);
-    if (charCode < 32 || charCode > 127) {
-      return {
-        ok: false,
-        svg: "",
-        width: 0,
-        error: "A Code128 csak latin betűket, számokat és egyszerű jeleket kezel.",
-      };
+  let startCode = 104; // Code128 B for alphanumeric AllIn internal identifiers.
+  if (/^\d{6,}$/.test(code)) {
+    // Code128 C encodes two digits in one 11-module character. This also keeps
+    // non-EAN numeric supplier barcodes legible WITHOUT changing the scan value.
+    if (code.length % 2 === 1) {
+      values.push(code.charCodeAt(0) - 32, 99); // B: first digit, then switch to C.
+    } else {
+      startCode = 105;
     }
-    values.push(charCode - 32);
+    for (let i = code.length % 2; i < code.length; i += 2) {
+      values.push(Number(code.slice(i, i + 2)));
+    }
+  } else {
+    for (const ch of code) {
+      const charCode = ch.charCodeAt(0);
+      if (charCode < 32 || charCode > 127) {
+        return {
+          ok: false,
+          svg: "",
+          width: 0,
+          error: "A Code128 csak latin betűket, számokat és egyszerű jeleket kezel.",
+        };
+      }
+      values.push(charCode - 32);
+    }
   }
 
-  const startB = 104;
-  let checksum = startB;
-  values.forEach((v, index) => {
-    checksum += v * (index + 1);
-  });
+  let checksum = startCode;
+  values.forEach((v, index) => { checksum += v * (index + 1); });
   checksum %= 103;
 
-  const sequence = [startB, ...values, checksum, 106];
+  const sequence = [startCode, ...values, checksum, 106];
   const patterns = sequence.map((v) => WAREHOUSE_CODE128_PATTERNS[v]).filter(Boolean);
   const totalModules = patterns.reduce((sum, p) => sum + p.split("").reduce((a, n) => a + Number(n), 0), 0);
   const quiet = 10;
@@ -4375,8 +4393,8 @@ function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
   }
 
   const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 12}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 12}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 9}" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.2">${safeText}</text></svg>`;
-  return { ok: true, svg, width };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" data-aif-symbology="code128" viewBox="0 0 ${width} ${height + 12}" preserveAspectRatio="none" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 12}" fill="#fff"/><g fill="#000" shape-rendering="crispEdges">${bars.join("")}</g><text x="${width / 2}" y="${height + 9}" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.2">${safeText}</text></svg>`;
+  return { ok: true, svg, width, symbology: "code128" };
 }
 
 function dateShort(v: unknown) {
@@ -10034,10 +10052,16 @@ export default function AllInWarehouse() {
     ? invoiceFilterStats
     : null;
 
+  // Számlaszűrésnél a kijelölés az ÖSSZES szűrt számlasorra vonatkozik,
+  // nem csak az éppen lapozott 50/100/150/200 termékre. Az importnézet is
+  // megtartja a teljes szűrt kört; általános raktárlistánál viszont továbbra
+  // is csak az aktuális oldal jelölődik, hogy ne válasszuk ki véletlenül az
+  // egész raktárt több ezer termékkel.
   const filteredVariantIds = useMemo(() => {
-    const sourceItems = incomingFocus?.batchId ? filtered : productPageItems;
-    return sourceItems.map((x) => String(x.variant_id || "")).filter(Boolean);
-  }, [incomingFocus?.batchId, filtered, productPageItems]);
+    const coversAllPages = Boolean(incomingFocus?.batchId) || invoiceFilter !== "all";
+    const sourceItems = coversAllPages ? filtered : productPageItems;
+    return Array.from(new Set(sourceItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
+  }, [incomingFocus?.batchId, invoiceFilter, filtered, productPageItems]);
 
   useEffect(() => {
     setProductPage(1);
@@ -12031,7 +12055,7 @@ export default function AllInWarehouse() {
       // kiválasztott számlanévtől, a böngésző cache-étől vagy a nyomtatási sablontól.
       const saved = await apiGenerateWarehouseLabelBarcode(id);
       const savedBarcode = cleanScannedBarcode(saved.barcode);
-      const checked = labelCode128Svg(savedBarcode, 52);
+      const checked = labelBarcodeSvg(savedBarcode, 52);
       if (!saved.ok || !savedBarcode || !checked.ok) {
         throw new Error(checked.error || "Nem érkezett nyomtatható, mentett vonalkód a szervertől.");
       }
@@ -12366,7 +12390,7 @@ export default function AllInWarehouse() {
         snCod: itemSnCod(mergedLabelItem),
         price,
         stockQty: Math.floor(n(item.total_qty)),
-        render: labelCode128Svg(barcode, 52),
+        render: labelBarcodeSvg(barcode, 52),
       };
     });
   }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
@@ -12771,12 +12795,22 @@ export default function AllInWarehouse() {
       setPersistedSelectedItems((current) => current.filter((item) => !removedSet.has(selectedVariantIdFromItem(item))));
     }
 
-    void runSelectedVariantMutation(
-      () => checked
-        ? apiAddSelectedVariantSelection(ids.map((variantId) => selectedMutationItem(variantId)))
-        : apiRemoveSelectedVariantSelection(ids),
-      checked ? "A szűrt termékek kijelölése nem sikerült." : "A szűrt kijelölések törlése nem sikerült.",
-    ).catch(() => undefined);
+    // A szerver kérésenként legfeljebb 1000 variánst dolgoz fel. Nagy számlánál
+    // sem hagyhatunk csendben termékeket a 2. vagy további oldalakon: a teljes
+    // kijelölést kisebb, egymás utáni adagokban mentjük a közös munkalistába.
+    void runSelectedVariantMutation(async () => {
+      let result: SelectedVariantSelectionResponse | null = null;
+      const batchSize = 800;
+      for (let start = 0; start < ids.length; start += batchSize) {
+        const batch = ids.slice(start, start + batchSize);
+        result = checked
+          ? await apiAddSelectedVariantSelection(batch.map((variantId) => selectedMutationItem(variantId)))
+          : await apiRemoveSelectedVariantSelection(batch);
+      }
+      if (!result) throw new Error("Nem sikerült a számla termékeinek kijelölése.");
+      return result;
+    }, checked ? "A szűrt termékek kijelölése nem sikerült." : "A szűrt kijelölések törlése nem sikerült.")
+      .catch(() => undefined);
   }
 
   function clearIncomingSelection() {
@@ -15332,6 +15366,12 @@ export default function AllInWarehouse() {
                 )}
                 {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{inventoryDisplayItems.length}</span>}
                 {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
+                {invoiceFilter !== "all" && !incomingFocus?.batchId && filteredVariantIds.length > 0 ? (
+                  <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/16 px-2.5 py-1 text-xs text-[#d7fffd]"
+                    title="Számlaszűrésnél az összes kijelölése minden lapozott oldalra vonatkozik">
+                    {selectedVisibleCount}/{filteredVariantIds.length} kijelölve a számlából • minden oldal
+                  </span>
+                ) : null}
                 {incomingFocus && (
                   <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">
                     Utolsó bevételezés: {incomingFocus.rows.length || incomingFocus.variantIds.length} sor / {incomingFocus.variantIds.length} variáns{incomingFocus.totalQty ? ` / ${incomingFocus.totalQty} db` : ""}
@@ -15549,8 +15589,16 @@ export default function AllInWarehouse() {
                           checked={allFilteredSelected}
                           onChange={(e) => toggleAllFilteredSelection(e.target.checked)}
                           disabled={!filteredVariantIds.length}
-                          aria-label={incomingFocus?.batchId ? "Az utolsó bevételezés összes szűrt termékének kijelölése" : "Az aktuális oldal termékeinek kijelölése"}
-                          title={incomingFocus?.batchId ? "Az utolsó bevételezés összes szűrt termékének kijelölése" : "Az aktuális oldal termékeinek kijelölése"}
+                          aria-label={incomingFocus?.batchId
+                            ? "Az utolsó bevételezés összes szűrt termékének kijelölése"
+                            : invoiceFilter !== "all"
+                              ? `A számla összes ${filteredVariantIds.length} szűrt termékének kijelölése minden oldalon`
+                              : "Az aktuális oldal termékeinek kijelölése"}
+                          title={incomingFocus?.batchId
+                            ? "Az utolsó bevételezés összes szűrt termékének kijelölése"
+                            : invoiceFilter !== "all"
+                              ? `A számla összes ${filteredVariantIds.length} szűrt termékének kijelölése minden oldalon`
+                              : "Az aktuális oldal termékeinek kijelölése"}
                         />
                       </th>
                       <th className="px-1 py-3 text-center align-middle font-normal">
@@ -16159,7 +16207,7 @@ export default function AllInWarehouse() {
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{row.title}</p>
                           <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • Színkód: {row.color || "-"} • {row.size}</p>
-                          <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}</p>
+                          <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}{row.render.ok ? ` • ${row.render.symbology === "ean13" ? "EAN-13" : row.render.symbology === "ean8" ? "EAN-8" : "Code128"}` : ""}</p>
                           {row.snCod ? <p className="mt-1 truncate font-mono text-[10px] tracking-[0.035em] text-[#bfe9e6]/72">S/N/COD · {row.snCod}</p> : null}
                           {!row.render.ok && (
                             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">

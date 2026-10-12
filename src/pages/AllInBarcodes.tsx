@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
+import { aifRetailEanBarcodeSvg } from "../lib/aif/eanBarcode";
 
 type PageProps = {
   apiBase?: string;
@@ -14,6 +15,7 @@ type BarcodeRender = {
   svg: string;
   width: number;
   error?: string;
+  symbology?: "ean13" | "ean8" | "code128";
 };
 
 type LabelPreset = {
@@ -296,31 +298,34 @@ function makeInternalCode(seed = "", parts: unknown[] = []) {
   return cleanInternalCode(`AIF${shortHashCode(source)}`);
 }
 
-function code128Svg(value: string, height = 74): BarcodeRender {
+function barcodeSvg(value: string, height = 74): BarcodeRender {
   const code = String(value || "").trim();
   if (!code) return { ok: false, svg: "", width: 0, error: "A vonalkód mező üres." };
 
+  // A címkeközpont ugyanazt a jól olvasható EAN-jelképet használja, mint a Raktár.
+  const ean = aifRetailEanBarcodeSvg(code, height);
+  if (ean) return ean;
+
   const values: number[] = [];
-  for (const ch of code) {
-    const charCode = ch.charCodeAt(0);
-    if (charCode < 32 || charCode > 127) {
-      return {
-        ok: false,
-        svg: "",
-        width: 0,
-        error: "A Code128 ebben a verzióban csak latin betűket, számokat és egyszerű jeleket kezel.",
-      };
+  let startCode = 104;
+  if (/^\d{6,}$/.test(code)) {
+    if (code.length % 2 === 1) values.push(code.charCodeAt(0) - 32, 99);
+    else startCode = 105;
+    for (let i = code.length % 2; i < code.length; i += 2) values.push(Number(code.slice(i, i + 2)));
+  } else {
+    for (const ch of code) {
+      const charCode = ch.charCodeAt(0);
+      if (charCode < 32 || charCode > 127) {
+        return { ok: false, svg: "", width: 0, error: "A Code128 csak latin betűket, számokat és egyszerű jeleket kezel." };
+      }
+      values.push(charCode - 32);
     }
-    values.push(charCode - 32);
   }
 
-  const startB = 104;
-  let checksum = startB;
-  values.forEach((v, index) => {
-    checksum += v * (index + 1);
-  });
-  checksum = checksum % 103;
-  const sequence = [startB, ...values, checksum, 106];
+  let checksum = startCode;
+  values.forEach((v, index) => { checksum += v * (index + 1); });
+  checksum %= 103;
+  const sequence = [startCode, ...values, checksum, 106];
   const patterns = sequence.map((v) => CODE128_PATTERNS[v]).filter(Boolean);
   const totalModules = patterns.reduce((sum, p) => sum + p.split("").reduce((a, n) => a + Number(n), 0), 0);
   const quiet = 10;
@@ -339,8 +344,8 @@ function code128Svg(value: string, height = 74): BarcodeRender {
   }
 
   const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 20}" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 20}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 15}" text-anchor="middle" font-family="Arial, sans-serif" font-size="9">${safeText}</text></svg>`;
-  return { ok: true, svg, width };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" data-aif-symbology="code128" viewBox="0 0 ${width} ${height + 20}" preserveAspectRatio="none" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 20}" fill="#fff"/><g fill="#000" shape-rendering="crispEdges">${bars.join("")}</g><text x="${width / 2}" y="${height + 15}" text-anchor="middle" font-family="Arial, sans-serif" font-size="9">${safeText}</text></svg>`;
+  return { ok: true, svg, width, symbology: "code128" };
 }
 
 function downloadFile(fileName: string, content: string, type: string) {
@@ -545,7 +550,7 @@ export default function AllInBarcodes(_props: PageProps) {
     barcodeComparable(barcode) !== barcodeComparable(persistedBarcode)
   );
   const barcodeBoundToVariant = Boolean(variantId && persistedBarcode && !barcodeNeedsSave);
-  const render = useMemo(() => code128Svg(barcode, 70), [barcode]);
+  const render = useMemo(() => barcodeSvg(barcode, 70), [barcode]);
   const copyCount = intNumber(copies, 1, 1, 300);
   const labels = useMemo(() => Array.from({ length: copyCount }), [copyCount]);
   const safeFile = cleanInternalCode(barcode || title || "aif-vonalkod") || "aif-vonalkod";
