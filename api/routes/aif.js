@@ -2380,9 +2380,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       "na", "n_a", "-", "permanent", "permanens", "fashion", "sport"
     ]).has(key)) return null;
     const replacements = {
-      spring: "Primăvară", primavara: "Primăvară", tavasz: "Primăvară",
+      // A jövőbeni SEZON importban Tavasz és Ősz ugyanabba a szezonba tartozik.
+      spring: "Primăvară/Toamnă", primavara: "Primăvară/Toamnă", tavasz: "Primăvară/Toamnă",
+      autumn: "Primăvară/Toamnă", fall: "Primăvară/Toamnă", toamna: "Primăvară/Toamnă", osz: "Primăvară/Toamnă",
+      tavasz_osz: "Primăvară/Toamnă", osz_tavasz: "Primăvară/Toamnă",
+      primavara_toamna: "Primăvară/Toamnă", toamna_primavara: "Primăvară/Toamnă",
+      spring_autumn: "Primăvară/Toamnă", autumn_spring: "Primăvară/Toamnă", spring_fall: "Primăvară/Toamnă", fall_spring: "Primăvară/Toamnă",
       summer: "Vară", vara: "Vară", nyar: "Vară",
-      autumn: "Toamnă", fall: "Toamnă", toamna: "Toamnă", osz: "Toamnă",
       winter: "Iarnă", iarna: "Iarnă", tel: "Iarnă",
       spring_summer: "Primăvară/Vară", primavara_vara: "Primăvară/Vară", tavasz_nyar: "Primăvară/Vară", ss: "Primăvară/Vară",
       autumn_winter: "Toamnă/Iarnă", fall_winter: "Toamnă/Iarnă", toamna_iarna: "Toamnă/Iarnă", osz_tel: "Toamnă/Iarnă", aw: "Toamnă/Iarnă", fw: "Toamnă/Iarnă",
