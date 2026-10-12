@@ -340,6 +340,7 @@ export type AifInventoryItem = {
   product_type?: string | null;
   material?: string | null;
   image_url?: string | null;
+  images?: string[] | Array<{ url?: string; src?: string }> | null;
   color_code?: string | null;
   color_name?: string | null;
   size: string;
@@ -1711,6 +1712,7 @@ export type AifManualProductInput = {
   sellPrice?: string | number | null;
   compareAtPrice?: string | number | null;
   imageUrl?: string | null;
+  images?: string[] | null;
   supplierId?: string | null;
   supplierCode?: string | null;
   supplierProductCode?: string | null;
@@ -2681,6 +2683,8 @@ export type AifShopifyProductExportPreviewItem = {
   size?: string | null;
   sku?: string | null;
   imageUrl?: string | null;
+  galleryImages?: string[];
+  imageCount?: number;
   availableQty?: number | string | null;
   mapped?: boolean | null;
   state: "valid" | "invalid" | "skipped_mapped" | string;
