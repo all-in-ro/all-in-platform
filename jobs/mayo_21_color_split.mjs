@@ -162,14 +162,73 @@ try {
   console.log('Összesen 37 számlán kívüli variáns, egyik sem része a javításnak.');
   const externalImports=await c.query(`SELECT count(*)::int AS c FROM aif_import_rows WHERE variant_id=ANY($1::uuid[]) AND batch_id<>$2::uuid`,[allOriginalIds,BATCH]);
   assert(Number(externalImports.rows[0].c)===0,'A 76 variáns közül valamelyik másik importnál is szerepel.');
-  const extraInvoiceMoves=await c.query(`
-    SELECT variant_id::text AS variant_id,source_type,source_id::text AS source_id
-    FROM aif_stock_movements
+  // 2026-10-12: A számla két MÁR LÉTEZŐ variánsa korábbi, valódi
+  // nyitókészletet is tartalmaz. Ezek nem a 21 összekevert színvariáns között
+  // vannak, és a teljes cikkszám/szín/méret azonosságuk ellenőrzött.
+  // A 3 történeti mozgást TILOS átírni vagy törölni. A korábbi, mindent
+  // tiltó ellenőrzést csak e három konkrét, biztonságos BEJÖVŐ mozgásra
+  // enyhítjük. Minden más eladás/korrekció/idegen import megállítja a javítást.
+  const SAFE_OPENING_MOVEMENTS=[
+    {variantId:'190dbc49-4176-4583-aec7-144911ad6a22',sourceType:'manual_stock_edit',
+      sourceId:'legacy:f757657c:11916',movementType:'incoming',reason:'legacy_opening_stock',delta:1},
+    {variantId:'190dbc49-4176-4583-aec7-144911ad6a22',sourceType:'opening_inventory',
+      sourceId:'a0453984-e13b-4110-96c6-2ff5f4e951f0',movementType:'manual_adjustment',
+      reason:'opening_inventory_recovery_checkpoint_apply',delta:1},
+    {variantId:'41613f42-d13d-42b0-946b-13d637a4b0ed',sourceType:'manual_stock_edit',
+      sourceId:'legacy:f757657c:11931',movementType:'incoming',reason:'legacy_opening_stock',delta:1}
+  ];
+  const readExtraMoves=()=>c.query(`
+    SELECT * FROM aif_stock_movements
     WHERE variant_id=ANY($1::uuid[])
       AND NOT (source_type='import_batch' AND source_id::text=$2::text)
-    LIMIT 20`,[allOriginalIds,BATCH]);
-  assert(!extraInvoiceMoves.rowCount,
-    `A számla 76 variánsa közül valamelyik már más mozgásban szerepel: ${extraInvoiceMoves.rows.map(x=>x.variant_id).join(', ')}. Kézi egyeztetés szükséges.`);
+    ORDER BY variant_id,created_at,id`,[allOriginalIds,BATCH]);
+  const extraInvoiceMoves=await c.query(`
+    SELECT * FROM aif_stock_movements
+    WHERE variant_id=ANY($1::uuid[])
+      AND NOT (source_type='import_batch' AND source_id::text=$2::text)
+    ORDER BY variant_id,created_at,id FOR UPDATE`,[allOriginalIds,BATCH]);
+  const verifiedOpeningMovements=new Map();
+  assert(extraInvoiceMoves.rows.length===SAFE_OPENING_MOVEMENTS.length,
+    `Nem pontosan 3 korábban ellenőrzött nyitókészlet-mozgás van a 76 variánson, hanem ${extraInvoiceMoves.rows.length}. Megállítva.`);
+  for(const m of extraInvoiceMoves.rows){
+    const matches=SAFE_OPENING_MOVEMENTS.filter(e=>
+      txt(m.variant_id)===e.variantId && m.source_type===e.sourceType &&
+      txt(m.source_id)===e.sourceId && m.movement_type===e.movementType &&
+      txt(m.raw?.reason)===e.reason && qty(m.qty_delta)===e.delta);
+    assert(matches.length===1,
+      `Váratlan, nem megengedett történeti mozgás ${m.id} (${m.variant_id}, ${m.source_type}).`);
+    const expected=matches[0];
+    assert(!verifiedOpeningMovements.has(expected.sourceId),
+      `Kétszer szerepel a korábbi készletmozgás: ${expected.sourceId}`);
+    assert(groupRows(byVariant.get(expected.variantId)||[]).size===1,
+      `Összekevert színre hivatkozik korábbi készletmozgás: ${expected.variantId}`);
+    assert(qty(m.qty_delta)>0 && txt(m.location_id),
+      `Nem bejövő vagy hely nélküli nyitókészlet: ${m.id}`);
+    verifiedOpeningMovements.set(expected.sourceId,m);
+  }
+  assert(verifiedOpeningMovements.size===3,'A három igazolt nyitókészlet-mozgás valamelyike hiányzik.');
+  const existingOpeningIds=[...new Set(SAFE_OPENING_MOVEMENTS.map(m=>m.variantId))];
+  const openingStockResult=await c.query(`
+    SELECT * FROM aif_stock WHERE variant_id=ANY($1::uuid[]) FOR UPDATE`,[existingOpeningIds]);
+  const openingRetailResult=await c.query(`
+    SELECT * FROM aif_stock_retail_book WHERE variant_id=ANY($1::uuid[]) FOR UPDATE`,[existingOpeningIds]);
+  const openingTotals=new Map([['190dbc49-4176-4583-aec7-144911ad6a22',3],
+    ['41613f42-d13d-42b0-946b-13d637a4b0ed',4]]);
+  for(const [id,expected] of openingTotals){
+    const stock=openingStockResult.rows.filter(r=>txt(r.variant_id)===id);
+    const book=openingRetailResult.rows.filter(r=>txt(r.variant_id)===id);
+    const historical=extraInvoiceMoves.rows.filter(m=>txt(m.variant_id)===id);
+    const invoiceQty=(byVariant.get(id)||[]).reduce((sum,r)=>sum+qty(r.qty),0);
+    const incoming=historical.reduce((sum,m)=>sum+qty(m.qty_delta),0);
+    assert(stock.length>0 && stock.reduce((sum,r)=>sum+qty(r.qty),0)===expected &&
+      stock.every(r=>qty(r.reserved_qty)===0) && expected===invoiceQty+incoming,
+      `A korábbi készlet nem egyezik az import + nyitókészlet összegével: ${id}`);
+    assert(book.length===stock.length && stock.every(st=>
+      book.some(b=>txt(b.location_id)===txt(st.location_id) && qty(b.qty)===qty(st.qty))),
+      `A korábbi eladási áras készletnyilvántartás nem egyezik: ${id}`);
+  }
+  console.log('\n✅ 2 saját számlavariánson 3 korábbi nyitókészlet-mozgás ellenőrizve: +3 darab.');
+  console.log('✅ Eredeti készlet: 3 és 4 darab; a mozgások és készletérték-sorok változatlanok maradnak.');
 
   const modelGroups=new Map();
   const existingRowsByVariant=new Map();
@@ -314,7 +373,8 @@ try {
   )`);
   const previous=await c.query(`SELECT id FROM aif_mayo_import_repair_audit WHERE batch_id=$1::uuid`,[BATCH]);
   assert(previous.rowCount===0,'Ez a számla már rendelkezik javítási naplóval.');
-  const backup={batch:batch.rows[0],variants:vRes.rows,allOriginalVariants:allVResult.rows,allSupplierLinks:allLinkRes.rows,originalModels:allModelResult.rows,unrelatedVariants:outside,protectedModelIds:[...protectedModelIds],modelPlan:modelPlan.map(p=>({oldModelId:p.oldModelId,modelCode:p.code,keep:p.keep,name:p.name,type:p.type})),importRows:mixedRows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows};
+  const backup={batch:batch.rows[0],variants:vRes.rows,allOriginalVariants:allVResult.rows,allSupplierLinks:allLinkRes.rows,originalModels:allModelResult.rows,unrelatedVariants:outside,protectedModelIds:[...protectedModelIds],modelPlan:modelPlan.map(p=>({oldModelId:p.oldModelId,modelCode:p.code,keep:p.keep,name:p.name,type:p.type})),importRows:mixedRows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows,
+    preservedOpeningMovements:extraInvoiceMoves.rows,preservedOpeningStock:openingStockResult.rows,preservedOpeningRetail:openingRetailResult.rows};
   const audit=await c.query(`INSERT INTO aif_mayo_import_repair_audit(batch_id,snapshot) VALUES($1,$2::jsonb) RETURNING id`,[BATCH,safeJson(backup)]);
   const auditId=audit.rows[0].id;
   const newIds=[];
@@ -553,11 +613,25 @@ try {
     const color=kept?.label || (originalRows && sourceColor(originalRows[0]));
     assert(color && same(link.supplier_color_code,color) && same(link.supplier_color_name,color),`A beszállítói színkód hibás: ${link.variant_id}`);
   }
-  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,createdModels:newModelIds,movedOriginalVariants,protectedLegacyVariants:outside.length,protectedLegacyModels:protectedModelIds.size,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
+  // A korábbi, a mostani számlától FÜGGETLEN 3 nyitókészlet-mozgás
+  // és a 2 variáns korábbi készlet-/készletérték-sora semmit sem változhat.
+  const openingAfterMoves=await readExtraMoves();
+  const openingAfterStock=await c.query(`SELECT * FROM aif_stock WHERE variant_id=ANY($1::uuid[])`,[existingOpeningIds]);
+  const openingAfterRetail=await c.query(`SELECT * FROM aif_stock_retail_book WHERE variant_id=ANY($1::uuid[])`,[existingOpeningIds]);
+  const fingerprint=rows=>JSON.stringify(rows.slice().sort((a,b)=>
+    txt(a.id||`${a.variant_id}:${a.location_id}`).localeCompare(txt(b.id||`${b.variant_id}:${b.location_id}`))));
+  assert(fingerprint(openingAfterMoves.rows)===fingerprint(extraInvoiceMoves.rows),
+    'A 3 korábbi nyitókészlet-mozgás valamelyike módosult! Visszavonás.');
+  assert(fingerprint(openingAfterStock.rows)===fingerprint(openingStockResult.rows),
+    'A két régi készletsor valamelyike módosult! Visszavonás.');
+  assert(fingerprint(openingAfterRetail.rows)===fingerprint(openingRetailResult.rows),
+    'A két régi készletérték-sor valamelyike módosult! Visszavonás.');
+  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,createdModels:newModelIds,movedOriginalVariants,protectedLegacyVariants:outside.length,protectedLegacyModels:protectedModelIds.size,preservedOpeningMovements:3,preservedOpeningVariants:2,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
   await c.query('COMMIT');
   console.log('\n✅ SIKER: 21 vegyes variáns szétválasztva, 35 új variáns létrehozva.');
   console.log('✅ Modellazonosítás: 29 számlamodell, ebből 20 javított meglévő és 9 új.');
   console.log('✅ A másik 37 Mayo-variáns és a 4 korábban használt modell érintetlen.');
+  console.log('✅ 2 számlavariáns 3 nyitókészlet-mozgása, 3 korábbi darabja és készletértéke is változatlan.');
   console.log('✅ 118 importsor / 192 darab / 111 külön variáns, 29 külön modell.');
   console.log('✅ 99 darab készlet, eredeti készletérték és mind a 76 régi vonalkód változatlan.');
   console.log('✅ Árváltozási sorok átkötve:',movedPriceRows);
