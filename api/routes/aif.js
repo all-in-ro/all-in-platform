@@ -51,6 +51,7 @@ import {
   refreshAifShopifyMappings,
 } from "../lib/aifShopifyExport.js";
 
+
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
@@ -2356,6 +2357,40 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     });
   }
 
+  // Egyedül a SEZON/SZEZON/SEASON mező jelent évszakot. A COLECTIE
+  // kollekció/termékcsalád, nem szezon: például FASHION vagy SPORT.
+  const AIF_SEASON_HEADERS = new Set(["sezon", "szezon", "szezonalis", "season", "evszak"]);
+  function aifSeasonExplicit(raw = {}, normalized = {}) {
+    if (normalized?._seasonExplicit === true || normalized?.seasonProvided === true) return true;
+    if (raw && typeof raw === "object" && Object.keys(raw).some((k) => AIF_SEASON_HEADERS.has(normCode(k)))) return true;
+    return [normalized?.season, normalized?.sezon, normalized?.szezon, normalized?.seasonName]
+      .some((v) => v !== undefined && v !== null && text(v) !== "");
+  }
+
+  function aifSeasonFromSource(value) {
+    const raw = text(value);
+    if (!raw || raw === "-") return null;
+    const key = normCode(raw);
+    // Ha a beszállító az egész éves terméket külön jelöli, az adatbázisban
+    // NULL értékkel tároljuk, nem kerül hamis szezon a Shopify tagekbe.
+    if (new Set([
+      "nem_szezonalis", "nem_szezonhoz_kotott", "nincs", "nincs_szezon",
+      "fara_sezon", "fara_sezonalitate", "nesezonier",
+      "no_season", "non_seasonal", "nonseasonal", "not_seasonal", "none",
+      "na", "n_a", "-", "permanent", "permanens", "fashion", "sport"
+    ]).has(key)) return null;
+    const replacements = {
+      spring: "Primăvară", primavara: "Primăvară", tavasz: "Primăvară",
+      summer: "Vară", vara: "Vară", nyar: "Vară",
+      autumn: "Toamnă", fall: "Toamnă", toamna: "Toamnă", osz: "Toamnă",
+      winter: "Iarnă", iarna: "Iarnă", tel: "Iarnă",
+      spring_summer: "Primăvară/Vară", primavara_vara: "Primăvară/Vară", tavasz_nyar: "Primăvară/Vară", ss: "Primăvară/Vară",
+      autumn_winter: "Toamnă/Iarnă", fall_winter: "Toamnă/Iarnă", toamna_iarna: "Toamnă/Iarnă", osz_tel: "Toamnă/Iarnă", aw: "Toamnă/Iarnă", fw: "Toamnă/Iarnă",
+      all_year: "Tot anul", year_round: "Tot anul", tot_anul: "Tot anul", egesz_evben: "Tot anul", egesz_ev: "Tot anul", all_season: "Tot anul"
+    };
+    return replacements[key] || raw;
+  }
+
   function rawValueByHeaders(raw, headers) {
     if (!raw || typeof raw !== "object") return null;
     const wanted = new Set((headers || []).map((x) => normCode(x)).filter(Boolean));
@@ -3123,7 +3158,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU", "SHOPIFY SKU"]);
     const rawGender = rawValueByHeaders(raw, ["GEN", "GENDER", "SEX", "DEPT", "DEPARTMENT", "DEPARTMENT NAME"]);
     const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
-    const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
+    const rawSeason = rawValueByHeaders(raw, ["SEZON", "SZEZON", "SZEZONÁLIS", "SEASON", "ÉVSZAK", "EVSZAK"]);
     const rawSize = rawValueByHeaders(raw, ["MARIME", "MĂRIME", "MARIMI", "MĂRIMI", "MERET", "MÉRET", "SIZE", "TALLA", "GRÖSSE", "GROSIME"]);
     const rawQty = rawValueByHeaders(raw, ["CANTITATE", "CANT.", "CANT", "QTY", "QUANTITY", "DARAB", "DB", "BUC", "BUCĂȚI"]);
     const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
@@ -3162,7 +3197,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender || "unisex"),
       _manualGender: src._manualGender === true,
       productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
-      season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
+      season: aifSeasonFromSource(src.season ?? src.sezon ?? src.szezon ?? src.seasonName ?? rawSeason),
+      _seasonExplicit: aifSeasonExplicit(raw, src),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
@@ -3365,7 +3401,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              ELSE gender
            END,
            product_type = COALESCE($8, product_type),
-           season = COALESCE($9, season),
+           season = CASE WHEN $15::boolean THEN $9 ELSE season END,
            material = COALESCE($10, material),
            shopify_title = COALESCE($11, shopify_title),
            status = CASE
@@ -3390,6 +3426,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           modelUpdateStatus,
           subcategoryId,
           Boolean(preserveExistingClassification),
+          Boolean(safeNormalized._seasonExplicit || safeNormalized.season),
         ]
       );
       return id;
@@ -7907,7 +7944,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL','')) AS shopify_title,
            COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN','')) AS gender,
            COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR','')) AS product_type,
-           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.normalized->>'collection',''), NULLIF(rw.raw->>'COLECTIE','')) AS season,
+           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.raw->>'SEZON',''), NULLIF(rw.raw->>'SEASON','')) AS season,
            COALESCE(NULLIF(m.material,''), NULLIF(rw.normalized->>'material',''), NULLIF(rw.normalized->>'composition',''), NULLIF(rw.raw->>'COMPOZITIE','')) AS material,
            COALESCE(NULLIF(c.code,''), NULLIF(rw.normalized->>'categoryCode',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE','')) AS category_code,
            COALESCE(NULLIF(c.name_ro,''), NULLIF(rw.normalized->>'categoryName',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE','')) AS category_name_ro,
@@ -7994,7 +8031,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL',''), NULLIF((sm.raw->'raw')->>'ARTICOL','')) AS shopify_title,
            COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN',''), NULLIF((sm.raw->'raw')->>'GEN','')) AS gender,
            COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'RODESCR','')) AS product_type,
-           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.normalized->>'collection',''), NULLIF(rw.raw->>'COLECTIE',''), NULLIF((sm.raw->'raw')->>'COLECTIE','')) AS season,
+           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.raw->>'SEZON',''), NULLIF(rw.raw->>'SEASON',''), NULLIF((sm.raw->'raw')->>'SEZON','')) AS season,
            COALESCE(NULLIF(m.material,''), NULLIF(rw.normalized->>'material',''), NULLIF(rw.normalized->>'composition',''), NULLIF(rw.raw->>'COMPOZITIE',''), NULLIF((sm.raw->'raw')->>'COMPOZITIE','')) AS material,
            COALESCE(NULLIF(c.code,''), NULLIF(rw.normalized->>'categoryCode',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE',''), NULLIF((sm.raw->'raw')->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'CATEGORIE','')) AS category_code,
            COALESCE(NULLIF(c.name_ro,''), NULLIF(rw.normalized->>'categoryName',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE',''), NULLIF((sm.raw->'raw')->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'CATEGORIE','')) AS category_name_ro,
@@ -12342,7 +12379,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawDescription = rawValueByHeaders(raw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "DESCRIERE RO", "DESCR_RO", "DESCRIPTION", "LONG DESCRIPTION", "PRODUCT DESCRIPTION", "DETALII", "LEIRAS", "LEÍRÁS"]);
     const rawTitle = rawValueByHeaders(raw, ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV"]);
     const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
-    const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
+    const rawSeason = rawValueByHeaders(raw, ["SEZON", "SZEZON", "SZEZONÁLIS", "SEASON", "ÉVSZAK", "EVSZAK"]);
     const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
     const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
     const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "URL POZA", "LINK FOTO", "LINK POZA", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
@@ -12446,7 +12483,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const rawSubcategory = rawValueByHeaders(manualRaw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "ALCATEGORIA"]);
       const rawDescription = rawValueByHeaders(manualRaw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEIRAS", "LEÍRÁS", "TERMÉK LEÍRÁS", "TERMEK LEIRAS"]);
       const rawMaterial = rawValueByHeaders(manualRaw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "TERMÉK ÖSSZETÉTELE", "TERMEK OSSZETETELE"]);
-      const rawSeason = rawValueByHeaders(manualRaw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
+      const rawSeason = rawValueByHeaders(manualRaw, ["SEZON", "SZEZON", "SZEZONÁLIS", "SEASON", "ÉVSZAK", "EVSZAK"]);
       const rawImageUrl = rawValueByHeaders(manualRaw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTÓ", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "LINK FOTO", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
       const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD", "SKU", "SHOPIFY SKU"]);
       const rawBuyPrice = rawValueByHeaders(manualRaw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
@@ -12471,7 +12508,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code),
         gender: canonicalGender(src.gender || src.genderCode || src.gender_code || "unisex"),
         productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
-        season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
+        season: aifSeasonFromSource(src.season ?? src.sezon ?? src.szezon ?? src.seasonName ?? rawSeason),
+      _seasonExplicit: aifSeasonExplicit(raw, src),
         material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || rawMaterial),
         shopifyTitle: emptyToNull(src.shopifyTitle || src.shopify_title || src.titleRo || src.title_ro),
         colorCode: emptyToNull(src.colorCode || src.color_code || src.supplierColorCode || src.supplier_color_code),
@@ -13634,7 +13672,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         addModel("gender", gender);
       }
       if (body.productType !== undefined || body.product_type !== undefined) addModel("product_type", emptyToNull(body.productType ?? body.product_type));
-      if (body.season !== undefined) addModel("season", emptyToNull(body.season));
+      if (body.season !== undefined) addModel("season", aifSeasonFromSource(body.season));
       if (body.material !== undefined) addModel("material", emptyToNull(body.material));
       if (body.shopifyTitle !== undefined || body.shopify_title !== undefined) addModel("shopify_title", emptyToNull(body.shopifyTitle ?? body.shopify_title));
       if (body.modelStatus !== undefined || body.model_status !== undefined) {
@@ -15355,7 +15393,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(NULLIF(m.shopify_title,''), NULLIF(lid.normalized->>'shopifyTitle',''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.raw->>'ARTICOL','')) AS shopify_title,
          COALESCE(NULLIF(m.gender,''), NULLIF(lid.normalized->>'gender',''), NULLIF(lid.raw->>'GEN','')) AS gender,
          COALESCE(NULLIF(m.product_type,''), NULLIF(lid.normalized->>'productType',''), NULLIF(lid.raw->>'RODESCR','')) AS product_type,
-         COALESCE(NULLIF(m.season,''), NULLIF(lid.normalized->>'season',''), NULLIF(lid.normalized->>'collection',''), NULLIF(lid.raw->>'COLECTIE','')) AS season,
+         COALESCE(NULLIF(m.season,''), NULLIF(lid.normalized->>'season',''), NULLIF(lid.raw->>'SEZON',''), NULLIF(lid.raw->>'SEASON','')) AS season,
          COALESCE(NULLIF(m.material,''), NULLIF(lid.normalized->>'material',''), NULLIF(lid.normalized->>'composition',''), NULLIF(lid.raw->>'COMPOZITIE','')) AS material,
          m.status AS model_status,
          COALESCE(b.name, NULLIF(lid.normalized->>'brandName',''), NULLIF(lid.raw->>'BRAND','')) AS brand_name,
