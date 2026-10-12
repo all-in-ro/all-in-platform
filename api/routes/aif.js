@@ -51,7 +51,6 @@ import {
   refreshAifShopifyMappings,
 } from "../lib/aifShopifyExport.js";
 
-
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
