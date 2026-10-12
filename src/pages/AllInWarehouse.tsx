@@ -2139,16 +2139,16 @@ const WAREHOUSE_SEASON_OPTIONS: WarehouseSingleSelectOption[] = [
   { value: "Toamnă", label: "Ősz" },
   { value: "Iarnă", label: "Tél" },
   { value: "", label: "Nem szezonális" },
-  { value: "Primăvară/Vară", label: "Tavasz / Nyár" },
-  { value: "Toamnă/Iarnă", label: "Ősz / Tél" },
-  { value: "Tot anul", label: "Egész évben (négyévszakos)" },
 ];
 
-function warehouseSeasonOptions(savedValue: string): WarehouseSingleSelectOption[] {
-  const value = String(savedValue || "").trim();
-  if (!value || WAREHOUSE_SEASON_OPTIONS.some((item) => item.value === value)) return WAREHOUSE_SEASON_OPTIONS;
-  // Régi szezonkódokat (pl. S23) nem tüntetjük el vagy írjuk át észrevétlenül.
-  return [...WAREHOUSE_SEASON_OPTIONS, { value, label: `Korábbi érték: ${value}`, hint: "Ellenőrizendő" }];
+// Az egykori S23 / SS / Ősz-Tél adatot nem írjuk át önkényesen. A legördülőben
+// azonban már valóban CSAK az öt kért lehetőség szerepel.
+function warehouseSeasonOptions(_savedValue: string): WarehouseSingleSelectOption[] {
+  return WAREHOUSE_SEASON_OPTIONS;
+}
+function warehouseSeasonLegacyValue(value: string): string {
+  const raw = String(value || "").trim();
+  return raw && !WAREHOUSE_SEASON_OPTIONS.some((row) => row.value === raw) ? raw : "";
 }
 
 type NewProductForm = EditForm & {
@@ -6574,14 +6574,54 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
 
 // Külön, kizárólag képeket mentő kérés: nem küldjük újra a termék árát,
 // készletét, egyéb mezőit. A régi /variants/:id PATCH végpont megmarad.
-async function apiPersistWarehousePhotos(id: string, urls: string[]) {
-  const gallery = warehousePhotoUrls(urls);
-  return fetchJSON<{ ok: true }>(`/api/aif/variants/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ images: gallery, imageUrl: gallery[0] || null }),
-    signal: AbortSignal.timeout(60_000),
+type WarehouseSavedGalleryResult = {
+  ok: true;
+  variantId: string;
+  images: string[];
+  imageUrl: string | null;
+  imageCount: number;
+  changed?: boolean;
+  shopifySync?: "queued" | "processing" | "error" | "not_needed";
+  syncWarning?: string | null;
+};
+
+async function apiReadWarehousePhotos(id: string) {
+  return fetchJSON<WarehouseSavedGalleryResult>(`/api/aif/variants/${encodeURIComponent(id)}/gallery?_=${Date.now()}`, {
+    signal: AbortSignal.timeout(20_000),
   });
+}
+
+async function apiPersistWarehousePhotos(id: string, urls: string[]) {
+  const images = warehousePhotoUrls(urls);
+  return fetchJSON<WarehouseSavedGalleryResult>(`/api/aif/variants/${encodeURIComponent(id)}/gallery`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ images }),
+    signal: AbortSignal.timeout(25_000),
+  });
+}
+
+function warehousePendingGalleryKey(id: string) {
+  return `allin:warehouse:unverified-gallery:${id}`;
+}
+function warehouseRememberPendingGallery(id: string, urls: string[]) {
+  try {
+    window.sessionStorage.setItem(warehousePendingGalleryKey(id), JSON.stringify({
+      savedAt: Date.now(), images: warehousePhotoUrls(urls),
+    }));
+  } catch { /* A tárhely esetleges tiltása nem akadályozhatja a mentést. */ }
+}
+function warehouseReadPendingGallery(id: string): string[] {
+  try {
+    const raw = window.sessionStorage.getItem(warehousePendingGalleryKey(id));
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    if (!data?.savedAt || Date.now()-Number(data.savedAt) > 7*24*3600*1000) return [];
+    return warehousePhotoUrls(data.images);
+  } catch { return []; }
+}
+function warehouseClearPendingGallery(id: string) {
+  try { window.sessionStorage.removeItem(warehousePendingGalleryKey(id)); } catch {}
 }
 
 async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "", signal?: AbortSignal) {
@@ -7011,6 +7051,7 @@ function WarehouseGalleryEditor({
         <span className="flex items-center gap-1.5 text-xs text-white/90"><ImagePlus size={15} className="text-[#91e2df]"/> Termékképek</span>
         <span className="rounded-full border border-[#7bd7d4]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#c9fffb] tabular-nums">{photos.length} kép</span>
       </div>
+      {statusText ? <p className={`rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${statusText.startsWith("HIBA") ? "border-rose-300/35 bg-rose-500/10 text-rose-100" : "border-[#7bd7d4]/35 bg-[#2a8d8b]/15 text-[#e0fffa]"}`} role="status">{statusText}</p> : null}
       <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-white p-2">
         {main ? <img src={main} alt={title || "Termék főképe"} className="aspect-square w-full object-contain"/> :
           <div className="flex aspect-square items-center justify-center gap-2 text-slate-400"><ImagePlus size={25}/><span className="text-xs">Még nincs termékkép</span></div>}
@@ -7043,7 +7084,6 @@ function WarehouseGalleryEditor({
         <button className={btnSoft} type="button" disabled={uploading} onClick={addUrl}><Plus size={14}/> Hozzáadás</button>
       </div>
       {localError && <p className="text-[11px] text-rose-200">{localError}</p>}
-      {statusText ? <p className={`rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${statusText.startsWith("HIBA") ? "border-rose-300/35 bg-rose-500/10 text-rose-100" : "border-[#7bd7d4]/35 bg-[#2a8d8b]/15 text-[#e0fffa]"}`} role="status">{statusText}</p> : null}
       <p className="text-[10px] leading-relaxed text-white/50">A feltöltött képek, a főképcsere és a sorrend automatikusan mentődik a raktárba. Nem kell külön Mentést nyomni. A Shopify képszinkronja háttérben fut.</p>
     </div>
   );
@@ -7377,6 +7417,8 @@ export default function AllInWarehouse() {
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [galleryNotice, setGalleryNotice] = useState("");
+  const [galleryRecovery, setGalleryRecovery] = useState<string[]>([]);
+  const galleryMutationRef = useRef(false);
   const editGalleryRef = useRef<string[]>([]);
   // A háttérből érkező részlet-GET és a több fájlt feltöltő callback ugyanazt
   // az aktuális galériát látja. Nem ragadhat bele egy korábbi render képlistájába.
@@ -9636,6 +9678,7 @@ export default function AllInWarehouse() {
     setDetail(null);
     setDetailBusy(false);
     setGalleryNotice("");
+    setGalleryRecovery([]);
     editGalleryRef.current = [];
     setEdit(emptyForm());
     setEditBaseline(emptyForm());
@@ -13920,6 +13963,7 @@ export default function AllInWarehouse() {
     setEditBarcodeConflict(null);
     setMessage("");
     setGalleryNotice("");
+    setGalleryRecovery(warehouseReadPendingGallery(cleanId));
 
     const requestSequence = ++detailLoadSequenceRef.current;
     const cached = detailCacheRef.current.get(cleanId);
@@ -13939,6 +13983,10 @@ export default function AllInWarehouse() {
 
       detailCacheRef.current.set(cleanId, { data: freshDetail, loadedAt: Date.now() });
       const freshForm = prepareDetailForm(freshDetail, cleanId);
+      if (JSON.stringify(warehouseReadPendingGallery(cleanId)) === JSON.stringify(freshForm.images)) {
+        warehouseClearPendingGallery(cleanId);
+        setGalleryRecovery([]);
+      }
 
       setDetail(freshDetail);
       // Ha a felhasználó már elkezdett gépelni, a háttérből megérkező válasz
@@ -14783,13 +14831,23 @@ export default function AllInWarehouse() {
     if (!id) return false;
     const next = warehousePhotoUrls(urls);
     editGalleryRef.current = [...next];
+    warehouseRememberPendingGallery(id, next);
     setEdit((current) => ({ ...current, images: next, imageUrl: next[0] || "" }));
-    setGalleryNotice(`Galéria mentése (${next.length} kép)…`);
+    setGalleryNotice(`Galéria mentése és ellenőrzése: ${next.length} kép…`);
     // A részletes adatlap korábban elindult GET-je nem írhatja vissza a régi képet.
     detailLoadSequenceRef.current += 1;
     setDetailBusy(false);
     try {
-      await apiPersistWarehousePhotos(id, next);
+      const stored = await apiPersistWarehousePhotos(id, next);
+      if (JSON.stringify(warehousePhotoUrls(stored.images)) !== JSON.stringify(next) || stored.imageCount !== next.length) {
+        throw new Error(`A szerver ${stored.imageCount ?? '?'} képet igazolt a kért ${next.length} helyett.`);
+      }
+      const verified = await apiReadWarehousePhotos(id);
+      if (JSON.stringify(warehousePhotoUrls(verified.images)) !== JSON.stringify(next) || verified.imageCount !== next.length) {
+        throw new Error(`Visszaolvasáskor eltérő képlista érkezett (${verified.imageCount ?? '?'} / ${next.length}).`);
+      }
+      warehouseClearPendingGallery(id);
+      setGalleryRecovery([]);
       const source: InventoryItem = {
         ...(detail?.item || {}),
         variant_id: id,
@@ -14803,8 +14861,11 @@ export default function AllInWarehouse() {
       const siblings = gallerySiblingCandidates.filter((item) => warehouseSameColorSizeSibling(source, item));
       const uniqueSiblings = [...new Set(siblings.map((item) => String(item.variant_id || "").trim()).filter(Boolean))];
       const results = await Promise.allSettled(uniqueSiblings.map((siblingId) => apiPersistWarehousePhotos(siblingId, next)));
-      const savedSiblingIds = uniqueSiblings.filter((_, index) => results[index].status === "fulfilled");
-      const failedSiblings = uniqueSiblings.filter((_, index) => results[index].status === "rejected");
+      const savedSiblingIds = uniqueSiblings.filter((_, index) => {
+        const result = results[index];
+        return result.status === "fulfilled" && JSON.stringify(warehousePhotoUrls(result.value.images)) === JSON.stringify(next);
+      });
+      const failedSiblings = uniqueSiblings.filter((siblingId) => !savedSiblingIds.includes(siblingId));
       const affected = new Set([id, ...savedSiblingIds]);
       const patchItem = (item: InventoryItem): InventoryItem =>
         affected.has(String(item.variant_id || ""))
@@ -14827,31 +14888,43 @@ export default function AllInWarehouse() {
           data: { ...cache.data, item: { ...cache.data.item, images: [...next], image_url: next[0] || null } },
         });
       }
+      const syncInfo = stored.shopifySync === "error"
+        ? " FIGYELEM: a Shopify képszinkron várólistája hibázott, a képek ettől még el vannak mentve."
+        : stored.shopifySync === "processing"
+          ? " A Shopify-szinkron várólistára kerülése még folyamatban."
+          : stored.shopifySync === "queued"
+            ? " Shopify-képszinkron várólistára téve."
+            : "";
       if (failedSiblings.length) {
-        setGalleryNotice(`Mentve: ${next.length} kép ehhez a termékhez. ${failedSiblings.length} másik méretnél a képmásolás sikertelen, ezt külön ellenőrizni kell.`);
+        setGalleryNotice(`MENTVE és visszaolvasva: ${next.length} kép. ${failedSiblings.length} másik méretnél a mentés sikertelen, ezt külön ellenőrizni kell.${syncInfo}`);
       } else {
-        setGalleryNotice(`MENTVE: ${next.length} kép az adatbázisban${savedSiblingIds.length ? `, további ${savedSiblingIds.length} méretnél is` : ""}. Shopify képszinkron a háttérben.`);
+        setGalleryNotice(`MENTVE és visszaellenőrizve: ${next.length} kép${savedSiblingIds.length ? `, további ${savedSiblingIds.length} méretnél is` : ""}.${syncInfo}`);
       }
       return true;
     } catch (error: any) {
       // A feltöltött R2 URL-ek a formban maradnak, így a szokásos Mentés gombbal
       // később is megpróbálható a mentés. Nem állítunk hamis sikert.
-      setGalleryNotice(`HIBA: A galéria adatbázisba mentése nem sikerült (${error?.message || "ismeretlen hiba"}). A kép-URL-eket ne dobd el: próbáld újra a Mentés gombbal.`);
+      setGalleryRecovery([...next]);
+      setGalleryNotice(`HIBA: A ${next.length} kép mentését nem lehetett visszaigazolni (${error?.message || "ismeretlen hiba"}). A feltöltött képek URL-je ideiglenesen megmaradt ebben a böngészőfülben. Próbáld újra a képek mentését.`);
       return false;
     }
   }
 
   function setEditedPhotoGallery(urls: string[]) {
-    if (saving) return;
+    if (galleryMutationRef.current || saving) return;
+    galleryMutationRef.current = true;
     setSaving(true);
-    void persistExistingPhotoGallery(urls).finally(() => setSaving(false));
+    void persistExistingPhotoGallery(urls).finally(() => {
+      galleryMutationRef.current = false;
+      setSaving(false);
+    });
   }
   function setNewProductPhotoGallery(urls: string[]) {
     setNewProduct((current) => ({ ...current, images: [...urls], imageUrl: urls[0] || "" }));
   }
 
   async function uploadGalleryFiles(files: File[], target: "edit" | "new") {
-    if (!files.length || saving || newProductSaving) return;
+    if (!files.length || saving || newProductSaving || galleryMutationRef.current) return;
     const variantId = String(detail?.item?.id || "").trim();
     const targetId = target === "edit" ? variantId : `draft-${Date.now()}`;
     if (!targetId) return;
@@ -14869,7 +14942,7 @@ export default function AllInWarehouse() {
       else setMessage(note);
       return;
     }
-    if (target === "edit") setSaving(true);
+    if (target === "edit") { galleryMutationRef.current = true; setSaving(true); }
     else setNewProductSaving(true);
     setMessage("");
     const uploaded: string[] = [];
@@ -14891,7 +14964,8 @@ export default function AllInWarehouse() {
         const original = warehousePhotoUrls(target === "edit" ? editGalleryRef.current : newProduct.images);
         const combined = warehousePhotoUrls([...original, ...uploaded]);
         if (target === "edit") {
-          await persistExistingPhotoGallery(combined);
+          const confirmed = await persistExistingPhotoGallery(combined);
+          if (!confirmed) return; // Egy sikertelen adatbázis-mentést nem nevezünk sikeres feltöltésnek.
         } else {
           setNewProduct((current) => {
             const next = warehousePhotoUrls([...current.images, ...uploaded]);
@@ -14910,7 +14984,7 @@ export default function AllInWarehouse() {
         else setMessage(note);
       }
     } finally {
-      if (target === "edit") setSaving(false);
+      if (target === "edit") { galleryMutationRef.current = false; setSaving(false); }
       else setNewProductSaving(false);
     }
   }
@@ -18871,6 +18945,14 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
+                  {galleryRecovery.length > 0 && (
+                    <div className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-2.5 text-xs text-amber-50">
+                      <p>{galleryRecovery.length} korábban feltöltött képet nem sikerült tartósan visszaigazolni. Az URL-ek ebben a böngészőfülben megmaradtak.</p>
+                      <button type="button" disabled={saving} className="mt-2 rounded-lg border border-amber-200/40 bg-amber-400/20 px-3 py-1.5 font-medium disabled:opacity-50" onClick={() => setEditedPhotoGallery(galleryRecovery)}>
+                        Képek mentésének újrapróbálása
+                      </button>
+                    </div>
+                  )}
                   <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} statusText={galleryNotice} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
                   <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
@@ -18950,6 +19032,7 @@ export default function AllInWarehouse() {
                         options={warehouseSeasonOptions(edit.season)}
                         onChange={(season) => setEdit((x) => ({ ...x, season }))}
                       />
+                      {warehouseSeasonLegacyValue(edit.season) ? <p className="text-[10px] text-amber-100/70">Régi szezonadat: {warehouseSeasonLegacyValue(edit.season)}. Csak választáskor módosul.</p> : null}
                       <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
                     </div>
                   </section>
