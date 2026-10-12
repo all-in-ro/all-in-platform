@@ -46,6 +46,25 @@ pool.on("error", (error) => {
   });
 });
 
+// Az auth nem állhat sorba a hosszú raktári / Shopify tranzakciók MÖGÉ.
+// Külön, kicsi, határidős pool ugyanahhoz a PostgreSQL adatbázishoz.
+// A session rekordok, cookie-k, szerepkörök és lejáratok változatlanok.
+const sessionPool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+  max: 3,
+  connectionTimeoutMillis: 4000,
+  idleTimeoutMillis: 30000,
+  statement_timeout: 5000,
+  query_timeout: 6500,
+});
+sessionPool.on("error", (error) => {
+  console.error("PostgreSQL: auth pool idle kapcsolat megszakadt", {
+    message: String(error?.message || error),
+    code: error?.code || null,
+  });
+});
+
 // --- R2 (Cloudflare API / Bearer token) ---
 // Uploads go through Cloudflare's REST API (api.cloudflare.com). This matches the working CUPE flow.
 // Required env:
@@ -84,7 +103,7 @@ function sessionStorageKey(sid) {
 async function ensureSessionStore() {
   if (!sessionStoreReadyPromise) {
     sessionStoreReadyPromise = (async () => {
-      await pool.query(`
+      await sessionPool.query(`
         CREATE TABLE IF NOT EXISTS app_sessions (
           session_key text PRIMARY KEY,
           session_data jsonb NOT NULL,
@@ -93,11 +112,11 @@ async function ensureSessionStore() {
           expires_at timestamptz NOT NULL
         )
       `);
-      await pool.query(`
+      await sessionPool.query(`
         CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx
         ON app_sessions (expires_at)
       `);
-      await pool.query(`DELETE FROM app_sessions WHERE expires_at <= now()`);
+      await sessionPool.query(`DELETE FROM app_sessions WHERE expires_at <= now()`);
     })().catch((error) => {
       sessionStoreReadyPromise = null;
       throw error;
@@ -119,7 +138,7 @@ function cacheSession(key, session, expiresAt) {
 async function saveSession(sid, session) {
   await ensureSessionStore();
   const key = sessionStorageKey(sid);
-  const result = await pool.query(
+  const result = await sessionPool.query(
     `INSERT INTO app_sessions
        (session_key, session_data, created_at, last_seen_at, expires_at)
      VALUES
@@ -146,7 +165,7 @@ async function loadSession(sid) {
   if (cached) sessionCache.delete(key);
 
   await ensureSessionStore();
-  const result = await pool.query(
+  const result = await sessionPool.query(
     `UPDATE app_sessions
      SET last_seen_at=now(),
          expires_at=now() + ($2::bigint * interval '1 millisecond')
@@ -159,7 +178,7 @@ async function loadSession(sid) {
 
   const session = result.rows[0].session_data;
   if (!session || typeof session !== "object" || !session.role) {
-    await pool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
+    await sessionPool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
     return null;
   }
   cacheSession(key, session, result.rows[0].expires_at);
@@ -171,7 +190,7 @@ async function deleteSession(sid) {
   const key = sessionStorageKey(sid);
   sessionCache.delete(key);
   await ensureSessionStore();
-  await pool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
+  await sessionPool.query(`DELETE FROM app_sessions WHERE session_key=$1`, [key]);
 }
 
 const captureShopifyWebhookRawBody = (req, _res, buffer) => {
@@ -594,8 +613,12 @@ app.get("/api/auth/me", async (req, res) => {
     if (!s && sid) clearCookie(res);
     return res.json({ session: s || null });
   } catch (error) {
-    console.error("Auth session lookup failed", error);
-    return res.status(500).json({ error: "A munkamenet ellenőrzése nem sikerült." });
+    console.error("Auth session lookup failed", {
+      message: String(error?.message || error),
+      code: error?.code || null,
+    });
+    res.setHeader("Retry-After", "3");
+    return res.status(503).json({ error: "A munkamenet ellenőrzése átmenetileg nem érhető el.", code: "auth_session_unavailable" });
   }
 });
 
