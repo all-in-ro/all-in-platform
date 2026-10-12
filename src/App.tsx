@@ -92,6 +92,72 @@ const LAST_ACTIVITY_AT_KEY = "allin:last-activity-at:v1";
 const SESSION_REQUIRED_HEADER = "X-AllIn-Auth";
 const SESSION_REQUIRED_VALUE = "session-required";
 
+// Az auth-me ellenőrzést sem a szerver, sem a böngésző nem várhatja örökké.
+// Hálózati/DB hiba NEM egyenlő kijelentkezéssel.
+const AUTH_RESTORE_TIMEOUT_MS = 8_000;
+const AUTH_RECHECK_TIMEOUT_MS = 6_000;
+const AUTH_ACTIVITY_TIMEOUT_MS = 7_000;
+
+type AuthCheckResult =
+  | { status: "valid"; session: Session }
+  | { status: "signed_out" }
+  | { status: "unavailable"; message: string };
+
+async function checkExistingSession(
+  fetchImpl: typeof fetch,
+  url: string,
+  timeoutMs: number,
+  cancelSignal?: AbortSignal,
+): Promise<AuthCheckResult> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortForCancel = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", abortForCancel, { once: true });
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return {
+        status: "unavailable",
+        message: `A szerver nem tudta ellenőrizni a munkamenetet (HTTP ${response.status}).`,
+      };
+    }
+    const data = await response.json();
+    if (!data || typeof data !== "object" || !("session" in data)) {
+      return { status: "unavailable", message: "A szerver hibás munkamenet-választ küldött." };
+    }
+    if (data.session === null) return { status: "signed_out" };
+    const candidate = data.session as Partial<Session> | undefined;
+    if (
+      candidate &&
+      (candidate.role === "admin" ||
+        (candidate.role === "shop" && typeof candidate.shopId === "string" && candidate.shopId.length > 0))
+    ) return { status: "valid", session: candidate as Session };
+    return { status: "unavailable", message: "A szerver hiányos munkamenet-adatot küldött." };
+  } catch {
+    return {
+      status: "unavailable",
+      message: timedOut
+        ? `A munkamenet-ellenőrzés ${Math.round(timeoutMs / 1000)} másodpercen belül nem válaszolt.`
+        : "A munkamenet-ellenőrzés hálózati vagy szerverhiba miatt nem sikerült.",
+    };
+  } finally {
+    window.clearTimeout(timer);
+    cancelSignal?.removeEventListener("abort", abortForCancel);
+  }
+}
+
+
 function ScreenLoader() {
   return (
     <div className="grid min-h-screen place-items-center bg-[#4b5362] px-4 text-white">
@@ -334,6 +400,9 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>(() => hashToScreen(window.location.hash));
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  // Hálózati probléma esetén nem írjuk felül az érvényes szerveres sessiont.
+  const [authProblem, setAuthProblem] = useState("");
+  const [authRetry, setAuthRetry] = useState(0);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -363,6 +432,7 @@ export default function App() {
 
       clearShopBrowserState();
       setSession(null);
+      setAuthProblem("");
       setAuthReady(true);
       setScreen({ name: "login" });
       setLogoutOpen(false);
@@ -376,16 +446,14 @@ export default function App() {
 
       sessionCheckPromise = (async () => {
         try {
-          const check = await nativeFetch(`${window.location.origin}/api/auth/me`, {
-            credentials: "include",
-            cache: "no-store",
-          });
-          if (!check.ok) return false;
-          const data = await check.json().catch(() => null);
-          return !data?.session;
-        } catch {
-          // Hálózati vagy szerverhiba miatt soha ne dobjuk ki a felhasználót.
-          return false;
+          const result = await checkExistingSession(
+            nativeFetch,
+            `${window.location.origin}/api/auth/me`,
+            AUTH_RECHECK_TIMEOUT_MS,
+          );
+          // Csak a kifejezett, érvényes {session:null} válasz jelent kijelentkezést.
+          // Timeout, 5xx és hibás válasz esetén soha nem dobunk ki senkit.
+          return result.status === "signed_out";
         } finally {
           window.setTimeout(() => { sessionCheckPromise = null; }, 250);
         }
@@ -427,22 +495,38 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const cancel = new AbortController();
+    setAuthReady(false);
+    setAuthProblem("");
 
-    fetch(`${api}/auth/me`, { credentials: "include", cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
+    void (async () => {
+      try {
+        const result = await checkExistingSession(
+          window.fetch.bind(window),
+          `${api}/auth/me`,
+          AUTH_RESTORE_TIMEOUT_MS,
+          cancel.signal,
+        );
         if (cancelled) return;
 
-        if (!data?.session) {
+        if (result.status === "unavailable") {
+          // Bizonytalan hálózati helyzetben nem jelentkezünk ki, nem törlünk cookie-t.
+          // A kezelő választhat újrapróbálást vagy kézi belépést.
+          setAuthProblem(result.message);
+          return;
+        }
+        if (result.status === "signed_out") {
           setSession(null);
+          setAuthProblem("");
           return;
         }
 
-        const nextSession = data.session as Session;
+        const nextSession = result.session;
         rememberLoginMode(nextSession);
         setLogoutOpen(false);
         setLogoutBusy(false);
         setLogoutError("");
+        setAuthProblem("");
         setSession(nextSession);
         const current = hashToScreen(window.location.hash);
 
@@ -451,22 +535,21 @@ export default function App() {
           if (!isShopScreenAllowed(nextSession.shopId, current.name)) go(target);
           return;
         }
-
         if (current.name === "login" || isShopFacingScreen(current.name)) {
           go("home");
         }
-      })
-      .catch(() => {
-        if (!cancelled) setSession(null);
-      })
-      .finally(() => {
+      } catch {
+        if (!cancelled) setAuthProblem("A munkamenet visszaállítása váratlan hiba miatt nem sikerült.");
+      } finally {
         if (!cancelled) setAuthReady(true);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
+      cancel.abort();
     };
-  }, [api]);
+  }, [api, authRetry]);
 
   useEffect(() => {
     if (!session || session.role !== "shop") return;
@@ -546,11 +629,14 @@ export default function App() {
 
       lastHeartbeatAt = now;
       heartbeatInFlight = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), AUTH_ACTIVITY_TIMEOUT_MS);
       try {
         const response = await fetch(`${api}/auth/activity`, {
           method: "POST",
           credentials: "include",
           cache: "no-store",
+          signal: controller.signal,
         });
 
         // Hálózati/5xx hiba miatt nem dobjuk ki az eladót.
@@ -562,6 +648,7 @@ export default function App() {
       } catch {
         // Ideiglenes hálózati hiba nem egyenlő kijelentkezéssel.
       } finally {
+        window.clearTimeout(timeout);
         heartbeatInFlight = false;
       }
     };
@@ -643,6 +730,41 @@ export default function App() {
     );
   }
 
+  if (authProblem && !session) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#4b5362] px-4 text-white">
+        <div role="alert" className="w-full max-w-[510px] rounded-2xl border border-amber-200/25 bg-[#303a4c] px-6 py-6 shadow-2xl">
+          <h2 className="text-lg font-medium text-white">A munkamenet ellenőrzése nem sikerült</h2>
+          <p className="mt-3 text-sm leading-6 text-white/80">{authProblem}</p>
+          <p className="mt-2 text-sm leading-6 text-white/65">
+            Az esetleges korábbi belépést nem töröltük. Újrapróbálhatod az ellenőrzést,
+            vagy megnyithatod a bejelentkezési oldalt.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setAuthRetry((value) => value + 1)}
+              className="rounded-xl bg-teal-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-teal-500"
+            >
+              Újrapróbálás
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                // A szerveres munkamenetet NEM töröljük és NEM hívunk logoutot.
+                setAuthProblem("");
+                go("login");
+              }}
+              className="rounded-xl border border-white/25 px-5 py-3 text-sm text-white transition hover:bg-white/10"
+            >
+              Belépési oldal
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!session || screen.name === "login") {
     return (
       <Login
@@ -652,6 +774,7 @@ export default function App() {
           setLogoutOpen(false);
           setLogoutBusy(false);
           setLogoutError("");
+          setAuthProblem("");
           rememberLoginMode(nextSession);
           setSession(nextSession);
 
