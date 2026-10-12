@@ -10,9 +10,142 @@ const txt = value => String(value ?? '').trim();
 const key = value => txt(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 const qty = value => Number(value || 0);
 const same = (a,b) => key(a) === key(b);
-const sourceColor = row => txt(row.raw?.CULOARE || row.raw?.raw?.CULOARE || row.normalized?.colorName);
-const sourceTitle = row => txt(row.raw?.ARTICOL || row.raw?.['ARTICOL/ DENUMIRE PRODUS'] || row.raw?.raw?.ARTICOL || row.normalized?.titleRo);
-const sourceType = row => txt(row.raw?.RODESCR || row.raw?.raw?.RODESCR || row.normalized?.sourceSubCategory || '');
+// Elsődleges forrás: a felhasználó által átadott eredeti Mayo Chix Excel
+// MAYOS SABLON MINTA AZ UJ PROGRAMBA 2026.07.13.xlsx / Sheet1!A6:T123.
+// Minden sor: [Excel sorszám, teljes cikkszám, szín, méret, darab, név, RODESCR].
+// Az importadatban a RODESCR hibásan vagy hiányosan tárolódhat; ezért ennél
+// a pontosan azonosított SZÁMLÁNÁL az eredeti Excel szerinti érték az irányadó.
+// A többi mezőt a feldolgozás előtt kötelezően összevetjük az importtal.
+const MAYO_EXCEL_ROWS = [
+  [6,"116005690-01","NEGRU","M",1,"LIGHT MATRICA","BLUZA"],
+  [7,"112430-65B","NEGRU","M",2,"MONTEVERDI NAGY CSILI","ROCHIE"],
+  [8,"112430-65B","NEGRU","L",2,"MONTEVERDI NAGY CSILI","ROCHIE"],
+  [9,"306900-02A","NEGRU","M",2,"GOLDEN CSILIS","TRENING"],
+  [10,"306900-02A","NEGRU","L",2,"GOLDEN CSILIS","TRENING"],
+  [11,"306890-01","BEJ","S",2,"FULTON","BLUZA"],
+  [12,"306890-01","BEJ","M",2,"FULTON","BLUZA"],
+  [13,"306890-03A","NEGRU","S",2,"FULTON","BLUZA"],
+  [14,"306890-03A","NEGRU","M",1,"FULTON","BLUZA"],
+  [15,"306890-03A","NEGRU","L",3,"FULTON","BLUZA"],
+  [16,"306890-03A","CREM","S",2,"FULTON","BLUZA"],
+  [17,"306890-03A","CREM","M",1,"FULTON","BLUZA"],
+  [18,"112430-60A","CREM","S",1,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [19,"311260-01","NEGRU","S",2,"MERLOT","PANTALONI"],
+  [20,"311260-01","NEGRU","M",2,"MERLOT","PANTALONI"],
+  [21,"311250-01","NEGRU","S",1,"BERKELEY","PANTALONI"],
+  [22,"311250-01","NEGRU","M",1,"BERKELEY","PANTALONI"],
+  [23,"311250-01","MARO","S",2,"BERKELEY","PANTALONI"],
+  [24,"311250-01","MARO","M",2,"BERKELEY","PANTALONI"],
+  [25,"311250-01","MARO","L",2,"BERKELEY","PANTALONI"],
+  [26,"307670-01","MARO","XS",2,"ZACAPA BOR","PANTALONI"],
+  [27,"307670-01","MARO","S",2,"ZACAPA BOR","PANTALONI"],
+  [28,"307670-01","MARO","M",2,"ZACAPA BOR","PANTALONI"],
+  [29,"307670-01","MARO","L",2,"ZACAPA BOR","PANTALONI"],
+  [30,"307670-01","NEGRU","M",2,"ZACAPA BOR","PANTALONI"],
+  [31,"307670-01","NEGRU","L",2,"ZACAPA BOR","PANTALONI"],
+  [32,"300025890-10","NEGRU","ONE SIZE",2,"NAPOLY DOMBOR CSILI","BLUZA"],
+  [33,"1244610490-12","BURGUNDI","ONE SIZE",1,"NATASHA MATRICA","ROCHIE"],
+  [34,"312907990-01","ALBASTRU","XS",2,"SAMBA","BLUGI"],
+  [35,"312907990-01","ALBASTRU","S",2,"SAMBA","BLUGI"],
+  [36,"312907990-01","ALBASTRU","M",2,"SAMBA","BLUGI"],
+  [37,"312907990-01","ALBASTRU","L",2,"SAMBA","BLUGI"],
+  [38,"312907990-01","ALBASTRU","XL",2,"SAMBA","BLUGI"],
+  [39,"312927590-01","NEGRU","XS",1,"BOOMERANG","BLUGI"],
+  [40,"312927590-01","NEGRU","S",1,"BOOMERANG","BLUGI"],
+  [41,"312927590-01","NEGRU","M",1,"BOOMERANG","BLUGI"],
+  [42,"312927590-01","NEGRU","L",1,"BOOMERANG","BLUGI"],
+  [43,"312927590-01","NEGRU","XL",1,"BOOMERANG","BLUGI"],
+  [44,"312688590-01","NEGRU","XS",1,"MODENA","BLUGI"],
+  [45,"312688590-01","NEGRU","S",1,"MODENA","BLUGI"],
+  [46,"312688590-01","NEGRU","M",1,"MODENA","BLUGI"],
+  [47,"312688590-01","NEGRU","L",1,"MODENA","BLUGI"],
+  [48,"312688590-01","NEGRU","XL",1,"MODENA","BLUGI"],
+  [49,"305659300-02","NEGRU","XS",1,"BABYLON","BLUGI"],
+  [50,"305659300-02","NEGRU","S",1,"BABYLON","BLUGI"],
+  [51,"305659300-02","NEGRU","M",1,"BABYLON","BLUGI"],
+  [52,"305659300-02","NEGRU","L",1,"BABYLON","BLUGI"],
+  [53,"305659300-02","NEGRU","XL",1,"BABYLON","BLUGI"],
+  [54,"303080-01","NEGRU","S",2,"MACAO","PANTALONI"],
+  [55,"303080-01","NEGRU","M",2,"MACAO","PANTALONI"],
+  [56,"3110017990-01","NEGRU","S",1,"FINE","GEACA"],
+  [57,"3110017990-01","NEGRU","M",3,"FINE","GEACA"],
+  [58,"3110017990-01","NEGRU","L",2,"FINE","GEACA"],
+  [59,"1050413590-09","NEGRU","S",2,"DESIRE DOMBOR CSILI","ROCHIE"],
+  [60,"1050413590-09","NEGRU","M",2,"DESIRE DOMBOR CSILI","ROCHIE"],
+  [61,"1050413590-09","NEGRU","L",2,"DESIRE DOMBOR CSILI","ROCHIE"],
+  [62,"97758850-03","ALB","S",2,"SONIA","CAMASA"],
+  [63,"97758850-03","ALB","M",1,"SONIA","CAMASA"],
+  [64,"97758850-03","ALB","L",1,"SONIA","CAMASA"],
+  [65,"3110017990-01","BEJ","S",2,"FINE","GEACA"],
+  [66,"3110017990-01","NEGRU","L",1,"FINE","GEACA"],
+  [67,"300025890-10","CREM","ONE SIZE",2,"NAPOLY DOMBOR CSILI","BLUZA"],
+  [68,"300025890-10","NEGRU","ONE SIZE",2,"NAPOLY DOMBOR CSILI","BLUZA"],
+  [69,"112430-60B","CARAMEL","M",2,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [70,"112430-60B","CARAMEL","L",2,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [71,"116005690-01","NEGRU","M",2,"LIGHT MATRICA","BLUZA"],
+  [72,"116005690-01","ALB","M",2,"LIGHT MATRICA","BLUZA"],
+  [73,"116005690-01","ALB","L",3,"LIGHT MATRICA","BLUZA"],
+  [74,"116006120-30","NEGRU","M",2,"LIGHT NAGY CSILI","BLUZA"],
+  [75,"116006120-30","NEGRU","L",4,"LIGHT NAGY CSILI","BLUZA"],
+  [76,"116006120-30","BURGUNDI","S",2,"LIGHT NAGY CSILI","BLUZA"],
+  [77,"116006120-30","BURGUNDI","M",2,"LIGHT NAGY CSILI","BLUZA"],
+  [78,"116006120-30","BURGUNDI","L",2,"LIGHT NAGY CSILI","BLUZA"],
+  [79,"116006120-30","CARAMEL","S",2,"LIGHT NAGY CSILI","BLUZA"],
+  [80,"116006120-30","CARAMEL","M",2,"LIGHT NAGY CSILI","BLUZA"],
+  [81,"116006120-30","CARAMEL","L",2,"LIGHT NAGY CSILI","BLUZA"],
+  [82,"306890-02B","NEGRU","S",2,"FULTON HIMZES","BLUZA"],
+  [83,"306890-02B","NEGRU","M",2,"FULTON HIMZES","BLUZA"],
+  [84,"306890-02B","NEGRU","L",2,"FULTON HIMZES","BLUZA"],
+  [85,"112430-60A","CREM","M",3,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [86,"112430-64","NEGRU","S",2,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [87,"112430-64","NEGRU","M",2,"MONTEVERDI DOMBOR HIMZES","ROCHIE"],
+  [88,"125228490-03","NEGRU","ONE SIZE",1,"JAYA MATRICA","BLUZA"],
+  [89,"125228490-03","CARAMEL","ONE SIZE",1,"JAYA MATRICA","BLUZA"],
+  [90,"125228490-03","MARO","ONE SIZE",1,"JAYA MATRICA","BLUZA"],
+  [91,"121997370-02","VERDE","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [92,"116005690-01","NEGRU","S",1,"LIGHT MATRICA","BLUZA"],
+  [93,"116005690-01","ALB","S",1,"LIGHT MATRICA","BLUZA"],
+  [94,"116005690-01","ALB","M",1,"LIGHT MATRICA","BLUZA"],
+  [95,"116005690-01","CARAMEL","M",1,"LIGHT MATRICA","BLUZA"],
+  [96,"116005690-01","CARAMEL","S",1,"LIGHT MATRICA","BLUZA"],
+  [97,"116006250-47","NEGRU","S",2,"LIGHT DOMBOR HIMZES","BLUZA"],
+  [98,"116006250-47","NEGRU","M",2,"LIGHT DOMBOR HIMZES","BLUZA"],
+  [99,"116006250-47","NEGRU","L",2,"LIGHT DOMBOR HIMZES","BLUZA"],
+  [100,"300025890-10","MARO","ONE SIZE",2,"NAPOLY DOMBOR CSILI","BLUZA"],
+  [101,"300025890-10","NEGRU","ONE SIZE",2,"NAPOLY DOMBOR CSILI","BLUZA"],
+  [102,"116006250-47","ALB","M",2,"LIGHT DOMBOR HIMZES","BLUZA"],
+  [103,"116006250-47","ALB","L",2,"LIGHT DOMBOR HIMZES","BLUZA"],
+  [104,"116005990-51","VERDE","S",1,"LIGHT FLOTTIR","BLUZA"],
+  [105,"116005990-51","ALB","M",1,"LIGHT FLOTTIR","BLUZA"],
+  [106,"116005690-01","CARAMEL","S",2,"LIGHT MATRICA","BLUZA"],
+  [107,"116005690-01","CARAMEL","M",1,"LIGHT MATRICA","BLUZA"],
+  [108,"116005690-01","CORAL","S",1,"LIGHT MATRICA","BLUZA"],
+  [109,"116005690-01","CORAL","M",2,"LIGHT MATRICA","BLUZA"],
+  [110,"116005690-01","CORAL","L",2,"LIGHT MATRICA","BLUZA"],
+  [111,"121997370-02","NEGRU","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [112,"121997370-02","CREM","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [113,"121997370-02","BURGUNDI","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [114,"121997370-02","CARAMEL","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [115,"121997370-02","MARO","ONE SIZE",1,"PILAR MATRICA","BLUZA"],
+  [116,"121907100-01","MARO","L",1,"PONTI","BLUZA"],
+  [117,"121907100-01","MARO","M",1,"PONTI","BLUZA"],
+  [118,"121907100-01","NEGRU","M",1,"PONTI","BLUZA"],
+  [119,"121907100-01","NEGRU","L",1,"PONTI","BLUZA"],
+  [120,"62586790-25","MARO","ONE SIZE",2,"BETH","BLUZA"],
+  [121,"62586790-25","CARAMEL","ONE SIZE",1,"BETH","BLUZA"],
+  [122,"62586790-25","ALB","ONE SIZE",1,"BETH","BLUZA"],
+  [123,"62586790-25","NEGRU","ONE SIZE",2,"BETH","BLUZA"],
+];
+const MAYO_EXCEL_BY_ROW = new Map(MAYO_EXCEL_ROWS.map(([rowNo, code, color, size, count, title, rodescr]) =>
+  [rowNo, {rowNo, code, color, size, count, title, rodescr}]));
+const mayoExpected = row => MAYO_EXCEL_BY_ROW.get(Number(row.row_no));
+const sourceColor = row => txt(mayoExpected(row)?.color);
+const sourceTitle = row => txt(mayoExpected(row)?.title);
+const sourceType = row => txt(mayoExpected(row)?.rodescr);
+const importedColor = row => txt(row.raw?.CULOARE || row.raw?.raw?.CULOARE || row.normalized?.colorName);
+const importedTitle = row => txt(row.raw?.ARTICOL || row.raw?.['ARTICOL/ DENUMIRE PRODUS'] || row.raw?.raw?.ARTICOL || row.normalized?.titleRo);
+const importedType = row => txt(row.raw?.RODESCR || row.raw?.raw?.RODESCR || row.normalized?.sourceSubCategory || row.normalized?.productType);
+
 const modelCodeFor = code => 'mayo_chix:' + txt(code).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
 const groupRows = rows => {
   const map = new Map();
@@ -46,6 +179,38 @@ try {
   const r = await c.query(`SELECT * FROM aif_import_rows WHERE batch_id=$1::uuid ORDER BY row_no FOR UPDATE`,[BATCH]);
   const rows = r.rows;
   assert(rows.length===118 && rows.every(x=>x.status==='committed') && rows.reduce((s,x)=>s+qty(x.qty),0)===192, 'Eltérő számla: nem 118 kész sor és 192 db.');
+  assert(MAYO_EXCEL_BY_ROW.size===118 && MAYO_EXCEL_ROWS.reduce((s,r)=>s+r[4],0)===192,
+    'Sérült Excel-referencia: 118 sor / 192 darab szükséges.');
+  const rodescrDifferences = [];
+  const verifiedRowNos = new Set();
+  for (const row of rows) {
+    const x = mayoExpected(row);
+    assert(x && !verifiedRowNos.has(Number(row.row_no)),
+      `A ${row.row_no}. sor hiányzik vagy ismétlődik az eredeti Excelben.`);
+    verifiedRowNos.add(Number(row.row_no));
+    assert(same(row.supplier_product_code,x.code),
+      `Az Excel és a raktári import cikkszáma eltér a(z) ${row.row_no}. soron: ${x.code} / ${row.supplier_product_code}`);
+    assert(same(row.supplier_size,x.size),
+      `Az Excel és a raktári import mérete eltér a(z) ${row.row_no}. soron: ${x.size} / ${row.supplier_size}`);
+    assert(qty(row.qty)===x.count,
+      `Az Excel és a raktári import mennyisége eltér a(z) ${row.row_no}. soron: ${x.count} / ${row.qty}`);
+    const dbColor=importedColor(row), dbTitle=importedTitle(row), dbType=importedType(row);
+    assert(!dbColor || same(dbColor,x.color),
+      `Az Excel és a mentett import színe eltér a(z) ${row.row_no}. soron: ${x.color} / ${dbColor}. Kézi ellenőrzés kell.`);
+    assert(!dbTitle || same(dbTitle,x.title),
+      `Az Excel és a mentett import termékneve eltér a(z) ${row.row_no}. soron: ${x.title} / ${dbTitle}. Kézi ellenőrzés kell.`);
+    if (!same(dbType,x.rodescr)) rodescrDifferences.push({
+      sor:row.row_no, cikkszam:x.code, szin:x.color, meret:x.size,
+      excel_rodescr:x.rodescr, mentett_rodescr:dbType || '(hiányzik)'
+    });
+  }
+  assert(verifiedRowNos.size===118, 'Az eredeti Excel 118 sora nem egyezik a mentett importsorokkal.');
+  console.log('\n✅ Excel-referencia egyeztetve: 118/118 importsor, 192 db, teljes cikkszám / szín / méret / megnevezés.');
+  if (rodescrDifferences.length) {
+    console.log(`\n⚠️ ${rodescrDifferences.length} sorban az importált RODESCR eltér az eredeti Exceltől.`);
+    console.table(rodescrDifferences);
+    console.log('A helyreállításnál az eredeti Excel RODESCR értéke az irányadó; a raw importtörténet megmarad.');
+  }
   const byVariant = new Map();
   for (const row of rows) {
     const id=txt(row.variant_id);
@@ -358,6 +523,7 @@ try {
   console.log('\n=== TELJES CIKKSZÁM SZERINTI MODELLTERV ===');
   console.table(modelPlan.filter(x=>!x.keep).map(x=>({uj_modell:x.code,termek:x.name,tipus:x.type,db:x.qty,eredeti_modell:x.oldModel.model_code})));
   console.log(`Számlamodell: 29 (20 biztonságosan átnevezett + 9 új). A 4 korábban használt régi modell változatlan.`);
+  console.log(`Excel szerinti RODESCR: ${new Set(MAYO_EXCEL_ROWS.map(r=>r[6])).size} ruhatípus; eltérő vagy hiányzó mentett RODESCR: ${rodescrDifferences.length} sor.`);
   console.log(`\nMAYO CHIX SZÉTVÁLASZTÁS: ${APPLY?'ÉLES JAVÍTÁS':'PRÓBA / NEM MÓDOSÍT'}`);
   console.table([{szamla:batch.rows[0].invoice_number,importsor:rows.length,darab:192,hibas_varians:mixed.length,erintett_db:99,mozgassor:moves.length,uj_varians:35,meglevo_barcode_megmarad:21,arvaltozas_sor:priceRes.rows.length}]);
   console.table(plan.filter(x=>!x.keep).map(x=>({cikk:x.code,szin:x.color,meret:x.old.size,db:x.qty,eredeti:x.oldId.slice(0,8)})));
@@ -373,7 +539,7 @@ try {
   )`);
   const previous=await c.query(`SELECT id FROM aif_mayo_import_repair_audit WHERE batch_id=$1::uuid`,[BATCH]);
   assert(previous.rowCount===0,'Ez a számla már rendelkezik javítási naplóval.');
-  const backup={batch:batch.rows[0],variants:vRes.rows,allOriginalVariants:allVResult.rows,allSupplierLinks:allLinkRes.rows,originalModels:allModelResult.rows,unrelatedVariants:outside,protectedModelIds:[...protectedModelIds],modelPlan:modelPlan.map(p=>({oldModelId:p.oldModelId,modelCode:p.code,keep:p.keep,name:p.name,type:p.type})),importRows:mixedRows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows,
+  const backup={batch:batch.rows[0],variants:vRes.rows,allOriginalVariants:allVResult.rows,allSupplierLinks:allLinkRes.rows,originalModels:allModelResult.rows,unrelatedVariants:outside,protectedModelIds:[...protectedModelIds],modelPlan:modelPlan.map(p=>({oldModelId:p.oldModelId,modelCode:p.code,keep:p.keep,name:p.name,type:p.type})),excelSourceRows:MAYO_EXCEL_ROWS,rodescrDifferences,importRows:rows,movements:moves,stock:stRes.rows,retail:retailRes.rows,supplier:scRes.rows,priceLines:priceRes.rows,
     preservedOpeningMovements:extraInvoiceMoves.rows,preservedOpeningStock:openingStockResult.rows,preservedOpeningRetail:openingRetailResult.rows};
   const audit=await c.query(`INSERT INTO aif_mayo_import_repair_audit(batch_id,snapshot) VALUES($1,$2::jsonb) RETURNING id`,[BATCH,safeJson(backup)]);
   const auditId=audit.rows[0].id;
@@ -468,9 +634,9 @@ try {
     const upd=await c.query(`UPDATE aif_import_rows SET variant_id=$2::uuid,supplier_color_code=$4::text,
       normalized=COALESCE(normalized,'{}'::jsonb) || jsonb_build_object(
         'colorName',$3::text,'colorCode',$4::text,'supplierColorCode',$4::text,'supplier_color_code',$4::text,'variantId',$2::text,
-        'mayoColorRepairId',$5::text
+        'mayoColorRepairId',$5::text,'productType',$7::text,'sourceSubCategory',$7::text
       ),updated_at=now() WHERE id=$1 AND status='committed' AND variant_id=$6::uuid RETURNING id`,[
-      row.id,p.target,p.label,p.color,String(auditId),p.oldId
+      row.id,p.target,p.label,p.color,String(auditId),p.oldId,sourceType(row)
     ]);
     assert(upd.rowCount===1,`Import variánshivatkozás nem módosult: ${row.row_no}`);
   }
@@ -482,10 +648,11 @@ try {
     const updated=await c.query(`UPDATE aif_import_rows SET supplier_color_code=$2,
        normalized=COALESCE(normalized,'{}'::jsonb) || jsonb_build_object(
          'colorName',$3::text,'colorCode',$2::text,'supplierColorCode',$2::text,
-         'supplier_color_code',$2::text,'variantId',$4::text,'mayoColorRepairId',$5::text
+         'supplier_color_code',$2::text,'variantId',$4::text,'mayoColorRepairId',$5::text,
+         'productType',$6::text,'sourceSubCategory',$6::text
        ),updated_at=now()
        WHERE id=$1 AND status='committed' AND variant_id=$4::uuid RETURNING id`,[
-      row.id,code,actual,originalId,String(auditId)
+      row.id,code,actual,originalId,String(auditId),sourceType(row)
     ]);
     assert(updated.rowCount===1,`Nem lehetett javítani a különálló importsor színkódját: ${row.row_no}`);
   }
@@ -626,7 +793,7 @@ try {
     'A két régi készletsor valamelyike módosult! Visszavonás.');
   assert(fingerprint(openingAfterRetail.rows)===fingerprint(openingRetailResult.rows),
     'A két régi készletérték-sor valamelyike módosult! Visszavonás.');
-  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,createdModels:newModelIds,movedOriginalVariants,protectedLegacyVariants:outside.length,protectedLegacyModels:protectedModelIds.size,preservedOpeningMovements:3,preservedOpeningVariants:2,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
+  await c.query(`UPDATE aif_mayo_import_repair_audit SET result=$2::jsonb WHERE id=$1`,[auditId,safeJson({createdVariants:newIds,sourceRows:mixedRows.length,sourceQty:99,movedPriceRows,createdModels:newModelIds,movedOriginalVariants,protectedLegacyVariants:outside.length,protectedLegacyModels:protectedModelIds.size,preservedOpeningMovements:3,preservedOpeningVariants:2,correctedImportRodescrRows:rodescrDifferences.length,after:final.rows[0],retailBookValueRon:beforeBook/100})]);
   await c.query('COMMIT');
   console.log('\n✅ SIKER: 21 vegyes variáns szétválasztva, 35 új variáns létrehozva.');
   console.log('✅ Modellazonosítás: 29 számlamodell, ebből 20 javított meglévő és 9 új.');
@@ -636,7 +803,8 @@ try {
   console.log('✅ 99 darab készlet, eredeti készletérték és mind a 76 régi vonalkód változatlan.');
   console.log('✅ Árváltozási sorok átkötve:',movedPriceRows);
   console.log('✅ Visszakereshető adatbázis-mentés azonosító:',auditId);
-  console.log('⚠️ Az új 35 variáns vonalkódja üres. A terméknevek és a RODESCR terméktípusok javítva; az alkategóriák ellenőrzése és az új vonalkódok kiosztása még hátravan.');
+  console.log(`✅ Az eredeti Excel 118/118 sorának RODESCR ruhatípusa érvényesítve (importeltérések: ${rodescrDifferences.length}).`);
+  console.log('⚠️ Az új 35 variáns vonalkódja üres. Az alkategóriák ellenőrzése és az új vonalkódok kiosztása még hátravan.');
 } catch(error){
   try{await c.query('ROLLBACK');}catch{}
   console.error('\n❌ JAVÍTÁS MEGSZAKÍTVA ÉS VISSZAVONVA:',error.message);
