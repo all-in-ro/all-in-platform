@@ -7251,6 +7251,20 @@ function editFormsEqual(a: EditForm, b: EditForm) {
   return editFormComparableKeys.every((key) => cleanEditComparableValue(a[key]) === cleanEditComparableValue(b[key]));
 }
 
+// A szezon a MODELL tulajdonsága, nem a konkrét S/M/L/XL variánsé.
+// Csak pontos model_id alapján terjesztünk: azonos nevű vagy hasonló
+// beszállítói kódú, de más modellhez tartozó termékhez nem nyúlunk.
+function warehouseModelId(item: Partial<InventoryItem> | Record<string, any> | null | undefined): string {
+  return firstWarehouseText((item as any)?.model_id, (item as any)?.modelId);
+}
+
+function warehouseWithModelSeason(items: InventoryItem[], modelId: string, season: string | null): InventoryItem[] {
+  if (!modelId) return items;
+  return items.map((item) => warehouseModelId(item) === modelId && item.season !== season
+    ? { ...item, season }
+    : item);
+}
+
 type WarehousePriceChangeRow = {
   key: "buyPrice" | "sellPrice" | "compareAtPrice";
   label: string;
@@ -9712,7 +9726,11 @@ export default function AllInWarehouse() {
   }, [detail?.item?.id, detailBrandColorMapping?.id, detailMappedColorName, edit.brandCode, edit.colorCode]);
 
   const detailHasChanges = useMemo(() => Boolean(detail?.item?.id) && !editFormsEqual(edit, editBaseline), [detail?.item?.id, edit, editBaseline]);
-  const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
+  // Képfeltöltéskor az automatikus mentés az űrlap kiinduló állapotát is
+  // frissíti. Sikeres mentés után tehát nincs kézi mentendő változás.
+  // Sikertelen galériamentésnél viszont maradjon elérhető az újrapróbálás.
+  const detailCanSave = detailHasChanges || galleryRecovery.length > 0;
+  const detailSaveButtonClass = detailCanSave ? primaryBtn : btnSoft;
 
   function closeDetailImmediately(options: { restoreListPosition?: boolean } = {}) {
     // Ha a háttérben még érkezik egy korábbi részletkérés, bezárás után már ne
@@ -9749,10 +9767,9 @@ export default function AllInWarehouse() {
   }
 
   async function saveDetailAndClose() {
-    // A fotók automatikus mentése után a szerkesztő szándékosan visszaállítja
-    // a piszkos (dirty) állapotot. Ettől a Mentés gomb NEM válhat inaktívvá:
-    // a felhasználónak bármikor ellenőrizhető, kézi mentési útvonal kell.
-    if (saving || galleryMutationRef.current || !detail?.item?.id) return;
+    // Változatlan adatlapon a Mentés gomb inaktív. Ha a galéria mentése
+    // meghiúsult, a helyreállítás külön mentendő változásnak számít.
+    if (saving || galleryMutationRef.current || !detail?.item?.id || !detailCanSave) return;
     const variantId = String(detail.item.id);
     const expectedPhotos = warehousePhotoUrls(editGalleryRef.current, edit.imageUrl);
     const originalPhotos = warehousePhotoUrls(editBaseline.images, editBaseline.imageUrl);
@@ -14534,6 +14551,8 @@ export default function AllInWarehouse() {
       after: edit,
       item: detail?.item || null,
     });
+    const seasonWasChanged = cleanEditComparableValue(edit.season) !== cleanEditComparableValue(editBaseline.season);
+    let seasonModelId = warehouseModelId(detail.item);
     // Az árváltozást a backend naplózza a Termék History-ba.
     // Nem írjuk még egyszer localStorage-ba / attributes-be, mert attól ugyanaz az egy módosítás több sorban jelent meg.
     const wasActivationWorkView = stockFilter === "watch" || incomingFocus?.mode === "activation";
@@ -14695,6 +14714,24 @@ export default function AllInWarehouse() {
 
       const d = await apiVariantDetail(detail.item.id);
       detailCacheRef.current.set(detailId, { data: d, loadedAt: Date.now() });
+      seasonModelId = warehouseModelId(d.item) || seasonModelId;
+
+      // A PATCH az aif_product_models.season oszlopot írja: minden méretre
+      // és színre egy közös adat. A többi méret részlet-cache-ét is frissítsük,
+      // különben a 3 perces előtöltésből újranyitva régi szezon jelenne meg.
+      const savedModelSeason: string | null = String(d.item?.season ?? edit.season ?? '').trim() || null;
+      if (seasonWasChanged && seasonModelId) {
+        for (const [cachedId, cached] of detailCacheRef.current) {
+          if (cachedId === detailId || warehouseModelId(cached.data?.item) !== seasonModelId) continue;
+          detailCacheRef.current.set(cachedId, {
+            ...cached,
+            data: {
+              ...cached.data,
+              item: { ...cached.data.item, season: savedModelSeason },
+            },
+          });
+        }
+      }
 
       // Egy termékadat módosítása miatt nem kérjük le újra a teljes raktárt.
       // A PATCH után a friss variánst visszaolvassuk és helyben cseréljük ki.
@@ -14716,17 +14753,23 @@ export default function AllInWarehouse() {
       const updateSavedRows = (current: InventoryItem[]) => current.map((item) => {
         const itemId = String(item.variant_id || "").trim();
         if (itemId === detailId) return freshItem(item);
+        let updated = item;
         if (inheritedSiblingIds.includes(itemId)) {
-          return {
-            ...item,
+          updated = {
+            ...updated,
             ...(galleryChangedForSiblings ? { image_url: edit.images[0] || null, images: edit.images } : {}),
             ...(String(edit.descriptionRo || '').trim() ? { description_ro: edit.descriptionRo } : {}),
           };
         }
         if (activatingSharedModel && deactivatedSiblingIds.includes(itemId)) {
-          return { ...item, model_status: nextModelStatus, variant_status: "inactive" };
+          updated = { ...updated, model_status: nextModelStatus, variant_status: "inactive" };
         }
-        return item;
+        // A szezon minden, ugyanahhoz a modellhez tartozó méretre érvényes.
+        // Csak az azonos model_id-jű sorokat javítjuk, nem hasonló nevű modelleket.
+        if (seasonWasChanged && seasonModelId && warehouseModelId(updated) === seasonModelId) {
+          updated = { ...updated, season: savedModelSeason };
+        }
+        return updated;
       });
       setItems(updateSavedRows);
       setCatalogSearchItems(updateSavedRows);
@@ -14735,6 +14778,14 @@ export default function AllInWarehouse() {
         warehouseInactiveProductsCache = {
           ...warehouseInactiveProductsCache,
           items: updateSavedRows(warehouseInactiveProductsCache.items),
+        };
+      }
+      // A raktár gyors visszatérési cache-e se élessze fel egy régi S/M/L/XL
+      // szezonértékét a következő oldalváltásnál.
+      if (seasonWasChanged && seasonModelId && warehouseBootstrapCache) {
+        warehouseBootstrapCache = {
+          ...warehouseBootstrapCache,
+          items: warehouseWithModelSeason(warehouseBootstrapCache.items, seasonModelId, savedModelSeason),
         };
       }
       setIncomingFocusItems(updateSavedRows);
@@ -14803,6 +14854,7 @@ export default function AllInWarehouse() {
         setMessage((priceHistoryEntry
           ? (shouldCloseAfter ? "A változtatások mentve, az árváltozás bekerült a Termék History-ba." : "A termékadatok mentve, az árváltozás bekerült a Termék History-ba.")
           : (shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.")) + siblingMessage
+          + (seasonWasChanged && seasonModelId ? " A szezon a termék összes méretén és színén frissült." : "")
           + (galleryChangedForSiblings ? " A Shopify-hoz kapcsolt termékek képei külön várólistán, a háttérben frissülnek." : "")
         );
       }
@@ -19362,12 +19414,12 @@ export default function AllInWarehouse() {
                 ) : null}
                 <button className={btnSoft} onClick={requestCloseDetail} disabled={saving} type="button" title="Bezárás / módosítások kezelése"><X size={16} /> Mégse</button>
                 <button
-                  className={primaryBtn}
+                  className={`${detailSaveButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                   onClick={() => void saveDetailAndClose()}
-                  disabled={saving || Boolean(effectiveEditBarcodeConflict)}
+                  disabled={saving || galleryMutationRef.current || !detailCanSave || Boolean(effectiveEditBarcodeConflict)}
                   title={effectiveEditBarcodeConflict
                     ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t."
-                    : "Módosítások mentése, képek ellenőrzése és adatlap bezárása"}
+                    : !detailCanSave ? "Nincs mentendő módosítás." : "Módosítások mentése, képek ellenőrzése és adatlap bezárása"}
                   type="button"
                 >
                   <Save size={16} /> {saving ? "Mentés és ellenőrzés..." : galleryRecovery.length ? "Képek újramentése" : "Mentés"}
