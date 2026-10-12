@@ -13320,6 +13320,126 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  // ISOLATED & VERIFIED MULTI-IMAGE GALLERY API.
+  // Raktári termék/ár/készlet/barcode soha nem módosul ezen az útvonalon.
+  // A korábbi általános PATCH marad változatlan a régebbi felületek számára.
+  router.get("/variants/:id/gallery", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    try {
+      const result = await pool.query(
+        `SELECT id, image_url, images FROM aif_product_variants WHERE id::text=$1 LIMIT 1`, [id]
+      );
+      if (!result.rowCount) return res.status(404).json({ error: "A termékváltozat nem található." });
+      const row = result.rows[0];
+      const images = aifImageGallery(row.images, row.image_url);
+      res.setHeader("Cache-Control", "no-store");
+      return res.json({ ok: true, variantId: String(row.id), images, imageUrl: images[0] || null, imageCount: images.length });
+    } catch (error) {
+      console.error("AIF isolated gallery read failed", { variantId: id, code: error?.code, error: error?.message });
+      return res.status(500).json({ error: "A képgaléria nem olvasható vissza.", code: error?.code || null });
+    }
+  });
+
+  router.put("/variants/:id/gallery", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    let images;
+    try {
+      images = aifValidatedGallery(req.body?.images);
+    } catch (error) {
+      return res.status(400).json({ error: error?.message || "Hibás képgaléria.", code: "invalid_image_gallery" });
+    }
+    let client;
+    let previous = [];
+    let resultGallery = [];
+    let changed = false;
+    let persistedId = id;
+    let queueCommitted = false;
+    let queueNotNeeded = false;
+    try {
+      client = await pool.connect();
+      await client.query("BEGIN");
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const current = await client.query(
+        `SELECT id, image_url, images FROM aif_product_variants WHERE id::text=$1 FOR UPDATE`, [id]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A termékváltozat nem található." });
+      }
+      const row = current.rows[0];
+      persistedId = String(row.id);
+      previous = aifImageGallery(row.images, row.image_url);
+      changed = JSON.stringify(previous) !== JSON.stringify(images)
+        || aifImageUrl(row.image_url) !== (images[0] || "");
+      if (changed) {
+        const saved = await client.query(
+          `UPDATE aif_product_variants
+           SET images=$2::jsonb, image_url=$3, updated_at=now()
+           WHERE id=$1::uuid RETURNING images,image_url`,
+          [persistedId, JSON.stringify(images), images[0] || null]
+        );
+        resultGallery = aifImageGallery(saved.rows[0]?.images, saved.rows[0]?.image_url);
+      } else resultGallery = previous;
+      if (JSON.stringify(resultGallery) !== JSON.stringify(images)) {
+        throw Object.assign(new Error("A képgaléria adatbázisba írt listája nem egyezik a kérttel."), { code: "image_gallery_verification_failed" });
+      }
+      // Ha a Shopify-képszinkron tábla már létezik, ugyanebben a tranzakcióban
+      // tesszük várólistára. SAVEPOINT: várólista-hiba SOHA nem vonhatja vissza a képeket.
+      if (changed) {
+        const schema = await client.query(`SELECT to_regclass('public.aif_shopify_image_outbox') AS gallery_queue`);
+        if (schema.rows[0]?.gallery_queue) {
+          await client.query("SAVEPOINT aif_gallery_enqueue_savepoint");
+          try {
+            const enqueued = await enqueueAifShopifyImagesForVariant(client, persistedId, previous);
+            queueCommitted = Number(enqueued.queued || 0) > 0;
+            queueNotNeeded = Number(enqueued.queued || 0) === 0;
+            await client.query("RELEASE SAVEPOINT aif_gallery_enqueue_savepoint");
+          } catch (error) {
+            await client.query("ROLLBACK TO SAVEPOINT aif_gallery_enqueue_savepoint");
+            await client.query("RELEASE SAVEPOINT aif_gallery_enqueue_savepoint");
+            console.error("AIF gallery image queue deferred", { variantId: persistedId, error: error?.message, code: error?.code });
+          }
+        }
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      if (client) await client.query("ROLLBACK").catch(() => {});
+      console.error("AIF isolated gallery save failed", { variantId: id, code: error?.code, error: error?.message });
+      return res.status(500).json({ error: error?.message || "A képgaléria nem menthető.", code: error?.code || null });
+    } finally {
+      client?.release();
+    }
+
+    // FONTOS: Shopify DDL / API-queue hiba nem vonhatja vissza a már elmentett képeket.
+    // Gyors megkísérlés; hosszú adatbázis-várakozás esetén a háttérben fejeződik be.
+    let shopifySync = changed ? (queueCommitted ? "queued" : queueNotNeeded ? "not_needed" : "processing") : "not_needed";
+    let syncWarning = null;
+    if (changed && !queueCommitted && !queueNotNeeded) {
+      const queued = Promise.resolve().then(async () => {
+        await ensureAifShopifyImageSchema(pool);
+        return enqueueAifShopifyImagesForVariant(pool, persistedId, previous);
+      }).then((value) => ({ status: value?.queued > 0 ? "queued" : "not_needed" })).catch((error) => {
+        console.error("AIF gallery saved but image sync enqueue failed", { variantId: persistedId, error: error?.message, code: error?.code });
+        return { status: "error", warning: "A Shopify-képszinkron várólistáját nem sikerült frissíteni." };
+      });
+      let timer;
+      const result = await Promise.race([
+        queued,
+        new Promise((resolve) => { timer = setTimeout(() => resolve({ status: "processing" }), 1800); timer.unref?.(); }),
+      ]);
+      if (timer) clearTimeout(timer);
+      shopifySync = result.status;
+      syncWarning = result.warning || null;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({
+      ok: true, variantId: persistedId, images: resultGallery,
+      imageUrl: resultGallery[0] || null, imageCount: resultGallery.length,
+      changed, shopifySync, syncWarning,
+    });
+  });
+
   router.put("/variants/:id/barcode", requireAdminOrSecret, handleVariantBarcodeAssignment);
   router.patch("/variants/:id/barcode", requireAdminOrSecret, handleVariantBarcodeAssignment);
 
