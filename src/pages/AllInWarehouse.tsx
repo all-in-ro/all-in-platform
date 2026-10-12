@@ -6458,6 +6458,23 @@ async function apiVariantDetail(id: string) {
   return fetchJSON<DetailResponse>(`/api/aif/variants/${encodeURIComponent(id)}`);
 }
 
+type WarehouseQuickBarcodeResult = {
+  ok: boolean;
+  unchanged?: boolean;
+  generated?: boolean;
+  source?: "generated" | "existing" | "supplier_existing";
+  variantId: string;
+  barcode: string;
+};
+
+async function apiGenerateWarehouseLabelBarcode(variantId: string) {
+  return fetchJSON<WarehouseQuickBarcodeResult>(`/api/aif/variants/${encodeURIComponent(variantId)}/barcode/generate-missing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+}
+
 async function apiLabelStockCheck(items: WarehouseLabelStockCheckItem[]) {
   return fetchJSON<{ ok?: true; items?: WarehouseLabelStockCheckRow[] }>("/api/aif/label-stock-check", {
     method: "POST",
@@ -7267,6 +7284,9 @@ export default function AllInWarehouse() {
   const labelPreviewFrameRef = useRef<HTMLDivElement | null>(null);
   const [labelPreviewScale, setLabelPreviewScale] = useState(0.58);
   const [labelDetailMap, setLabelDetailMap] = useState<Record<string, DetailResponse>>({});
+  const [labelBarcodeSavingById, setLabelBarcodeSavingById] = useState<Record<string, boolean>>({});
+  const [labelBarcodeFeedbackById, setLabelBarcodeFeedbackById] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const labelBarcodeInFlightRef = useRef<Set<string>>(new Set());
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [labelPrintFlow, setLabelPrintFlow] = useState<WarehouseLabelPrintFlow | null>(null);
   const [labelStockLimitById, setLabelStockLimitById] = useState<Record<string, number>>({});
@@ -11996,6 +12016,68 @@ export default function AllInWarehouse() {
       .slice(0, 64);
   }
 
+  async function generateMissingLabelBarcode(variantId: string) {
+    const id = String(variantId || "").trim();
+    if (!id || labelBarcodeInFlightRef.current.has(id)) return;
+    labelBarcodeInFlightRef.current.add(id);
+    setLabelBarcodeSavingById((current) => ({ ...current, [id]: true }));
+    setLabelBarcodeFeedbackById((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    try {
+      // A végleges kódot a szerver generálja, zárolja és menti. Nem függünk a
+      // kiválasztott számlanévtől, a böngésző cache-étől vagy a nyomtatási sablontól.
+      const saved = await apiGenerateWarehouseLabelBarcode(id);
+      const savedBarcode = cleanScannedBarcode(saved.barcode);
+      const checked = labelCode128Svg(savedBarcode, 52);
+      if (!saved.ok || !savedBarcode || !checked.ok) {
+        throw new Error(checked.error || "Nem érkezett nyomtatható, mentett vonalkód a szervertől.");
+      }
+      const withBarcode = (item: InventoryItem) => selectedVariantIdFromItem(item) === id
+        ? { ...item, barcode: savedBarcode }
+        : item;
+
+      // A nyitott címkemodal helyben frissül, sem navigáció, sem újraszűrés nincs.
+      setLabelDetailMap((current) => ({
+        ...current,
+        [id]: {
+          ...(current[id] || { stock: [], supplierCodes: [], movements: [] }),
+          item: { ...(current[id]?.item || {}), id, barcode: savedBarcode },
+        } as DetailResponse,
+      }));
+      setPersistedSelectedItems((current) => current.map(withBarcode));
+      setItems((current) => current.map(withBarcode));
+      setCatalogSearchItems((current) => current.map(withBarcode));
+      setInactiveProductsItems((current) => current.map(withBarcode));
+      setLabelBarcodeFeedbackById((current) => ({
+        ...current,
+        [id]: {
+          ok: true,
+          message: saved.unchanged
+            ? "A meglévő vonalkódot visszatöltöttem. Nem módosítottam."
+            : saved.source === "supplier_existing"
+              ? "A meglévő beszállítói vonalkódot mentettem a termékhez."
+              : "Vonalkód generálva és mentve. Mehetsz a következő termékre.",
+        },
+      }));
+      try {
+        const payload = { at: new Date().toISOString(), variantId: id, barcode: savedBarcode };
+        window.localStorage.setItem(warehouseBarcodeChangedStorageKey, JSON.stringify(payload));
+        window.dispatchEvent(new CustomEvent("aif:variant-barcode-changed", { detail: payload }));
+      } catch {
+        // A szerveres mentést a böngésző helyi tárhelyének hibája nem érinti.
+      }
+    } catch (error) {
+      const details = error instanceof Error && error.message ? error.message : "A vonalkód mentése nem sikerült.";
+      setLabelBarcodeFeedbackById((current) => ({ ...current, [id]: { ok: false, message: details } }));
+    } finally {
+      labelBarcodeInFlightRef.current.delete(id);
+      setLabelBarcodeSavingById((current) => ({ ...current, [id]: false }));
+    }
+  }
+
   async function openLabelComposer() {
     setLabelPrintFlow(null);
     setLabelClearConfirmOpen(false);
@@ -16082,16 +16164,35 @@ export default function AllInWarehouse() {
                           {!row.render.ok && (
                             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">
                               <span className="text-xs text-rose-100">{row.render.error}</span>
-                              <button
-                                className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b] px-2 text-[11px] text-white hover:bg-[#319c99]"
-                                type="button"
-                                onClick={() => {
-                                  setLabelComposerOpen(false);
-                                  goBarcodeManager(row.id, "", row.title);
-                                }}
-                              >
-                                <Barcode size={13} /> Generálás és mentés
-                              </button>
+                              {row.barcode ? (
+                                <button
+                                  className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-white/25 bg-[#354153] px-2 text-[11px] text-white hover:bg-[#3e4d63]"
+                                  type="button"
+                                  onClick={() => {
+                                    setLabelComposerOpen(false);
+                                    goBarcodeManager(row.id, row.barcode, row.title);
+                                  }}
+                                >
+                                  <Edit3 size={13} /> Meglévő kód javítása
+                                </button>
+                              ) : (
+                                <button
+                                  className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b] px-2 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-wait disabled:opacity-55"
+                                  type="button"
+                                  disabled={Boolean(labelBarcodeSavingById[row.id])}
+                                  onClick={() => void generateMissingLabelBarcode(row.id)}
+                                >
+                                  {labelBarcodeSavingById[row.id] ? <RefreshCw size={13} className="animate-spin" /> : <Barcode size={13} />}
+                                  {labelBarcodeSavingById[row.id] ? "Generálás és mentés..." : "Generálás és mentés"}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {labelBarcodeFeedbackById[row.id] && (
+                            <div className={`mt-2 rounded-lg border px-2.5 py-1.5 text-[11px] ${labelBarcodeFeedbackById[row.id].ok
+                              ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/20 text-[#d7fffd]"
+                              : "border-rose-300/35 bg-rose-500/12 text-rose-100"}`} role="status">
+                              {labelBarcodeFeedbackById[row.id].ok ? "✓ " : "⚠ "}{labelBarcodeFeedbackById[row.id].message}
                             </div>
                           )}
                         </div>
