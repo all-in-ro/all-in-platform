@@ -7,6 +7,8 @@ import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
 import { createHash } from "node:crypto";
+import { aifImageGallery, aifImageUrl, aifValidatedGallery } from "../lib/aifImageGallery.js";
+import { ensureAifShopifyImageSchema, enqueueAifShopifyImagesForVariant } from "../lib/aifShopifyImages.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12349,6 +12351,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const requestedBarcodeForConflict = assignedBarcodeValue(
       src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode
     );
+    // A képek kizárólag az új termék felvételekor megadott, érvényes HTTPS URL-ek.
+    // Üres galériánál a régi fő kép természetesen változatlanul használható.
+    let manualGallery;
+    try {
+      manualGallery = src.images !== undefined
+        ? aifValidatedGallery(src.images)
+        : aifImageGallery([], src.imageUrl || src.image_url || src.photoUrl || rawImageUrl);
+    } catch (error) {
+      return res.status(400).json({ error: error.message, code: 'invalid_image_gallery' });
+    }
+
     const stockRowsInput = Array.isArray(body.stockRows)
       ? body.stockRows
       : Array.isArray(body.stock_rows)
@@ -12503,6 +12516,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const modelId = await upsertModel(client, { supplierCode: supplier?.code || row.normalized.brandCode || "manual", normalized: row.normalized });
       const variantId = await upsertVariant(client, { modelId, normalized: row.normalized });
+      if (manualGallery.length) {
+        await client.query(
+          `UPDATE aif_product_variants
+           SET images=$2::jsonb, image_url=$3, updated_at=now()
+           WHERE id=$1`,
+          [variantId, JSON.stringify(manualGallery), manualGallery[0]]
+        );
+      }
+
 
       const modelStatus = text(row.normalized.modelStatus || "active");
       if (["draft", "active", "archived"].includes(modelStatus)) {
@@ -13385,6 +13407,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const id = text(req.params.id);
     const body = req.body || {};
     if (!id) return res.status(400).json({ error: "variant id required" });
+    const galleryProvided = body.images !== undefined || body.imageUrls !== undefined || body.image_urls !== undefined;
+    const primaryProvided = body.imageUrl !== undefined || body.image_url !== undefined;
+    let requestedGallery = null;
+    if (galleryProvided) {
+      try {
+        requestedGallery = aifValidatedGallery(body.images ?? body.imageUrls ?? body.image_urls);
+        if (primaryProvided && aifImageUrl(body.imageUrl ?? body.image_url) !== (requestedGallery[0] || '')) {
+          return res.status(400).json({ error: 'A fő kép a képgaléria első képével egyezzen.', code: 'image_primary_mismatch' });
+        }
+      } catch (error) {
+        return res.status(400).json({ error: error.message, code: 'invalid_image_gallery' });
+      }
+    }
+    if (galleryProvided || primaryProvided) {
+      // A DDL nem futhat terméksor-zárat tartó tranzakción belül.
+      try { await ensureAifShopifyImageSchema(pool); }
+      catch (error) { return res.status(503).json({ error: 'Képszinkron várólista inicializálása sikertelen.', code: error?.code || null }); }
+    }
 
     const client = await pool.connect();
     try {
@@ -13392,7 +13432,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureSnCodSchema(client);
       const current = await client.query(
         `SELECT v.id, v.model_id, v.barcode, v.buy_price, v.sell_price, v.compare_at_price,
-                v.status AS variant_status, v.size, v.image_url,
+                v.status AS variant_status, v.size, v.image_url, v.images,
                 m.status AS model_status, m.title_ro
          FROM aif_product_variants v
          JOIN aif_product_models m ON m.id=v.model_id
@@ -13520,7 +13560,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (sellPriceProvided) addVariant("sell_price", nextSellPrice);
       if (compareAtPriceProvided) addVariant("compare_at_price", nextCompareAtPrice);
       if (body.weightGrams !== undefined || body.weight_grams !== undefined) addVariant("weight_grams", toInt(body.weightGrams ?? body.weight_grams));
-      if (body.imageUrl !== undefined || body.image_url !== undefined) addVariant("image_url", emptyToNull(body.imageUrl ?? body.image_url));
+      // A régi image_url mező továbbra is mindig a kijelölt fő kép.
+      // A régebbi, csak imageUrl-t küldő kliensnél a többi kép megmarad.
+      let galleryChanged = false;
+      if (galleryProvided || primaryProvided) {
+        const previousGallery = aifImageGallery(current.rows[0].images, current.rows[0].image_url);
+        let nextGallery = requestedGallery;
+        if (!galleryProvided) {
+          const primary = aifImageUrl(body.imageUrl ?? body.image_url);
+          nextGallery = primary
+            ? [primary, ...previousGallery.filter((url) => url !== primary && url !== aifImageUrl(current.rows[0].image_url))]
+            : previousGallery.slice(1);
+        }
+        galleryChanged = JSON.stringify(previousGallery) !== JSON.stringify(nextGallery);
+        if (galleryChanged || aifImageUrl(current.rows[0].image_url) !== (nextGallery[0] || '')) {
+          addVariant('image_url', nextGallery[0] || null);
+          addVariant('images', JSON.stringify(nextGallery));
+        }
+      }
       if (body.status !== undefined) {
         const status = text(body.status);
         if (!["active", "inactive", "archived"].includes(status)) {
@@ -13807,6 +13864,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
+      if (galleryChanged) {
+        await enqueueAifShopifyImagesForVariant(
+          client, variantId,
+          aifImageGallery(current.rows[0].images, current.rows[0].image_url)
+        );
+      }
       await client.query("COMMIT");
       res.json({ ok: true });
     } catch (e) {
