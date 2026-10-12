@@ -1790,7 +1790,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(`CREATE TABLE IF NOT EXISTS aif_price_change_document_lines (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         document_id uuid NOT NULL REFERENCES aif_price_change_documents(id) ON DELETE CASCADE,
-        source_import_row_id uuid NULL,
+        source_import_row_id bigint NULL,
         variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
         product_title text NULL,
         product_code text NULL,
