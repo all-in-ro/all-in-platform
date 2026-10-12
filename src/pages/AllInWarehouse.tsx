@@ -22,6 +22,7 @@ import {
   Filter,
   Home,
   ImagePlus,
+  Star,
   Minus,
   MoreVertical,
   Plus,
@@ -260,6 +261,7 @@ type InventoryItem = {
   hs_code?: string | null;
   attributes?: Record<string, unknown> | null;
   image_url?: string | null;
+  images?: unknown;
   brand_name?: string | null;
   brand_code?: string | null;
   supplier_names?: string | null;
@@ -2126,6 +2128,7 @@ type EditForm = {
   sellPrice: string;
   compareAtPrice: string;
   imageUrl: string;
+  images: string[];
   variantStatus: string;
 };
 type NewProductForm = EditForm & {
@@ -4740,7 +4743,9 @@ function warehouseSameColorSizeSibling(a: Partial<InventoryItem> | Record<string
 
   const aColorName = firstWarehouseText((a as any).color_name, (a as any).colorName);
   const bColorName = firstWarehouseText((b as any).color_name, (b as any).colorName);
-  if ((!aColorCode || !bColorCode) && aColorName && bColorName && colorKey(aColorName) !== colorKey(bColorName)) return false;
+  // A beszállító színkódja több különböző színnél is azonos lehet.
+  // Ha a tényleges színnevek eltérnek, semmiképp ne másoljuk át a galériát.
+  if (aColorName && bColorName && colorKey(aColorName) !== colorKey(bColorName)) return false;
 
   // Ha az egyik oldalon sincs színadat, ugyanazon modellen belül ezt is egy színnek tekintjük.
   // Ha van használható színadat, annak már fent egyeznie kellett.
@@ -6894,6 +6899,115 @@ async function uploadImage(file: File, variantId: string) {
   return fetchJSON<{ key: string; url: string }>("/api/uploads/r2", { method: "POST", body: fd });
 }
 
+const WAREHOUSE_GALLERY_MAX = 60;
+function warehousePhotoUrls(value: unknown, fallback?: unknown): string[] {
+  let entries: unknown = value;
+  if (typeof entries === "string") {
+    try { entries = JSON.parse(entries); } catch { entries = [entries]; }
+  }
+  const urls: string[] = [];
+  const add = (entry: unknown) => {
+    const raw = entry && typeof entry === "object"
+      ? (entry as Record<string, any>).url || (entry as Record<string, any>).src || (entry as Record<string, any>).imageUrl
+      : entry;
+    const url = String(raw ?? "").trim();
+    if (!/^https:\/\//i.test(url) || urls.includes(url)) return;
+    urls.push(url);
+  };
+  if (Array.isArray(entries)) entries.forEach(add);
+  else if (entries) add(entries);
+  const previousMain = String(fallback ?? "").trim();
+  if (/^https:\/\//i.test(previousMain) && !urls.includes(previousMain)) urls.unshift(previousMain);
+  return urls.slice(0, WAREHOUSE_GALLERY_MAX);
+}
+
+function WarehouseGalleryEditor({
+  images,
+  onChange,
+  onUpload,
+  uploading,
+  title,
+}: {
+  images: string[];
+  onChange: (urls: string[]) => void;
+  onUpload: (files: File[]) => void | Promise<void>;
+  uploading: boolean;
+  title: string;
+}) {
+  const [urlDraft, setUrlDraft] = useState("");
+  const [localError, setLocalError] = useState("");
+  const photos = warehousePhotoUrls(images);
+  const main = photos[0] || "";
+  const chooseMain = (url: string) => onChange([url, ...photos.filter((x) => x !== url)]);
+  const move = (index: number, step: number) => {
+    const target = index + step;
+    if (target < 0 || target >= photos.length) return;
+    const next = [...photos];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  const addUrl = () => {
+    const url = urlDraft.trim();
+    if (!/^https:\/\//i.test(url) || url.length > 2048) {
+      setLocalError("Nyilvános HTTPS kép URL-t adj meg.");
+      return;
+    }
+    if (photos.includes(url)) {
+      setLocalError("Ez a kép már szerepel a galériában.");
+      return;
+    }
+    if (photos.length >= WAREHOUSE_GALLERY_MAX) {
+      setLocalError(`Legfeljebb ${WAREHOUSE_GALLERY_MAX} kép menthető.`);
+      return;
+    }
+    onChange([...photos, url]);
+    setUrlDraft("");
+    setLocalError("");
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs text-white/90"><ImagePlus size={15} className="text-[#91e2df]"/> Termékképek</span>
+        <span className="rounded-full border border-[#7bd7d4]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#c9fffb] tabular-nums">{photos.length} kép</span>
+      </div>
+      <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-white p-2">
+        {main ? <img src={main} alt={title || "Termék főképe"} className="aspect-square w-full object-contain"/> :
+          <div className="flex aspect-square items-center justify-center gap-2 text-slate-400"><ImagePlus size={25}/><span className="text-xs">Még nincs termékkép</span></div>}
+        {main && <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-lg bg-[#167a75] px-2 py-1 text-[10px] text-white shadow"><Star size={11} fill="currentColor"/> Fő kép</span>}
+      </div>
+      {photos.length > 0 && <div className="grid grid-cols-2 gap-2">
+        {photos.map((url,index)=><div key={url} className={`overflow-hidden rounded-xl border p-1 ${index === 0 ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/20" : "border-white/14 bg-[#354153]"}`}>
+          <button type="button" className="relative w-full overflow-hidden rounded-lg bg-white" onClick={()=>chooseMain(url)} title="Fő képnek kijelölés">
+            <img src={url} alt={`${title || "Kép"} ${index+1}`} className="aspect-square w-full object-contain p-1" loading="lazy"/>
+            {index===0 && <span className="absolute left-1 top-1 rounded-md bg-[#167a75] px-1.5 py-0.5 text-[9px] text-white">Fő</span>}
+          </button>
+          <div className="flex items-center justify-between gap-1 px-0.5 pt-1">
+            <span className="text-[10px] text-white/62">{index+1}. kép</span>
+            <div className="flex gap-0.5">
+              <button type="button" disabled={index===0 || uploading} className="rounded-md p-1 text-white/65 hover:bg-white/10 disabled:opacity-30" onClick={()=>move(index,-1)} title="Balra"><ArrowLeft size={12}/></button>
+              <button type="button" disabled={index===photos.length-1 || uploading} className="rounded-md p-1 text-white/65 hover:bg-white/10 disabled:opacity-30" onClick={()=>move(index,1)} title="Jobbra"><ArrowRight size={12}/></button>
+              <button type="button" disabled={uploading} className="rounded-md p-1 text-rose-200 hover:bg-rose-500/20 disabled:opacity-30" onClick={()=>onChange(photos.filter((x)=>x!==url))} title="Kép eltávolítása"><Trash2 size={12}/></button>
+            </div>
+          </div>
+          {index>0 && <button type="button" disabled={uploading} className="mt-1 w-full rounded-lg border border-[#7bd7d4]/25 bg-[#2a8d8b]/15 py-1.5 text-[10px] text-[#d7fffd] hover:bg-[#2a8d8b]/35 disabled:opacity-40" onClick={()=>chooseMain(url)}><Star size={11} className="mr-1 inline"/> Fő képnek</button>}
+        </div>)}
+      </div>}
+      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#7bd7d4]/55 bg-[#2a8d8b]/15 p-3 text-xs text-[#d7fffd] hover:bg-[#2a8d8b]/30">
+        <ImagePlus size={17}/>{uploading ? "Képek feltöltése folyamatban…" : "Képek hozzáadása (többet egyszerre)"}
+        <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={uploading || photos.length>=WAREHOUSE_GALLERY_MAX}
+          className="sr-only" onChange={(event)=>{ const files=Array.from(event.target.files||[]);event.target.value="";if(files.length)void onUpload(files); }}/>
+      </label>
+      <div className="flex gap-1.5">
+        <input className={`${input} min-w-0 flex-1 text-xs`} value={urlDraft} onChange={e=>{setUrlDraft(e.target.value);setLocalError("");}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addUrl();}}} placeholder="https://... további kép URL" aria-label="Kép URL hozzáadása"/>
+        <button className={btnSoft} type="button" disabled={uploading} onClick={addUrl}><Plus size={14}/> Hozzáadás</button>
+      </div>
+      {localError && <p className="text-[11px] text-rose-200">{localError}</p>}
+      <p className="text-[10px] leading-relaxed text-white/50">Az első kép a fő kép. Kattintással választhatod a fő képet, a nyilakkal módosíthatod a sorrendet. A Shopify-ra mentés után a teljes galéria szinkronizálódik.</p>
+    </div>
+  );
+}
+
+
 function emptyForm(): EditForm {
   return {
     titleRo: "",
@@ -6920,6 +7034,7 @@ function emptyForm(): EditForm {
     sellPrice: "",
     compareAtPrice: "",
     imageUrl: "",
+    images: [],
     variantStatus: "active",
   };
 }
@@ -6967,7 +7082,8 @@ function formFromDetail(d: DetailResponse): EditForm {
     buyPrice: x.buy_price == null ? "" : String(x.buy_price),
     sellPrice: x.sell_price == null ? "" : String(x.sell_price),
     compareAtPrice: x.compare_at_price == null ? "" : String(x.compare_at_price),
-    imageUrl: x.image_url || "",
+    imageUrl: warehousePhotoUrls(x.images, x.image_url)[0] || "",
+    images: warehousePhotoUrls(x.images, x.image_url),
     variantStatus,
   };
 }
@@ -6997,10 +7113,12 @@ const editFormComparableKeys: Array<keyof EditForm> = [
   "sellPrice",
   "compareAtPrice",
   "imageUrl",
+  "images",
   "variantStatus",
 ];
 
 function cleanEditComparableValue(value: unknown) {
+  if (Array.isArray(value)) return JSON.stringify(value);
   return String(value ?? "").trim();
 }
 
@@ -14150,7 +14268,8 @@ export default function AllInWarehouse() {
         buyPrice: newProduct.buyPrice,
         sellPrice: newProduct.sellPrice,
         compareAtPrice: newProduct.compareAtPrice,
-        imageUrl: newProduct.imageUrl,
+        imageUrl: newProduct.images[0] || null,
+        images: newProduct.images,
         status: newProduct.variantStatus || "active",
         supplierId: newProduct.supplierId || null,
         supplierProductCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
@@ -14319,7 +14438,8 @@ export default function AllInWarehouse() {
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
-        imageUrl: edit.imageUrl,
+        imageUrl: edit.images[0] || null,
+        images: edit.images,
         status: edit.variantStatus,
       };
       await apiVariantUpdate(detail.item.id, variantUpdatePayload);
@@ -14341,7 +14461,11 @@ export default function AllInWarehouse() {
       };
       const sameColorSizeSiblings = inventoryDisplayItems.filter((item) => warehouseSameColorSizeSibling(siblingSource, item));
       const siblingPatch: Record<string, unknown> = {};
-      if (String(edit.imageUrl || '').trim()) siblingPatch.imageUrl = edit.imageUrl;
+      const galleryChangedForSiblings = JSON.stringify(edit.images) !== JSON.stringify(editBaseline.images);
+      if (galleryChangedForSiblings) {
+        siblingPatch.images = edit.images;
+        siblingPatch.imageUrl = edit.images[0] || null;
+      }
       if (String(edit.descriptionRo || '').trim()) siblingPatch.descriptionRo = edit.descriptionRo;
 
       let inheritedSiblingCount = 0;
@@ -14388,7 +14512,7 @@ export default function AllInWarehouse() {
         if (inheritedSiblingIds.includes(itemId)) {
           return {
             ...item,
-            ...(String(edit.imageUrl || '').trim() ? { image_url: edit.imageUrl } : {}),
+            ...(galleryChangedForSiblings ? { image_url: edit.images[0] || null, images: edit.images } : {}),
             ...(String(edit.descriptionRo || '').trim() ? { description_ro: edit.descriptionRo } : {}),
           };
         }
@@ -14472,6 +14596,7 @@ export default function AllInWarehouse() {
         setMessage((priceHistoryEntry
           ? (shouldCloseAfter ? "A változtatások mentve, az árváltozás bekerült a Termék History-ba." : "A termékadatok mentve, az árváltozás bekerült a Termék History-ba.")
           : (shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.")) + siblingMessage
+          + (galleryChangedForSiblings ? " A Shopify-hoz kapcsolt termékek képei külön várólistán, a háttérben frissülnek." : "")
         );
       }
       return true;
@@ -14596,17 +14721,55 @@ export default function AllInWarehouse() {
     }
   }
 
-  async function onImageSelected(file: File | null) {
-    if (!file || !detail?.item?.id) return;
-    setSaving(true);
+  function setEditedPhotoGallery(urls: string[]) {
+    setEdit((current) => ({ ...current, images: [...urls], imageUrl: urls[0] || "" }));
+  }
+  function setNewProductPhotoGallery(urls: string[]) {
+    setNewProduct((current) => ({ ...current, images: [...urls], imageUrl: urls[0] || "" }));
+  }
+  async function uploadGalleryFiles(files: File[], target: "edit" | "new") {
+    const targetId = target === "edit" ? String(detail?.item?.id || "").trim() : `draft-${Date.now()}`;
+    if (!targetId || !files.length) return;
+    const sourceGallery = target === "edit" ? edit.images : newProduct.images;
+    if (sourceGallery.length + files.length > WAREHOUSE_GALLERY_MAX) {
+      setMessage(`Legfeljebb ${WAREHOUSE_GALLERY_MAX} kép adható egy termékhez.`);
+      return;
+    }
+    const invalid = files.find((file) => !file.type.startsWith("image/") || file.size > 15 * 1024 * 1024);
+    if (invalid) {
+      setMessage(`Nem megfelelő kép: ${invalid.name}. Csak képfájl és legfeljebb 15 MB engedélyezett.`);
+      return;
+    }
+    if (target === "edit") setSaving(true);
+    else setNewProductSaving(true);
     setMessage("");
+    const uploaded: string[] = [];
+    const failures: string[] = [];
     try {
-      const up = await uploadImage(file, detail.item.id);
-      setEdit((x) => ({ ...x, imageUrl: up.url }));
-    } catch (e: any) {
-      setMessage(e.message || "Nem sikerült feltölteni a képet.");
+      for (const file of files) {
+        try {
+          const response = await uploadImage(file,targetId);
+          if (!/^https:\/\//i.test(response.url || "")) throw new Error("Nem nyilvános HTTPS kép URL érkezett.");
+          uploaded.push(response.url);
+        } catch (error: any) {
+          failures.push(`${file.name}: ${error?.message || "feltöltési hiba"}`);
+        }
+      }
+      if (uploaded.length) {
+        const apply = (current: EditForm): EditForm => {
+          const original = warehousePhotoUrls(current.images,current.imageUrl);
+          const next = warehousePhotoUrls([...original,...uploaded]);
+          return { ...current, images:next, imageUrl: next[0] || "" };
+        };
+        if (target === "edit") setEdit(apply);
+        else setNewProduct((current) => apply(current) as NewProductForm);
+      }
+      setMessage(failures.length
+        ? `${uploaded.length} kép hozzáadva. Hibák: ${failures.slice(0,3).join(" | ")}`
+        : `${uploaded.length} kép feltöltve. A galéria véglegesítéséhez nyomd meg a Mentés gombot.`);
     } finally {
-      setSaving(false);
+      if (target === "edit") setSaving(false);
+      else setNewProductSaving(false);
     }
   }
 
@@ -17590,10 +17753,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
-                  {newProduct.imageUrl ? <img src={newProduct.imageUrl} alt="" className="aspect-square w-full rounded-xl bg-white object-contain p-2" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-white text-slate-400"><ImagePlus size={32} /></div>}
-                  <label className={label}>Kép URL
-                    <input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
-                  </label>
+                  <WarehouseGalleryEditor images={newProduct.images} title={newProduct.titleRo} onChange={setNewProductPhotoGallery} uploading={newProductSaving} onUpload={(files)=>uploadGalleryFiles(files,"new")} />
                   <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
                     <p>Beszállítói kód: {newProduct.supplierProductCode || "nincs megadva"}</p>
                     <p className="mt-1">Vonalkód / SKU alap: {newProduct.barcode || "nincs megadva"}</p>
@@ -18561,13 +18721,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
-                  {edit.imageUrl ? <img src={edit.imageUrl} alt="" className="aspect-square w-full rounded-xl bg-white object-contain p-2" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-white text-slate-400"><ImagePlus size={32} /></div>}
-                  <label className={label}>Kép feltöltése
-                    <input type="file" accept="image/*" className="text-xs text-white/70" onChange={(e) => onImageSelected(e.target.files?.[0] || null)} />
-                  </label>
-                  <label className={label}>Kép URL
-                    <input className={input} value={edit.imageUrl} onChange={(e) => setEdit((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
-                  </label>
+                  <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
                   <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
                       <div className="text-[9px] uppercase tracking-[0.14em] text-[#bfe9e6]/72">Aktuális termékkód</div>
