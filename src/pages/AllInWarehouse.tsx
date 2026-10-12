@@ -774,7 +774,7 @@ function importFocusRowToInventoryItem(rawItem: any): InventoryItem | null {
     shopify_title: firstWarehouseText(rawItem.shopify_title, rawItem.shopifyTitle, norm.shopifyTitle, title) || null,
     gender: firstWarehouseText(rawItem.gender, norm.gender, raw.GEN) || null,
     product_type: firstWarehouseText(rawItem.product_type, rawItem.productType, norm.productType, raw.RODESCR) || null,
-    season: firstWarehouseText(rawItem.season, norm.season, norm.collection, raw.COLECTIE) || null,
+    season: firstWarehouseText(rawItem.season, norm.season, raw.SEZON, raw.SZEZON, raw.SEASON) || null,
     material: firstWarehouseText(rawItem.material, norm.material, norm.composition, raw.COMPOZITIE) || null,
     model_status: firstWarehouseText(rawItem.model_status, rawItem.modelStatus, "active") || "active",
     category_code: categoryCode || null,
@@ -2131,6 +2131,25 @@ type EditForm = {
   images: string[];
   variantStatus: string;
 };
+// A tárolt érték román nyelvű; a kezelőfelület magyar feliratokat mutat.
+// A "Nem szezonális" szándékosan üres adatbázisérték, nem Shopify-tag.
+const WAREHOUSE_SEASON_OPTIONS: WarehouseSingleSelectOption[] = [
+  { value: "Primăvară", label: "Tavasz" },
+  { value: "Vară", label: "Nyár" },
+  { value: "Toamnă", label: "Ősz" },
+  { value: "Iarnă", label: "Tél" },
+  { value: "Primăvară/Vară", label: "Tavasz / Nyár" },
+  { value: "Toamnă/Iarnă", label: "Ősz / Tél" },
+  { value: "Tot anul", label: "Egész évben (négyévszakos)" },
+];
+
+function warehouseSeasonOptions(savedValue: string): WarehouseSingleSelectOption[] {
+  const value = String(savedValue || "").trim();
+  if (!value || WAREHOUSE_SEASON_OPTIONS.some((item) => item.value === value)) return WAREHOUSE_SEASON_OPTIONS;
+  // Régi szezonkódokat (pl. S23) nem tüntetjük el vagy írjuk át észrevétlenül.
+  return [{ value, label: `Korábbi érték: ${value}`, hint: "Ellenőrizendő" }, ...WAREHOUSE_SEASON_OPTIONS];
+}
+
 type NewProductForm = EditForm & {
   supplierId: string;
   supplierProductCode: string;
@@ -17818,7 +17837,14 @@ export default function AllInWarehouse() {
                         onChange={(next) => setNewProduct((x) => ({ ...x, gender: next }))}
                       />
                       <label className={label}>Import terméktípus / RODESCR<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
-                      <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
+                      <WarehouseSingleSelect
+                        labelText="Szezon"
+                        value={newProduct.season}
+                        emptyValue=""
+                        emptyText="Nem szezonális"
+                        options={warehouseSeasonOptions(newProduct.season)}
+                        onChange={(season) => setNewProduct((x) => ({ ...x, season }))}
+                      />
                       <label className={label}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
                     </div>
                   </section>
@@ -18791,7 +18817,14 @@ export default function AllInWarehouse() {
                       <WarehouseSingleSelect labelText="Alkategória / terméktípus" value={edit.subCategoryCode} emptyValue="" emptyText="Nincs beállítva" noOptionsText="Nincs alkategória." options={editSubCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))} onChange={(next) => { const found = subCategories.find((c) => categoryValueMatches(c, next)); setEdit((x) => ({ ...x, subCategoryCode: next, productType: x.productType || (found ? categoryLabel(found) : "") })); }} />
                       <WarehouseSingleSelect labelText="Nem" value={edit.gender} showEmptyOption={false} emptyText="Unisex" options={(genderTypes.length ? genderTypes : [{ code: "unisex", name: "Unisex" }]).map((g) => ({ value: String(g.code), label: String(g.name || g.code) }))} onChange={(next) => setEdit((x) => ({ ...x, gender: next }))} />
                       <label className={label}>Import terméktípus / RODESCR<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
-                      <label className={label}>Szezon<input className={input} value={edit.season} onChange={(e) => setEdit((x) => ({ ...x, season: e.target.value }))} /></label>
+                      <WarehouseSingleSelect
+                        labelText="Szezon"
+                        value={edit.season}
+                        emptyValue=""
+                        emptyText="Nem szezonális"
+                        options={warehouseSeasonOptions(edit.season)}
+                        onChange={(season) => setEdit((x) => ({ ...x, season }))}
+                      />
                       <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
                     </div>
                   </section>
