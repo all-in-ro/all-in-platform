@@ -116,13 +116,13 @@ try {
   assert(plan.length===56 && plan.filter(x=>!x.keep).length===35,'Nem 35 új színvariáns lenne.');
   // Ha ugyanez a modell/szín/méret már máshol létezik, ahelyett hogy összevonnánk,
   // megállunk. A szétválasztás csak tiszta, egyértelmű forrásnál engedélyezett.
-  const related=await c.query(`SELECT id,model_id,color_code,color_name,size,status FROM aif_product_variants WHERE model_id=ANY($1::uuid[])`,[...new Set(vRes.rows.map(x=>String(x.model_id)))]);
+  const related=await c.query(`SELECT id,model_id,color_code,color_name,size,status FROM aif_product_variants WHERE model_id=ANY($1::uuid[])`,[[...new Set(vRes.rows.map(x=>String(x.model_id)))]]);
   for(const p of plan.filter(x=>!x.keep)){
     const duplicates=related.rows.filter(x=>String(x.model_id)===String(p.old.model_id) && same(x.size,p.old.size) && (same(x.color_name,p.label)||same(x.color_code,p.color)));
     assert(!duplicates.length,`Létező azonos szín/méret: ${p.code} ${p.color} ${p.old.size}. ${duplicates.map(x=>x.id).join(',')}`);
   }
   // Beszállítói kapcsolatok sem duplikálódhatnak. Más cikkszámot nem írunk át.
-  const linkConflicts=await c.query(`SELECT id,variant_id,supplier_id,supplier_product_code,supplier_color_code,supplier_size FROM aif_variant_supplier_codes WHERE supplier_id=ANY($1::uuid[])`,[...new Set(scRes.rows.map(x=>String(x.supplier_id)))]);
+  const linkConflicts=await c.query(`SELECT id,variant_id,supplier_id,supplier_product_code,supplier_color_code,supplier_size FROM aif_variant_supplier_codes WHERE supplier_id=ANY($1::uuid[])`,[[...new Set(scRes.rows.map(x=>String(x.supplier_id)))]]);
   for(const p of plan.filter(x=>!x.keep)){
     const x=linkConflicts.rows.find(l=>String(l.supplier_id)===String(p.oldLink.supplier_id) && same(l.supplier_product_code,p.code) && same(l.supplier_color_code,p.color) && same(l.supplier_size,p.old.size));
     assert(!x,`Beszállítói színazonosító már foglalt: ${p.code} ${p.color} ${p.old.size}`);
@@ -130,7 +130,7 @@ try {
   console.log(`\nMAYO CHIX SZÉTVÁLASZTÁS: ${APPLY?'ÉLES JAVÍTÁS':'PRÓBA / NEM MÓDOSÍT'}`);
   console.table([{szamla:batch.rows[0].invoice_number,importsor:rows.length,darab:192,hibas_varians:mixed.length,erintett_db:99,mozgassor:moves.length,uj_varians:35,meglevo_barcode_megmarad:21,arvaltozas_sor:priceRes.rows.length}]);
   console.table(plan.filter(x=>!x.keep).map(x=>({cikk:x.code,szin:x.color,meret:x.old.size,db:x.qty,eredeti:x.oldId.slice(0,8)})));
-  if(!APPLY){await c.query('ROLLBACK');console.log('\n✅ PRÓBA SIKERES. Nem történt módosítás.');console.log('Az éles indításhoz: AIF_MAYO_APPLY=IGEN node /tmp/aif_mayo_split.mjs');process.exit(0);}
+  if(!APPLY){await c.query('ROLLBACK');console.log('\n✅ PRÓBA SIKERES. Nem történt módosítás.');console.log('Az éles futtatást csak a próba eredményének ellenőrzése után szabad indítani.');process.exit(0);}
 
   // Mentett adatbázis-pillantkép a helyreállítás előtti állapotról.
   await c.query(`CREATE TABLE IF NOT EXISTS aif_mayo_import_repair_audit (
