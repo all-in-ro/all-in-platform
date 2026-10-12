@@ -1040,6 +1040,7 @@ type StockTransferPrintLine = {
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "inactive" | "watch";
 type ImageFilter = "all" | "with" | "missing";
 type ShopifyFilter = "all" | "mapped" | "recent_mapped" | "exported" | "unmapped" | "error";
+type WarehouseSeasonFilter = "all" | "spring_autumn" | "summer" | "winter" | "nonseasonal";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc" | "incoming_asc" | "shopify_connected_desc";
 
 type WarehouseMultiSelectOption = { value: string; label: string; hint?: string };
@@ -2012,6 +2013,7 @@ type WarehouseFilterSnapshot = {
   brand: string;
   category: string;
   subCategory: string;
+  season: WarehouseSeasonFilter;
   genderFilters: string[];
   sizeFilters: string[];
   color: string;
@@ -2133,22 +2135,63 @@ type EditForm = {
 };
 // A tárolt érték román nyelvű; a kezelőfelület magyar feliratokat mutat.
 // A "Nem szezonális" szándékosan üres adatbázisérték, nem Shopify-tag.
+// Üzleti szabály: a tavaszi és őszi szezon közös választás.
 const WAREHOUSE_SEASON_OPTIONS: WarehouseSingleSelectOption[] = [
-  { value: "Primăvară", label: "Tavasz" },
+  { value: "Primăvară/Toamnă", label: "Tavasz / Ősz" },
   { value: "Vară", label: "Nyár" },
-  { value: "Toamnă", label: "Ősz" },
   { value: "Iarnă", label: "Tél" },
   { value: "", label: "Nem szezonális" },
 ];
 
-// Az egykori S23 / SS / Ősz-Tél adatot nem írjuk át önkényesen. A legördülőben
-// azonban már valóban CSAK az öt kért lehetőség szerepel.
+// A korábbi, ettől eltérő szezonadatot nem írjuk át automatikusan.
+// A legördülőben kizárólag a négy jóváhagyott opció szerepel.
 function warehouseSeasonOptions(_savedValue: string): WarehouseSingleSelectOption[] {
   return WAREHOUSE_SEASON_OPTIONS;
 }
 function warehouseSeasonLegacyValue(value: string): string {
   const raw = String(value || "").trim();
   return raw && !WAREHOUSE_SEASON_OPTIONS.some((row) => row.value === raw) ? raw : "";
+}
+
+// A termékadatlap és a raktári szűrő ugyanazt a négy üzleti szezonkategóriát használja.
+// Az "Összes" kizárólag szűrőállapot, nem mentett szezonérték.
+const WAREHOUSE_SEASON_FILTER_OPTIONS: WarehouseSingleSelectOption[] = [
+  { value: "spring_autumn", label: "Tavasz / Ősz" },
+  { value: "summer", label: "Nyár" },
+  { value: "winter", label: "Tél" },
+  { value: "nonseasonal", label: "Nem szezonális" },
+];
+
+// A régi adatokat nem írjuk át szűréskor: csak az egyértelműen megfeleltethető
+// román, magyar és angol elnevezéseket soroljuk a négy jóváhagyott csoportba.
+// A vegyes történeti "Tavasz/Nyár" és "Ősz/Tél" értékeket szándékosan nem
+// találgatjuk át egy másik szezonra.
+function warehouseSeasonFilterBucket(value: unknown): Exclude<WarehouseSeasonFilter, "all"> | null {
+  const key = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if ([
+    "", "nem_szezonalis", "nem_szezonhoz_kotott", "nincs", "nincs_szezon",
+    "fara_sezon", "fara_sezonalitate", "nesezonier", "non_seasonal",
+    "nonseasonal", "no_season", "not_seasonal", "none", "na", "n_a",
+    "tot_anul", "all_year", "year_round", "egesz_evben", "egesz_ev",
+    "all_season", "permanent", "permanens", "fashion", "sport",
+  ].includes(key)) return "nonseasonal";
+
+  if ([
+    "primavara_toamna", "toamna_primavara", "primavara", "toamna",
+    "tavasz_osz", "osz_tavasz", "tavasz", "osz", "spring", "autumn",
+    "fall", "spring_autumn", "autumn_spring", "spring_fall", "fall_spring",
+  ].includes(key)) return "spring_autumn";
+
+  if (["vara", "nyar", "summer"].includes(key)) return "summer";
+  if (["iarna", "tel", "winter"].includes(key)) return "winter";
+  return null;
 }
 
 type NewProductForm = EditForm & {
@@ -7371,6 +7414,7 @@ export default function AllInWarehouse() {
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
   const [subCategory, setSubCategory] = useState("all");
+  const [seasonFilter, setSeasonFilter] = useState<WarehouseSeasonFilter>("all");
   const [genderFilters, setGenderFilters] = useState<string[]>([]);
   const [sizeFilters, setSizeFilters] = useState<string[]>([]);
   const [color, setColor] = useState("all");
@@ -9705,6 +9749,59 @@ export default function AllInWarehouse() {
   }
 
   async function saveDetailAndClose() {
+    // A fotók automatikus mentése után a szerkesztő szándékosan visszaállítja
+    // a piszkos (dirty) állapotot. Ettől a Mentés gomb NEM válhat inaktívvá:
+    // a felhasználónak bármikor ellenőrizhető, kézi mentési útvonal kell.
+    if (saving || galleryMutationRef.current || !detail?.item?.id) return;
+    const variantId = String(detail.item.id);
+    const expectedPhotos = warehousePhotoUrls(editGalleryRef.current, edit.imageUrl);
+    const originalPhotos = warehousePhotoUrls(editBaseline.images, editBaseline.imageUrl);
+    const checkPhotos = expectedPhotos.length > 0 || originalPhotos.length > 0 || galleryRecovery.length > 0;
+
+    if (checkPhotos) {
+      setSaving(true);
+      setGalleryNotice(`Mentés előtt a képek ellenőrzése (${expectedPhotos.length} kép)…`);
+      try {
+        const stored = await apiReadWarehousePhotos(variantId);
+        const databasePhotos = warehousePhotoUrls(stored.images, stored.imageUrl);
+        if (JSON.stringify(databasePhotos) !== JSON.stringify(expectedPhotos) || stored.imageCount !== expectedPhotos.length) {
+          const localGalleryEdited = galleryRecovery.length > 0 || JSON.stringify(expectedPhotos) !== JSON.stringify(originalPhotos);
+          if (!localGalleryEdited && databasePhotos.length > expectedPhotos.length && expectedPhotos.every((url) => databasePhotos.includes(url))) {
+            // A szerveren több kép van, mint a megnyitott (esetleg elavult) űrlapon.
+            // Nem írjuk felül a több képet egyetlen képpel! Visszatöltjük és megmutatjuk.
+            editGalleryRef.current = [...databasePhotos];
+            setEdit((current) => ({ ...current, images: [...databasePhotos], imageUrl: databasePhotos[0] || "" }));
+            setEditBaseline((current) => ({ ...current, images: [...databasePhotos], imageUrl: databasePhotos[0] || "" }));
+            setGalleryNotice(`Az adatbázisban ${databasePhotos.length} kép található. Mindet visszatöltöttem. Ellenőrizd a képeket, majd nyomj újra Mentést.`);
+            return;
+          }
+          // A hiányzó képet megőrző összevonás csak akkor biztonságos, ha
+          // nem történt szándékos képtörlés. Egyébként ne találgassunk.
+          const removingPhoto = originalPhotos.some((url) => !expectedPhotos.includes(url));
+          if (localGalleryEdited && removingPhoto && databasePhotos.some((url) => !originalPhotos.includes(url))) {
+            setGalleryNotice("HIBA: Közben egy másik munkaállomáson megváltozott a képgaléria. Nem töröltem felül az ottani képeket. Frissítsd az adatlapot, és ellenőrizd az új képlistát.");
+            return;
+          }
+          const safePhotos = removingPhoto
+            ? expectedPhotos
+            : warehousePhotoUrls([...databasePhotos, ...expectedPhotos]);
+          const saved = await persistExistingPhotoGallery(safePhotos);
+          if (!saved) return; // Hiba esetén maradjon nyitva az adatlap és a menthető lista.
+        } else {
+          warehouseClearPendingGallery(variantId);
+          setGalleryRecovery([]);
+          setGalleryNotice(`MENTVE és visszaellenőrizve: ${expectedPhotos.length} kép.`);
+        }
+      } catch (error: any) {
+        warehouseRememberPendingGallery(variantId, expectedPhotos);
+        setGalleryRecovery([...expectedPhotos]);
+        setGalleryNotice(`HIBA: A képek visszaellenőrzése nem sikerült (${error?.message || "ismeretlen hiba"}). Nem zártam be az adatlapot; a képek újramenthetők.`);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+
     const ok = await saveDetail({ closeAfterSave: true });
     if (ok) setDetailCloseConfirmOpen(false);
   }
@@ -9947,6 +10044,7 @@ export default function AllInWarehouse() {
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
     if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
+    if (seasonFilter !== "all") out = out.filter((x) => warehouseSeasonFilterBucket(x.season) === seasonFilter);
     if (genderFilters.length) out = out.filter((x) => itemMatchesGenderSelections(x, genderFilters, genderTypes));
     if (sizeFilters.length) out = out.filter((x) => selectedSizeMatchKeys.has(colorKey(x.size)));
     if (color !== "all") {
@@ -10053,7 +10151,7 @@ export default function AllInWarehouse() {
       return compareWarehouseVariantPresentation(a, b);
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, brands, location, invoiceFilter, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, seasonFilter, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, brands, location, invoiceFilter, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     catalogSearchAbortRef.current?.abort();
@@ -10065,6 +10163,7 @@ export default function AllInWarehouse() {
     setBrand("all");
     setCategory("all");
     setSubCategory("all");
+    setSeasonFilter("all");
     setGenderFilters([]);
     setSizeFilters([]);
     setColor("all");
@@ -10100,6 +10199,9 @@ export default function AllInWarehouse() {
     if (brand !== "all") labels.push(`Márka: ${labelForMetaValue(brands, brand)}`);
     if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
     if (subCategory !== "all") labels.push(`Alkategória / terméktípus: ${labelForMetaValue(subCategories, subCategory)}`);
+    if (seasonFilter !== "all") {
+      labels.push(`Szezon: ${WAREHOUSE_SEASON_FILTER_OPTIONS.find((option) => option.value === seasonFilter)?.label || seasonFilter}`);
+    }
     if (genderFilters.length) labels.push(`Nem: ${genderFilters.map((value) => genderLabel(value, genderTypes)).join(" + ")}`);
     if (sizeFilters.length) {
       const count = selectedSizeFilterLabels.length || sizeFilters.length;
@@ -10145,7 +10247,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, selectedSizeFilterLabels, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, colorGroups, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, seasonFilter, genderFilters, sizeFilters, selectedSizeFilterLabels, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, colorGroups, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -10275,7 +10377,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, sortMode, incomingFocusVariantIdsKey]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, seasonFilter, genderFilters, sizeFilters, color, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, sortMode, incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -10306,6 +10408,7 @@ export default function AllInWarehouse() {
       brand,
       category,
       subCategory,
+      season: seasonFilter,
       genderFilters: [...genderFilters],
       sizeFilters: [...sizeFilters],
       color,
@@ -10330,6 +10433,7 @@ export default function AllInWarehouse() {
     setBrand(snapshot.brand);
     setCategory(snapshot.category);
     setSubCategory(snapshot.subCategory);
+    setSeasonFilter(snapshot.season || "all");
     setGenderFilters([...(snapshot.genderFilters || [])]);
     setSizeFilters([...(snapshot.sizeFilters || [])]);
     setColor(snapshot.color);
@@ -10535,6 +10639,7 @@ export default function AllInWarehouse() {
     setBrand("all");
     setCategory("all");
     setSubCategory("all");
+    setSeasonFilter("all");
     setGenderFilters([]);
     setSizeFilters([]);
     setColor("all");
@@ -14962,7 +15067,25 @@ export default function AllInWarehouse() {
       }
       if (uploaded.length) {
         const original = warehousePhotoUrls(target === "edit" ? editGalleryRef.current : newProduct.images);
-        const combined = warehousePhotoUrls([...original, ...uploaded]);
+        let serverPhotos: string[] = [];
+        if (target === "edit") {
+          try {
+            // Mielőtt új képeket hozzáfűznénk, a valóban tárolt listát kérjük le.
+            // Így egy elavult adatlap (1 fotó) nem tudja eltörölni a szerveren
+            // közben mentett 2-3 másik fotót.
+            const response = await apiReadWarehousePhotos(variantId);
+            serverPhotos = warehousePhotoUrls(response.images, response.imageUrl);
+          } catch (error: any) {
+            const pending = warehousePhotoUrls([...original, ...uploaded]);
+            editGalleryRef.current = [...pending];
+            warehouseRememberPendingGallery(variantId, pending);
+            setEdit((current) => ({ ...current, images: pending, imageUrl: pending[0] || "" }));
+            setGalleryRecovery([...pending]);
+            setGalleryNotice(`HIBA: A ${uploaded.length} feltöltött kép az R2-n megvan, de a régi képek visszaolvasása nem sikerült (${error?.message || "hálózati hiba"}). A képlistát megőriztem az újramentéshez.`);
+            return;
+          }
+        }
+        const combined = warehousePhotoUrls([...serverPhotos, ...original, ...uploaded]);
         if (target === "edit") {
           const confirmed = await persistExistingPhotoGallery(combined);
           if (!confirmed) return; // Egy sikertelen adatbázis-mentést nem nevezünk sikeres feltöltésnek.
@@ -15451,6 +15574,14 @@ export default function AllInWarehouse() {
                   label: categoryLabel(c),
                 }))}
                 onChange={setSubCategory}
+              />
+              <WarehouseSingleSelect
+                labelText="Szezon"
+                value={seasonFilter}
+                emptyValue="all"
+                emptyText="Összes"
+                options={WAREHOUSE_SEASON_FILTER_OPTIONS}
+                onChange={(next) => setSeasonFilter(next as WarehouseSeasonFilter)}
               />
               <WarehouseMultiSelect
                 labelText="Nem"
@@ -19027,7 +19158,7 @@ export default function AllInWarehouse() {
                         labelText="Szezon"
                         value={edit.season}
                         emptyValue=""
-                        emptyText="Nem szezonális"
+                        emptyText={warehouseSeasonLegacyValue(edit.season) ? `Régi: ${warehouseSeasonLegacyValue(edit.season)}` : "Nem szezonális"}
                         showEmptyOption={false}
                         options={warehouseSeasonOptions(edit.season)}
                         onChange={(season) => setEdit((x) => ({ ...x, season }))}
@@ -19223,20 +19354,23 @@ export default function AllInWarehouse() {
                 </section>
               </div>
 
-              <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap justify-end gap-2 border-t border-white/16 bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
-                <button className={btnSoft} onClick={requestCloseDetail} type="button" title="Bezárás / módosítások kezelése"><X size={16} /> Mégse</button>
+              <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap items-center justify-end gap-2 border-t border-white/16 bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
+                {galleryNotice ? (
+                  <span className={`mr-auto max-w-full truncate text-[11px] md:max-w-[54%] ${galleryNotice.startsWith("HIBA") ? "text-rose-200" : "text-[#bbf9ed]"}`} title={galleryNotice} role="status">
+                    {galleryNotice}
+                  </span>
+                ) : null}
+                <button className={btnSoft} onClick={requestCloseDetail} disabled={saving} type="button" title="Bezárás / módosítások kezelése"><X size={16} /> Mégse</button>
                 <button
-                  className={detailHasChanges ? primaryBtn : btnSoft}
+                  className={primaryBtn}
                   onClick={() => void saveDetailAndClose()}
-                  disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)}
+                  disabled={saving || Boolean(effectiveEditBarcodeConflict)}
                   title={effectiveEditBarcodeConflict
                     ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t."
-                    : !detailHasChanges
-                      ? "Nincs módosítás, amit menteni kellene."
-                      : "Módosítások mentése és adatlap bezárása"}
+                    : "Módosítások mentése, képek ellenőrzése és adatlap bezárása"}
                   type="button"
                 >
-                  <Save size={16} /> {saving ? "Mentés..." : "Mentés"}
+                  <Save size={16} /> {saving ? "Mentés és ellenőrzés..." : galleryRecovery.length ? "Képek újramentése" : "Mentés"}
                 </button>
               </div>
             </div>
