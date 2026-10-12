@@ -2138,6 +2138,7 @@ const WAREHOUSE_SEASON_OPTIONS: WarehouseSingleSelectOption[] = [
   { value: "Vară", label: "Nyár" },
   { value: "Toamnă", label: "Ősz" },
   { value: "Iarnă", label: "Tél" },
+  { value: "", label: "Nem szezonális" },
   { value: "Primăvară/Vară", label: "Tavasz / Nyár" },
   { value: "Toamnă/Iarnă", label: "Ősz / Tél" },
   { value: "Tot anul", label: "Egész évben (négyévszakos)" },
@@ -2147,7 +2148,7 @@ function warehouseSeasonOptions(savedValue: string): WarehouseSingleSelectOption
   const value = String(savedValue || "").trim();
   if (!value || WAREHOUSE_SEASON_OPTIONS.some((item) => item.value === value)) return WAREHOUSE_SEASON_OPTIONS;
   // Régi szezonkódokat (pl. S23) nem tüntetjük el vagy írjuk át észrevétlenül.
-  return [{ value, label: `Korábbi érték: ${value}`, hint: "Ellenőrizendő" }, ...WAREHOUSE_SEASON_OPTIONS];
+  return [...WAREHOUSE_SEASON_OPTIONS, { value, label: `Korábbi érték: ${value}`, hint: "Ellenőrizendő" }];
 }
 
 type NewProductForm = EditForm & {
@@ -4756,6 +4757,12 @@ function warehouseSameColorSizeSibling(a: Partial<InventoryItem> | Record<string
       normalizeSearch(firstWarehouseText((a as any).brand_code, (a as any).brand_name)) === normalizeSearch(firstWarehouseText((b as any).brand_code, (b as any).brand_name));
   if (!sameModel) return false;
 
+  // Azonos modell alatt eltérő teljes beszállítói cikkszám is előfordulhat.
+  // A FULTON / FULTON HIMZES jellegű termékek fotóit nem egyesítjük.
+  const aProductCode = firstWarehouseText((a as any).supplier_product_code, (a as any).supplierProductCode, (a as any).product_code, (a as any).productCode);
+  const bProductCode = firstWarehouseText((b as any).supplier_product_code, (b as any).supplierProductCode, (b as any).product_code, (b as any).productCode);
+  if (aProductCode && bProductCode && normalizeSearch(aProductCode) !== normalizeSearch(bProductCode)) return false;
+
   const aColorCode = firstWarehouseText((a as any).color_code, (a as any).colorCode, (a as any).supplier_color_code, (a as any).supplierColorCode);
   const bColorCode = firstWarehouseText((b as any).color_code, (b as any).colorCode, (b as any).supplier_color_code, (b as any).supplierColorCode);
   if (aColorCode && bColorCode && normalizeSearch(aColorCode) !== normalizeSearch(bColorCode)) return false;
@@ -6565,6 +6572,18 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
   });
 }
 
+// Külön, kizárólag képeket mentő kérés: nem küldjük újra a termék árát,
+// készletét, egyéb mezőit. A régi /variants/:id PATCH végpont megmarad.
+async function apiPersistWarehousePhotos(id: string, urls: string[]) {
+  const gallery = warehousePhotoUrls(urls);
+  return fetchJSON<{ ok: true }>(`/api/aif/variants/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ images: gallery, imageUrl: gallery[0] || null }),
+    signal: AbortSignal.timeout(60_000),
+  });
+}
+
 async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "", signal?: AbortSignal) {
   const cleanBarcode = cleanScannedBarcode(barcode);
   if (!cleanBarcode) return { ok: true as const, barcode: "", conflict: null as Record<string, any> | null };
@@ -6915,7 +6934,7 @@ async function uploadImage(file: File, variantId: string) {
   fd.append("file", file);
   fd.append("folder", `products/${variantId}`);
   fd.append("name", file.name);
-  return fetchJSON<{ key: string; url: string }>("/api/uploads/r2", { method: "POST", body: fd });
+  return fetchJSON<{ key: string; url: string }>("/api/uploads/r2", { method: "POST", body: fd, signal: AbortSignal.timeout(90_000) });
 }
 
 const WAREHOUSE_GALLERY_MAX = 60;
@@ -6945,12 +6964,14 @@ function WarehouseGalleryEditor({
   onChange,
   onUpload,
   uploading,
+  statusText = "",
   title,
 }: {
   images: string[];
   onChange: (urls: string[]) => void;
   onUpload: (files: File[]) => void | Promise<void>;
   uploading: boolean;
+  statusText?: string;
   title: string;
 }) {
   const [urlDraft, setUrlDraft] = useState("");
@@ -6966,6 +6987,7 @@ function WarehouseGalleryEditor({
     onChange(next);
   };
   const addUrl = () => {
+    if (uploading) return;
     const url = urlDraft.trim();
     if (!/^https:\/\//i.test(url) || url.length > 2048) {
       setLocalError("Nyilvános HTTPS kép URL-t adj meg.");
@@ -6996,7 +7018,7 @@ function WarehouseGalleryEditor({
       </div>
       {photos.length > 0 && <div className="grid grid-cols-2 gap-2">
         {photos.map((url,index)=><div key={url} className={`overflow-hidden rounded-xl border p-1 ${index === 0 ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/20" : "border-white/14 bg-[#354153]"}`}>
-          <button type="button" className="relative w-full overflow-hidden rounded-lg bg-white" onClick={()=>chooseMain(url)} title="Fő képnek kijelölés">
+          <button type="button" disabled={uploading} className="relative w-full overflow-hidden rounded-lg bg-white disabled:opacity-70" onClick={()=>chooseMain(url)} title="Fő képnek kijelölés">
             <img src={url} alt={`${title || "Kép"} ${index+1}`} className="aspect-square w-full object-contain p-1" loading="lazy"/>
             {index===0 && <span className="absolute left-1 top-1 rounded-md bg-[#167a75] px-1.5 py-0.5 text-[9px] text-white">Fő</span>}
           </button>
@@ -7017,11 +7039,12 @@ function WarehouseGalleryEditor({
           className="sr-only" onChange={(event)=>{ const files=Array.from(event.target.files||[]);event.target.value="";if(files.length)void onUpload(files); }}/>
       </label>
       <div className="flex gap-1.5">
-        <input className={`${input} min-w-0 flex-1 text-xs`} value={urlDraft} onChange={e=>{setUrlDraft(e.target.value);setLocalError("");}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addUrl();}}} placeholder="https://... további kép URL" aria-label="Kép URL hozzáadása"/>
+        <input disabled={uploading} className={`${input} min-w-0 flex-1 text-xs`} value={urlDraft} onChange={e=>{setUrlDraft(e.target.value);setLocalError("");}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addUrl();}}} placeholder="https://... további kép URL" aria-label="Kép URL hozzáadása"/>
         <button className={btnSoft} type="button" disabled={uploading} onClick={addUrl}><Plus size={14}/> Hozzáadás</button>
       </div>
       {localError && <p className="text-[11px] text-rose-200">{localError}</p>}
-      <p className="text-[10px] leading-relaxed text-white/50">Az első kép a fő kép. Kattintással választhatod a fő képet, a nyilakkal módosíthatod a sorrendet. A Shopify-ra mentés után a teljes galéria szinkronizálódik.</p>
+      {statusText ? <p className={`rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${statusText.startsWith("HIBA") ? "border-rose-300/35 bg-rose-500/10 text-rose-100" : "border-[#7bd7d4]/35 bg-[#2a8d8b]/15 text-[#e0fffa]"}`} role="status">{statusText}</p> : null}
+      <p className="text-[10px] leading-relaxed text-white/50">A feltöltött képek, a főképcsere és a sorrend automatikusan mentődik a raktárba. Nem kell külön Mentést nyomni. A Shopify képszinkronja háttérben fut.</p>
     </div>
   );
 }
@@ -7353,6 +7376,11 @@ export default function AllInWarehouse() {
   const [detailCloseConfirmOpen, setDetailCloseConfirmOpen] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [galleryNotice, setGalleryNotice] = useState("");
+  const editGalleryRef = useRef<string[]>([]);
+  // A háttérből érkező részlet-GET és a több fájlt feltöltő callback ugyanazt
+  // az aktuális galériát látja. Nem ragadhat bele egy korábbi render képlistájába.
+  useEffect(() => { editGalleryRef.current = warehousePhotoUrls(edit.images, edit.imageUrl); }, [edit.images, edit.imageUrl]);
   const [newProductOpen, setNewProductOpen] = useState(false);
   const [newProduct, setNewProduct] = useState<NewProductForm>(() => emptyNewProductForm());
   const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
@@ -9607,6 +9635,8 @@ export default function AllInWarehouse() {
     setDetailCloseConfirmOpen(false);
     setDetail(null);
     setDetailBusy(false);
+    setGalleryNotice("");
+    editGalleryRef.current = [];
     setEdit(emptyForm());
     setEditBaseline(emptyForm());
     setEditBarcodeConflict(null);
@@ -13889,6 +13919,7 @@ export default function AllInWarehouse() {
     setDetailCloseConfirmOpen(false);
     setEditBarcodeConflict(null);
     setMessage("");
+    setGalleryNotice("");
 
     const requestSequence = ++detailLoadSequenceRef.current;
     const cached = detailCacheRef.current.get(cleanId);
@@ -14478,7 +14509,11 @@ export default function AllInWarehouse() {
         supplier_product_code: edit.supplierProductCode || detail.item.supplier_product_code || null,
         model_code: detail.item.model_code || null,
       };
-      const sameColorSizeSiblings = inventoryDisplayItems.filter((item) => warehouseSameColorSizeSibling(siblingSource, item));
+      const siblingCandidates = [...items, ...catalogSearchItems, ...inactiveProductsItems, ...inventoryDisplayItems];
+      const sameColorSizeSiblings = Array.from(new Map(
+        siblingCandidates.filter((item) => warehouseSameColorSizeSibling(siblingSource, item))
+          .map((item) => [String(item.variant_id || ""), item])
+      ).values());
       const siblingPatch: Record<string, unknown> = {};
       const galleryChangedForSiblings = JSON.stringify(edit.images) !== JSON.stringify(editBaseline.images);
       if (galleryChangedForSiblings) {
@@ -14740,23 +14775,98 @@ export default function AllInWarehouse() {
     }
   }
 
+  // A képgaléria külön, azonnali mentést kap. Ez megvédi a képeket a
+  // munkamenet-frissítés vagy az adatlap véletlen bezárása miatti elvesztéstől.
+  // A többi, éppen szerkesztett termékmezőt ez a PATCH nem írja át.
+  async function persistExistingPhotoGallery(urls: string[]): Promise<boolean> {
+    const id = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
+    if (!id) return false;
+    const next = warehousePhotoUrls(urls);
+    editGalleryRef.current = [...next];
+    setEdit((current) => ({ ...current, images: next, imageUrl: next[0] || "" }));
+    setGalleryNotice(`Galéria mentése (${next.length} kép)…`);
+    // A részletes adatlap korábban elindult GET-je nem írhatja vissza a régi képet.
+    detailLoadSequenceRef.current += 1;
+    setDetailBusy(false);
+    try {
+      await apiPersistWarehousePhotos(id, next);
+      const source: InventoryItem = {
+        ...(detail?.item || {}),
+        variant_id: id,
+        model_id: firstWarehouseText(detail?.item?.model_id, detail?.item?.modelId) || null,
+        color_code: edit.colorCode || detail?.item?.color_code || null,
+        color_name: edit.colorName || detail?.item?.color_name || null,
+        size: edit.size || detail?.item?.size || null,
+        supplier_product_code: edit.supplierProductCode || detail?.item?.supplier_product_code || null,
+      } as InventoryItem;
+      const gallerySiblingCandidates = [...items, ...catalogSearchItems, ...inactiveProductsItems, ...inventoryDisplayItems];
+      const siblings = gallerySiblingCandidates.filter((item) => warehouseSameColorSizeSibling(source, item));
+      const uniqueSiblings = [...new Set(siblings.map((item) => String(item.variant_id || "").trim()).filter(Boolean))];
+      const results = await Promise.allSettled(uniqueSiblings.map((siblingId) => apiPersistWarehousePhotos(siblingId, next)));
+      const savedSiblingIds = uniqueSiblings.filter((_, index) => results[index].status === "fulfilled");
+      const failedSiblings = uniqueSiblings.filter((_, index) => results[index].status === "rejected");
+      const affected = new Set([id, ...savedSiblingIds]);
+      const patchItem = (item: InventoryItem): InventoryItem =>
+        affected.has(String(item.variant_id || ""))
+          ? { ...item, images: [...next], image_url: next[0] || null }
+          : item;
+      setItems((current) => current.map(patchItem));
+      setCatalogSearchItems((current) => current.map(patchItem));
+      setInactiveProductsItems((current) => current.map(patchItem));
+      setIncomingFocusItems((current) => current.map(patchItem));
+      setEditBaseline((current) => ({ ...current, images: [...next], imageUrl: next[0] || "" }));
+      setDetail((current) => {
+        if (String(current?.item?.id || "") !== id) return current;
+        return { ...current, item: { ...current.item, images: [...next], image_url: next[0] || null } };
+      });
+      const cache = detailCacheRef.current.get(id);
+      if (cache?.data) {
+        detailCacheRef.current.set(id, {
+          ...cache,
+          loadedAt: Date.now(),
+          data: { ...cache.data, item: { ...cache.data.item, images: [...next], image_url: next[0] || null } },
+        });
+      }
+      if (failedSiblings.length) {
+        setGalleryNotice(`Mentve: ${next.length} kép ehhez a termékhez. ${failedSiblings.length} másik méretnél a képmásolás sikertelen, ezt külön ellenőrizni kell.`);
+      } else {
+        setGalleryNotice(`MENTVE: ${next.length} kép az adatbázisban${savedSiblingIds.length ? `, további ${savedSiblingIds.length} méretnél is` : ""}. Shopify képszinkron a háttérben.`);
+      }
+      return true;
+    } catch (error: any) {
+      // A feltöltött R2 URL-ek a formban maradnak, így a szokásos Mentés gombbal
+      // később is megpróbálható a mentés. Nem állítunk hamis sikert.
+      setGalleryNotice(`HIBA: A galéria adatbázisba mentése nem sikerült (${error?.message || "ismeretlen hiba"}). A kép-URL-eket ne dobd el: próbáld újra a Mentés gombbal.`);
+      return false;
+    }
+  }
+
   function setEditedPhotoGallery(urls: string[]) {
-    setEdit((current) => ({ ...current, images: [...urls], imageUrl: urls[0] || "" }));
+    if (saving) return;
+    setSaving(true);
+    void persistExistingPhotoGallery(urls).finally(() => setSaving(false));
   }
   function setNewProductPhotoGallery(urls: string[]) {
     setNewProduct((current) => ({ ...current, images: [...urls], imageUrl: urls[0] || "" }));
   }
+
   async function uploadGalleryFiles(files: File[], target: "edit" | "new") {
-    const targetId = target === "edit" ? String(detail?.item?.id || "").trim() : `draft-${Date.now()}`;
-    if (!targetId || !files.length) return;
-    const sourceGallery = target === "edit" ? edit.images : newProduct.images;
-    if (sourceGallery.length + files.length > WAREHOUSE_GALLERY_MAX) {
-      setMessage(`Legfeljebb ${WAREHOUSE_GALLERY_MAX} kép adható egy termékhez.`);
+    if (!files.length || saving || newProductSaving) return;
+    const variantId = String(detail?.item?.id || "").trim();
+    const targetId = target === "edit" ? variantId : `draft-${Date.now()}`;
+    if (!targetId) return;
+    const currentGallery = target === "edit" ? editGalleryRef.current : newProduct.images;
+    if (currentGallery.length + files.length > WAREHOUSE_GALLERY_MAX) {
+      const note = `Legfeljebb ${WAREHOUSE_GALLERY_MAX} kép adható egy termékhez. Most ${currentGallery.length} van.`;
+      if (target === "edit") setGalleryNotice(`HIBA: ${note}`);
+      else setMessage(note);
       return;
     }
-    const invalid = files.find((file) => !file.type.startsWith("image/") || file.size > 15 * 1024 * 1024);
+    const invalid = files.find((file) => !file.type.startsWith("image/") || file.size > 10 * 1024 * 1024);
     if (invalid) {
-      setMessage(`Nem megfelelő kép: ${invalid.name}. Csak képfájl és legfeljebb 15 MB engedélyezett.`);
+      const note = `Nem megfelelő kép: ${invalid.name}. Csak képfájl és legfeljebb 10 MB engedélyezett.`;
+      if (target === "edit") setGalleryNotice(`HIBA: ${note}`);
+      else setMessage(note);
       return;
     }
     if (target === "edit") setSaving(true);
@@ -14765,27 +14875,40 @@ export default function AllInWarehouse() {
     const uploaded: string[] = [];
     const failures: string[] = [];
     try {
-      for (const file of files) {
-        try {
-          const response = await uploadImage(file,targetId);
-          if (!/^https:\/\//i.test(response.url || "")) throw new Error("Nem nyilvános HTTPS kép URL érkezett.");
-          uploaded.push(response.url);
-        } catch (error: any) {
-          failures.push(`${file.name}: ${error?.message || "feltöltési hiba"}`);
-        }
+      // Egyszerre három HTTP-kérés futhat, DE ez nem képszámkorlát!
+      // Pl. 14 kijelölt kép öt körben, mind a 14 feldolgozva.
+      for (let offset = 0; offset < files.length; offset += 3) {
+        const chunk = files.slice(offset, offset + 3);
+        if (target === "edit") setGalleryNotice(`Képek feltöltése: ${offset}/${files.length}…`);
+        const results = await Promise.allSettled(chunk.map((file) => uploadImage(file, targetId)));
+        results.forEach((result, index) => {
+          const file = chunk[index];
+          if (result.status === "fulfilled" && /^https:\/\//i.test(result.value.url || "")) uploaded.push(result.value.url);
+          else failures.push(`${file.name}: ${result.status === "rejected" ? result.reason?.message || String(result.reason) : "Nem nyilvános HTTPS kép URL"}`);
+        });
       }
       if (uploaded.length) {
-        const apply = (current: EditForm): EditForm => {
-          const original = warehousePhotoUrls(current.images,current.imageUrl);
-          const next = warehousePhotoUrls([...original,...uploaded]);
-          return { ...current, images:next, imageUrl: next[0] || "" };
-        };
-        if (target === "edit") setEdit(apply);
-        else setNewProduct((current) => apply(current) as NewProductForm);
+        const original = warehousePhotoUrls(target === "edit" ? editGalleryRef.current : newProduct.images);
+        const combined = warehousePhotoUrls([...original, ...uploaded]);
+        if (target === "edit") {
+          await persistExistingPhotoGallery(combined);
+        } else {
+          setNewProduct((current) => {
+            const next = warehousePhotoUrls([...current.images, ...uploaded]);
+            return { ...current, images: next, imageUrl: next[0] || "" };
+          });
+          setMessage(`${uploaded.length} képfájl felment az R2-be. Új terméknél a Mentés gombbal véglegesítsd.`);
+        }
       }
-      setMessage(failures.length
-        ? `${uploaded.length} kép hozzáadva. Hibák: ${failures.slice(0,3).join(" | ")}`
-        : `${uploaded.length} kép feltöltve. A galéria véglegesítéséhez nyomd meg a Mentés gombot.`);
+      if (failures.length) {
+        const warning = `${uploaded.length}/${files.length} kép feltöltve. Sikertelen: ${failures.slice(0, 4).join(" | ")}`;
+        if (target === "edit") setGalleryNotice((previous) => `${previous} ${warning}`.trim());
+        else setMessage(warning);
+      } else if (!uploaded.length) {
+        const note = "Nem sikerült képet feltölteni.";
+        if (target === "edit") setGalleryNotice(`HIBA: ${note}`);
+        else setMessage(note);
+      }
     } finally {
       if (target === "edit") setSaving(false);
       else setNewProductSaving(false);
@@ -17842,6 +17965,7 @@ export default function AllInWarehouse() {
                         value={newProduct.season}
                         emptyValue=""
                         emptyText="Nem szezonális"
+                        showEmptyOption={false}
                         options={warehouseSeasonOptions(newProduct.season)}
                         onChange={(season) => setNewProduct((x) => ({ ...x, season }))}
                       />
@@ -18747,7 +18871,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
-                  <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
+                  <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} statusText={galleryNotice} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
                   <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
                       <div className="text-[9px] uppercase tracking-[0.14em] text-[#bfe9e6]/72">Aktuális termékkód</div>
@@ -18822,6 +18946,7 @@ export default function AllInWarehouse() {
                         value={edit.season}
                         emptyValue=""
                         emptyText="Nem szezonális"
+                        showEmptyOption={false}
                         options={warehouseSeasonOptions(edit.season)}
                         onChange={(season) => setEdit((x) => ({ ...x, season }))}
                       />
