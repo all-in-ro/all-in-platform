@@ -26,6 +26,9 @@ export function startSmsWorker(pool,{ensure,provider}) {
       if(!c)return;
       const s=await settingsFrom(db);
       const pause=async reason=>{await db.query(`UPDATE aif_sms_campaigns SET status='paused',note=$2,updated_at=now() WHERE id=$1 AND status IN('queued','sending')`,[c.id,reason]);await audit(db,{campaignId:c.id,locationId:c.location_id,actor:'sms-worker',event:'campaign_auto_paused',payload:{reason}});};
+      if(c.mode==='live'&&(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)){
+        await pause('A leiratkozási kapcsolattartó telefonszáma hiányzik vagy megváltozott. A címzettüzeneteket új kampányban kell elkészíteni.');return;
+      }
       if(c.mode==='live'&&(!s.liveEnabled||!providerConfig().enabled)){await pause('Az éles küldés kikapcsolva.');return;}
       if(c.mode==='live'&&!withinSendHours(s)){await pause('Küldési csendidő. Nyitvatartási időben kézzel folytatható.');return;}
       const r=(await db.query(`SELECT * FROM aif_sms_recipients WHERE campaign_id=$1 AND status='pending' ORDER BY id LIMIT 1`,[c.id])).rows[0];

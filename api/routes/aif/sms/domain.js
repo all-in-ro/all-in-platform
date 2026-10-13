@@ -1,4 +1,5 @@
-/** Pure SMS rules. No network or database side effects. */
+/** SMS rules and cryptographically secure voucher-code generation. */
+import { randomInt } from 'node:crypto';
 export const txt = v => String(v ?? '').trim();
 export const norm = v => txt(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
 export const unique = values => [...new Set((Array.isArray(values) ? values : []).map(txt).filter(Boolean))];
@@ -20,12 +21,29 @@ export function genderKey(value) {
   if (['kids','kid','children','child','copii','copil','gyerek','gyermek','junior','baieti','fete','fiuk','lanyok'].includes(s)) return 'children';
   return ''; // Missing/unknown gender is never interpreted as "everyone".
 }
+// Easily typed at checkout: four letters + three digits, shuffled securely;
+// omit the ambiguous I/O/0/1 characters. The DB enforces global uniqueness.
+const COUPON_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const COUPON_DIGITS = '23456789';
+export function generateShortCouponCode() {
+  const chars = [
+    ...Array.from({length:4},()=>COUPON_LETTERS[randomInt(COUPON_LETTERS.length)]),
+    ...Array.from({length:3},()=>COUPON_DIGITS[randomInt(COUPON_DIGITS.length)])
+  ];
+  for(let i=chars.length-1;i>0;i--) {
+    const j=randomInt(i+1);
+    [chars[i],chars[j]]=[chars[j],chars[i]];
+  }
+  return chars.join('');
+}
 export const GENDERS = [{id:'women',name:'Női'},{id:'men',name:'Férfi'},{id:'unisex',name:'Uniszex'},{id:'children',name:'Gyermek'}];
 export const TOKENS = [{id:'name',name:'Kliens neve'},{id:'store',name:'Üzlet neve'},{id:'brands',name:'Érdeklődésnek megfelelő márkák'},{id:'categories',name:'Érdeklődésnek megfelelő terméktípusok'},{id:'coupon',name:'Személyes kuponkód'},{id:'discount',name:'Kupon kedvezménye'},{id:'expiry',name:'Kupon lejárata'}];
 export const DEFAULT_SETTINGS = Object.freeze({
   liveEnabled:false, sellersCanSend:true, requireApproval:true, sender:'numeric',
   maxRecipients:300, maxSegments:4, campaignSegmentLimit:1000, dailySegmentLimit:2000,
   frequencyHours:72, sendFromHour:9, sendUntilHour:20, lowCredit:100,
+  // Optional manager/contact phone for unsubscribe requests; link stays automatic.
+  unsubscribePhone:'',
   shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' }
 });
 export function cleanSettings(input, current = DEFAULT_SETTINGS) {
@@ -38,6 +56,12 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
   }
   if(o.sendFromHour>=o.sendUntilHour) throw fail('A küldési időszak kezdete legyen korábbi a végénél.');
   if('sender' in input) { o.sender=txt(input.sender)||'numeric'; if(!/^[a-zA-Z0-9 ]{1,11}$/.test(o.sender)) throw fail('A feladó legfeljebb 11 latin betű vagy szám lehet.'); }
+  if('unsubscribePhone' in input) {
+    if(input.unsubscribePhone != null && typeof input.unsubscribePhone !== 'string') throw fail('A leiratkozási telefonszám érvénytelen.');
+    const raw=txt(input.unsubscribePhone),phone=raw?phoneNumber(raw):'';
+    if(raw&&!phone)throw fail('A leiratkozási kapcsolattartónál romániai mobilszám szükséges (például +40745123456).');
+    o.unsubscribePhone=phone||'';
+  }
   if(input.shopNames) o.shopNames=Object.fromEntries(['main_warehouse','magazin_targu_secuiesc'].map(k=>[k,txt(input.shopNames[k]||current.shopNames[k]).slice(0,50)]));
   return o;
 }
@@ -81,13 +105,17 @@ export function couponTerms(rules, language='hu') {
     ? `Personal, o singura utilizare, doar in magazinul indicat. De la ${date}.${minimum} ${rules.stackable?'Cumulabil cu alte reduceri.':'Nu se cumuleaza cu alte reduceri.'}`
     : `Szemelyes, egyszeri, csak a megjelolt uzletben. Kezdete: ${date}.${minimum} ${rules.stackable?'Mas kedvezmennyel osszevonhato.':'Mas kedvezmennyel nem vonhato ossze.'}`;
 }
-export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='') {
+export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='') {
   const raw=blocks.map(b=>{
     if(b.type==='text') return b.value;
     const value=txt(values[b.value]); if(!value) throw fail('Nem tölthető ki az SMS adatmezője: '+b.value,'sms_missing_value'); return value;
   }).join('');
   if(!unsubscribeUrl.startsWith('https://')) throw fail('Hiányzik a biztonságos leiratkozási cím.');
-  return segmentInfo(`AllInFashion: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${unsubscribeUrl}`);
+  const contact=unsubscribePhone?phoneNumber(unsubscribePhone):'';
+  if(unsubscribePhone&&!contact)throw fail('Érvénytelen leiratkozási kapcsolattartó telefonszám.');
+  // Keep the personal self-service link: a phone call/text to the manager is NOT an automatic opt-out.
+  const optOut=contact?`${contact} / ${unsubscribeUrl}`:unsubscribeUrl;
+  return segmentInfo(`AllInFashion: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
 }
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);

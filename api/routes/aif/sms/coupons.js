@@ -1,9 +1,35 @@
-import { fail, txt, money, couponDiscount } from './domain.js';
+import { fail, txt, money, couponDiscount, generateShortCouponCode } from './domain.js';
 import { ensureSmsSchema, audit } from './schema.js';
+
+/**
+ * Allocates unique short codes for a campaign without writing rows prematurely.
+ * Caller must hold the shared pg_advisory_xact_lock('aif_sms_coupon_code_v2')
+ * until inserting the campaign's coupon rows. The DB UNIQUE(code) is a final guard.
+ */
+export async function allocateUniqueCouponCodes(db, count) {
+  if(!Number.isInteger(count)||count<1||count>5000)throw fail('Érvénytelen kuponmennyiség.');
+  const codes=Array(count).fill(null),reserved=new Set();
+  for(let attempt=0;attempt<12;attempt++) {
+    for(let i=0;i<count;i++)if(!codes[i]) {
+      let candidate;
+      do { candidate=generateShortCouponCode(); } while(reserved.has(candidate));
+      codes[i]=candidate;reserved.add(candidate);
+    }
+    const {rows:collisions}=await db.query(`SELECT code FROM aif_sms_coupons WHERE code=ANY($1::text[])`,[codes]);
+    if(!collisions.length)return codes;
+    for(const {code} of collisions) {
+      const i=codes.indexOf(code);
+      if(i>=0){reserved.delete(code);codes[i]=null;}
+    }
+  }
+  throw fail('Nem sikerült ütközésmentes kuponkódokat kiosztani. Próbáld újra.','sms_coupon_collision',409);
+}
+
 export function createCouponService(pool) {
   async function validate(db,{code,customerId,locationId,baseTotal,manualExtraDiscount=0,hasPercentDiscount=false,lock=false}) {
     code=txt(code).toUpperCase().replace(/\s+/g,'');
-    if(!/^[A-Z0-9-]{10,40}$/.test(code))throw fail('Érvénytelen kuponkód.','coupon_invalid');
+    // 7-character new vouchers + already issued legacy AIF-... vouchers.
+    if(!(/^[A-Z0-9]{7}$/.test(code)||/^AIF-[A-Z0-9-]{6,36}$/.test(code)))throw fail('Érvénytelen kuponkód.','coupon_invalid');
     if(!customerId)throw fail('A kuponhoz előbb válaszd ki a klienst.','coupon_customer');
     const {rows}=await db.query(`SELECT cp.*, ((now() AT TIME ZONE 'Europe/Bucharest')::date)::text AS today
       FROM aif_sms_coupons cp WHERE cp.code=$1 ${lock?'FOR UPDATE OF cp':''}`,[code]);
