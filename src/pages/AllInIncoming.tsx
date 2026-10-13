@@ -42,6 +42,9 @@ import {
   AifPurchaseOrderDetail,
   AifPurchaseOrderSummary,
   apiAifCommitImportBatch,
+  apiAifPreviewReceptionPrices,
+  type AifIncomingPriceReviewResponse,
+  type AifIncomingPriceChoice,
   apiAifAppendImportRows,
   apiAifDeleteImportBatchHistory,
   apiAifCreateCurrency,
@@ -83,6 +86,12 @@ type IncomingWorkflowStep = "reception" | "source" | "import" | "manual" | "revi
 type IncomingInputMode = "" | "import" | "manual";
 type InvoiceDifferenceMode = "distributed" | "kept";
 type SellPriceCurrencyMode = "invoice" | "ron";
+type IncomingPriceReviewDialog = AifIncomingPriceReviewResponse & {
+  receptionId: string;
+  batchId: string;
+  rowIds: string[];
+};
+
 type InvoiceDifferencePrompt = {
   currentGoodsValue: number;
   targetGoodsValue: number;
@@ -2105,6 +2114,9 @@ function AllInIncomingReception(_props: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [invoiceDifferencePrompt, setInvoiceDifferencePrompt] = useState<InvoiceDifferencePrompt | null>(null);
+  const [incomingPriceReview, setIncomingPriceReview] = useState<IncomingPriceReviewDialog | null>(null);
+  const [incomingPriceChoices, setIncomingPriceChoices] = useState<Record<string, 'keep_existing' | 'use_incoming'>>({});
+  const [incomingPriceError, setIncomingPriceError] = useState('');
   const [locationModalOpen, setLocationModalOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [newLocationType, setNewLocationType] = useState<LocationType>("warehouse");
@@ -2118,7 +2130,7 @@ function AllInIncomingReception(_props: Props) {
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
   useEffect(() => {
-    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen || purchaseOrderPickerOpen);
+    const anyModalOpen = Boolean(incomingPriceReview || invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen || purchaseOrderPickerOpen);
     if (!anyModalOpen) return;
 
     const previousOverflow = document.body.style.overflow;
@@ -2129,7 +2141,8 @@ function AllInIncomingReception(_props: Props) {
       event.preventDefault();
       event.stopPropagation();
 
-      if (purchaseOrderPickerOpen) setPurchaseOrderPickerOpen(false);
+      if (incomingPriceReview) { if (!busy) { setIncomingPriceReview(null); setIncomingPriceChoices({}); setIncomingPriceError(''); } }
+      else if (purchaseOrderPickerOpen) setPurchaseOrderPickerOpen(false);
       else if (manualBarcodeScannerOpen) closeManualBarcodeScanner();
       else if (invoiceDifferencePrompt) setInvoiceDifferencePrompt(null);
       else if (salesTvaModalOpen) setSalesTvaModalOpen(false);
@@ -2142,7 +2155,7 @@ function AllInIncomingReception(_props: Props) {
       document.removeEventListener("keydown", closeTopModal, true);
       document.body.style.overflow = previousOverflow;
     };
-  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen, manualBarcodeScannerOpen, purchaseOrderPickerOpen]);
+  }, [incomingPriceReview, busy, invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen, manualBarcodeScannerOpen, purchaseOrderPickerOpen]);
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId) || null,
@@ -4129,64 +4142,144 @@ function AllInIncomingReception(_props: Props) {
     await performSaveDraft(adjustedRows, "distributed");
   }
 
+  async function applyIncomingBatchCommitResult(batch: AifImportBatchSummary, result: any) {
+    const receptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || '').trim();
+    const committedRows = Array.isArray(result.committedRowResults)
+      ? result.committedRowResults
+      : Array.isArray(result.committedRows) ? result.committedRows : [];
+    const committedVariantIds = Array.isArray(result.variantIds) ? result.variantIds
+      : Array.isArray(result.committedVariantIds) ? result.committedVariantIds
+      : committedRows.map((row: any) => row?.variantId || row?.variant_id).filter(Boolean);
+    const committedTotalQty = Number(result.committedTotalQty || committedRows.reduce(
+      (sum: number, row: any) => sum + toNumber(row?.qty), 0
+    ) || 0);
+    if (Number(result.committed || 0) > 0) {
+      notifyWarehouseShowAllAfterIncoming({
+        importBatchId: batch.id,
+        receptionId: receptionId || null,
+        committed: result.committed ?? null,
+        failedCount: result.failedCount ?? null,
+        variantIds: Array.from(new Set(committedVariantIds.map((id: unknown) => String(id || '').trim()).filter(Boolean))),
+        committedRows: committedRows.length || Number(result.committedRows || result.committed || 0),
+        committedRowResults: committedRows,
+        rowCount: committedRows.length || Number(result.committed || 0),
+        totalQty: committedTotalQty || null,
+      });
+    }
+    await Promise.all([loadBatches(), loadReceptions()]);
+    let receiptValueText = '';
+    if (receptionId) {
+      try {
+        const fresh = await apiAifGetReception(receptionId);
+        fillReceptionHeader(fresh, { clearDraftRows: false });
+        setIncomingStep('review');
+        if (fresh.item.sales_total_ron != null) {
+          receiptValueText = ` A Receptió új eladási összértéke: ${moneyText(toNumber(fresh.item.sales_total_ron), 'RON')}.`;
+        }
+      } catch {
+        // A készletre vétel sikerült; hálózati hiba nem változtat ezen.
+      }
+    }
+    const failedCount = Number(result.failedCount || result.failedRows?.length || 0);
+    if (failedCount > 0) {
+      const firstError = result.failedRows?.[0]?.error || result.warning || 'Néhány sor nem került készletre.';
+      setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}.${receiptValueText} ${firstError}`);
+    } else {
+      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.${receiptValueText} Az eladási ár döntése a Receptióban is érvényes; a beszállítói számla összege nem módosult.`);
+    }
+  }
+
   async function commitBatch(batch: AifImportBatchSummary) {
     if (!batch?.id) return;
     if (Number(batch.row_count || 0) <= 0) {
-      setMessage("A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor.");
+      setMessage('A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor.');
       return;
     }
     if (Number(batch.error_count || 0) > 0) {
-      setMessage("A készletre vétel nem indítható: az importban ellenőrzendő vagy hibás sor van.");
+      setMessage('A készletre vétel nem indítható: az importban ellenőrzendő vagy hibás sor van.');
       return;
     }
-
     setBusy(true);
-    setMessage("");
+    setMessage('');
     try {
-      const committedReceptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || "").trim();
-      const result = await apiAifCommitImportBatch(batch.id);
-      const committedRows = Array.isArray((result as any).committedRowResults)
-        ? (result as any).committedRowResults
-        : Array.isArray((result as any).committedRows)
-          ? (result as any).committedRows
-          : [];
-      const committedVariantIds = Array.isArray((result as any).variantIds)
-        ? (result as any).variantIds
-        : Array.isArray((result as any).committedVariantIds)
-          ? (result as any).committedVariantIds
-          : committedRows.map((row: any) => row?.variantId || row?.variant_id).filter(Boolean);
-      const committedTotalQty = Number((result as any).committedTotalQty || committedRows.reduce((sum: number, row: any) => sum + toNumber(row?.qty), 0) || 0);
-      notifyWarehouseShowAllAfterIncoming({
-        importBatchId: batch.id,
-        receptionId: (batch as any).reception_id || selectedReceptionId || null,
-        committed: (result as any).committed ?? null,
-        failedCount: (result as any).failedCount ?? null,
-        variantIds: Array.from(new Set(committedVariantIds.map((id: unknown) => String(id || "").trim()).filter(Boolean))),
-        committedRows: committedRows.length || Number((result as any).committedRows || (result as any).committed || 0),
-        committedRowResults: committedRows,
-        rowCount: committedRows.length || Number((result as any).committed || 0),
-        totalQty: committedTotalQty || null,
-      });
-      await Promise.all([loadBatches(), loadReceptions()]);
-      if (committedReceptionId) {
-        try {
-          const detail = await apiAifGetReception(committedReceptionId);
-          fillReceptionHeader(detail, { clearDraftRows: false });
-          setIncomingStep("review");
-        } catch {
-          // A készletre vétel már sikerült. Ha a friss részletlista nem jön vissza, a következő frissítés behozza.
+      const receptionId = String((batch as any).reception_id || (batch as any).receptionId || '').trim();
+      if (receptionId) {
+        const receipt = await apiAifGetReception(receptionId);
+        const rowIds = (receipt.rows || []).filter((row: any) =>
+          String(row.batch_id || '') === String(batch.id)
+          && !['ignored','committed'].includes(String(row.status || '').toLowerCase())
+        ).map((row: any) => String(row.id));
+        if (!rowIds.length) {
+          setMessage('A kiválasztott importban nincs még készletre vehető sor. Frissítsd az importlistát.');
+          return;
+        }
+        const review = await apiAifPreviewReceptionPrices(receptionId, rowIds);
+        if (review.items.length) {
+          setIncomingPriceReview({ ...review, receptionId, batchId: String(batch.id), rowIds });
+          setIncomingPriceChoices({});
+          setIncomingPriceError('');
+          return;
         }
       }
-      const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
-      if (failedCount > 0) {
-        const firstError = (result as any).failedRows?.[0]?.error || (result as any).warning || "Néhány sor nem került készletre.";
-        setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}. A sikeres sorok termékei automatikusan aktívak. ${firstError}`);
-      } else {
-        setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}. A sikeresen készletre vett termékek automatikusan aktívak.`);
-      }
-    } catch (e: any) {
+      const result = await apiAifCommitImportBatch(batch.id);
+      await applyIncomingBatchCommitResult(batch, result);
+    } catch (error: any) {
       await Promise.all([loadBatches(), loadReceptions()]).catch(() => undefined);
-      setMessage(e.message || "A készletre vétel nem sikerült. Ellenőrizd az import sorokat.");
+      setMessage(error?.message || 'A készletre vétel nem sikerült. Ellenőrizd az import sorokat.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyIncomingPriceChoices() {
+    if (!incomingPriceReview || busy) return;
+    if (incomingPriceReview.items.some((item) => !incomingPriceChoices[item.variantId])) {
+      setIncomingPriceError('Minden eltérő eladási árnál válassz: régi vagy új.');
+      return;
+    }
+    const choices: Record<string,AifIncomingPriceChoice> = {};
+    for (const item of incomingPriceReview.items) {
+      for (const rowId of item.rowIds) {
+        choices[rowId] = {
+          choice: incomingPriceChoices[item.variantId],
+          variantId: item.variantId,
+          oldPrice: Number(item.oldPrice),
+          incomingPrice: Number(item.incomingPrice),
+        };
+      }
+    }
+    setBusy(true);
+    setIncomingPriceError('');
+    try {
+      const batch = batches.find((entry) => String(entry.id) === incomingPriceReview.batchId);
+      if (!batch) throw new Error('Az import nem található. Frissítsd az importlistát.');
+      const result = await apiAifCommitImportBatch(incomingPriceReview.batchId, { priceChoices: choices });
+      setIncomingPriceReview(null);
+      setIncomingPriceChoices({});
+      await applyIncomingBatchCommitResult(batch, result);
+    } catch (error: any) {
+      setIncomingPriceError(error?.message || 'Az ár-választás és készletre vétel nem sikerült. Frissítsd az ár-egyeztetést.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshIncomingPriceReview() {
+    if (!incomingPriceReview || busy) return;
+    setBusy(true);
+    setIncomingPriceError('');
+    try {
+      const preview = await apiAifPreviewReceptionPrices(incomingPriceReview.receptionId, incomingPriceReview.rowIds);
+      if (!preview.items.length) {
+        setIncomingPriceReview(null);
+        setIncomingPriceChoices({});
+        setMessage('Már nincs árkülönbség. Indítsd újra a készletre vételt.');
+      } else {
+        setIncomingPriceReview({ ...incomingPriceReview, ...preview });
+        setIncomingPriceChoices({});
+      }
+    } catch (error: any) {
+      setIncomingPriceError(error?.message || 'Az árak újraellenőrzése nem sikerült.');
     } finally {
       setBusy(false);
     }
@@ -5091,11 +5184,12 @@ function AllInIncomingReception(_props: Props) {
           title="Betöltött receptió tartalma"
           right={<span className="text-xs text-white/60">A már mentett sorok áttekintése</span>}
         />
-        <div className="mt-3 grid gap-2 md:grid-cols-4">
+        <div className="mt-3 grid gap-2 md:grid-cols-5">
           <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Összes sor</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.total}</p></div>
           <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Készleten</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.committed}</p></div>
           <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Még dolgozandó</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.remaining}</p></div>
-          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / érték</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
+          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / vételár</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
+          <div className="rounded-2xl border border-[#7bd7d4]/30 bg-[#24545a] px-3 py-2.5"><p className="text-xs uppercase tracking-[0.06em] text-[#cffffd]/68">Receptió eladási értéke</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{moneyText(toNumber(loadedReception.item?.sales_total_ron), 'RON')}</p></div>
         </div>
         <div className="mt-3 overflow-auto rounded-xl border border-white/14">
           <table className="min-w-[1080px] w-full text-left text-sm">
@@ -5264,6 +5358,67 @@ function AllInIncomingReception(_props: Props) {
           </div>
         </div>
       )}
+      {incomingPriceReview && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-label="Eladási ár egyeztetése"
+             onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) {setIncomingPriceReview(null);setIncomingPriceChoices({});setIncomingPriceError('');} }}>
+          <div className={`${modalCard} max-w-4xl`} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Bevételezés • készletre vétel előtt</p>
+                <h2 className="mt-1 text-xl text-white">Melyik eladási ár maradjon?</h2>
+                <p className="mt-1.5 text-xs leading-5 text-white/70">Termékenként választhatsz, mielőtt bármi készletre kerülne. A döntés automatikusan módosítja a Receptió sorainak eladási értékét is. A beszállítói számla és a vételár nem változik.</p>
+              </div>
+              <button type="button" className={neutralBtn} disabled={busy} onClick={() => {setIncomingPriceReview(null);setIncomingPriceChoices({});setIncomingPriceError('');}}><X size={14}/> Bezárás</button>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <div className={statCard}><p className="text-[10px] text-white/56">Import sor</p><p className="mt-1 text-xl tabular-nums text-white">{incomingPriceReview.selectedRowCount}</p></div>
+              <div className={statCard}><p className="text-[10px] text-white/56">Új darab</p><p className="mt-1 text-xl tabular-nums text-white">{incomingPriceReview.selectedQty} db</p></div>
+              <div className="rounded-2xl border border-[#7bd7d4]/28 bg-[#245259] p-3"><p className="text-[10px] text-[#d8fffd]/72">Eltérő árú termék</p><p className="mt-1 text-xl tabular-nums text-white">{incomingPriceReview.items.length}</p></div>
+            </div>
+            <div className="mt-3 max-h-[48vh] space-y-3 overflow-y-auto pr-1">
+              {incomingPriceReview.items.map((item) => {
+                const selected = incomingPriceChoices[item.variantId];
+                const oldQty = Math.max(0, Number(item.currentQty || 0));
+                const newQty = Math.max(0, Number(item.incomingQty || 0));
+                return (
+                  <div key={`${item.variantId}-${item.incomingPrice}`} className="rounded-2xl border border-white/12 bg-[#354153] p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0"><p className="text-sm text-white">{item.productTitle || item.productCode || 'Termék'}</p><p className="mt-1 text-[11px] text-white/56">{[item.brandName,item.productCode,item.colorName,item.size].filter(Boolean).join(' • ')}</p></div>
+                      <span className="rounded-lg border border-[#7bd7d4]/22 bg-[#208d8b]/14 px-2 py-1 text-xs text-[#d8fffd]">{item.incomingRowCount} sor • {newQty} db érkezik</span>
+                    </div>
+                    <p className="mt-2 text-xs text-white/66">Régi készlet: <strong>{oldQty} db</strong> · Új áru: <strong>{newQty} db</strong> · Összesen: <strong>{oldQty+newQty} db</strong></p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button type="button" disabled={busy} onClick={() => setIncomingPriceChoices((current) => ({...current,[item.variantId]:'keep_existing'}))} aria-pressed={selected==='keep_existing'} className={`rounded-xl border p-3 text-left ${selected==='keep_existing'?'border-[#8fe7e3] bg-[#208d8b]':'border-white/16 bg-[#293548] hover:bg-[#3e4d63]'}`}>
+                        <p className="text-xs text-white/76">Régi ár megtartása {selected==='keep_existing' ? '✓' : ''}</p>
+                        <p className="mt-1 text-xl text-white">{moneyText(Number(item.oldPrice||0),'RON')}</p>
+                        <p className="mt-1.5 text-[11px] leading-4 text-white/67">A régi és új darabok is a régi árat kapják. Az új receptiósorok értéke: {moneyText(newQty * Number(item.oldPrice||0), 'RON')}. Nincs régi címkecsere.</p>
+                      </button>
+                      <button type="button" disabled={busy} onClick={() => setIncomingPriceChoices((current) => ({...current,[item.variantId]:'use_incoming'}))} aria-pressed={selected==='use_incoming'} className={`rounded-xl border p-3 text-left ${selected==='use_incoming'?'border-[#8fe7e3] bg-[#208d8b]':'border-white/16 bg-[#293548] hover:bg-[#3e4d63]'}`}>
+                        <p className="text-xs text-white/76">Új ár alkalmazása {selected==='use_incoming' ? '✓' : ''}</p>
+                        <p className="mt-1 text-xl text-white">{moneyText(Number(item.incomingPrice||0),'RON')}</p>
+                        <p className="mt-1.5 text-[11px] leading-4 text-white/67">Az új eladási árat mind a {oldQty+newQty} darab kapja. Az új receptiósorok értéke: {moneyText(newQty * Number(item.incomingPrice||0), 'RON')}. A {oldQty} régi darabot át kell címkézni.</p>
+                      </button>
+                    </div>
+                    {item.stockLocations?.length ? <p className="mt-2 text-[10px] text-white/48">{item.stockLocations.map((loc) => `${loc.location||'Hely'}: ${loc.qty||0} db`).join(' • ')}</p> : null}
+                  </div>
+                );
+              })}
+            </div>
+            {incomingPriceError ? <div className="mt-3 rounded-xl border border-red-300/40 bg-red-500/14 px-3 py-2 text-sm text-red-50"><AlertTriangle size={14} className="mr-2 inline"/>{incomingPriceError}</div> : null}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-3">
+              <p className="text-xs text-white/55">{Object.keys(incomingPriceChoices).length} / {incomingPriceReview.items.length} ár kiválasztva</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={neutralBtn} disabled={busy} onClick={() => void refreshIncomingPriceReview()}><RefreshCw size={14}/> Frissítés</button>
+                <button type="button" className={neutralBtn} disabled={busy} onClick={() => {setIncomingPriceReview(null);setIncomingPriceChoices({});setIncomingPriceError('');}}>Mégse</button>
+                <button type="button" className={primaryBtn} disabled={busy || incomingPriceReview.items.some((item)=>!incomingPriceChoices[item.variantId])} onClick={() => void applyIncomingPriceChoices()}>
+                  {busy ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle size={14}/>} {busy ? 'Készletre vétel…' : 'Árak jóváhagyása és készletre vétel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {invoiceDifferencePrompt && (
         <div
           className={modalBackdrop}
