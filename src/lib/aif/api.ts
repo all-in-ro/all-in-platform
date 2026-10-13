@@ -4701,6 +4701,8 @@ export function apiAifCompleteShopSale(input: {
   paymentMethod: AifShopSalePaymentMethod;
   idempotencyKey: string;
   extraDiscountAmount?: number;
+  couponCode?: string | null;
+  couponExpectedDiscount?: number;
   note?: string | null;
   customer?: {
     id?: string | null;
