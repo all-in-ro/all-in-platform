@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms } from './domain.js';
+import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { metadata, sourceProducts, audienceFor } from './data.js';
 import { publicBase, providerConfig } from './provider.js';
@@ -31,20 +31,22 @@ export function createCampaignService(pool,provider) {
     if(!audience.eligible.length)throw fail('Nincs megfelelő, SMS-hez hozzájárult kliens ebben az üzletben. Ellenőrizd az érdeklődéseket, nyelvet és küldési korlátot.','sms_empty_audience');
     if(audience.eligible.length>settings.maxRecipients)throw fail(`A kampány ${audience.eligible.length} címzettje meghaladja a ${settings.maxRecipients} fős korlátot.`);
     const base=publicBase(),recipients=[];
+    const messageSettings=messageSettingsSnapshot(settings,location.code);
     const codes=coupon?await allocateUniqueCouponCodes(db,audience.eligible.length):[];
     for(const [i,person] of audience.eligible.entries()){
       const code=coupon?codes[i]:null;
-      const values={name:person.name,store:settings.shopNames[location.code]||location.name,
+      const values={name:person.name,store:storeLabel(settings,location.code,location.name),
+        storeName:messageSettings.storeName||location.name,storeAddress:messageSettings.storeAddress,
         brands:unique(person.matched.map(p=>p.brand)).join(', ')||meta.brands.filter(b=>filters.brands.includes(b.id)).map(b=>b.name).join(', ')||(language==='ro'?'selectia AllInFashion':'AllInFashion valogatas'),
         categories:unique(person.matched.map(p=>p.category)).join(', ')||(language==='ro'?'produse selectate':'valogatott termekek'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
-      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone);
+      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true);
       if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget.`,'sms_too_long');
       recipients.push({...person,id:randomUUID(),couponCode:code,...rendered});
     }
     const segments=recipients.reduce((n,r)=>n+r.segments,0);
     if(segments>settings.campaignSegmentLimit)throw fail('Az összes SMS-rész meghaladja a kampánykeretet.');
-    return {definition:{...definition,excluded:audience.excluded,unknownGender:loaded.unknownGender,sender:settings.sender,unsubscribePhone:settings.unsubscribePhone||''},recipients,segments,sources:loaded.sources};
+    return {definition:{...definition,excluded:audience.excluded,unknownGender:loaded.unknownGender,sender:settings.sender,unsubscribePhone:settings.unsubscribePhone||'',messageSettings},recipients,segments,sources:loaded.sources};
   }
   return {
     detail,
@@ -97,6 +99,7 @@ export function createCampaignService(pool,provider) {
           if(Number(input.confirmCount)!==c.recipient_count)throw fail('A címzettszám visszaigazolása nem egyezik az előnézettel.');
           if(c.mode==='live'){
             if(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)throw fail('A leiratkozási szám hiányzik vagy megváltozott. Készíts új kampányt az aktuális beállítással.','sms_unsubscribe_contact',409);
+            if(!messageSettingsMatch(c.definition,s,c.location_code))throw fail('Az üzlet neve, címe vagy a leiratkozási mód megváltozott az előnézet óta. Készíts új kampányt.','sms_message_settings_changed',409);
             if(!s.liveEnabled||!providerConfig().enabled)throw fail('Az éles SMS-küldés nincs engedélyezve.','sms_live_disabled',403);
             if(providerConfig().secret.length<32)throw fail('Az SMS-visszaigazolásokhoz legalább 32 karakteres webhook-titok szükséges.');
             if(!withinSendHours(s))throw fail(`Most küldési csendidő van. Küldési időszak: ${s.sendFromHour}:00–${s.sendUntilHour}:00 (romániai idő).`,'sms_quiet_hours');

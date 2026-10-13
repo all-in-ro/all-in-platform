@@ -75,7 +75,7 @@ export function ensureSmsSchema(pool) {
 export async function settingsFrom(db) {
   const {rows}=await db.query('SELECT settings FROM aif_sms_settings WHERE id=1');
   const saved=rows[0]?.settings||{};
-  return {...DEFAULT_SETTINGS,...saved,shopNames:{...DEFAULT_SETTINGS.shopNames,...saved.shopNames}};
+  return {...DEFAULT_SETTINGS,...saved,shopNames:{...DEFAULT_SETTINGS.shopNames,...saved.shopNames},shopAddresses:{...DEFAULT_SETTINGS.shopAddresses,...saved.shopAddresses}};
 }
 export function audit(db,{campaignId=null,customerId=null,locationId=null,actor,event,payload={}}) {
   return db.query(`INSERT INTO aif_sms_audit(campaign_id,customer_id,location_id,actor,event,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)`,[campaignId,customerId,locationId,actor||'system',event,JSON.stringify(payload)]);

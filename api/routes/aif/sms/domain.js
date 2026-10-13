@@ -37,18 +37,20 @@ export function generateShortCouponCode() {
   return chars.join('');
 }
 export const GENDERS = [{id:'women',name:'Női'},{id:'men',name:'Férfi'},{id:'unisex',name:'Uniszex'},{id:'children',name:'Gyermek'}];
-export const TOKENS = [{id:'name',name:'Kliens neve'},{id:'store',name:'Üzlet neve'},{id:'brands',name:'Érdeklődésnek megfelelő márkák'},{id:'categories',name:'Érdeklődésnek megfelelő terméktípusok'},{id:'coupon',name:'Személyes kuponkód'},{id:'discount',name:'Kupon kedvezménye'},{id:'expiry',name:'Kupon lejárata'}];
+export const TOKENS = [{id:'name',name:'Kliens neve'},{id:'store',name:'Üzlet neve és teljes címe'},{id:'storeName',name:'Csak az üzlet neve'},{id:'storeAddress',name:'Csak az üzlet címe'},{id:'brands',name:'Érdeklődésnek megfelelő márkák'},{id:'categories',name:'Érdeklődésnek megfelelő terméktípusok'},{id:'coupon',name:'Személyes kuponkód'},{id:'discount',name:'Kupon kedvezménye'},{id:'expiry',name:'Kupon lejárata'}];
 export const DEFAULT_SETTINGS = Object.freeze({
   liveEnabled:false, sellersCanSend:true, requireApproval:true, sender:'numeric',
   maxRecipients:300, maxSegments:4, campaignSegmentLimit:1000, dailySegmentLimit:2000,
   frequencyHours:72, sendFromHour:9, sendUntilHour:20, lowCredit:100,
-  // Optional manager/contact phone for unsubscribe requests; link stays automatic.
-  unsubscribePhone:'',
-  shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' }
+  // A phone-only SMS is shorter. A personal opt-out link is optional and separately configurable.
+  unsubscribePhone:'', includeUnsubscribeLink:false,
+  shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' },
+  // No invented street addresses. The administrator enters each real store address.
+  shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''}
 });
 export function cleanSettings(input, current = DEFAULT_SETTINGS) {
   const o = { ...current };
-  for (const k of ['liveEnabled','sellersCanSend','requireApproval']) if (k in input) {
+  for (const k of ['liveEnabled','sellersCanSend','requireApproval','includeUnsubscribeLink']) if (k in input) {
     if (typeof input[k] !== 'boolean') throw fail('Érvénytelen kapcsoló: '+k); o[k]=input[k];
   }
   for (const [k,min,max] of [['maxRecipients',1,5000],['maxSegments',1,4],['campaignSegmentLimit',1,20000],['dailySegmentLimit',1,50000],['frequencyHours',0,720],['sendFromHour',0,23],['sendUntilHour',1,24],['lowCredit',0,100000]]) if (k in input) {
@@ -62,8 +64,45 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
     if(raw&&!phone)throw fail('A leiratkozási kapcsolattartónál romániai mobilszám szükséges (például +40745123456).');
     o.unsubscribePhone=phone||'';
   }
-  if(input.shopNames) o.shopNames=Object.fromEntries(['main_warehouse','magazin_targu_secuiesc'].map(k=>[k,txt(input.shopNames[k]||current.shopNames[k]).slice(0,50)]));
+  const shopCodes=['main_warehouse','magazin_targu_secuiesc'];
+  if(input.shopNames!==undefined) {
+    if(!input.shopNames||typeof input.shopNames!=='object'||Array.isArray(input.shopNames))throw fail('Az üzletnevek adatai érvénytelenek.');
+    o.shopNames=Object.fromEntries(shopCodes.map(k=>{
+      const raw=input.shopNames[k]===undefined?current.shopNames?.[k]:input.shopNames[k];
+      if(typeof raw!=='string'||!txt(raw)||txt(raw).length>60||/[\x00-\x1f{}]/.test(raw))throw fail('Az üzlet neve legyen kitöltve, legfeljebb 60 karakterrel.');
+      return [k,txt(raw)];
+    }));
+  }
+  if(input.shopAddresses!==undefined) {
+    if(!input.shopAddresses||typeof input.shopAddresses!=='object'||Array.isArray(input.shopAddresses))throw fail('Az üzletcímek adatai érvénytelenek.');
+    o.shopAddresses=Object.fromEntries(shopCodes.map(k=>{
+      const raw=input.shopAddresses[k]===undefined?current.shopAddresses?.[k]||'':input.shopAddresses[k];
+      if(typeof raw!=='string'||raw.length>160||/[\x00-\x1f{}]/.test(raw))throw fail('Az üzlet címe legfeljebb 160 karakteres, egysoros szöveg lehet.');
+      return [k,txt(raw).replace(/\s+/g,' ')];
+    }));
+  }
   return o;
+}
+// A prepared SMS is immutable. Check these message-sensitive settings again before live launch
+// and before each recipient; a changed address or opt-out method must not send old text.
+export function messageSettingsSnapshot(settings,locationCode) {
+  return {
+    unsubscribePhone:txt(settings.unsubscribePhone),
+    includeUnsubscribeLink:settings.includeUnsubscribeLink===true,
+    storeName:txt(settings.shopNames?.[locationCode]),
+    storeAddress:txt(settings.shopAddresses?.[locationCode])
+  };
+}
+export function messageSettingsMatch(definition,settings,locationCode) {
+  const previous=definition?.messageSettings;
+  if(!previous||typeof previous!=='object')return false; // Legacy drafts must be re-prepared.
+  const current=messageSettingsSnapshot(settings,locationCode);
+  return Object.keys(current).every(key=>previous[key]===current[key]);
+}
+export function storeLabel(settings,locationCode,fallbackName='') {
+  const name=txt(settings.shopNames?.[locationCode])||txt(fallbackName);
+  const address=txt(settings.shopAddresses?.[locationCode]);
+  return [name,address].filter(Boolean).join(', ');
 }
 export function validateBlocks(blocks, kind) {
   if(!Array.isArray(blocks)||!blocks.length||blocks.length>40) throw fail('Az üzenethez 1–40 szöveg- vagy adatblokk szükséges.');
@@ -80,7 +119,9 @@ export function validateBlocks(blocks, kind) {
     }
     throw fail('Ismeretlen SMS-adatblokk.');
   });
-  if(!out.some(b=>b.type==='token'&&b.value==='store')) throw fail('Az SMS-ben kötelező az üzlet neve adatmező.');
+  const fullStore=out.some(b=>b.type==='token'&&b.value==='store');
+  const splitStore=['storeName','storeAddress'].every(key=>out.some(b=>b.type==='token'&&b.value===key));
+  if(!fullStore&&!splitStore) throw fail('Az SMS-ben kötelező az üzlet neve és címe. Használd az összetett mezőt vagy a név és cím mezőket együtt.');
   if(kind==='arrival'&&!out.some(b=>b.type==='token'&&b.value==='brands')) throw fail('Az újáru-értesítésben kötelező az érdeklődésnek megfelelő márkák adatmező.');
   if(kind==='promotion') for(const key of ['coupon','discount','expiry']) if(!out.some(b=>b.type==='token'&&b.value===key)) throw fail('A promóciós üzenetben kötelező a kuponkód, kedvezmény és lejárat adatblokk.');
   if(!out.some(b=>b.type==='text'&&b.value.trim())) throw fail('Írj szöveget is az üzenethez.');
@@ -105,16 +146,17 @@ export function couponTerms(rules, language='hu') {
     ? `Personal, o singura utilizare, doar in magazinul indicat. De la ${date}.${minimum} ${rules.stackable?'Cumulabil cu alte reduceri.':'Nu se cumuleaza cu alte reduceri.'}`
     : `Szemelyes, egyszeri, csak a megjelolt uzletben. Kezdete: ${date}.${minimum} ${rules.stackable?'Mas kedvezmennyel osszevonhato.':'Mas kedvezmennyel nem vonhato ossze.'}`;
 }
-export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='') {
+export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false) {
   const raw=blocks.map(b=>{
     if(b.type==='text') return b.value;
     const value=txt(values[b.value]); if(!value) throw fail('Nem tölthető ki az SMS adatmezője: '+b.value,'sms_missing_value'); return value;
   }).join('');
-  if(!unsubscribeUrl.startsWith('https://')) throw fail('Hiányzik a biztonságos leiratkozási cím.');
   const contact=unsubscribePhone?phoneNumber(unsubscribePhone):'';
   if(unsubscribePhone&&!contact)throw fail('Érvénytelen leiratkozási kapcsolattartó telefonszám.');
-  // Keep the personal self-service link: a phone call/text to the manager is NOT an automatic opt-out.
-  const optOut=contact?`${contact} / ${unsubscribeUrl}`:unsubscribeUrl;
+  const showLink=includeUnsubscribeLink===true||!contact;
+  if(showLink&&!/^https:\/\/[^\s]+$/.test(unsubscribeUrl))throw fail('Hiányzik a biztonságos személyes leiratkozási cím.');
+  // Phone-only: manual opt-out requests must be recorded promptly in the SMS preferences.
+  const optOut=showLink&&contact?`${contact} / ${unsubscribeUrl}`:showLink?unsubscribeUrl:contact;
   return segmentInfo(`AllInFashion: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
 }
 export function profileMatchesProduct(pref, product) {

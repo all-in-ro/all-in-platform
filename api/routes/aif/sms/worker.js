@@ -1,4 +1,4 @@
-import { phoneNumber, withinSendHours, segmentInfo } from './domain.js';
+import { phoneNumber, withinSendHours, segmentInfo, messageSettingsMatch } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { providerConfig } from './provider.js';
 const workers=new WeakMap();
@@ -28,6 +28,9 @@ export function startSmsWorker(pool,{ensure,provider}) {
       const pause=async reason=>{await db.query(`UPDATE aif_sms_campaigns SET status='paused',note=$2,updated_at=now() WHERE id=$1 AND status IN('queued','sending')`,[c.id,reason]);await audit(db,{campaignId:c.id,locationId:c.location_id,actor:'sms-worker',event:'campaign_auto_paused',payload:{reason}});};
       if(c.mode==='live'&&(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)){
         await pause('A leiratkozási kapcsolattartó telefonszáma hiányzik vagy megváltozott. A címzettüzeneteket új kampányban kell elkészíteni.');return;
+      }
+      if(c.mode==='live'&&!messageSettingsMatch(c.definition,s,c.location_code)){
+        await pause('Az üzlet neve, címe vagy a leiratkozási mód megváltozott. A további SMS-ek előtt új kampányt kell előkészíteni.');return;
       }
       if(c.mode==='live'&&(!s.liveEnabled||!providerConfig().enabled)){await pause('Az éles küldés kikapcsolva.');return;}
       if(c.mode==='live'&&!withinSendHours(s)){await pause('Küldési csendidő. Nyitvatartási időben kézzel folytatható.');return;}
