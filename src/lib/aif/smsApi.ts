@@ -29,7 +29,7 @@ export type SmsCampaign = {
   id:string; title:string; kind:'arrival'|'promotion'; location_code:string; mode:'test'|'live'; status:string;
   recipient_count:number; segment_count:number; created_by:string; created_at:string; approved_by?:string; approved_at?:string;
   launched_by?:string; launched_at?:string; note?:string; delivered?:number; attention?:number;
-  definition: SmsDraft & {sender:string;unsubscribePhone?:string;messageSettings?:{unsubscribePhone:string;includeUnsubscribeLink:boolean;storeName:string;storeAddress:string};unknownGender:number;excluded:Array<{id:string;name:string;phone:string;reason:string}>};
+  definition: SmsDraft & {sender:string;unsubscribePhone?:string;messageSettings?:{unsubscribePhone:string;includeUnsubscribeLink:boolean;storeName:string;storeAddress:string;messageFormatVersion?:number};unknownGender:number;excluded:Array<{id:string;name:string;phone:string;reason:string}>};
 };
 export type SmsRecipient = { id:string;customer_id:string; customer_name:string;phone:string;message:string;segments:number;status:string;reason?:string;provider_id?:string;accepted_at?:string;delivered_at?:string;coupon_code?:string;coupon_status?:string;used_at?:string;used_by?:string;used_sale_id?:string };
 export type SmsCampaignDetail = {campaign:SmsCampaign;recipients:SmsRecipient[]};
