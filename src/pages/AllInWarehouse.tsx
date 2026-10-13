@@ -3301,6 +3301,7 @@ type WarehouseLabelPriceChange = {
   incomingQty?: number | string | null;
   oldSellPrice?: number | string | null;
   newSellPrice?: number | string | null;
+  approvedPriceChoice?: "old" | "new" | null;
   locationBreakdown?: Array<{ locationId?: string | null; locationCode?: string | null; locationName?: string | null; qty?: number | string | null }> | null;
   productTitle?: string | null;
   productCode?: string | null;
@@ -3318,6 +3319,7 @@ type WarehouseLabelStockCheckRow = {
   currentQty?: number | string | null;
   currentLocationQty?: number | string | null;
   outgoingSinceReception?: number | string | null;
+  verifiedReceptionQty?: number | string | null;
   maxCopies?: number | string | null;
   baseMaxCopies?: number | string | null;
   relabelRequired?: boolean | null;
@@ -3872,6 +3874,40 @@ function labelInt(v: unknown, fallback: number, min: number, max: number) {
   const n = Number.parseInt(String(v ?? "").replace(",", "."), 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
+}
+
+// Címkepótlás: a CSV kizárólag vonalkód + példányszám adatokat tartalmaz.
+// Nem módosítja a termékadatbázist, árat, vonalkódot vagy készletet.
+function parseWarehouseLabelQuantityCsv(source: string): Array<{ barcode: string; copies: number }> {
+  const lines = String(source || "")
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const entries: Array<{ barcode: string; copies: number }> = [];
+  const seen = new Set<string>();
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const parts = lines[lineIndex].split(/[;\t,]/).map((value) => value.trim().replace(/^"|"$/g, "").trim());
+    if (parts.length !== 2) {
+      throw new Error(`A CSV ${lineIndex + 1}. sorában pontosan két mező szükséges: vonalkód;darab.`);
+    }
+    const [rawBarcode, rawCopies] = parts;
+    const header = rawBarcode.toLocaleLowerCase("hu-HU").replace(/[\s_-]+/g, "");
+    if (lineIndex === 0 && ["vonalkod", "barcode", "coddebara", "ean"].includes(header)) continue;
+    const barcode = rawBarcode.toUpperCase();
+    if (!barcode || !/^[A-Z0-9-]{4,64}$/.test(barcode)) {
+      throw new Error(`Érvénytelen vonalkód a CSV ${lineIndex + 1}. sorában: ${rawBarcode || "üres"}.`);
+    }
+    const copies = Number(rawCopies);
+    if (!/^\d+$/.test(rawCopies) || !Number.isSafeInteger(copies) || copies < 1 || copies > 999) {
+      throw new Error(`Érvénytelen címkemennyiség a CSV ${lineIndex + 1}. sorában: ${rawCopies || "üres"}.`);
+    }
+    if (seen.has(barcode)) throw new Error(`Duplán szerepel a CSV-ben: ${barcode}.`);
+    seen.add(barcode);
+    entries.push({ barcode, copies });
+  }
+  if (!entries.length) throw new Error("A CSV-ben nincs feldolgozható vonalkód és darabszám.");
+  return entries;
 }
 
 function labelMm(v: unknown, fallback: number, min: number, max: number) {
@@ -6595,6 +6631,15 @@ async function apiLabelStockCheck(items: WarehouseLabelStockCheckItem[]) {
   });
 }
 
+// Egyszeri árválasztás mentése a konkrét PMP árváltozási bizonylatsorhoz.
+async function apiApproveWarehouseLabelPrice(documentId: string, variantId: string, choice: WarehouseRelabelPriceChoice) {
+  return fetchJSON<{ ok: true; documentId: string; variantId: string; choice: WarehouseRelabelPriceChoice; approvedPrice: number }>("/api/aif/label-price-approval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documentId, variantId, choice }),
+  });
+}
+
 function warehouseCatalogItemFromDetail(detail: DetailResponse, fallbackBarcode = ""): InventoryItem | null {
   const raw = (detail?.item || {}) as Record<string, any>;
   const variantId = firstWarehouseText(raw.variant_id, raw.id);
@@ -7578,6 +7623,9 @@ export default function AllInWarehouse() {
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
   const [labelPrintMode, setLabelPrintMode] = useState<WarehouseLabelPrintMode>(() => readWarehouseLabelPrintMode());
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
+  const labelCopiesUploadRef = useRef<HTMLInputElement | null>(null);
+  const [labelCopiesUploadStatus, setLabelCopiesUploadStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [labelCopiesImportedFromCsv, setLabelCopiesImportedFromCsv] = useState(false);
   const [labelWidth, setLabelWidth] = useState("40");
   const [labelHeight, setLabelHeight] = useState("46");
   const [labelCols, setLabelCols] = useState("5");
@@ -7600,6 +7648,7 @@ export default function AllInWarehouse() {
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [labelPrintFlow, setLabelPrintFlow] = useState<WarehouseLabelPrintFlow | null>(null);
   const [labelStockLimitById, setLabelStockLimitById] = useState<Record<string, number>>({});
+  const [labelStockCheckById, setLabelStockCheckById] = useState<Record<string, WarehouseLabelStockCheckRow>>({});
   const [labelRelabelExtraById, setLabelRelabelExtraById] = useState<Record<string, number>>({});
   const [labelRelabelPromptRows, setLabelRelabelPromptRows] = useState<WarehouseRelabelPromptRow[]>([]);
   const [labelRelabelPromptOpen, setLabelRelabelPromptOpen] = useState(false);
@@ -9451,8 +9500,34 @@ export default function AllInWarehouse() {
     };
   }
 
+  // A "Legutóbbi bevételezés" saját kijelölése is SZÁMLA-darabszámmal dolgozzon.
+  // A gyors import-nézet variánsonként összevonja a terméksorokat, ezért az
+  // import_variant_qty mindig az eredeti, készletre vett sorok ÖSSZEGE.
+  function incomingFocusSelectionMetaForVariant(variantId: string): WarehouseSelectionMeta | null {
+    const id = String(variantId || "").trim();
+    const source = incomingFocus;
+    if (!id || !source?.batchId || !source.variantIds.includes(id)) return null;
+    const receptionId = firstWarehouseText(source.batch?.reception_id, source.batch?.receptionId);
+    if (!receptionId) return null;
+    const matches = (source.rows || []).filter((row) =>
+      String(row.variant_id || row.variantId || "").trim() === id
+    );
+    if (!matches.length) return null;
+    const combinedQty = Math.max(0, Math.floor(n(matches[0].import_variant_qty ?? matches[0].importVariantQty)));
+    const directQty = matches.reduce((sum, row) => sum + Math.max(0, Math.floor(n(row.import_qty ?? row.qty))), 0);
+    const qty = combinedQty || directQty;
+    if (!qty) return null;
+    return {
+      labelSource: "invoice",
+      labelQty: qty,
+      invoiceKey: `import:${source.batchId}`,
+      invoiceNumber: firstWarehouseText(source.batch?.invoice_number, source.batch?.invoiceNumber) || null,
+      receptionId,
+    };
+  }
+
   function selectedMutationItem(variantId: string, action?: SelectedWorkAction | null) {
-    const selectionMeta = invoiceSelectionMetaForVariant(variantId);
+    const selectionMeta = incomingFocusSelectionMetaForVariant(variantId) || invoiceSelectionMetaForVariant(variantId);
     if (selectionMeta) return { variantId, action, selectionMeta };
     if (action === "label") {
       return {
@@ -12187,7 +12262,7 @@ export default function AllInWarehouse() {
     setSelectedPanelOpen(true);
 
     void runSelectedVariantMutation(
-      () => apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId }))),
+      () => apiAddSelectedVariantSelection(ids.map((variantId) => selectedMutationItem(variantId))),
       "A legutóbbi bevételezés kijelölt termékeinek megnyitása nem sikerült.",
     ).catch(() => undefined);
   }
@@ -12480,10 +12555,14 @@ export default function AllInWarehouse() {
     const persisted = raw && typeof raw === "object" && !Array.isArray(raw)
       ? raw as WarehouseSelectionMeta
       : null;
-    const persistedSource = String(persisted?.labelSource || persisted?.label_source || "").trim().toLowerCase();
-    if (persistedSource === "invoice") return persisted;
-
     const id = String(item.variant_id || "").trim();
+    // Frissen kijelölt import esetén NE egy korábbi munkalista számlamennyisége
+    // legyen az elsődleges forrás, hanem a most megnyitott bevételezésé.
+    const incomingMeta = id ? incomingFocusSelectionMetaForVariant(id) : null;
+    if (incomingMeta) return incomingMeta;
+    // Ha most egy konkrét számla van kiválasztva, annak AKTUÁLIS
+    // mennyisége/receptiója az elsődleges. A közös munkalista korábban
+    // mentett (akár másik számlához tartozó) metadata nem írhatja felül.
     const activeInvoiceMeta = id ? invoiceSelectionMetaForVariant(id) : null;
     return activeInvoiceMeta || persisted;
   }
@@ -12541,6 +12620,7 @@ export default function AllInWarehouse() {
     const response = await apiLabelStockCheck(requestItems);
     const rows = Array.isArray(response.items) ? response.items : [];
     const byId = new Map(rows.map((row) => [String(row.variantId || "").trim(), row] as const));
+    setLabelStockCheckById(Object.fromEntries(byId));
     const missingIds = requestItems.map((row) => row.variantId).filter((id) => !byId.has(id));
     if (missingIds.length) {
       throw new Error(`A friss készletellenőrzés ${missingIds.length} terméknél nem adott eredményt.`);
@@ -12662,7 +12742,59 @@ export default function AllInWarehouse() {
     }
   }
 
+  async function applyWarehouseLabelQuantityCsv(file: File) {
+    setLabelCopiesUploadStatus(null);
+    try {
+      if (file.size > 150_000) throw new Error("A CSV túl nagy. Legfeljebb 150 KB-os címkelista fogadható.");
+      const requested = parseWarehouseLabelQuantityCsv(await file.text());
+      const barcodeToItem = new Map<string, typeof labelRowsForPrint[number]>();
+      for (const row of labelRowsForPrint) {
+        const code = String(row.barcode || "").trim().toUpperCase();
+        if (!code) continue;
+        if (barcodeToItem.has(code) && barcodeToItem.get(code)?.id !== row.id) {
+          throw new Error(`A kijelölt termékek között ugyanaz a vonalkód két variánshoz tartozik: ${code}.`);
+        }
+        barcodeToItem.set(code, row);
+      }
+      const missing = requested.filter((entry) => !barcodeToItem.has(entry.barcode));
+      if (missing.length) {
+        throw new Error(`${missing.length} vonalkód nincs a címkelistában (${missing.slice(0, 3).map((row) => row.barcode).join(", ")}). Nyisd meg előbb a megfelelő teljes bevételezés termékeit.`);
+      }
+      for (const entry of requested) {
+        const item = barcodeToItem.get(entry.barcode)!;
+        const maxCopies = Object.prototype.hasOwnProperty.call(labelStockLimitById, item.id)
+          ? Math.max(0, Math.floor(n(labelStockLimitById[item.id])))
+          : 999;
+        if (entry.copies > maxCopies) {
+          throw new Error(`${entry.barcode}: ${entry.copies} címke szükséges, de a friss ellenőrzés legfeljebb ${maxCopies} darabot enged. Nem állítom át csendben a mennyiséget.`);
+        }
+        if (!item.render.ok) {
+          throw new Error(`A ${entry.barcode} kód nem nyomtatható: ${item.render.error || "érvénytelen vonalkód"}.`);
+        }
+      }
+      // Atomi művelet: előbb minden vonalkódot és limitet ellenőrzünk,
+      // csak utána állítjuk a többi terméket 0 darabra.
+      const nextCopies: Record<string, string> = {};
+      for (const row of labelRowsForPrint) nextCopies[row.id] = "0";
+      for (const entry of requested) {
+        const row = barcodeToItem.get(entry.barcode)!;
+        nextCopies[row.id] = String(entry.copies);
+      }
+      setLabelCopies((current) => ({ ...current, ...nextCopies }));
+      setLabelCopiesImportedFromCsv(true);
+      const totalCopies = requested.reduce((sum, row) => sum + row.copies, 0);
+      setLabelCopiesUploadStatus({
+        ok: true,
+        message: `${requested.length} termék • ${totalCopies} címke beállítva. A fájlban nem szereplő kijelölt termékek 0 db-ra kerültek. Ellenőrizd a végösszeget, majd nyomtass. A sikeres nyomtatás visszaigazolásakor az egész jelenlegi címkemunkalista kiürül.`,
+      });
+    } catch (error) {
+      setLabelCopiesUploadStatus({ ok: false, message: error instanceof Error ? error.message : "A címke CSV nem olvasható." });
+    }
+  }
+
   async function openLabelComposer() {
+    setLabelCopiesImportedFromCsv(false);
+    setLabelCopiesUploadStatus(null);
     setLabelPrintFlow(null);
     setLabelClearConfirmOpen(false);
     setLabelRelabelPriceTargetId("");
@@ -12794,6 +12926,15 @@ export default function AllInWarehouse() {
         if (savedPrice === null || cents(savedPrice) !== cents(selectedPrice)) {
           throw new Error("A szerver nem a kiválasztott eladási árat adta vissza. A jóváhagyás nem zárható le, ellenőrizd a termékárat.");
         }
+      }
+
+      // A termékár önmagában nem elég: a döntés a PMP bizonylatban is
+      // rögzül, különben újabb címkenyomtatáskor a popup ismét megjelenik.
+      const documentId = String(row.priceChange.documentId || "").trim();
+      if (!documentId) throw new Error("Hiányzik az árváltozási bizonylat azonosítója, a jóváhagyás nem tárolható.");
+      const approval = await apiApproveWarehouseLabelPrice(documentId, id, chosen);
+      if (!approval.ok || approval.choice !== chosen || cents(Number(approval.approvedPrice)) !== cents(selectedPrice)) {
+        throw new Error("A jóváhagyott ár visszaellenőrzése sikertelen. Ellenőrizd a bizonylat állapotát.");
       }
 
       const updatedDetail: DetailResponse = {
@@ -13107,6 +13248,48 @@ export default function AllInWarehouse() {
     });
   }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
 
+  // A címkenyomtatóba kerülő végső példányszámok tételes ellenőrzése.
+  // Számlánként szétválasztjuk a felületi mennyiséget, a szerverhez elküldött
+  // mennyiséget és a szerver által engedélyezett darabszámot.
+  const labelQuantityAudit = labelRowsForPrint.map((row) => {
+    const id = row.id;
+    const selectedInvoiceQty = Math.max(0, Math.floor(n(selectedInvoiceFilterOption?.variantQtyById[id])));
+    const incomingInvoiceQty = incomingFocusSelectionMetaForVariant(id)?.labelQty || 0;
+    const displayedInvoiceQty = Math.max(0, Math.floor(n(incomingInvoiceQty || selectedInvoiceQty || invoiceLabelCopiesForItem(row.item))));
+    const server = labelStockCheckById[id] || null;
+    const submittedQty = Math.max(0, Math.floor(n(server?.invoiceQty)));
+    const allowedQty = Math.max(0, Math.floor(n(server?.baseMaxCopies ?? server?.maxCopies)));
+    return {
+      id,
+      barcode: row.barcode,
+      title: row.title,
+      productCode: row.productCode,
+      color: row.colorNameRo,
+      size: row.size,
+      displayedInvoiceQty,
+      submittedQty,
+      allowedQty,
+      copies: row.copies,
+      deficit: Math.max(0, displayedInvoiceQty - row.copies),
+      mode: String(server?.mode || ""),
+      verifiedQty: Math.max(0, Math.floor(n(server?.verifiedReceptionQty))),
+      outgoingQty: Math.max(0, Math.floor(n(server?.outgoingSinceReception))),
+      currentQty: Math.max(0, Math.floor(n(server?.currentQty))),
+      localQty: Math.max(0, Math.floor(n(server?.currentLocationQty))),
+    };
+  });
+  const labelInvoiceAuditTotals = labelQuantityAudit.reduce((acc, row) => {
+    acc.displayed += row.displayedInvoiceQty;
+    acc.submitted += row.submittedQty;
+    acc.allowed += row.allowedQty;
+    acc.deficit += row.deficit;
+    if (row.deficit > 0) acc.affected += 1;
+    return acc;
+  }, { displayed: 0, submitted: 0, allowed: 0, deficit: 0, affected: 0 });
+  const labelInvoiceQuantityAuditVisible = !labelCopiesImportedFromCsv &&
+    (Boolean(selectedInvoiceFilterOption) || Boolean(incomingFocus?.batchId) || labelInvoiceAuditTotals.submitted > 0) &&
+    labelInvoiceAuditTotals.displayed > 0;
+
   const labelInvalidRows = useMemo(
     () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
     [labelRowsForPrint]
@@ -13248,7 +13431,13 @@ export default function AllInWarehouse() {
     }
 
     const printedVariantIds = Array.from(new Set(printItems.map((item) => String(item.variantId || "").trim()).filter(Boolean)));
-    const completedVariantIds = Array.from(new Set([...printedVariantIds, ...stockCheck.zeroStockVariantIds]));
+    // CSV pótlás után a többi kijelölt variáns szándékosan 0 darab.
+    // Sikeres nyomtatás megerősítésekor ne maradjon vissza ez a teljes import a munkalistán.
+    const completedVariantIds = Array.from(new Set([
+      ...printedVariantIds,
+      ...stockCheck.zeroStockVariantIds,
+      ...(labelCopiesImportedFromCsv ? selectedLabelItems.map((row) => String(row.variant_id || "").trim()).filter(Boolean) : []),
+    ]));
     if (trackedPrint) {
       setLabelPrintFlow((current) => current ? {
         ...current,
@@ -17028,6 +17217,34 @@ export default function AllInWarehouse() {
               </div>
             </div>
 
+            {labelInvoiceQuantityAuditVisible && (
+              <div className={`border-b px-4 py-3 text-xs ${labelInvoiceAuditTotals.deficit ? "border-amber-200/30 bg-[#514733]" : "border-[#7bd7d4]/20 bg-[#25484d]"}`}>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  <span className="font-medium text-white">Számlás címkék ellenőrzése</span>
+                  <span className="tabular-nums text-white/84">Számlán: <b>{labelInvoiceAuditTotals.displayed} db</b></span>
+                  <span className="tabular-nums text-white/84">API-nak átadva: <b>{labelInvoiceAuditTotals.submitted} db</b></span>
+                  <span className="tabular-nums text-white/84">Szerver által engedve: <b>{labelInvoiceAuditTotals.allowed} db</b></span>
+                  <span className="tabular-nums text-white/84">Nyomtatásra: <b>{labelPrintItems.length} db</b></span>
+                  {labelInvoiceAuditTotals.deficit > 0 ? <span className="tabular-nums font-medium text-amber-100">Eltérés: −{labelInvoiceAuditTotals.deficit} címke / {labelInvoiceAuditTotals.affected} variáns</span> : <span className="text-[#d7fffd]">Nincs címkehiány.</span>}
+                </div>
+                {labelInvoiceAuditTotals.deficit > 0 && (
+                  <details className="mt-2 rounded-lg border border-amber-100/18 bg-black/15 p-2.5">
+                    <summary className="cursor-pointer font-medium text-amber-50">Miért maradt ki címke? {labelInvoiceAuditTotals.affected} érintett termék részletei</summary>
+                    <div className="mt-2 max-h-56 space-y-1.5 overflow-auto pr-1">
+                      {labelQuantityAudit.filter((row) => row.deficit > 0).map((row) => (
+                        <div key={row.id} className="rounded-lg border border-white/10 bg-[#334155] px-2.5 py-2 text-white/82">
+                          <p className="text-[11px] text-white">{row.title} • {row.productCode} • {row.color} • {row.size}</p>
+                          <p className="mt-1 font-mono text-[10px] text-white/58">{row.barcode}</p>
+                          <p className="mt-1 tabular-nums text-[11px]">Számla: {row.displayedInvoiceQty} • API: {row.submittedQty} • Limit: {row.allowedQty} • Címke: {row.copies} • <b className="text-amber-100">Hiányzik: {row.deficit}</b></p>
+                          <p className="mt-1 text-[10px] text-white/55">Mód: {row.mode || "nincs adat"} • Receptióban igazolt: {row.verifiedQty} • Valódi kimenő: {row.outgoingQty} • Helyi készlet: {row.localQty} • Összes készlet: {row.currentQty}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+
             {labelPrintFlow && labelPrintFlow.phase !== "confirm" && (
               <div className="border-b border-[#7bd7d4]/22 bg-[#183f48] px-4 py-3">
                 <div className="mx-auto flex max-w-5xl items-center gap-3">
@@ -17199,6 +17416,39 @@ export default function AllInWarehouse() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-white">Termékek és példányszám</p>
                     <span className="text-xs text-white/55">A kép csak végső ellenőrzéshez látszik, a címkére nem kerül</span>
+                  </div>
+                  <div className="mb-3 rounded-xl border border-[#7bd7d4]/32 bg-[#203f49] p-3">
+                    <input
+                      ref={labelCopiesUploadRef}
+                      type="file"
+                      accept=".csv,.txt,text/csv,text/plain"
+                      className="hidden"
+                      aria-label="Címkemennyiségek importálása CSV-ből"
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        event.currentTarget.value = "";
+                        if (file) void applyWarehouseLabelQuantityCsv(file);
+                      }}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[12px] text-white">Csak a hiányzó címkék nyomtatása</p>
+                        <p className="mt-1 text-[11px] text-white/62">CSV formátum: vonalkód;darab. Automatikusan 0 lesz minden más termék.</p>
+                      </div>
+                      <button
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/46 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                        onClick={() => labelCopiesUploadRef.current?.click()}
+                        disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
+                        type="button"
+                      ><FileText size={14} /> Pótló CSV betöltése</button>
+                    </div>
+                    {labelCopiesUploadStatus && (
+                      <p role="status" className={`mt-3 rounded-lg border px-3 py-2 text-[12px] ${labelCopiesUploadStatus.ok
+                        ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/18 text-[#d7fffd]"
+                        : "border-rose-300/38 bg-rose-500/12 text-rose-100"}`}>
+                        {labelCopiesUploadStatus.ok ? "✓ " : "⚠ "}{labelCopiesUploadStatus.message}
+                      </p>
+                    )}
                   </div>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
