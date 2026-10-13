@@ -47,8 +47,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' },
   // No invented street addresses. The administrator enters each real store address.
   shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''},
-  // One webshop link for both stores. Enabled by default, editable by the admin.
-  websiteUrl:'www.allinfashion.ro', includeWebsite:true
+  // Optional webshop link for both shops. Empty by default; the admin opts in explicitly.
+  websiteUrl:'', includeWebsite:false
 });
 // Allow only a website home address. Never include arbitrary schemes, credentials, SMS separators or control chars.
 export function normalizeWebsite(value) {
@@ -81,7 +81,9 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
     o.unsubscribePhone=phone||'';
   }
   if('websiteUrl' in input) o.websiteUrl=normalizeWebsite(input.websiteUrl);
-  if(o.includeWebsite&&!normalizeWebsite(o.websiteUrl))throw fail('Add meg az online üzlet weboldalát, vagy kapcsold ki az SMS-be illesztést.');
+  // Blank website is always optional: even a previously enabled toggle must not block saving.
+  // Avoid a logically enabled-but-empty state when old settings are submitted.
+  if(!txt(o.websiteUrl))o.includeWebsite=false;
   const shopCodes=['main_warehouse','magazin_targu_secuiesc'];
   if(input.shopNames!==undefined) {
     if(!input.shopNames||typeof input.shopNames!=='object'||Array.isArray(input.shopNames))throw fail('Az üzletnevek adatai érvénytelenek.');
@@ -110,7 +112,7 @@ export function messageSettingsSnapshot(settings,locationCode) {
     storeName:txt(settings.shopNames?.[locationCode]),
     storeAddress:txt(settings.shopAddresses?.[locationCode]),
     websiteUrl:txt(settings.websiteUrl),
-    includeWebsite:settings.includeWebsite===true,
+    includeWebsite:settings.includeWebsite===true&&Boolean(txt(settings.websiteUrl)),
     // V3 adds the configured webshop URL to the SMS body when enabled.
     // Old prepared campaigns must be prepared again before they can be sent live.
     messageFormatVersion:3
@@ -184,8 +186,8 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   // is configured separately and may be a numeric sender.
   const storeName=txt(values.storeName);
   if(!storeName)throw fail('Az SMS feladó üzletneve nincs beállítva.','sms_missing_store_name');
-  const webshop=includeWebsite?normalizeWebsite(websiteUrl):'';
-  if(includeWebsite&&!webshop)throw fail('Az SMS-hez bekapcsolt webáruház-cím nincs kitöltve.','sms_missing_website');
+  // No website entered means no webshop text, regardless of stale enabled settings.
+  const webshop=includeWebsite&&txt(websiteUrl)?normalizeWebsite(websiteUrl):'';
   // Webshop after the business message and before the mandatory opt-out contact.
   const sitePart=webshop?` Online: ${webshop}`:'';
   return segmentInfo(`${storeName}: ${raw} ${terms}${sitePart} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
