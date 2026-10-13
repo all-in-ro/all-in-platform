@@ -1,4 +1,5 @@
 import express from "express";
+import createAifSmsModule from "./aif/sms/index.js";
 import createAifAdminShopsRouter from "./aif/adminShops.js";
 import createAifShopReturnsRouter from "./aif/shopReturns.js";
 import createAifShopReservationsRouter from "./aif/shopReservations.js";
@@ -31377,6 +31378,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  // SMS, érdeklődési profil és kupon: külön modul, itt csak a bekötés marad.
+  const aifSms = createAifSmsModule({ pool, requireAuthed, ensureAifShopSalesSchema, aifResolveShopLocation, actorFrom });
+  router.use("/sms", aifSms.router);
+
   router.post("/shop-sales/complete", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const linesInput = Array.isArray(body.lines) ? body.lines : [];
@@ -31394,6 +31399,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const client = await pool.connect();
     try {
+      if (text(body.couponCode)) await aifSms.ensure();
       await client.query("BEGIN");
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, client, body.location);
@@ -31675,7 +31681,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
-      const extraDiscountAmount = aifRoundMoney(requestedExtraDiscount);
+      const smsCoupon = await aifSms.coupons.prepare(client, {
+        body, location, lines: saleLines, baseTotal: percentDiscountedTotal,
+        manualExtraDiscount: requestedExtraDiscount,
+      });
+      const extraDiscountAmount = aifRoundMoney(requestedExtraDiscount + (smsCoupon?.amount || 0));
       if (extraDiscountAmount > percentDiscountedTotal + 0.005) {
         const error = new Error(`A plusz kedvezmény legfeljebb ${percentDiscountedTotal.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON lehet.`);
         error.statusCode = 400;
@@ -31993,6 +32003,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ]
       );
 
+      await aifSms.coupons.consume(client, smsCoupon, sale, actorFrom(req));
       const completed = await aifLoadShopSaleResult(client, sale.id);
       await client.query("COMMIT");
       res.json(aifShopSaleResponse(completed, location, false));
