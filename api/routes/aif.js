@@ -6233,6 +6233,109 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
 
+  // Központi alkategória -> engedélyezett standard méretek.
+  // Üres kapcsolat = az alkategória még nincs konfigurálva; ilyenkor a felületek
+  // a tényleges raktári méretekből ajánlhatnak értékeket, de nem írhatnak készletet.
+  let subcategorySizeSchemaPromise = null;
+  function ensureAifSubcategorySizeSchema() {
+    if (!subcategorySizeSchemaPromise) {
+      subcategorySizeSchemaPromise = (async () => {
+        await ensureAifSizeTables(pool);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_subcategory_size_types (
+          subcategory_id uuid NOT NULL REFERENCES aif_categories(id) ON DELETE CASCADE,
+          size_type_id uuid NOT NULL REFERENCES aif_size_types(id) ON DELETE CASCADE,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (subcategory_id, size_type_id)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_subcategory_size_types_size_idx
+          ON aif_subcategory_size_types (size_type_id, subcategory_id)`);
+        return true;
+      })().catch((error) => {
+        subcategorySizeSchemaPromise = null;
+        throw error;
+      });
+    }
+    return subcategorySizeSchemaPromise;
+  }
+
+  async function readAifSubcategorySizes(client = pool) {
+    const result = await client.query(`SELECT
+        link.subcategory_id::text AS subcategory_id,
+        link.size_type_id::text AS size_type_id
+      FROM aif_subcategory_size_types link
+      JOIN aif_categories cat ON cat.id=link.subcategory_id
+      JOIN aif_size_types sz ON sz.id=link.size_type_id
+      WHERE cat.parent_id IS NOT NULL
+        AND COALESCE(cat.is_active,true)=true
+        AND COALESCE(sz.is_active,true)=true
+      ORDER BY link.subcategory_id,sz.sort_order,sz.name`);
+    return result.rows;
+  }
+
+  router.get("/subcategory-size-links", requireAuthed, async (_req, res) => {
+    try {
+      await ensureAifSubcategorySizeSchema();
+      return res.json({ ok: true, items: await readAifSubcategorySizes() });
+    } catch (error) {
+      console.error("AIF subcategory size links read failed", error);
+      return res.status(500).json({ error: "Az alkategóriák méretkapcsolatai nem tölthetők be." });
+    }
+  });
+
+  router.put("/subcategory-size-links/:subcategoryId", requireAdminOrSecret, async (req, res) => {
+    const subcategoryId = text(req.params.subcategoryId);
+    const incoming = req.body?.sizeTypeIds ?? req.body?.size_type_ids;
+    if (!isUuidText(subcategoryId) || !Array.isArray(incoming) || incoming.length > 300) {
+      return res.status(400).json({ error: "Érvényes alkategória és méretazonosító lista szükséges." });
+    }
+    const ids = [...new Set(incoming.map((id) => text(id)))];
+    if (ids.some((id) => !isUuidText(id))) {
+      return res.status(400).json({ error: "A méretazonosítók között érvénytelen érték van." });
+    }
+    let client;
+    try {
+      await ensureAifSubcategorySizeSchema();
+      client = await pool.connect();
+      await client.query("BEGIN");
+      await client.query("SET LOCAL lock_timeout='5s'");
+      const category = await client.query(`SELECT id FROM aif_categories
+        WHERE id=$1::uuid AND parent_id IS NOT NULL AND COALESCE(is_active,true)=true
+        FOR UPDATE`, [subcategoryId]);
+      if (category.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Az alkategória nem található vagy inaktív." });
+      }
+      if (ids.length) {
+        const valid = await client.query(`SELECT id FROM aif_size_types
+          WHERE id=ANY($1::uuid[]) AND COALESCE(is_active,true)=true`, [ids]);
+        if (valid.rowCount !== ids.length) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Inaktív vagy nem létező méretet választottál." });
+        }
+      }
+      // A teljes kapcsolat atomikusan cserélődik. Termék, készlet, variáns NEM változik.
+      await client.query(`DELETE FROM aif_subcategory_size_types WHERE subcategory_id=$1::uuid`, [subcategoryId]);
+      if (ids.length) {
+        await client.query(`INSERT INTO aif_subcategory_size_types(subcategory_id,size_type_id)
+          SELECT $1::uuid,unnest($2::uuid[])
+          ON CONFLICT DO NOTHING`, [subcategoryId, ids]);
+      }
+      const result = await client.query(`SELECT subcategory_id::text,size_type_id::text
+        FROM aif_subcategory_size_types WHERE subcategory_id=$1::uuid`, [subcategoryId]);
+      if (result.rowCount !== ids.length) {
+        throw new Error("A méretkapcsolatok visszaellenőrzése nem egyezik a mentett listával.");
+      }
+      await client.query("COMMIT");
+      return res.json({ ok: true, subcategoryId, sizeTypeIds: ids, items: result.rows });
+    } catch (error) {
+      try { await client?.query("ROLLBACK"); } catch {}
+      console.error("AIF subcategory size links save failed", error);
+      return res.status(500).json({ error: "Az alkategória méretkapcsolatainak mentése nem sikerült." });
+    } finally {
+      client?.release();
+    }
+  });
+
   router.get("/size-types", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     try {
@@ -7148,13 +7251,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (req, res) => {
-    await ensureAifSizeTables(pool);
+    await ensureAifSubcategorySizeSchema();
 
     const scope = text(req.query.scope).toLowerCase();
     if (scope === "warehouse") {
       // A raktár nem használ pénznem-, importprofil- és egyéb admin-meta adatot.
       // Ezeket korábban mégis minden megnyitáskor lekértük és JSON-ba csomagoltuk.
-      const [suppliers, brands, categories, genderTypes, locations, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands] = await Promise.all([
+      const [suppliers, brands, categories, genderTypes, locations, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, subcategorySizes] = await Promise.all([
         pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
         pool.query(`WITH ranked AS (
                       SELECT id, code, name, is_active,
@@ -7201,6 +7304,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     JOIN aif_brands b ON b.id=sb.brand_id
                     WHERE sb.is_active=true AND s.is_active=true AND b.is_active=true
                     ORDER BY s.name ASC, b.name ASC`),
+        readAifSubcategorySizes(pool),
       ]);
 
       return res.json({
@@ -7216,10 +7320,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         brandSizeCodes: brandSizeCodes.rows,
         materialTypes: materialTypes.rows,
         supplierBrands: supplierBrands.rows,
+        subcategorySizes,
       });
     }
 
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles, subcategorySizes] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`WITH ranked AS (
                     SELECT id, code, name, is_active,
@@ -7273,6 +7378,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   JOIN aif_suppliers s ON s.id=p.supplier_id
                   WHERE s.is_active=true AND p.is_active=true
                   ORDER BY s.name ASC, p.name ASC, p.version DESC`),
+      readAifSubcategorySizes(pool),
     ]);
     const salesTvaSettings = await readSalesTvaSettings(pool);
     res.json({
@@ -7289,6 +7395,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sizeTypes: sizeTypes.rows,
       brandSizeCodes: brandSizeCodes.rows,
       materialTypes: materialTypes.rows,
+      subcategorySizes,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
       salesTvaSettings,
