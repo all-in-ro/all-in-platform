@@ -1,3 +1,5 @@
+import { SmsLauncher } from "../components/aif/sms/SmsCenter";
+import { SmsBadge, SmsProfileButton, useSmsProfiles } from "../components/aif/sms/SmsProfile";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -281,6 +283,7 @@ export default function AllInMagazinClients({
     [locationCodeProp, locationName],
   );
   const defaultCountyCode = useMemo(() => preferredCountyCode(locationName), [locationName]);
+  const smsProfiles = useSmsProfiles(open ? items.map(item => item.id) : [], locationCode);
   const yearOptions = useMemo(
     () => Array.from({ length: Math.max(1, currentYear - 2025 + 1) }, (_, index) => currentYear - index),
     [currentYear],
@@ -1175,7 +1178,8 @@ export default function AllInMagazinClients({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <SmsLauncher role={role} locationCode={locationCode} />
             <button
               type="button"
               onClick={openSearch}
@@ -1289,6 +1293,7 @@ export default function AllInMagazinClients({
                               {numberValue(item.saleCount)} vásárlás
                             </span>
                           </div>
+                          <div className="mt-1"><SmsBadge status={smsProfiles[item.id]} /></div>
                           <div className="mt-2 space-y-1 text-xs text-white/55">
                             {item.phone ? <p className="flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{item.phone}</p> : null}
                             {item.email ? <p className="flex items-center gap-2 truncate"><Mail size={13} className="text-[#8ee6e2]" />{item.email}</p> : null}
@@ -1417,6 +1422,7 @@ export default function AllInMagazinClients({
                 </button>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  <SmsProfileButton key={selected.id} customerId={selected.id} location={locationCode} role={role} />
                   {canManageCustomerData ? (
                     <>
                       <button

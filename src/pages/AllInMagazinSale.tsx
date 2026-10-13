@@ -1,3 +1,4 @@
+import { useSmsCoupon } from "../components/aif/sms/SmsCouponBox";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -327,6 +328,7 @@ export default function AllInMagazinSale({
   const [saleErrorDialog, setSaleErrorDialog] = useState<SaleErrorDialog | null>(null);
   const [success, setSuccess] = useState<AifShopSaleResult | null>(null);
   const requestKeyRef = useRef("");
+  const saleSubmittingRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const cartScrollRef = useRef<HTMLDivElement | null>(null);
   const automaticLookupTimerRef = useRef<number | null>(null);
@@ -496,12 +498,19 @@ export default function AllInMagazinSale({
   const extraDiscountAmount = extraDiscountTooLarge
     ? requestedExtraDiscount
     : Math.min(requestedExtraDiscount, percentDiscountedTotal);
-  const total = extraDiscountTooLarge
+  const beforeCoupon = extraDiscountTooLarge
     ? percentDiscountedTotal
     : roundMoney(percentDiscountedTotal - extraDiscountAmount);
+  const smsCoupon = useSmsCoupon({
+    location: locationCode, customerId: selectedCustomer?.id,
+    lines: cart.map(line => ({variantId: line.variantId, quantity: line.quantity, discountPercent: line.discountPercent})),
+    manualDiscount: extraDiscountAmount, beforeCoupon, locked: submitting,
+    onChange: invalidateRequestKey,
+  });
+  const total = roundMoney(Math.max(0, beforeCoupon - smsCoupon.discount));
   const discountTotal = Math.max(
     0,
-    roundMoney(percentDiscountTotal + (extraDiscountTooLarge ? 0 : extraDiscountAmount)),
+    roundMoney(percentDiscountTotal + (extraDiscountTooLarge ? 0 : extraDiscountAmount) + smsCoupon.discount),
   );
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const selectedQuickDiscount = useMemo(() => {
@@ -847,6 +856,8 @@ export default function AllInMagazinSale({
   }
 
   function clearCart() {
+    if (saleSubmittingRef.current) return;
+    smsCoupon.reset();
     invalidateRequestKey();
     setCart([]);
     setSelectedCustomer(null);
@@ -856,6 +867,7 @@ export default function AllInMagazinSale({
   }
 
   async function completeSale() {
+    if (saleSubmittingRef.current) return;
     if (!cart.length) {
       setError("");
       setSaleErrorDialog({
@@ -879,6 +891,11 @@ export default function AllInMagazinSale({
       return;
     }
 
+    if (smsCoupon.blocked || smsCoupon.loading) {
+      setSaleErrorDialog({title: "A kupon még nincs ellenőrizve", message: "Ellenőrizd a kuponkódot a jelenlegi klienshez és kosárhoz, vagy töröld a kódot az eladásból."});
+      return;
+    }
+    saleSubmittingRef.current = true;
     setSubmitting(true);
     setError("");
     if (!requestKeyRef.current) requestKeyRef.current = createRequestKey();
@@ -889,6 +906,8 @@ export default function AllInMagazinSale({
         paymentMethod,
         idempotencyKey: requestKeyRef.current,
         extraDiscountAmount,
+        couponCode: smsCoupon.valid ? smsCoupon.code : undefined,
+        couponExpectedDiscount: smsCoupon.expectedDiscount,
         note: note.trim() || null,
         customer: selectedCustomer
           ? {
@@ -911,6 +930,7 @@ export default function AllInMagazinSale({
         })),
       });
       setSuccess(result);
+      smsCoupon.reset();
       setCart([]);
       setSelectedCustomer(null);
       setExtraDiscountInput("");
@@ -921,6 +941,7 @@ export default function AllInMagazinSale({
       setError("");
       setSaleErrorDialog(saleErrorDialogFrom(caught));
     } finally {
+      saleSubmittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -1319,11 +1340,14 @@ export default function AllInMagazinSale({
                       <div className="flex justify-between text-white/58"><span>Eredeti összeg</span><span>{formatMoney(subtotal)}</span></div>
                       <div className="flex justify-between text-amber-100/82"><span>Százalékos kedvezmény</span><span>-{formatMoney(percentDiscountTotal)}</span></div>
                       <div className="flex justify-between text-amber-100"><span>Plusz kedvezmény</span><span>-{formatMoney(extraDiscountTooLarge ? 0 : extraDiscountAmount)}</span></div>
+                      {smsCoupon.discount > 0 ? <div className="flex justify-between text-[#9be9e5]"><span>SMS-kupon</span><span>-{formatMoney(smsCoupon.discount)}</span></div> : null}
                       <div className="flex justify-between border-t border-white/10 pt-2 text-amber-50"><span>Összes kedvezmény</span><span>-{formatMoney(discountTotal)}</span></div>
                       <div className="flex items-end justify-between pt-1"><span className="text-base text-white/75">Fizetendő</span><span className="text-3xl tracking-tight text-[#d7fffd]">{formatMoney(total)}</span></div>
                     </div>
                   </div>
                 </div>
+
+                {smsCoupon.box}
 
                 <div className="mt-3">
                   <p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Fizetési mód</p>
@@ -1362,7 +1386,7 @@ export default function AllInMagazinSale({
                 <button
                   type="button"
                   onClick={() => void completeSale()}
-                  disabled={submitting || total < 0 || extraDiscountTooLarge}
+                  disabled={submitting || total < 0 || extraDiscountTooLarge || smsCoupon.blocked || smsCoupon.loading}
                   className="mt-3 inline-flex min-h-16 w-full touch-manipulation items-center justify-center gap-3 rounded-[20px] border border-[#a4efeb]/55 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-5 text-lg shadow-[0_12px_28px_rgba(22,120,117,0.28)] transition hover:brightness-110 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? <Loader2 className="animate-spin" size={24} /> : <Receipt size={24} />}

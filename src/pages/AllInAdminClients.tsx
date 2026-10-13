@@ -1,3 +1,5 @@
+import { SmsLauncher } from "../components/aif/sms/SmsCenter";
+import { SmsBadge, SmsProfileButton, useSmsProfiles } from "../components/aif/sms/SmsProfile";
 import {
   useCallback,
   useEffect,
@@ -2390,6 +2392,7 @@ function CustomerDetailModal({
               <ReceiptText size={15} /> Vásárlások
               <span className="rounded-full border border-white/10 bg-white/[0.07] px-1.5 py-0.5 text-[9px] text-white/70">{integer(activeStore?.transactions || 0)}</span>
             </button>
+            <SmsProfileButton key={`${activeCustomerId}:${activeLocation}`} customerId={activeCustomerId} location={activeLocation} role={canManage ? "admin" : "shop"} />
             {canManage ? (
               <button type="button" onClick={startEditing} disabled={recordBusy || saveBusy || deleteBusy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/35 bg-[#2a8d8b]/22 px-3 text-xs text-[#d7fffd] transition hover:bg-[#2a8d8b]/34 disabled:opacity-45">
                 <Edit3 size={15} /> Szerkesztés
@@ -2699,6 +2702,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
   const [actionMessage, setActionMessage] = useState("");
   const [summaryQuickFilter, setSummaryQuickFilter] = useState<SummaryQuickFilter>("");
   const [rowNumberDescending, setRowNumberDescending] = useState(true);
+  const smsProfiles = useSmsProfiles((data?.customers || []).flatMap(item => item.stores.map(store => store.customerId)));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2832,6 +2836,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
               <p className="mt-1 text-sm text-white/52">Éves vásárlási érték, üzleti bontás és eladói teljesítmény egy helyen.</p>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <SmsLauncher role={role} locationCode={location === "all" ? undefined : location} />
               <span className="hidden rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-xs text-white/55 lg:inline-flex lg:items-center lg:gap-2">
                 <UserRound size={14} className="text-[#8ee6e2]" /> {actor}
               </span>
@@ -3112,6 +3117,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                             {item.combined ? <span className="shrink-0 rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">Összevonva</span> : null}
                           </div>
                           <p className="mt-1 truncate text-[10px] text-white/43">{[item.phone, item.email].filter(Boolean).join(" • ") || "Nincs elérhetőség"}</p>
+                          <div className="mt-1 flex flex-wrap gap-1">{item.stores.map((store) => <span key={`sms-${store.customerId}`} title={store.locationName || store.locationCode || "SMS"}><SmsBadge status={smsProfiles[store.customerId]} /></span>)}</div>
                         </div>
                       </div>
                     </td>
@@ -3148,6 +3154,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                           {item.periodTransactions >= 2 ? <span className="shrink-0 rounded-full border border-[#ffb08a]/80 bg-[#ff5301] px-2.5 py-1 text-[10px] font-medium leading-none text-white shadow-[0_4px_10px_rgba(255,83,1,0.24)]">Visszatérő</span> : null}
                         </div>
                         <p className="mt-1 truncate text-[10px] text-white/42">{item.phone || item.email || "Nincs elérhetőség"}</p>
+                        <span className="mt-1 flex flex-wrap gap-1">{item.stores.map((store) => <span key={`sms-${store.customerId}`} title={store.locationName || store.locationCode || "SMS"}><SmsBadge status={smsProfiles[store.customerId]} /></span>)}</span>
                       </div>
                       <p className="shrink-0 text-sm text-white">{money(item.periodRevenue)}</p>
                     </div>
