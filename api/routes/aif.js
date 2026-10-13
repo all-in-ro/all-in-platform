@@ -8130,6 +8130,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            rw.raw AS import_raw,
            rw.normalized AS import_normalized,
            rw.qty AS import_qty,
+           COALESCE(SUM(COALESCE(rw.qty,0)) OVER (PARTITION BY rw.variant_id),0)::int AS import_variant_qty,
            rw.buy_price AS import_buy_price,
            rw.buy_price_ron AS import_buy_price_ron,
            rw.sell_price AS import_sell_price,
@@ -15350,10 +15351,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  // Címkenyomtatás előtt mindig az aktuális készletből számolunk. Számlás
-  // kijelölésnél az adott receptió célhelyén, a beérkezés UTÁNI kimenő mozgásokat
-  // levonva kapjuk meg, hány címkére van még ténylegesen szükség. Így egy két nappal
-  // későbbi nyomtatás nem gyárt címkét az időközben eladott / kivett darabokra.
+  // A normál (nem receptióhoz kötött) címkézés az aktuális készletre korlátozott.
+  // Számla/receptió szerinti címkézésnél viszont a már KÉSZLETRE VETT, adatbázisban
+  // igazolt beérkezett mennyiségből indulunk ki, és csak a tényleges üzleti kiadásokat
+  // vonjuk le. A stock_table_audit/Shopify-echo technikai mozgás, nem eladás vagy
+  // fizikai árukiadás: sem a címkeszámot nem csökkentheti, sem a készlettábla
+  // pillanatnyi eltérése nem nullázhatja le a hiteles receptió címkéit.
+  // A receptióazonosítót és a mennyiséget a szerver újra ellenőrzi az importsorokon.
   router.post("/label-stock-check", requireAuthed, async (req, res) => {
     const sourceItems = Array.isArray(req.body?.items) ? req.body.items : [];
     const unique = new Map();
@@ -15408,10 +15412,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(total_stock.qty,0) AS "currentQty",
            CASE WHEN ctx.target_location_id IS NOT NULL THEN COALESCE(target_stock.qty,0) ELSE COALESCE(total_stock.qty,0) END AS "currentLocationQty",
            COALESCE(outgoing.outgoing_qty,0) AS "outgoingSinceReception",
+           COALESCE(received.committed_qty,0) AS "verifiedReceptionQty",
            GREATEST(
              0,
              FLOOR(
                CASE
+                 WHEN ctx.invoice_qty > 0
+                  AND ctx.reception_id IS NOT NULL
+                  AND anchor.created_at IS NOT NULL
+                  AND COALESCE(received.committed_qty,0) > 0 THEN
+                   GREATEST(
+                     0,
+                     LEAST(ctx.invoice_qty, received.committed_qty) - COALESCE(outgoing.outgoing_qty,0)
+                   )
                  WHEN ctx.invoice_qty > 0 AND anchor.created_at IS NOT NULL THEN
                    LEAST(
                      ctx.invoice_qty,
@@ -15427,6 +15440,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              )
            )::int AS "maxCopies",
            CASE
+             WHEN ctx.invoice_qty > 0 AND ctx.reception_id IS NOT NULL
+              AND anchor.created_at IS NOT NULL AND COALESCE(received.committed_qty,0) > 0
+               THEN 'verified_reception_business_outgoing'
              WHEN ctx.invoice_qty > 0 AND anchor.created_at IS NOT NULL THEN 'invoice_outgoing_guard'
              WHEN ctx.invoice_qty > 0 AND ctx.target_location_id IS NOT NULL THEN 'invoice_location_cap'
              WHEN ctx.invoice_qty > 0 THEN 'invoice_total_cap'
@@ -15446,6 +15462,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND s.location_id=ctx.target_location_id
          ) target_stock ON true
          LEFT JOIN LATERAL (
+           SELECT COALESCE(sum(ir.qty) FILTER (WHERE ir.status='committed'),0)::numeric AS committed_qty
+           FROM aif_import_rows ir
+           JOIN aif_import_batches ib ON ib.id=ir.batch_id
+           WHERE ctx.reception_id IS NOT NULL
+             AND ib.reception_id::text=ctx.reception_id
+             AND ir.variant_id=ctx.variant_uuid
+         ) received ON true
+         LEFT JOIN LATERAL (
            SELECT sm.created_at
            FROM aif_stock_movements sm
            JOIN aif_import_batches ib
@@ -15460,12 +15484,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            LIMIT 1
          ) anchor ON true
          LEFT JOIN LATERAL (
-           SELECT COALESCE(SUM(CASE WHEN COALESCE(sm.qty_delta,0) < 0 THEN -sm.qty_delta ELSE 0 END),0)::numeric AS outgoing_qty
+           SELECT COALESCE(SUM(-sm.qty_delta),0)::numeric AS outgoing_qty
            FROM aif_stock_movements sm
            WHERE sm.variant_id=ctx.variant_uuid
              AND anchor.created_at IS NOT NULL
              AND sm.created_at > anchor.created_at
+             AND sm.qty_delta < 0
              AND (ctx.target_location_id IS NULL OR sm.location_id=ctx.target_location_id)
+             -- Az alábbi mozgásokat a normál készletmozgás-riport is technikainak tekinti.
+             AND COALESCE(sm.source_type,'') NOT IN (
+               'stock_table_audit',
+               'shopify_inventory_webhook',
+               'shopify_incident_correction',
+               'shopify_incident_restore'
+             )
          ) outgoing ON true
          ORDER BY ctx.variant_id`,
         [JSON.stringify(items.map((item) => ({
@@ -15489,6 +15521,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            l.affected_qty AS "affectedQty",
            l.old_sell_price AS "oldSellPrice",
            l.new_sell_price AS "newSellPrice",
+           l.raw->'labelPriceApproval'->>'choice' AS "labelPriceApprovedChoice",
            l.location_breakdown AS "locationBreakdown",
            l.product_title AS "productTitle",
            l.product_code AS "productCode",
@@ -15533,7 +15566,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return {
           ...row,
           baseMaxCopies,
-          relabelRequired: Boolean(priceChange && relabelMaxCopies > 0),
+          // A korábban jóváhagyott árválasztás ugyanarra a PMP sorra többé nem jelenik meg.
+          // A relabelMaxCopies továbbra is elérhető az AKTUÁLIS jóváhagyási
+          // munkamenethez, hogy az új áras régi készletcímkék ne vesszenek el.
+          relabelRequired: Boolean(priceChange && relabelMaxCopies > 0 && !['old','new'].includes(priceChange.labelPriceApprovedChoice)),
           relabelMaxCopies,
           priceChange: priceChange ? {
             documentId: priceChange.priceChangeDocumentId,
@@ -15544,6 +15580,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             incomingQty: Number(priceChange.incomingQty || 0),
             oldSellPrice: Number(priceChange.oldSellPrice || 0),
             newSellPrice: Number(priceChange.newSellPrice || 0),
+            approvedPriceChoice: ['old','new'].includes(priceChange.labelPriceApprovedChoice) ? priceChange.labelPriceApprovedChoice : null,
             locationBreakdown: priceChange.locationBreakdown || [],
             productTitle: priceChange.productTitle || null,
             productCode: priceChange.productCode || null,
@@ -15559,6 +15596,72 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (error) {
       console.error("AIF label stock check failed", error);
       return res.status(500).json({ error: "A címkenyomtatás előtti készletellenőrzés nem sikerült.", code: error?.code || null });
+    }
+  });
+
+  // A címkézésnél meghozott árdöntést a PMP bizonylatsorhoz mentjük.
+  // Nem csak a termékárat tároljuk: maga az egyszer már jóváhagyott döntés is
+  // tartós lesz, így ugyanarra a bizonylatra nem kérdezünk rá újra.
+  router.post("/label-price-approval", requireAdminOrSecret, async (req, res) => {
+    const variantId = text(req.body?.variantId || req.body?.variant_id);
+    const documentId = text(req.body?.documentId || req.body?.document_id);
+    const choice = text(req.body?.choice).toLowerCase();
+    if (!isUuidText(variantId) || !isUuidText(documentId) || !["old", "new"].includes(choice)) {
+      return res.status(400).json({ error: "Érvénytelen termék, árváltozási bizonylat vagy árválasztás.", code: "invalid_label_price_approval" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query(
+        `SELECT l.id,l.old_sell_price,l.new_sell_price,v.sell_price,d.status
+         FROM aif_price_change_document_lines l
+         JOIN aif_price_change_documents d ON d.id=l.document_id
+         JOIN aif_product_variants v ON v.id=l.variant_id
+         WHERE l.document_id=$1::uuid AND l.variant_id=$2::uuid
+         FOR UPDATE OF l,v`,
+        [documentId, variantId]
+      );
+      const row = locked.rows[0];
+      if (!row || row.status !== "issued") {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Az árváltozási bizonylatsor már nem elérhető.", code: "label_price_document_missing" });
+      }
+      const oldPrice = aifPriceNumber(row.old_sell_price);
+      const newPrice = aifPriceNumber(row.new_sell_price);
+      const selectedPrice = choice === "old" ? oldPrice : newPrice;
+      const currentPrice = aifPriceNumber(row.sell_price);
+      if (selectedPrice === null || selectedPrice <= 0 || currentPrice === null || aifPriceChanged(selectedPrice, currentPrice)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: "Az ár nem a kiválasztott jóváhagyott értéken van. Frissítsd a terméket és hagyd jóvá ismét.",
+          code: "label_price_not_saved",
+          currentPrice,
+        });
+      }
+      // A régi PMP értékei és bizonylati története változatlan marad.
+      const updated = await client.query(
+        `UPDATE aif_price_change_document_lines
+         SET raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object(
+           'labelPriceApproval', jsonb_build_object(
+             'choice', $2::text,
+             'approvedPrice', $3::numeric,
+             'approvedAt', now(),
+             'approvedBy', $4::text
+           )
+         )
+         WHERE id=$1
+         RETURNING id`,
+        [row.id, choice, selectedPrice, actorFrom(req)]
+      );
+      if (!updated.rowCount) throw new Error("Az árjóváhagyás tárolása meghiúsult.");
+      await client.query("COMMIT");
+      return res.json({ ok: true, variantId, documentId, choice, approvedPrice: selectedPrice });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF label price approval failed", error);
+      return res.status(500).json({ error: "Az árjóváhagyás nem menthető.", code: error?.code || null });
+    } finally {
+      client.release();
     }
   });
 
