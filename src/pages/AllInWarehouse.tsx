@@ -3297,6 +3297,8 @@ type WarehouseLabelPriceChange = {
   documentNumber?: string | null;
   documentDate?: string | null;
   affectedQty?: number | string | null;
+  incomingRowCount?: number | string | null;
+  incomingQty?: number | string | null;
   oldSellPrice?: number | string | null;
   newSellPrice?: number | string | null;
   locationBreakdown?: Array<{ locationId?: string | null; locationCode?: string | null; locationName?: string | null; qty?: number | string | null }> | null;
@@ -15678,6 +15680,7 @@ export default function AllInWarehouse() {
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/52">
                             <span>{[change.brandName, change.colorName, change.size].filter(Boolean).join(" • ")}</span>
                             {locationText ? <span>{locationText}</span> : null}
+                            {n(change.incomingRowCount) > 0 ? <span className="text-[#d7fffd]">Most importálva: {Math.floor(n(change.incomingRowCount))} sor • {Math.floor(n(change.incomingQty))} db új áru</span> : null}
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
