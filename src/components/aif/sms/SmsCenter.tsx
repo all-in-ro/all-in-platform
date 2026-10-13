@@ -66,8 +66,12 @@ function Composer({kind,status,meta,locationCode,template,onPrepared}:{kind:'arr
   const unsubscribeContact=status.settings.unsubscribePhone||'';
   const showUnsubscribeLink=status.settings.includeUnsubscribeLink===true||!unsubscribeContact;
   const unsubscribePreview=showUnsubscribeLink&&unsubscribeContact?`${unsubscribeContact} / [személyes leiratkozási link]`:showUnsubscribeLink?'[személyes leiratkozási link]':unsubscribeContact;
-  const websitePreview=status.settings.includeWebsite===true&&status.settings.websiteUrl?.trim()?` Online: ${status.settings.websiteUrl.trim()}`:'';
-  const preview=shopName+': '+draft.blocks.map(b=>b.type==='text'?b.value:tokenValues[b.value]||'…').join('')+websitePreview+(draft.language==='ro'?' Dezabonare: ':' Leiratkozas: ')+unsubscribePreview;
+  const websitePreview=status.settings.includeWebsite===true&&status.settings.websiteUrl?.trim()?`Online: ${status.settings.websiteUrl.trim()}`:'';
+  const preview=[
+    (shopName+': '+draft.blocks.map(b=>b.type==='text'?b.value:tokenValues[b.value]||'…').join('')).trim(),
+    ...(websitePreview?[websitePreview]:[]),
+    `${draft.language==='ro'?'Dezabonare':'Leiratkozas'}: ${unsubscribePreview}`
+  ].join('\n');
   const couponMissing=kind==='promotion'&&(!Number.isFinite(draft.coupon.value)||draft.coupon.value<=0||draft.coupon.value>(draft.coupon.type==='percent'?90:5000));
   const unsafe=draft.blocks.some(b=>b.type==='text'&&/[{}]/.test(b.value));
   async function prepare(){if(locked.current)return;if(couponMissing){setError('A kampány előtt add meg a kedvezmény értékét.');return;}locked.current=true;setBusy(true);setError('');try{if(!requestKey.current)requestKey.current=smsKey();const d=await smsApi<SmsCampaignDetail>('/campaigns',{...draft,requestKey:requestKey.current});onPrepared(d);}catch(e){setError(errText(e));}finally{locked.current=false;setBusy(false);}}
