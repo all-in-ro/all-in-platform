@@ -3326,11 +3326,14 @@ type WarehouseLabelStockCheckRow = {
   mode?: string | null;
 };
 
+type WarehouseRelabelPriceChoice = "old" | "new";
+
 type WarehouseRelabelPromptRow = {
   variantId: string;
   relabelMaxCopies: number;
   priceChange: WarehouseLabelPriceChange;
-  selected: boolean;
+  // Nincs automatikus választás: a régi készlet árát soronként jóvá kell hagyni.
+  approvedPrice: WarehouseRelabelPriceChoice | null;
 };
 
 type WarehouseLabelTemplate = {
@@ -7600,6 +7603,12 @@ export default function AllInWarehouse() {
   const [labelRelabelExtraById, setLabelRelabelExtraById] = useState<Record<string, number>>({});
   const [labelRelabelPromptRows, setLabelRelabelPromptRows] = useState<WarehouseRelabelPromptRow[]>([]);
   const [labelRelabelPromptOpen, setLabelRelabelPromptOpen] = useState(false);
+  const [labelRelabelPriceTargetId, setLabelRelabelPriceTargetId] = useState("");
+  const [labelRelabelPriceDraft, setLabelRelabelPriceDraft] = useState<WarehouseRelabelPriceChoice | null>(null);
+  const [labelRelabelPriceBusy, setLabelRelabelPriceBusy] = useState(false);
+  const [labelRelabelPriceError, setLabelRelabelPriceError] = useState("");
+  const labelRelabelPriceSubmitLockRef = useRef(false);
+  const labelRelabelPriceDialogRef = useRef<HTMLDivElement | null>(null);
   const [priceChangeArchiveOpen, setPriceChangeArchiveOpen] = useState(false);
   const [priceChangeArchiveBusy, setPriceChangeArchiveBusy] = useState(false);
   const [priceChangeArchiveSearch, setPriceChangeArchiveSearch] = useState("");
@@ -12656,6 +12665,9 @@ export default function AllInWarehouse() {
   async function openLabelComposer() {
     setLabelPrintFlow(null);
     setLabelClearConfirmOpen(false);
+    setLabelRelabelPriceTargetId("");
+    setLabelRelabelPriceDraft(null);
+    setLabelRelabelPriceError("");
     setLabelShowBorder(false);
     setLabelContent((current) => ({ ...current, brand: false }));
     if (!selectedLabelItems.length) {
@@ -12699,7 +12711,7 @@ export default function AllInWarehouse() {
           variantId: String(row.variantId || ""),
           relabelMaxCopies: Math.max(0, Math.floor(n(row.relabelMaxCopies))),
           priceChange: row.priceChange || {},
-          selected: true,
+          approvedPrice: null,
         })).filter((row) => row.variantId && row.relabelMaxCopies > 0));
         setLabelRelabelPromptOpen(true);
         setLabelComposerOpen(false);
@@ -12723,31 +12735,180 @@ export default function AllInWarehouse() {
     }
   }
 
-  async function continueLabelComposerAfterRelabel(includeSelected: boolean) {
+  function openRelabelPriceChoice(row: WarehouseRelabelPromptRow) {
+    if (labelDetailsBusy || labelRelabelPriceSubmitLockRef.current) return;
+    setLabelRelabelPriceTargetId(row.variantId);
+    setLabelRelabelPriceDraft(row.approvedPrice);
+    setLabelRelabelPriceError("");
+  }
+
+  function closeRelabelPriceChoice() {
+    if (labelRelabelPriceSubmitLockRef.current) return;
+    setLabelRelabelPriceTargetId("");
+    setLabelRelabelPriceDraft(null);
+    setLabelRelabelPriceError("");
+  }
+
+  // Az ár nem csak nyomtatási dekoráció: a jóváhagyott érték lesz a variáns
+  // valódi eladási ára is. A régi ár választásakor az új bevételezés címkéje
+  // is a régi árat kapja, az új árnál a korábbi készletet újracímkézzük.
+  async function approveRelabelPriceChoice() {
+    if (labelRelabelPriceSubmitLockRef.current || !labelRelabelPriceDraft) return;
+    const row = labelRelabelPromptRows.find((entry) => entry.variantId === labelRelabelPriceTargetId);
+    if (!row) return;
+
+    const oldPrice = priceNumber(row.priceChange.oldSellPrice);
+    const newPrice = priceNumber(row.priceChange.newSellPrice);
+    if (oldPrice === null || newPrice === null || oldPrice <= 0 || newPrice <= 0) {
+      setLabelRelabelPriceError("Nem áll rendelkezésre mindkét érvényes eladási ár. Az árválasztás nem menthető.");
+      return;
+    }
+
+    const selectedPrice = labelRelabelPriceDraft === "old" ? oldPrice : newPrice;
+    const chosen = labelRelabelPriceDraft;
+    const id = row.variantId;
+    const cents = (value: number) => Math.round(value * 100);
+    labelRelabelPriceSubmitLockRef.current = true;
+    setLabelRelabelPriceBusy(true);
+    setLabelRelabelPriceError("");
+    try {
+      // Minden jóváhagyás előtt a szerverről olvassuk vissza az aktuális árat.
+      // Ha azt időközben más módosította, NEM írjuk felül csendben.
+      const fresh = await apiVariantDetail(id);
+      const currentPrice = priceNumber(fresh.item?.sell_price ?? fresh.item?.sellPrice);
+      if (currentPrice === null || ![cents(oldPrice), cents(newPrice)].includes(cents(currentPrice))) {
+        throw new Error("A termék eladási ára időközben megváltozott. Frissítsd a címkelistát, mielőtt új árat hagysz jóvá.");
+      }
+
+      let confirmedDetail = fresh;
+      if (cents(currentPrice) !== cents(selectedPrice)) {
+        // A meglévő részleges PATCH végpont naplózza az árváltozást, nem kell
+        // a termék többi mezőjét felülírni egy idejétmúlt adatlappal.
+        await apiVariantUpdate(id, { sellPrice: selectedPrice.toFixed(2) });
+        try {
+          confirmedDetail = await apiVariantDetail(id);
+        } catch {
+          throw new Error("Az ár módosítását a szerver fogadta, de nem tudtam visszaellenőrizni. Próbáld újra a jóváhagyást, mielőtt címkét nyomtatsz.");
+        }
+        const savedPrice = priceNumber(confirmedDetail.item?.sell_price ?? confirmedDetail.item?.sellPrice);
+        if (savedPrice === null || cents(savedPrice) !== cents(selectedPrice)) {
+          throw new Error("A szerver nem a kiválasztott eladási árat adta vissza. A jóváhagyás nem zárható le, ellenőrizd a termékárat.");
+        }
+      }
+
+      const updatedDetail: DetailResponse = {
+        ...confirmedDetail,
+        item: { ...confirmedDetail.item, sell_price: selectedPrice, sellPrice: selectedPrice },
+      };
+      setLabelDetailMap((current) => ({ ...current, [id]: updatedDetail }));
+      detailCacheRef.current.set(id, { data: updatedDetail, loadedAt: Date.now() });
+      // A korábbi teljes lista cache-éből sem kerülhet vissza a régi mentett érték.
+      warehouseBootstrapCache = null;
+      const withApprovedPrice = (item: InventoryItem) => String(item.variant_id || "") === id
+        ? { ...item, sell_price: selectedPrice }
+        : item;
+      setItems((current) => current.map(withApprovedPrice));
+      setCatalogSearchItems((current) => current.map(withApprovedPrice));
+      setInactiveProductsItems((current) => current.map(withApprovedPrice));
+      setIncomingFocusItems((current) => current.map(withApprovedPrice));
+      setPersistedSelectedItems((current) => current.map(withApprovedPrice));
+      setLabelRelabelPromptRows((current) => current.map((entry) => entry.variantId === id
+        ? { ...entry, approvedPrice: chosen }
+        : entry));
+      setLabelRelabelPriceTargetId("");
+      setLabelRelabelPriceDraft(null);
+      setLabelRelabelPriceError("");
+    } catch (error) {
+      setLabelRelabelPriceError(error instanceof Error ? error.message : "Az ár jóváhagyása nem sikerült. Az eddigi választás nem változott.");
+    } finally {
+      labelRelabelPriceSubmitLockRef.current = false;
+      setLabelRelabelPriceBusy(false);
+    }
+  }
+
+  async function continueLabelComposerAfterRelabel(includeApproved: boolean) {
+    if (labelDetailsBusy || labelRelabelPriceSubmitLockRef.current) return;
+    if (includeApproved && labelRelabelPromptRows.some((row) => row.approvedPrice === null)) {
+      setMessage("Előbb minden érintett terméksornál válaszd ki és hagyd jóvá a régi vagy az új árat.");
+      return;
+    }
     const extraMap: Record<string, number> = {};
-    if (includeSelected) {
+    if (includeApproved) {
       for (const row of labelRelabelPromptRows) {
-        if (row.selected) extraMap[row.variantId] = row.relabelMaxCopies;
+        if (row.approvedPrice === "new") extraMap[row.variantId] = row.relabelMaxCopies;
       }
     }
-    setLabelRelabelExtraById(extraMap);
-    setLabelRelabelPromptOpen(false);
     setLabelDetailsBusy(true);
     try {
       const checked = await refreshLabelStockLimits(selectedLabelItems, false, extraMap);
+      setLabelRelabelExtraById(extraMap);
+      setLabelRelabelPromptOpen(false);
+      setLabelRelabelPromptRows([]);
       setLabelComposerOpen(true);
       const extraLabels = Object.values(extraMap).reduce((sum, value) => sum + Math.max(0, Math.floor(n(value))), 0);
       if (extraLabels > 0) {
-        setMessage(`${extraLabels} régi címkét hozzáadtam az új ár miatt. A nyomtatási lista már az aktuális eladási árat használja.`);
+        setMessage(`${extraLabels} új áras címkét hozzáadtam a régi készlet átárazásához. Az árak a jóváhagyott érték szerint kerülnek nyomtatásra.`);
       } else if (checked.removedLabels > 0) {
         setMessage(`A friss készlet alapján ${checked.removedLabels} címkét kihagytam ${checked.reducedProducts} terméknél.`);
+      } else {
+        setMessage("A régi készletre nem kell további címkét nyomtatni. Az új bevételezés az aktuálisan jóváhagyott árral nyomtatható.");
       }
     } catch (error) {
+      // Ne veszítsük el a jóváhagyott döntéseket, ha a készletellenőrzés hibázik.
       setMessage(error instanceof Error ? `A címkelista frissítése nem sikerült: ${error.message}` : "A címkelista frissítése nem sikerült.");
     } finally {
       setLabelDetailsBusy(false);
     }
   }
+
+  // A második árválasztó modal idején a mögöttes ablakot nem lehet billentyűvel
+  // véletlenül vezérelni; ESC zár, a TAB csak az aktív ablakban lépked.
+  useEffect(() => {
+    if (!labelRelabelPriceTargetId) return;
+    const previousActive = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => {
+      const selected = labelRelabelPriceDialogRef.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+      const first = labelRelabelPriceDialogRef.current?.querySelector<HTMLButtonElement>('[data-aif-relabel-choice="true"]');
+      (selected || first)?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!labelRelabelPriceSubmitLockRef.current) {
+          setLabelRelabelPriceTargetId("");
+          setLabelRelabelPriceDraft(null);
+          setLabelRelabelPriceError("");
+        }
+      } else if (event.key === "Tab") {
+        const buttons = Array.from(labelRelabelPriceDialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") || []);
+        if (!buttons.length) return;
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !buttons.includes(document.activeElement as HTMLButtonElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !buttons.includes(document.activeElement as HTMLButtonElement))) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+      previousActive?.focus?.();
+    };
+  }, [labelRelabelPriceTargetId]);
+
+  const labelRelabelPriceTarget = labelRelabelPromptRows.find((row) => row.variantId === labelRelabelPriceTargetId) || null;
+  const labelRelabelApprovedCount = labelRelabelPromptRows.filter((row) => row.approvedPrice !== null).length;
+  const labelRelabelNewPriceRows = labelRelabelPromptRows.filter((row) => row.approvedPrice === "new");
+  const labelRelabelExtraCopies = labelRelabelNewPriceRows.reduce((sum, row) => sum + row.relabelMaxCopies, 0);
 
   async function loadPriceChangeArchive(searchValue = priceChangeArchiveSearch) {
     setPriceChangeArchiveBusy(true);
@@ -15644,63 +15805,122 @@ export default function AllInWarehouse() {
           </div>
         )}
         {labelRelabelPromptOpen && (
-          <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#071019]/84 px-4 py-6 backdrop-blur-md">
-            <div className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/35 bg-[#354153] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
-              <div className="flex items-start justify-between gap-4 border-b border-white/12 bg-[linear-gradient(135deg,rgba(42,141,139,.34),rgba(31,48,67,.96))] px-5 py-5">
-                <div className="flex min-w-0 items-start gap-4">
-                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#b9fffb]/30 bg-[#2a8d8b] text-white shadow-[0_12px_30px_rgba(42,141,139,.28)]"><RefreshCw size={21} /></span>
+          <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#071019]/84 px-3 py-5 backdrop-blur-md sm:px-4" role="dialog" aria-modal={!labelRelabelPriceTargetId} aria-hidden={Boolean(labelRelabelPriceTargetId)} aria-label="Árváltozás: régi készlet">
+            <div className="flex max-h-[88vh] w-full max-w-[900px] flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/35 bg-[#354153] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
+              <div className="flex items-start justify-between gap-4 border-b border-white/12 bg-[linear-gradient(135deg,rgba(42,141,139,.34),rgba(31,48,67,.96))] px-4 py-4 sm:px-5 sm:py-5">
+                <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#b9fffb]/30 bg-[#2a8d8b] text-white shadow-[0_12px_30px_rgba(42,141,139,.28)] sm:h-12 sm:w-12"><RefreshCw size={21} /></span>
                   <div className="min-w-0">
                     <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/72">Árváltozás • régi készlet</p>
-                    <h3 className="mt-1 text-xl text-white">Új címke kell a korábban beérkezett darabokra is</h3>
-                    <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/64">Az új számla címkéi már benne vannak a listában. Az alábbi régi készlet ugyanebből a variánsból még a korábbi árral van felcímkézve. A kijelölteket hozzáadom az új áras nyomtatáshoz.</p>
+                    <h3 className="mt-1 text-lg leading-snug text-white sm:text-xl">Melyik ár legyen érvényes a készleten?</h3>
+                    <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/70">Kattints a termék sorára, és egy külön ablakban válaszd ki a régi vagy az új eladási árat. A jóváhagyott ár a rendszerbe is mentődik. Új árat választva a korábbi készlethez is készül új címke.</p>
                   </div>
                 </div>
-                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.07] text-white hover:bg-white/[0.12]" type="button" onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Bezárás"><X size={17} /></button>
+                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.07] text-white hover:bg-white/[0.12] disabled:opacity-40" type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Csak az új bevételezés címkéi"><X size={17} /></button>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
                 <div className="space-y-2.5">
                   {labelRelabelPromptRows.map((row) => {
-                    const change = row.priceChange || {};
+                    const change = row.priceChange;
                     const locationText = (change.locationBreakdown || []).map((loc) => `${loc.locationName || loc.locationCode || "Hely"}: ${Math.floor(n(loc.qty))} db`).join(" • ");
+                    const isNew = row.approvedPrice === "new";
+                    const isOld = row.approvedPrice === "old";
                     return (
                       <button
                         key={row.variantId}
                         type="button"
-                        onClick={() => setLabelRelabelPromptRows((current) => current.map((item) => item.variantId === row.variantId ? { ...item, selected: !item.selected } : item))}
-                        className={`grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-3.5 py-3 text-left transition ${row.selected ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : "border-white/12 bg-[#3e495b] hover:bg-[#465266]"}`}
+                        disabled={labelDetailsBusy}
+                        onClick={() => openRelabelPriceChoice(row)}
+                        aria-label={`${change.productTitle || change.productCode || "Termék"}: ár kiválasztása`}
+                        className={`grid w-full grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border px-3 py-3 text-left transition sm:grid-cols-[48px_minmax(0,1fr)_auto] sm:px-3.5 ${isNew ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : isOld ? "border-amber-200/30 bg-[#424956]" : "border-white/16 bg-[#3e495b] hover:border-[#7bd7d4]/50 hover:bg-[#465266]"} disabled:cursor-wait disabled:opacity-65`}
                       >
-                        <div className="h-11 w-11 overflow-hidden rounded-xl border border-white/12 bg-[#2b3547]">
-                          {change.imageUrl ? <img src={String(change.imageUrl)} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[9px] text-white/38">Nincs kép</div>}
+                        <div className="h-11 w-11 overflow-hidden rounded-xl border border-white/12 bg-[#2b3547] sm:h-12 sm:w-12">
+                          {change.imageUrl ? <img src={String(change.imageUrl)} alt="" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center text-[9px] text-white/38">Nincs kép</div>}
                         </div>
                         <div className="min-w-0">
                           <div className="flex min-w-0 flex-wrap items-center gap-2">
                             <span className="truncate text-[13px] text-white">{change.productTitle || change.productCode || row.variantId}</span>
                             <span className="rounded-full border border-white/15 bg-black/10 px-2 py-0.5 text-[9px] text-white/62">{change.documentNumber || "Árváltozás"}</span>
                           </div>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/52">
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/57">
                             <span>{[change.brandName, change.colorName, change.size].filter(Boolean).join(" • ")}</span>
                             {locationText ? <span>{locationText}</span> : null}
-                            {n(change.incomingRowCount) > 0 ? <span className="text-[#d7fffd]">Most importálva: {Math.floor(n(change.incomingRowCount))} sor • {Math.floor(n(change.incomingQty))} db új áru</span> : null}
+                            {n(change.incomingRowCount) > 0 ? <span className="text-[#d7fffd]">Új bevételezés: {Math.floor(n(change.incomingQty))} db</span> : null}
+                          </div>
+                          <div className={`mt-1.5 flex items-center gap-1 text-[11px] ${isNew ? "text-[#bff8f5]" : isOld ? "text-amber-100" : "text-white/58"}`}>
+                            {row.approvedPrice ? <CheckCircle2 size={13} /> : <ChevronDown size={13} className="-rotate-90" />}
+                            {isNew ? `Új ár jóváhagyva • +${row.relabelMaxCopies} új címke` : isOld ? "Régi ár jóváhagyva • nincs extra címke" : "Ár kiválasztása és jóváhagyása"}
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <div className="text-[10px] text-white/46"><span className="line-through">{money(change.oldSellPrice)} RON</span> <span className="mx-1 text-white/28">→</span> <span className="text-[#bff8f5]">{money(change.newSellPrice)} RON</span></div>
-                            <div className="mt-1 text-[16px] tabular-nums text-white">+{row.relabelMaxCopies} db <span className="text-[10px] text-white/52">régi címke</span></div>
+                        <div className="col-span-2 flex items-center justify-between gap-3 border-t border-white/10 pt-2.5 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
+                          <div className="text-left sm:text-right">
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] tabular-nums sm:justify-end"><span className="text-white/65">{money(change.oldSellPrice)} RON</span><ArrowRight size={13} className="text-white/35"/><span className="text-[#bff8f5]">{money(change.newSellPrice)} RON</span></div>
+                            <div className="mt-1 text-[11px] text-white/60">{row.relabelMaxCopies} db korábbi készlet</div>
                           </div>
-                          <span className={`inline-flex h-6 w-6 items-center justify-center rounded-lg border ${row.selected ? "border-[#9ff4ef]/55 bg-[#2a8d8b] text-white" : "border-white/22 bg-[#2d3749] text-white/28"}`}>{row.selected ? <CheckCircle2 size={14} /> : null}</span>
+                          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${isNew ? "border-[#9ff4ef]/55 bg-[#2a8d8b] text-white" : isOld ? "border-amber-200/40 bg-amber-300/15 text-amber-100" : "border-white/20 bg-[#2d3749] text-white/65"}`}>{row.approvedPrice ? <CheckCircle2 size={17} /> : <ChevronDown size={16} className="-rotate-90" />}</span>
                         </div>
                       </button>
                     );
                   })}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#2b3547] px-5 py-4">
-                <div className="text-[11px] text-white/58">Kijelölve: <span className="text-white">{labelRelabelPromptRows.filter((row) => row.selected).length} termék</span> • <span className="text-[#bff8f5]">{labelRelabelPromptRows.filter((row) => row.selected).reduce((sum, row) => sum + row.relabelMaxCopies, 0)} extra címke</span></div>
-                <div className="flex gap-2">
-                  <button className={btnSoft} type="button" onClick={() => void continueLabelComposerAfterRelabel(false)}>Csak az új áru</button>
-                  <button className={primaryBtn} type="button" onClick={() => void continueLabelComposerAfterRelabel(true)}><Printer size={15} /> Kijelöltek hozzáadása</button>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#2b3547] px-4 py-3.5 sm:px-5 sm:py-4">
+                <div className="text-[11px] leading-relaxed text-white/64">
+                  Jóváhagyva: <span className="text-white">{labelRelabelApprovedCount} / {labelRelabelPromptRows.length} termék</span>
+                  <span className="mx-1.5 text-white/25">•</span><span className="text-[#bff8f5]">{labelRelabelExtraCopies} extra címke</span>
+                  {labelRelabelApprovedCount < labelRelabelPromptRows.length ? <span className="ml-2 text-amber-100">({labelRelabelPromptRows.length - labelRelabelApprovedCount} döntés hiányzik)</span> : null}
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className={btnSoft} type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)}>Csak az új áru</button>
+                  <button className={primaryBtn} type="button" disabled={labelDetailsBusy || labelRelabelApprovedCount !== labelRelabelPromptRows.length} onClick={() => void continueLabelComposerAfterRelabel(true)}>{labelDetailsBusy ? <RefreshCw size={15} className="animate-spin" /> : <Printer size={15} />} Jóváhagyott árakkal tovább</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {labelRelabelPromptOpen && labelRelabelPriceTarget && (
+          <div className="fixed inset-0 z-[165] flex items-center justify-center bg-[#06101d]/82 px-3 py-5 backdrop-blur-lg sm:px-4" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRelabelPriceChoice(); }}>
+            <div ref={labelRelabelPriceDialogRef} className="flex max-h-[92vh] w-full max-w-[690px] flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/50 bg-[#263246] text-white shadow-[0_40px_130px_rgba(0,0,0,.72)]" role="dialog" aria-modal="true" aria-labelledby="aif-warehouse-relabel-price-title" aria-describedby="aif-warehouse-relabel-price-description">
+              <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-[linear-gradient(120deg,#22434e,#28384d_65%,#2a8d8b)] px-4 py-4 sm:px-5">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#aff4f0]/40 bg-[#2a8d8b]/65"><Receipt size={21} /></span>
+                  <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.15em] text-[#cffffd]/72">Árváltozás jóváhagyása</p><h3 id="aif-warehouse-relabel-price-title" className="mt-0.5 text-[20px] leading-tight">Régi vagy új ár?</h3></div>
+                </div>
+                <button type="button" aria-label="Árválasztó bezárása" disabled={labelRelabelPriceBusy} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.08] text-white hover:bg-white/[0.14] disabled:opacity-40" onClick={closeRelabelPriceChoice}><X size={16}/></button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="flex items-center gap-3 rounded-2xl border border-white/12 bg-[#354153] p-3">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-[#202c3e]">
+                    {labelRelabelPriceTarget.priceChange.imageUrl ? <img src={String(labelRelabelPriceTarget.priceChange.imageUrl)} alt="" className="h-full w-full object-contain"/> : <ImagePlus size={20} className="text-white/25"/>}
+                  </div>
+                  <div className="min-w-0"><p className="text-[15px] leading-snug text-white">{labelRelabelPriceTarget.priceChange.productTitle || labelRelabelPriceTarget.priceChange.productCode || labelRelabelPriceTarget.variantId}</p><p className="mt-1 text-[11px] text-white/58">{[labelRelabelPriceTarget.priceChange.brandName, labelRelabelPriceTarget.priceChange.productCode, labelRelabelPriceTarget.priceChange.colorName, labelRelabelPriceTarget.priceChange.size].filter(Boolean).join(" • ")}</p><p className="mt-1.5 text-[11px] text-[#c5f5f2]">{labelRelabelPriceTarget.relabelMaxCopies} db korábbi készlet • {Math.floor(n(labelRelabelPriceTarget.priceChange.incomingQty))} db most bevételezve</p></div>
+                </div>
+                <p id="aif-warehouse-relabel-price-description" className="mt-4 text-[13px] leading-relaxed text-white/75">Válaszd ki, melyik eladási árat alkalmazza a rendszer erre a termékvariánsra. A választott ár lesz érvényes az új címkéken és az eladásnál is.</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {(["old", "new"] as const).map((choice) => {
+                    const old = choice === "old";
+                    const chosen = labelRelabelPriceDraft === choice;
+                    const priceValue = old ? labelRelabelPriceTarget.priceChange.oldSellPrice : labelRelabelPriceTarget.priceChange.newSellPrice;
+                    const available = (priceNumber(priceValue) ?? 0) > 0;
+                    return (
+                      <button key={choice} type="button" data-aif-relabel-choice="true" aria-pressed={chosen} disabled={labelRelabelPriceBusy || !available} onClick={() => { setLabelRelabelPriceDraft(choice); setLabelRelabelPriceError(""); }}
+                        className={`relative flex min-h-[174px] flex-col items-start rounded-2xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-white/30 disabled:cursor-not-allowed disabled:opacity-40 ${chosen ? (old ? "border-amber-200 bg-[#5a5147] shadow-[0_0_0_2px_rgba(251,191,36,.16),0_10px_30px_rgba(0,0,0,.16)]" : "border-[#9ff4ef] bg-[#1a5559] shadow-[0_0_0_2px_rgba(123,215,212,.18),0_10px_30px_rgba(0,0,0,.16)]") : "border-white/16 bg-[#354153] hover:border-[#7bd7d4]/55 hover:bg-[#3f4d60]"}`}
+                      >
+                        <span className="flex w-full items-center justify-between gap-3"><span className={`text-[11px] uppercase tracking-[0.12em] ${old ? "text-amber-100" : "text-[#bff8f5]"}`}>{old ? "Régi eladási ár" : "Új eladási ár"}</span><span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${chosen ? "border-white bg-[#2a8d8b] text-white" : "border-white/25 bg-[#263246] text-transparent"}`}><CheckCircle2 size={15}/></span></span>
+                        <span className="mt-3 text-[31px] leading-none tabular-nums tracking-tight text-white">{money(priceValue)} <span className="text-[13px] text-white/65">RON</span></span>
+                        <span className="mt-3 text-[11px] leading-relaxed text-white/65">{old ? "A régi darabok címkéje maradhat. Az újonnan bevételezett darabok is ezen az áron kapnak címkét." : `A teljes készlet az új áron lesz. A korábbi ${labelRelabelPriceTarget.relabelMaxCopies} db-hoz új címkéket adunk a nyomtatáshoz.`}</span>
+                        {chosen ? <span className="mt-auto pt-2 text-[11px] text-white"><CheckCircle2 size={13} className="mr-1 inline"/> Kiválasztva</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                {labelRelabelPriceError ? <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-rose-300/40 bg-rose-500/15 px-3 py-2.5 text-xs leading-relaxed text-rose-100"><AlertTriangle size={15} className="shrink-0"/>{labelRelabelPriceError}</div> : null}
+                <p className="mt-3 text-[11px] leading-relaxed text-white/52">A jóváhagyás a termék eladási árát is menti. A vételárhoz, mennyiséghez és a többi termékadathoz nem nyúl.</p>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#202c3e] px-4 py-3.5 sm:px-5">
+                <span className="text-[11px] text-white/55">{labelRelabelPriceDraft ? `Választott ár: ${money(labelRelabelPriceDraft === "old" ? labelRelabelPriceTarget.priceChange.oldSellPrice : labelRelabelPriceTarget.priceChange.newSellPrice)} RON` : "Még nem választottál árat"}</span>
+                <div className="flex gap-2"><button type="button" className={btnSoft} disabled={labelRelabelPriceBusy} onClick={closeRelabelPriceChoice}>Vissza</button><button type="button" className={primaryBtn} disabled={!labelRelabelPriceDraft || labelRelabelPriceBusy} onClick={() => void approveRelabelPriceChoice()}>{labelRelabelPriceBusy ? <RefreshCw size={15} className="animate-spin"/> : <CheckCircle2 size={15}/>} {labelRelabelPriceBusy ? "Ár mentése..." : "Ár jóváhagyása"}</button></div>
               </div>
             </div>
           </div>
