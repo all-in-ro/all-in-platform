@@ -197,7 +197,26 @@ function salesNetPriceRon(value: unknown, settings?: SalesTvaSettings | null) {
   return factor > 0 ? entered / factor : entered;
 }
 
-function rowSellGrossPriceRon(row: any, draft: any, settings?: SalesTvaSettings | null) {
+// A készletre vett receptiósor eladási ára történeti pillanatkép. A raktárban
+// jóváhagyott JELENLEGI eladási árat külön olvassuk, nem írjuk át a bizonylatot.
+function receptionLiveUnitPriceRon(row: any): number | null {
+  if (String(row?.status || "").toLowerCase() !== "committed") return null;
+  const value = row?.current_sell_price_ron;
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const price = Number(String(value).replace(",", "."));
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function receptionPriceDiffers(row: any, draft: any, settings?: SalesTvaSettings | null): boolean {
+  const live = receptionLiveUnitPriceRon(row);
+  if (live === null) return false;
+  const historical = salesGrossPriceRon(rowSellEnteredPriceRon(row, draft), settings);
+  return Math.round(live * 100) !== Math.round(historical * 100);
+}
+
+function rowSellGrossPriceRon(row: any, draft: any, settings?: SalesTvaSettings | null, historical = false) {
+  const live = historical ? null : receptionLiveUnitPriceRon(row);
+  if (live !== null) return live; // Az élő variánsár már TVA-t tartalmazó RON végár.
   return salesGrossPriceRon(rowSellEnteredPriceRon(row, draft), settings);
 }
 
@@ -710,8 +729,14 @@ function receptionNetInvoiceValue(item: any) {
   return factor > 0 ? gross / factor : gross;
 }
 
+// A lista és az aktuális receptió-nézet az élő termékárral dolgozik.
+// A receptionSalesTotalRon továbbra is az eredeti bizonylat eladási értéke.
 function receptionSalesTotalRon(item: any) {
   return n(item?.sales_total_ron ?? item?.salesTotalRon);
+}
+
+function receptionCurrentSalesTotalRon(item: any) {
+  return n(item?.current_sales_total_ron ?? item?.currentSalesTotalRon ?? item?.sales_total_ron ?? item?.salesTotalRon);
 }
 
 function receptionValueRon(value: unknown, item: any) {
@@ -1334,7 +1359,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     const qty = n(draft.qty ?? row.qty);
     const price = n(draft.buyPrice ?? row.buy_price ?? draft.buyPriceOriginal);
     const priceRon = price * rate;
-    const sellPriceRon = rowSellGrossPriceRon(row, draft, salesTva);
+    const sellPriceRon = rowSellGrossPriceRon(row, draft, salesTva, true);
     const sellValueRon = qty * sellPriceRon;
     const value = qty * price;
     return { row, draft, qty, price, priceRon, sellPriceRon, sellValueRon, value };
@@ -1584,7 +1609,7 @@ function checkRowData(
 ) {
   const qty = n(draft.qty ?? row?.qty ?? row?.normalized?.qty);
   const enteredSellPrice = rowSellEnteredPriceRon(row, draft);
-  const sellPriceRon = enteredSellPrice > 0 ? rowSellGrossPriceRon(row, draft, salesSettings) : null;
+  const sellPriceRon = enteredSellPrice > 0 ? rowSellGrossPriceRon(row, draft, salesSettings, true) : null;
   const lineValueRon = sellPriceRon === null ? null : qty * sellPriceRon;
   const imageUrl = String(
     draft.imageUrl ||
@@ -2133,7 +2158,7 @@ export default function AllInReceptions(_props: Props) {
         acc.qty += Number(r.total_qty || 0);
         acc.lines += Number(r.line_count || 0);
         acc.value += n(r.invoice_gross);
-        acc.salesValueRon += receptionSalesTotalRon(r);
+        acc.salesValueRon += receptionCurrentSalesTotalRon(r);
         acc.deletable += r.can_delete ? 1 : 0;
         return acc;
       },
@@ -2980,7 +3005,7 @@ export default function AllInReceptions(_props: Props) {
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Terméksor</p><p className="mt-0.5 text-lg text-white">{totals.lines}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-0.5 text-lg text-white">{totals.qty}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white">{money(totals.value)}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Bruttó érték</p><p className="mt-0.5 text-lg text-[#d7fffd]">{money(totals.salesValueRon, "RON")}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Jelenlegi eladási érték</p><p className="mt-0.5 text-lg text-[#d7fffd]">{money(totals.salesValueRon, "RON")}</p></div>
             <div className="rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 py-1.5"><p className="text-xs uppercase tracking-[0.06em] text-white/72">Eladási TVA</p><p className="mt-0.5 text-lg text-white">{salesTvaText}</p></div>
           </div>
         </section>
@@ -3024,7 +3049,7 @@ export default function AllInReceptions(_props: Props) {
                     <th className="px-2 py-1.5 text-center">Pénznem</th>
                     <th className="px-2 py-1.5 text-right">Nettó érték</th>
                     <th className="px-2 py-1.5 text-right">Végösszeg</th>
-                    <th className="px-2 py-1.5 text-right text-[#baf7f3]">Eladási érték (RON)</th>
+                    <th className="px-2 py-1.5 text-right text-[#baf7f3]" title="Aktuális variánsár × receptióban szereplő darabszám. A PDF-ben az eredeti eladási érték marad.">Jelenlegi eladási érték (RON)</th>
                     <th className="px-2 py-1.5 text-right">Darab</th>
                     <th className="px-2 py-1.5 text-center">Állapot</th>
                     <th className="px-2 py-1.5 text-center"><span className="sr-only">Műveletek</span></th>
@@ -3043,7 +3068,7 @@ export default function AllInReceptions(_props: Props) {
                       <td className="whitespace-nowrap px-2 py-2 text-center text-white/82">{cell(r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{money(receptionNetInvoiceValue(r), r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white">{money(r.invoice_gross, r.currency_code)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium text-[#baf7f3]">{money(receptionSalesTotalRon(r), "RON")}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium text-[#baf7f3]">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{r.total_qty || 0}</td>
                       <td className="px-2 py-2 text-center">
                         <span
@@ -3102,7 +3127,7 @@ export default function AllInReceptions(_props: Props) {
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
-                    <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Eladási érték (RON)</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionSalesTotalRon(r), "RON")}</p></div>
+                    <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Jelenlegi eladási érték (RON)</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionCurrentSalesTotalRon(r), "RON")}</p>{Math.round(receptionCurrentSalesTotalRon(r) * 100) !== Math.round(receptionSalesTotalRon(r) * 100) ? <p className="mt-1 text-[10px] text-white/55">Receptiókori: {money(receptionSalesTotalRon(r), "RON")}</p> : null}</div>
                   </div>
                   <div className="mt-2 flex items-center justify-end gap-2">
                     <button
@@ -3174,6 +3199,9 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {String(detail.item.status || "").toLowerCase() === "committed" ? (
+                    <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" type="button" disabled={busy} onClick={() => void (async () => { try { await reloadDetail(detail.item.id); await load(); } catch (error: any) { setMessage(error?.message || "Az aktuális árak frissítése nem sikerült."); } })()} title="A Raktárban jóváhagyott eladási árak újraolvasása"><RefreshCw size={15} /> Árak frissítése</button>
+                  ) : null}
                   <button
                     className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] transition hover:bg-[#319c99]"
                     onClick={() => setReceptionDocumentEditOpen(true)}
@@ -3231,9 +3259,10 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="rounded-[24px] border border-[#7bd7d4]/30 bg-[#24545a] p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
-                  <p className="text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/70">Receptió eladási értéke</p>
-                  <p className="mt-2 text-2xl tabular-nums tracking-tight text-[#eaffff]">{money(receptionSalesTotalRon(detail.item), "RON")}</p>
-                  <p className="mt-2 text-[10px] text-white/56">Mentett eladási árak × darabszám, árdöntés után frissül</p>
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/70">Jelenlegi eladási érték</p>
+                  <p className="mt-2 text-2xl tabular-nums tracking-tight text-[#eaffff]">{money(receptionCurrentSalesTotalRon(detail.item), "RON")}</p>
+                  <p className="mt-2 text-[10px] text-white/56">Az aktuális raktári eladási árak × a receptió darabszámai.</p>
+                  {Math.round(receptionCurrentSalesTotalRon(detail.item) * 100) !== Math.round(receptionSalesTotalRon(detail.item) * 100) ? <p className="mt-1 text-[10px] text-[#cffffd]/75">Receptiókori érték: {money(receptionSalesTotalRon(detail.item), "RON")}</p> : null}
                 </div>
 
                 <div className="rounded-[24px] border border-[#7bd7d4]/22 bg-[#29464f] p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
@@ -3328,7 +3357,7 @@ export default function AllInReceptions(_props: Props) {
                       <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
                       {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
-                    <p className="mt-1 text-[14px] text-white/90">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
+                    <p className="mt-1 text-[14px] text-white/90">Termékek és árak egyetlen sorban. Készletre vett tételeknél a jelenlegi raktári ár látszik, a régi receptiós ár és a PDF változatlan marad.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <select className={`${lightSelect} h-9 min-w-[178px]`} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
@@ -3365,7 +3394,7 @@ export default function AllInReceptions(_props: Props) {
                       <span className="text-center">Db</span>
                       <span className="text-right">Vételár / db</span>
                       <span className="text-right text-[#dffefd]">Vételár össz.</span>
-                      <span className="text-right">Eladási ár / db</span>
+                      <span className="text-right" title="Készletre vett soroknál a Raktár aktuális eladási ára látható; az eredeti ár történeti adatként megmarad.">Jelenlegi ár / db</span>
                       <span className="text-right text-[#aef5f1]">Eladási érték <span className="block text-[8px] normal-case tracking-normal text-[#8fe9e5]/70">TVA {salesTvaShort(salesTvaSettings)}</span></span>
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
@@ -3554,13 +3583,14 @@ export default function AllInReceptions(_props: Props) {
                               <div className="relative">
                                 <input
                                   className="h-9 w-full rounded-lg border border-[#8ee6e2]/[0.22] bg-[#285159] pr-8 pl-2 text-right text-[12px] tabular-nums text-[#f0ffff] outline-none focus:border-[#7bd7d4]/[0.58] focus:ring-1 focus:ring-[#7bd7d4]/[0.16] disabled:opacity-100"
-                                  value={String(draft.sellPrice ?? "")}
-                                  disabled={!editable}
+                                  value={receptionLiveUnitPriceRon(r) === null ? String(draft.sellPrice ?? "") : money(receptionLiveUnitPriceRon(r))}
+                                  disabled={!editable || r.status === "committed"}
                                   onChange={(e) => updateRowSellPrice(r.id, e.target.value)}
-                                  title="Eladási ár darabonként"
+                                  title={r.status === "committed" ? "Jelenlegi raktári eladási ár (TVA-val). A receptiókori ár megmarad a bizonylaton." : "Eladási ár darabonként"}
                                 />
                                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.03em] text-[#d9fffd]/[0.60]">RON</span>
                               </div>
+                              {receptionPriceDiffers(r, draft, salesTvaSettings) ? <p className="mt-0.5 text-right text-[9px] tabular-nums text-amber-100/85" title="A lezárt receptióban mentett, változatlan eredeti ár">Receptiókor: {money(rowSellGrossPriceRon(r, draft, salesTvaSettings, true))}</p> : null}
                             </div>
 
                             <div className="min-w-0">
@@ -3674,7 +3704,7 @@ export default function AllInReceptions(_props: Props) {
                             <div className="rounded-xl border border-[#7bd7d4]/[0.14] bg-[#2c4d59] p-2.5">
                               <p className="text-[10px] uppercase tracking-[0.06em] text-[#d9fffd]/72">Eladás <span className="normal-case tracking-normal text-[#8fe9e5]/60">TVA {salesTvaShort(salesTvaSettings)}</span></p>
                               <div className="mt-2 grid grid-cols-2 gap-2">
-                                <label className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46">Darabár<div className="relative"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right text-[12px]`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/50">RON</span></div></label>
+                                <label className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46">Darabár<div className="relative"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right text-[12px]`} value={receptionLiveUnitPriceRon(r) === null ? String(draft.sellPrice ?? "") : money(receptionLiveUnitPriceRon(r))} disabled={!editable || r.status === "committed"} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} title={r.status === "committed" ? "Aktuális raktári eladási ár" : "Receptiósor eladási ára"} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/50">RON</span></div>{receptionPriceDiffers(r, draft, salesTvaSettings) ? <span className="text-[9px] normal-case tracking-normal text-amber-100/85">Receptiókor: {money(rowSellGrossPriceRon(r, draft, salesTvaSettings, true))}</span> : null}</label>
                                 <div className="grid gap-1 text-[9px] uppercase tracking-[0.05em] text-white/46"><span>Összesen</span><div className="flex h-8 items-center justify-end rounded-lg border border-[#7bd7d4]/[0.26] bg-[#236169] px-2 text-[12px] normal-case tabular-nums tracking-normal text-[#f1ffff]">{money(sellLineTotalRon, "RON")}</div></div>
                               </div>
                             </div>
