@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
-import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
+import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifHasConfiguredSizeLink, aifFallbackSizeLabels } from "../lib/aif/subcategorySizeFilters";
 
 type Props = {
   apiBase?: string;
@@ -2435,6 +2435,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     .sort((a, b) => String(a.name || a.code).localeCompare(String(b.name || b.code), "hu", { sensitivity: "base" }))
     .map((row) => ({ value: String(row.code), label: String(row.name || row.code) })), [genderTypes]);
 
+  // A Törzsadatok méretkapcsolatai elsődlegesek. Ha a külön meta kérés még
+  // tölti az adatokat, a már rendelkezésre álló kategóriákból akkor is helyes
+  // cipőméret-fallbacket adunk, nem dobjuk vissza a teljes S/M/L listát.
+  const fallbackMobileSizeRules = useMemo(() => ({ categories, sizeTypes,
+    subcategorySizes: [] as Array<{ subcategory_id: string; size_type_id: string }> }), [categories, sizeTypes]);
+  const effectiveMobileSizeRules = categorySizeRules || fallbackMobileSizeRules;
+
   // A Törzsadatokban beállított alkategória–méret szabályok a mobil Raktárban is érvényesek.
   // Beállítás nélküli alkategóriánál csak az ott ténylegesen szereplő méreteket javasoljuk.
   const observedMobileSizes = useMemo(() => items.filter((item) =>
@@ -2442,37 +2449,36 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     (subCategory === "all" || itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro, item.subcategory_name_hu], subCategory, subCategories))
   ).map((item) => String(item.size || "")).filter(Boolean), [items, category, categoryOptions, subCategory, subCategories]);
   const availableMobileSizeTypes = useMemo(() => {
-    if (!categorySizeRules) return sizeTypes;
-    return aifSizeTypesForCategory(categorySizeRules, category, subCategory, observedMobileSizes) as SizeType[];
-  }, [categorySizeRules, sizeTypes, category, subCategory, observedMobileSizes]);
+    return aifSizeTypesForCategory(effectiveMobileSizeRules, category, subCategory, observedMobileSizes) as SizeType[];
+  }, [effectiveMobileSizeRules, category, subCategory, observedMobileSizes]);
   const sizeFilterOptions = useMemo<MobileSelectOption[]>(() => {
     const official = availableMobileSizeTypes.filter((row) => row.is_active !== false)
       .slice().sort(compareMobileWarehouseSizeTypes)
       .map((row) => ({ value: String(row.id || row.name || row.code), label: sizeTypeLabel(row) }));
-    if (!aifHasConfiguredSizeLink(categorySizeRules, category, subCategory)) {
-      const extra = [...new Set(observedMobileSizes)].filter((value) =>
+    if (!aifHasConfiguredSizeLink(effectiveMobileSizeRules, category, subCategory)) {
+      const extra = aifFallbackSizeLabels(effectiveMobileSizeRules, category, subCategory, observedMobileSizes).filter((value) =>
         !availableMobileSizeTypes.some((size) => aifSizeMatchesType(value, size)))
         .sort(compareMobileWarehouseSizeLabels)
         .map((value) => ({ value, label: value }));
       official.push(...extra);
     }
     return official;
-  }, [availableMobileSizeTypes, categorySizeRules, category, subCategory, observedMobileSizes]);
+  }, [availableMobileSizeTypes, effectiveMobileSizeRules, category, subCategory, observedMobileSizes]);
 
-  const newProductAvailableSizes = useMemo(() => categorySizeRules
-    ? aifSizeTypesForCategory(categorySizeRules, newProduct.categoryCode, newProduct.subCategoryCode,
+  const newProductAvailableSizes = useMemo(() =>
+    aifSizeTypesForCategory(effectiveMobileSizeRules, newProduct.categoryCode, newProduct.subCategoryCode,
         items.filter((item) =>
           itemMatchesMeta([item.category_code, item.category_name_ro], newProduct.categoryCode, categoryOptions) &&
           itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro], newProduct.subCategoryCode, subCategories))
-          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[]
-    : sizeTypes, [categorySizeRules, newProduct.categoryCode, newProduct.subCategoryCode, items, categoryOptions, subCategories, sizeTypes]);
-  const editAvailableSizes = useMemo(() => categorySizeRules
-    ? aifSizeTypesForCategory(categorySizeRules, edit.categoryCode, edit.subCategoryCode,
+          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[],
+    [effectiveMobileSizeRules, newProduct.categoryCode, newProduct.subCategoryCode, items, categoryOptions, subCategories]);
+  const editAvailableSizes = useMemo(() =>
+    aifSizeTypesForCategory(effectiveMobileSizeRules, edit.categoryCode, edit.subCategoryCode,
         items.filter((item) =>
           itemMatchesMeta([item.category_code, item.category_name_ro], edit.categoryCode, categoryOptions) &&
           itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro], edit.subCategoryCode, subCategories))
-          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[]
-    : sizeTypes, [categorySizeRules, edit.categoryCode, edit.subCategoryCode, items, categoryOptions, subCategories, sizeTypes]);
+          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[],
+    [effectiveMobileSizeRules, edit.categoryCode, edit.subCategoryCode, items, categoryOptions, subCategories]);
 
   const selectedSizeMatchKeys = useMemo(() => mobileSelectedSizeMatchKeys(sizeFilters, sizeTypes), [sizeFilters, sizeTypes]);
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
+import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink, aifFallbackSizeLabels } from "../lib/aif/subcategorySizeFilters";
 import {
   ChevronDown,
   ChevronLeft,
@@ -1548,7 +1548,7 @@ export default function AllInInventory() {
     const types = aifSizeTypesForCategory(categorySizeRules, categoryFilter, "", observed);
     const values = types.map((row) => String(row.name || row.code || "").trim()).filter(Boolean);
     // Hiányos régi mérettörzs esetén a valódi készletsor mérete se tűnjön el.
-    if (!aifHasConfiguredSizeLink(categorySizeRules, categoryFilter)) values.push(...observed);
+    if (!aifHasConfiguredSizeLink(categorySizeRules, categoryFilter)) values.push(...aifFallbackSizeLabels(categorySizeRules, categoryFilter, "", observed));
     return [...new Set(values)].sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
   }, [active?.lines, stockRows, categoryFilter, categorySizeRules]);
   const inventorySizeMatches = (rowSize?: string | null) => {

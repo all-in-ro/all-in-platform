@@ -958,6 +958,8 @@ type MaterialType = {
   sort_order?: number | string | null;
   is_active?: boolean;
 };
+type SubcategorySizeLink = { subcategory_id: string; size_type_id: string };
+
 type SizeType = {
   id: string;
   code: string;
@@ -6284,6 +6286,7 @@ type WarehouseMetaResponse = {
   brandColorCodes?: BrandColorCode[];
   materialTypes?: MaterialType[];
   sizeTypes?: SizeType[];
+  subcategorySizes?: SubcategorySizeLink[];
   brandSizeCodes?: BrandSizeCode[];
   locations: MetaItem[];
   supplierBrands?: SupplierBrandLink[];
@@ -6472,6 +6475,18 @@ async function apiInactiveWarehouseProducts(signal?: AbortSignal) {
 
 async function apiMeta() {
   return fetchJSON<WarehouseMetaResponse>("/api/aif/meta?scope=warehouse");
+}
+
+// A Törzsadatok közös alkategória-méret kapcsolatai. A válasz nem készletadat.
+async function apiReadWarehouseSubcategorySizes() {
+  return fetchJSON<{ ok: true; items: SubcategorySizeLink[] }>("/api/aif/subcategory-size-links", { signal: AbortSignal.timeout(20_000) });
+}
+
+async function apiSaveWarehouseSubcategorySizes(subcategoryId: string, sizeTypeIds: string[]) {
+  return fetchJSON<{ ok: true; subcategoryId: string; sizeTypeIds: string[]; items: SubcategorySizeLink[] }>(
+    `/api/aif/subcategory-size-links/${encodeURIComponent(subcategoryId)}`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sizeTypeIds }), signal: AbortSignal.timeout(25_000) }
+  );
 }
 
 async function apiStock() {
@@ -7416,6 +7431,13 @@ export default function AllInWarehouse() {
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
   const [materialTypes, setMaterialTypes] = useState<MaterialType[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
+  const [subcategorySizeLinks, setSubcategorySizeLinks] = useState<SubcategorySizeLink[]>([]);
+  const [editingSizeSubcategoryId, setEditingSizeSubcategoryId] = useState("");
+  const [subcategorySizeDraft, setSubcategorySizeDraft] = useState<string[]>([]);
+  const [subcategorySizeSearch, setSubcategorySizeSearch] = useState("");
+  const [subcategorySizeLoading, setSubcategorySizeLoading] = useState(false);
+  const [subcategorySizeLoadError, setSubcategorySizeLoadError] = useState("");
+  const [subcategorySizeNotice, setSubcategorySizeNotice] = useState("");
   const [brandSizeCodes, setBrandSizeCodes] = useState<BrandSizeCode[]>([]);
   const [colorGroups, setColorGroups] = useState<ColorGroup[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
@@ -7488,7 +7510,7 @@ export default function AllInWarehouse() {
   const [newProductBarcodeConflict, setNewProductBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
   const [editBarcodeConflict, setEditBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "genders" | "colorGroups" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "subcategorySizes" | "genders" | "colorGroups" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
   const [categoryForm, setCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [subCategoryForm, setSubCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
@@ -8742,6 +8764,155 @@ export default function AllInWarehouse() {
 
   const mainCategories = useMemo(() => categories.filter((c) => !String((c as any).parent_id || (c as any).parentId || "").trim()), [categories]);
   const subCategories = useMemo(() => categories.filter((c) => String((c as any).parent_id || (c as any).parentId || "").trim()), [categories]);
+  // Az alkategóriákhoz a Törzsadatokban szerkeszthető méretkapcsolatot tároljuk.
+  // Nem módosítjuk a korábban felvett termékek méretét / készletét.
+  const subcategorySizeIds = useMemo(() => {
+    const result = new Map<string, Set<string>>();
+    for (const row of subcategorySizeLinks) {
+      const subId = String(row.subcategory_id || "");
+      const sizeId = String(row.size_type_id || "");
+      if (!subId || !sizeId) continue;
+      if (!result.has(subId)) result.set(subId, new Set<string>());
+      result.get(subId)!.add(sizeId);
+    }
+    return result;
+  }, [subcategorySizeLinks]);
+
+  function warehouseFootwearSubcategory(row: MetaItem) {
+    const parentId = categoryParentId(row);
+    const parent = mainCategories.find((item) => String(item.id) === parentId);
+    const target = parent || row;
+    const text = [target.code, target.name_ro, target.name_hu, target.name, ...(target.aliases || [])]
+      .map(normalizeSearch).join(" ");
+    return /labbel|incalt|footwear|cipo|pantof|shoes?|sneaker|ghete|sandale|tenisi/.test(text);
+  }
+
+  function warehouseIsShoeSize(row: SizeType) {
+    const label = String(row.name || row.code || row.name_hu || "").normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "").toUpperCase().trim().replace(/,/g, ".")
+      .replace(/^(EU|UK|US)\s*[-:]?\s*/, "");
+    const simple = label.match(/^(\d{1,2}(?:\.\d{1,2})?)$/);
+    if (simple) return Number(simple[1]) >= 1 && Number(simple[1]) <= 60;
+    const fraction = label.match(/^(\d{1,2})\s+(1\/2|1\/3|2\/3)$/);
+    if (fraction) return Number(fraction[1]) >= 1 && Number(fraction[1]) <= 59;
+    const range = label.match(/^(\d{1,2}(?:\.\d{1,2})?)\s*[-/]\s*(\d{1,2}(?:\.\d{1,2})?)$/);
+    return Boolean(range && Number(range[1]) >= 1 && Number(range[1]) <= 60 && Number(range[2]) >= 1 && Number(range[2]) <= 60);
+  }
+
+  function warehouseSizeRuleKey(value: unknown): string {
+    return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().trim().replace(/^eu[\s._-]*(?=\d)/, "")
+      .replace(/[\s._-]+/g, "").replace(/[^a-z0-9/]+/g, "");
+  }
+
+  function warehouseProductSizeOptions(categoryValue: string, subcategoryValue: string) {
+    const types = sizeTypes.filter((row) => row.is_active !== false).slice().sort(compareWarehouseSizeTypes);
+    const target = subCategories.find((row) => categoryValueMatches(row, subcategoryValue));
+    if (target) {
+      const linked = subcategorySizeIds.get(String(target.id));
+      if (linked?.size) return types.filter((row) => linked.has(String(row.id)));
+      if (warehouseFootwearSubcategory(target)) return types.filter(warehouseIsShoeSize);
+    }
+    // Főkategória kiválasztásakor is értelmes méretek legyenek az alkategória megadása előtt.
+    const main = mainCategories.find((row) => categoryValueMatches(row, categoryValue));
+    if (main && /labbel|incalt|footwear|cipo|pantof|shoes?/.test(
+      [main.code, main.name, main.name_ro, main.name_hu].map(normalizeSearch).join(" "))) {
+      return types.filter(warehouseIsShoeSize);
+    }
+    return types;
+  }
+
+  const newProductSizeSuggestions = useMemo(
+    () => warehouseProductSizeOptions(newProduct.categoryCode, newProduct.subCategoryCode),
+    [sizeTypes, newProduct.categoryCode, newProduct.subCategoryCode, subCategories, subcategorySizeIds, mainCategories]);
+  const editSizeSuggestions = useMemo(
+    () => warehouseProductSizeOptions(edit.categoryCode, edit.subCategoryCode),
+    [sizeTypes, edit.categoryCode, edit.subCategoryCode, subCategories, subcategorySizeIds, mainCategories]);
+
+  const savedSubcategorySizeIds = useMemo(
+    () => [...(subcategorySizeIds.get(editingSizeSubcategoryId) || new Set<string>())].sort(),
+    [editingSizeSubcategoryId, subcategorySizeIds]);
+  const subcategorySizesDirty = editingSizeSubcategoryId !== "" &&
+    [...subcategorySizeDraft].sort().join("|") !== savedSubcategorySizeIds.join("|");
+
+  function selectSubcategoryForSizes(id: string) {
+    if (subcategorySizesDirty && !window.confirm("A jelenlegi alkategória méreteit még nem mentetted. Eldobod a változtatásokat?")) return;
+    setEditingSizeSubcategoryId(id);
+    setSubcategorySizeDraft([...(subcategorySizeIds.get(id) || new Set<string>())]);
+    setSubcategorySizeSearch("");
+    setSubcategorySizeNotice("");
+  }
+
+  function openSizeEditorForSubcategory(id: string) {
+    if (taxonomyTab === "subcategorySizes" && subcategorySizesDirty &&
+        !window.confirm("A jelenlegi alkategória méreteit még nem mentetted. Eldobod a változtatásokat?")) return;
+    setEditingSizeSubcategoryId(id);
+    setSubcategorySizeDraft([...(subcategorySizeIds.get(id) || new Set<string>())]);
+    setSubcategorySizeSearch("");
+    setSubcategorySizeNotice("");
+    setTaxonomyTab("subcategorySizes");
+    setOpenTaxonomyMenu(null);
+  }
+
+  // A Törzsadatok megnyitásakor frissen olvassuk be a kapcsolatokat; ne egy korábbi
+  // raktári cache alapján jelenítsünk meg hamis "Nincs beállítva" állapotot.
+  useEffect(() => {
+    if (!taxonomyOpen || taxonomyTab !== "subcategorySizes") return;
+    let active = true;
+    setSubcategorySizeLoading(true);
+    setSubcategorySizeLoadError("");
+    void apiReadWarehouseSubcategorySizes().then((result) => {
+      if (!active) return;
+      if (!Array.isArray(result.items)) throw new Error("A szerver nem adott vissza méretkapcsolatokat.");
+      setSubcategorySizeLinks(result.items);
+      const chosen = editingSizeSubcategoryId;
+      if (chosen) {
+        setSubcategorySizeDraft(result.items.filter((row) => String(row.subcategory_id) === chosen)
+          .map((row) => String(row.size_type_id)));
+      }
+    }).catch((error: any) => {
+      if (active) setSubcategorySizeLoadError(error?.message || "Nem érhetők el a központi méretkapcsolatok.");
+    }).finally(() => { if (active) setSubcategorySizeLoading(false); });
+    return () => { active = false; };
+  }, [taxonomyOpen, taxonomyTab]);
+
+  async function saveSubcategorySizeDraft() {
+    if (!editingSizeSubcategoryId || !subcategorySizesDirty || taxonomyBusy || subcategorySizeLoading || subcategorySizeLoadError) return;
+    const chosen = editingSizeSubcategoryId;
+    const requested = [...new Set(subcategorySizeDraft)].sort();
+    setTaxonomyBusy(true);
+    setSubcategorySizeNotice("");
+    try {
+      const result = await apiSaveWarehouseSubcategorySizes(chosen, requested);
+      const persisted = await apiReadWarehouseSubcategorySizes();
+      if (!Array.isArray(persisted.items)) throw new Error("A mentett méretkapcsolatok nem olvashatók vissza.");
+      const actual = persisted.items.filter((row) => String(row.subcategory_id) === chosen).map((row) => String(row.size_type_id)).sort();
+      if (actual.join("|") !== requested.join("|")) {
+        throw new Error("A mentett méretlista nem egyezik a kiválasztott méretekkel. Nem jelöltem sikeresnek a mentést.");
+      }
+      setSubcategorySizeLinks(persisted.items);
+      setSubcategorySizeDraft(actual);
+      warehouseBootstrapCache = null;
+      setSubcategorySizeNotice(`MENTVE: ${actual.length} méret hozzárendelve. A Raktár és a többi felület ezt fogja használni.`);
+    } catch (error: any) {
+      setSubcategorySizeNotice(`HIBA: ${error?.message || "Nem sikerült elmenteni a méretkapcsolatokat."}`);
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
+  function addUsedSubcategorySizes() {
+    const selected = subCategories.find((row) => String(row.id) === editingSizeSubcategoryId);
+    if (!selected) return;
+    const used = new Set(inventoryDisplayItems.filter((row) => itemMatchesSubCategory(row, selected.id, subCategories))
+      .map((row) => warehouseSizeRuleKey(row.size)).filter(Boolean));
+    const types = sizeTypes.filter((row) => row.is_active !== false &&
+      (!warehouseFootwearSubcategory(selected) || warehouseIsShoeSize(row)) &&
+      [row.code, row.name, row.name_hu, ...(row.aliases || [])]
+        .some((value) => used.has(warehouseSizeRuleKey(value)))).map((row) => String(row.id));
+    setSubcategorySizeDraft((previous) => [...new Set([...previous, ...types])]);
+  }
+
   const categorySelectOptions = mainCategories.length ? mainCategories : categories;
   const subCategoriesForValue = (categoryValue: unknown) => {
     if (!categoryValue) return subCategories;
@@ -8848,18 +9019,64 @@ export default function AllInWarehouse() {
   }, [genderTypes]);
 
   const sizeFilterOptions = useMemo<WarehouseMultiSelectOption[]>(() => {
-    // Egyetlen forrás: pontosan ugyanaz az aktív mérettörzs jelenik meg itt,
-    // mint a Törzsadatok / Méretek listában. Nyers termékméret nem kerülhet
-    // külön a szűrőbe, mert attól a két felület megint két külön életet élne.
-    return sizeTypes
-      .filter((row) => row.is_active !== false)
-      .slice()
-      .sort(compareWarehouseSizeTypes)
-      .map((row) => ({
-        value: String(row.id || row.name || row.code),
-        label: sizeTypeLabel(row),
-      }));
-  }, [sizeTypes]);
+    const types = sizeTypes.filter((row) => row.is_active !== false).slice().sort(compareWarehouseSizeTypes);
+    if (category === "all" && subCategory === "all") {
+      return types.map((row) => ({ value: String(row.id), label: sizeTypeLabel(row) }));
+    }
+
+    // A beállított kapcsolatok elsőbbséget élveznek. Más alkategóriák S/M/L méreteit
+    // nem szabad a Sportcipőkhöz hozzácsapni.
+    const eligible = subCategories.filter((row) =>
+      (subCategory === "all" || categoryValueMatches(row, subCategory)) &&
+      (category === "all" || itemMatchesMetaSelection([row.parent_id, row.parentId], category, categorySelectOptions)));
+    if (!eligible.length) return [];
+    const linkedIds = new Set<string>();
+    const unconfigured = eligible.filter((row) => {
+      const assigned = subcategorySizeIds.get(String(row.id));
+      if (assigned?.size) {
+        for (const id of assigned) linkedIds.add(id);
+        return false;
+      }
+      return true;
+    });
+    // Készítsünk előre keresési kulcsokat: több ezer terméksor esetén ne járjuk
+    // körbe a teljes kategóriatörzset minden egyes mérethez újra.
+    const unconfiguredIds = new Set(unconfigured.map((row) => String(row.id)));
+    const unconfiguredKeys = new Set(unconfigured.flatMap(metaSelectionKeys));
+    const observed = new Set<string>();
+    for (const item of inventoryDisplayItems) {
+      if (category !== "all" && !itemMatchesMainCategory(item, category, categorySelectOptions)) continue;
+      const selectedId = String(item.subcategory_id || "").trim();
+      const matching = selectedId
+        ? unconfiguredIds.has(selectedId)
+        : [item.subcategory_code, item.subcategory_name_ro, item.subcategory_name_hu, item.product_type]
+            .map(normalizeSearch).some((value) => Boolean(value && unconfiguredKeys.has(value)));
+      if (!matching) continue;
+      const sizeKey = warehouseSizeRuleKey(item.size);
+      if (sizeKey) observed.add(sizeKey);
+    }
+    const footwearFallback = unconfigured.length > 0 && unconfigured.every(warehouseFootwearSubcategory);
+    return types.filter((row) => {
+      if (linkedIds.has(String(row.id))) return true;
+      if (!unconfigured.length) return false;
+      if (footwearFallback && !warehouseIsShoeSize(row)) return false;
+      const aliases = [row.code, row.name, row.name_hu, ...(row.aliases || [])];
+      // Ha még nincsenek terméksorok betöltve, cipőnél a számozott méretek
+      // maradjanak választhatók, más kategóriában pedig a standard törzs.
+      if (observed.size === 0) return true;
+      return aliases.some((value) => observed.has(warehouseSizeRuleKey(value)));
+    }).map((row) => ({ value: String(row.id), label: sizeTypeLabel(row) }));
+  }, [sizeTypes, category, subCategory, subCategories, categorySelectOptions, subcategorySizeIds, inventoryDisplayItems]);
+
+  // Kategóriaváltáskor a régi, oda nem illő méretszűrő ne maradjon rejtve aktív.
+  useEffect(() => {
+    setSizeFilters((current) => {
+      if (!current.length) return current;
+      const allowed = new Set(sizeFilterOptions.map((row) => String(row.value)));
+      const next = current.filter((value) => allowed.has(String(value)));
+      return next.length === current.length ? current : next;
+    });
+  }, [sizeFilterOptions]);
 
   // A régi szűrés minden egyes terméknél végigjárta a 78 kijelölt méretet,
   // és azon belül újra végigkereste a teljes mérettörzset. "Mind kijelölése"
@@ -13780,6 +13997,7 @@ export default function AllInWarehouse() {
     setBrandColorCodes(meta.brandColorCodes || []);
     setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
     setSizeTypes((meta.sizeTypes || []).slice().sort(compareWarehouseSizeTypes));
+    if (Array.isArray(meta.subcategorySizes)) setSubcategorySizeLinks(meta.subcategorySizes);
     setBrandSizeCodes(meta.brandSizeCodes || []);
     setLocations(meta.locations || []);
   }
@@ -15541,8 +15759,11 @@ export default function AllInWarehouse() {
           </div>
         )}
 
-        <datalist id="warehouse-standard-size-options">
-          {sizeTypes.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
+        <datalist id="warehouse-new-product-size-options">
+          {newProductSizeSuggestions.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
+        </datalist>
+        <datalist id="warehouse-edit-product-size-options">
+          {editSizeSuggestions.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
         </datalist>
         <datalist id="warehouse-color-options">
           {colorTypes.map((c) => <option key={c.id} value={c.name_ro}>{c.name_hu || c.code}</option>)}
@@ -15613,6 +15834,7 @@ export default function AllInWarehouse() {
                 onChange={(next) => {
                   setCategory(next);
                   setSubCategory("all");
+                  setSizeFilters([]);
                 }}
               />
               <WarehouseSingleSelect
@@ -15625,7 +15847,7 @@ export default function AllInWarehouse() {
                   value: String(c.code || c.name_ro || c.id),
                   label: categoryLabel(c),
                 }))}
-                onChange={setSubCategory}
+                onChange={(next) => { setSubCategory(next); setSizeFilters([]); }}
               />
               <WarehouseSingleSelect
                 labelText="Szezon"
@@ -18245,7 +18467,7 @@ export default function AllInWarehouse() {
                         const mapped = standardSizeForBrandSize(newProduct.brandCode, supplierSizeValue);
                         setNewProduct((x) => ({ ...x, supplierSize: supplierSizeValue, size: mapped || x.size || supplierSizeValue }));
                       }} placeholder="pl. US 8.5 vagy OSFM" /></label>
-                      <label className={label}>Standard méret<input className={input} list="warehouse-standard-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
+                      <label className={label}>Standard méret<input className={input} list="warehouse-new-product-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
                       <label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
@@ -18400,6 +18622,9 @@ export default function AllInWarehouse() {
                 <button className={taxonomyTab === "subCategories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("subCategories"); setOpenTaxonomyMenu(null); }}>
                   Alkategóriák / terméktípusok <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{subCategories.length}</span>
                 </button>
+                <button type="button" className={taxonomyTab === "subcategorySizes" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("subcategorySizes"); setOpenTaxonomyMenu(null); }}>
+                  Alkategória-méretek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{subcategorySizeIds.size}</span>
+                </button>
                 <button className={taxonomyTab === "genders" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("genders"); setOpenTaxonomyMenu(null); }}>
                   Nemek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{genderTypes.length}</span>
                 </button>
@@ -18528,6 +18753,12 @@ export default function AllInWarehouse() {
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/50">Főkategória: {subCategoryParentLabel(c)} • RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
                             {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="text-[10px] text-white/50">{subcategorySizeIds.get(String(c.id))?.size ? `${subcategorySizeIds.get(String(c.id))!.size} méret hozzárendelve` : "Méretek még nincsenek beállítva"}</span>
+                              <button className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b]/15 px-2.5 text-[11px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/35" type="button" onClick={() => openSizeEditorForSubcategory(String(c.id))}>
+                                Méretek beállítása <ArrowRight size={12} />
+                              </button>
+                            </div>
                           </div>
                           {taxonomyActionMenu({
                             menuId: `subcategory-${c.id}`,
@@ -18538,6 +18769,109 @@ export default function AllInWarehouse() {
                         </div>
                       ))}
                       {!subCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória / terméktípus.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "subcategorySizes" && (
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.05fr),minmax(0,.95fr)]">
+                  <section className={taxonomyCard}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm text-white/90">Méretek alkategóriához rendelése</h3>
+                        <p className="mt-1 text-[11px] leading-relaxed text-white/50">A kiválasztott alkategória összes márkája és méretvariánsa ugyanazt a méretlistát kapja.</p>
+                      </div>
+                      {subcategorySizeLoading && <span className="inline-flex items-center gap-1.5 text-xs text-white/60"><RefreshCw size={13} className="animate-spin" /> Frissítés...</span>}
+                    </div>
+                    {subcategorySizeLoadError ? (
+                      <div className="mt-3 rounded-xl border border-rose-300/40 bg-rose-500/12 p-3 text-xs text-rose-100" role="alert">
+                        <strong>A központi méretkapcsolat nem érhető el.</strong> {subcategorySizeLoadError}
+                        <p className="mt-1 text-rose-100/75">A mentés addig nem engedélyezett. Ellenőrizd, hogy az előző Törzsadatok-backend telepítve van-e.</p>
+                      </div>
+                    ) : null}
+                    <div className="mt-4">
+                      <WarehouseTaxonomySelect
+                        labelText="Alkategória / terméktípus"
+                        value={editingSizeSubcategoryId}
+                        onChange={selectSubcategoryForSizes}
+                        placeholder="Válassz alkategóriát"
+                        disabled={subcategorySizeLoading || taxonomyBusy}
+                        options={subCategories.map((row) => ({
+                          value: String(row.id), label: `${subCategoryParentLabel(row)} / ${categoryLabel(row)}`,
+                        }))}
+                      />
+                    </div>
+                    {editingSizeSubcategoryId ? (
+                      <>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] text-white/58">{subcategorySizeDraft.length} méret kijelölve</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button className={taxonomySmallBtn} type="button" disabled={taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)} onClick={addUsedSubcategorySizes}>Használt méretek hozzáadása</button>
+                            <button className={taxonomySmallBtn} type="button" disabled={taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)} onClick={() => setSubcategorySizeDraft([])}>Kijelölés törlése</button>
+                          </div>
+                        </div>
+                        <label className={`${taxonomyField} mt-3`}>Méret keresése
+                          <div className="relative">
+                            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/46" />
+                            <input className={`${taxonomyInput} w-full pl-9`} value={subcategorySizeSearch} onChange={(e) => setSubcategorySizeSearch(e.target.value)} placeholder="pl. 38, 39, M, XL" />
+                          </div>
+                        </label>
+                        <div className="mt-2 max-h-[39vh] overflow-y-auto rounded-xl border border-white/12 bg-black/10 p-2.5">
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            {sizeTypes.filter((row) => row.is_active !== false)
+                              .filter((row) => {
+                                const q = normalizeSearch(subcategorySizeSearch);
+                                return !q || [row.name, row.name_hu, row.code, ...(row.aliases || [])]
+                                  .some((value) => normalizeSearch(value).includes(q));
+                              }).slice().sort(compareWarehouseSizeTypes).map((row) => {
+                                const chosen = subcategorySizeDraft.includes(String(row.id));
+                                return (
+                                  <label key={row.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] transition ${chosen ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/25 text-white" : "border-white/10 bg-white/[0.04] text-white/75 hover:border-white/30"}`}>
+                                    <input className={selectBox} type="checkbox" checked={chosen} disabled={taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)}
+                                      onChange={(e) => setSubcategorySizeDraft((prev) => e.target.checked ? [...new Set([...prev, String(row.id)])] : prev.filter((id) => id !== String(row.id)))} />
+                                    <span className="truncate">{sizeTypeLabel(row)}</span>
+                                  </label>
+                                );
+                              })}
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+                          <span className="text-xs text-white/55">{subcategorySizesDirty ? "Nem mentett módosítás" : "Nincs új változtatás"}</span>
+                          <button className={taxonomyPrimaryBtn} type="button" onClick={() => void saveSubcategorySizeDraft()}
+                            disabled={!subcategorySizesDirty || taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)}>
+                            <Save size={14} /> Méretek mentése
+                          </button>
+                        </div>
+                        {subcategorySizeNotice && (
+                          <p className={`mt-2 rounded-lg border px-3 py-2 text-[11px] ${subcategorySizeNotice.startsWith("HIBA") ? "border-rose-300/40 bg-rose-500/12 text-rose-100" : "border-[#7bd7d4]/40 bg-[#2a8d8b]/20 text-[#d7fffd]"}`} role="status">{subcategorySizeNotice}</p>
+                        )}
+                        {!subcategorySizeDraft.length && <p className="mt-2 text-[11px] text-amber-100/80">Nincs kijelölt méret: ez az alkategória még nincs konfigurálva. Cipőknél addig csak a számozott méretek jelennek meg ajánlásként.</p>}
+                      </>
+                    ) : (
+                      <p className="mt-4 rounded-xl border border-dashed border-white/15 p-5 text-center text-xs text-white/50">Válassz egy alkategóriát a méretek beállításához.</p>
+                    )}
+                  </section>
+                  <section className={taxonomyCard}>
+                    <p className="text-sm text-white/90">Alkategóriák és méretszabályok</p>
+                    <p className="mt-1 text-[11px] text-white/50">Kattints a sorra, hogy megnyisd a hozzá tartozó méreteket.</p>
+                    <div className="mt-3 max-h-[62vh] space-y-2 overflow-y-auto pr-1">
+                      {subCategories.map((row) => {
+                        const linked = subcategorySizeIds.get(String(row.id)) || new Set<string>();
+                        const assigned = sizeTypes.filter((size) => linked.has(String(size.id))).slice().sort(compareWarehouseSizeTypes).map(sizeTypeLabel);
+                        return (
+                          <button key={row.id} type="button" disabled={subcategorySizeLoading || taxonomyBusy}
+                            className={`w-full rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-60 ${editingSizeSubcategoryId === String(row.id) ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/18" : "border-white/10 bg-black/10 hover:border-[#7bd7d4]/25"}`}
+                            onClick={() => selectSubcategoryForSizes(String(row.id))}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm text-white">{categoryLabel(row)}</span>
+                              <span className="shrink-0 text-[11px] text-white/45">{linked.size ? `${linked.size} méret` : "Nincs beállítva"}</span>
+                            </div>
+                            <p className="mt-0.5 text-[10px] text-white/50">{subCategoryParentLabel(row)}</p>
+                            {assigned.length > 0 && <p className="mt-2 line-clamp-2 text-[11px] text-[#b8f6f2]">{assigned.join(" · ")}</p>}
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
                 </div>
@@ -19295,7 +19629,7 @@ export default function AllInWarehouse() {
                         </div>
                       </label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
-                      <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
+                      <label className={label}>Méret<input className={input} list="warehouse-edit-product-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
                       <label className={label}>
                         Vételár
                         <div className="relative">

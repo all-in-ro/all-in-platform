@@ -47,7 +47,7 @@ import {
   type AifShopSalePaymentMethod,
   type AifShopSaleResult,
 } from "../lib/aif/api";
-import { useAifCategorySizeRules, aifCategoryIsChildOf, aifMatchesCategory, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
+import { useAifCategorySizeRules, aifCategoryIsChildOf, aifMatchesCategory, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink, aifFallbackSizeLabels } from "../lib/aif/subcategorySizeFilters";
 
 type Props = {
   locationCode: string;
@@ -470,7 +470,7 @@ export default function AllInMagazinSale({
     const sizes = [...new Set(scopedSaleProducts.map((row) => String(row.size || "").trim()).filter(Boolean))];
     const allowed = aifSizeTypesForCategory(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter, sizes);
     const mapped = allowed.map((row) => String(row.name || row.code || "").trim()).filter(Boolean);
-    if (!aifHasConfiguredSizeLink(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter)) mapped.push(...sizes);
+    if (!aifHasConfiguredSizeLink(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter)) mapped.push(...aifFallbackSizeLabels(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter, sizes));
     return [...new Set(mapped)].sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
   }, [categorySizeRules, saleCategoryFilter, saleSubcategoryFilter, scopedSaleProducts]);
   const displayedProducts = useMemo(() => scopedSaleProducts.filter((row) => {
