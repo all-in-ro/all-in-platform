@@ -90,7 +90,10 @@ export function messageSettingsSnapshot(settings,locationCode) {
     unsubscribePhone:txt(settings.unsubscribePhone),
     includeUnsubscribeLink:settings.includeUnsubscribeLink===true,
     storeName:txt(settings.shopNames?.[locationCode]),
-    storeAddress:txt(settings.shopAddresses?.[locationCode])
+    storeAddress:txt(settings.shopAddresses?.[locationCode]),
+    // V2: the actual SMS prefix uses the saved location name, not a fixed product name.
+    // Old prepared campaigns must be prepared again before an SMS can be sent live.
+    messageFormatVersion:2
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -157,7 +160,11 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   if(showLink&&!/^https:\/\/[^\s]+$/.test(unsubscribeUrl))throw fail('Hiányzik a biztonságos személyes leiratkozási cím.');
   // Phone-only: manual opt-out requests must be recorded promptly in the SMS preferences.
   const optOut=showLink&&contact?`${contact} / ${unsubscribeUrl}`:showLink?unsubscribeUrl:contact;
-  return segmentInfo(`AllInFashion: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
+  // The SMS body identifies the real shop chosen for this campaign. SMSLink sender ID
+  // is configured separately and may be a numeric sender.
+  const storeName=txt(values.storeName);
+  if(!storeName)throw fail('Az SMS feladó üzletneve nincs beállítva.','sms_missing_store_name');
+  return segmentInfo(`${storeName}: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
 }
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);

@@ -30,7 +30,7 @@ export function startSmsWorker(pool,{ensure,provider}) {
         await pause('A leiratkozási kapcsolattartó telefonszáma hiányzik vagy megváltozott. A címzettüzeneteket új kampányban kell elkészíteni.');return;
       }
       if(c.mode==='live'&&!messageSettingsMatch(c.definition,s,c.location_code)){
-        await pause('Az üzlet neve, címe vagy a leiratkozási mód megváltozott. A további SMS-ek előtt új kampányt kell előkészíteni.');return;
+        await pause('Az SMS fejléce, az üzlet neve/címe vagy a leiratkozási mód megváltozott. Új kampányt kell előkészíteni.');return;
       }
       if(c.mode==='live'&&(!s.liveEnabled||!providerConfig().enabled)){await pause('Az éles küldés kikapcsolva.');return;}
       if(c.mode==='live'&&!withinSendHours(s)){await pause('Küldési csendidő. Nyitvatartási időben kézzel folytatható.');return;}
