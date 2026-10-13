@@ -952,15 +952,18 @@ export type AifCommitImportBatchResult = {
   errorRows?: number;
   failedCount?: number;
   warning?: string | null;
+  committedRowResults?: Array<{ id?: string; rowNo?: number | string | null; variantId?: string; qty?: number }>;
+  variantIds?: string[];
+  committedTotalQty?: number;
   failedRows?: Array<{ id?: string; rowNo?: number | string | null; error?: string; code?: string | null; detail?: string | null; constraint?: string | null }>;
 };
 
-export function apiAifCommitImportBatch(batchId: string) {
+export function apiAifCommitImportBatch(batchId: string, options?: { priceChoices?: Record<string, AifIncomingPriceChoice> }) {
   return fetchAifJSON<AifCommitImportBatchResult>(
     `/import-batches/${encodeURIComponent(batchId)}/commit`,
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ priceChoices: options?.priceChoices || {} }),
     }
   );
 }
@@ -2222,12 +2225,57 @@ export function apiAifDeleteReception(id: string) {
   });
 }
 
-export function apiAifCommitReceptionRows(id: string, rowIds?: string[]) {
+export type AifIncomingPriceReviewItem = {
+  variantId: string;
+  rowIds: string[];
+  incomingRowCount: number;
+  incomingQty: number;
+  currentQty: number;
+  stockLocations?: Array<{ location?: string; qty?: number }>;
+  oldPrice: number;
+  incomingPrice: number;
+  productTitle?: string | null;
+  productCode?: string | null;
+  brandName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+};
+
+export type AifIncomingPriceReviewResponse = {
+  ok: true;
+  items: AifIncomingPriceReviewItem[];
+  selectedRowCount: number;
+  selectedQty: number;
+};
+
+export type AifIncomingPriceChoice = {
+  choice: "keep_existing" | "use_incoming";
+  variantId: string;
+  oldPrice: number;
+  incomingPrice: number;
+};
+
+export function apiAifPreviewReceptionPrices(id: string, rowIds: string[]) {
+  return fetchAifJSON<AifIncomingPriceReviewResponse>(
+    `/receptions/${encodeURIComponent(id)}/price-review`,
+    { method: "POST", body: JSON.stringify({ rowIds }) }
+  );
+}
+
+export function apiAifCommitReceptionRows(
+  id: string,
+  rowIds?: string[],
+  options?: { priceChoices?: Record<string, AifIncomingPriceChoice>; requirePriceChoice?: boolean }
+) {
   return fetchAifJSON<{ ok: true; committed: number; batches?: any[] }>(
     `/receptions/${encodeURIComponent(id)}/commit-selected`,
     {
       method: "POST",
-      body: JSON.stringify({ rowIds: rowIds || [] }),
+      body: JSON.stringify({
+        rowIds: rowIds || [],
+        priceChoices: options?.priceChoices || {},
+        requirePriceChoice: options?.requirePriceChoice === true,
+      }),
     }
   );
 }
