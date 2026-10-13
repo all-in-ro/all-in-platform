@@ -66,7 +66,8 @@ function Composer({kind,status,meta,locationCode,template,onPrepared}:{kind:'arr
   const unsubscribeContact=status.settings.unsubscribePhone||'';
   const showUnsubscribeLink=status.settings.includeUnsubscribeLink===true||!unsubscribeContact;
   const unsubscribePreview=showUnsubscribeLink&&unsubscribeContact?`${unsubscribeContact} / [személyes leiratkozási link]`:showUnsubscribeLink?'[személyes leiratkozási link]':unsubscribeContact;
-  const preview=shopName+': '+draft.blocks.map(b=>b.type==='text'?b.value:tokenValues[b.value]||'…').join('')+(draft.language==='ro'?' Dezabonare: ':' Leiratkozas: ')+unsubscribePreview;
+  const websitePreview=status.settings.includeWebsite===true&&status.settings.websiteUrl?.trim()?` Online: ${status.settings.websiteUrl.trim()}`:'';
+  const preview=shopName+': '+draft.blocks.map(b=>b.type==='text'?b.value:tokenValues[b.value]||'…').join('')+websitePreview+(draft.language==='ro'?' Dezabonare: ':' Leiratkozas: ')+unsubscribePreview;
   const couponMissing=kind==='promotion'&&(!Number.isFinite(draft.coupon.value)||draft.coupon.value<=0||draft.coupon.value>(draft.coupon.type==='percent'?90:5000));
   const unsafe=draft.blocks.some(b=>b.type==='text'&&/[{}]/.test(b.value));
   async function prepare(){if(locked.current)return;if(couponMissing){setError('A kampány előtt add meg a kedvezmény értékét.');return;}locked.current=true;setBusy(true);setError('');try{if(!requestKey.current)requestKey.current=smsKey();const d=await smsApi<SmsCampaignDetail>('/campaigns',{...draft,requestKey:requestKey.current});onPrepared(d);}catch(e){setError(errText(e));}finally{locked.current=false;setBusy(false);}}
@@ -149,6 +150,14 @@ function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
       <div className="sms-note" style={{marginTop:12}}><strong>SMS-ben így jelenik meg:</strong><div style={{marginTop:6}}>Csíkszereda: {[s.shopNames.main_warehouse,s.shopAddresses?.main_warehouse].filter(Boolean).join(', ')}</div><div style={{marginTop:4}}>Kézdivásárhely: {[s.shopNames.magazin_targu_secuiesc,s.shopAddresses?.magazin_targu_secuiesc].filter(Boolean).join(', ')}</div></div>
       <p className="sms-caption" style={{marginTop:12}}>Az „Üzlet neve és teljes címe” adatmező automatikusan mindkettőt behelyettesíti, a korábban mentett sablonokban is. Nincs kitalált cím: a tényleges utcacímet te adod meg. Egy már előkészített kampány szövege nem változik; beállításmódosítás után készíts újat.</p>
     </div></div>
+    <div className="sms-card teal"><div className="sms-flex"><div><p className="sms-overline">KÖZÖS ONLINE ÜZLET</p><h3>Webáruház címe az SMS végén</h3></div><span className="sms-pill live">Mindkét üzlet</span></div>
+      <div className="sms-grid two" style={{marginTop:14}}>
+        <label>Online üzlet weboldala<input type="text" autoComplete="url" maxLength={160} value={s.websiteUrl??''} placeholder="www.allinfashion.ro" onChange={e=>patch({websiteUrl:e.target.value})}/></label>
+        <div><CheckRow checked={s.includeWebsite===true} onChange={v=>patch({includeWebsite:v})} title="A webáruház megjelenjen az SMS végén" hint="Új áru és promóció esetén is. Kikapcsolva a cím mentve marad, de nem kerül az SMS-be."/></div>
+      </div>
+      <div className="sms-note" style={{marginTop:12}}><strong>Üzenetben így jelenik meg:</strong><div style={{marginTop:7}}>{s.includeWebsite?(s.websiteUrl?.trim()?`Online: ${s.websiteUrl.trim()}`:'Hiányzik a weboldal címe'):'A webshop linkje ki van kapcsolva.'}</div></div>
+      <p className="sms-caption" style={{marginTop:12}}>A webáruház címe a leiratkozás elé kerül. Például: <strong>Online: www.allinfashion.ro</strong>. A hosszabb SMS több kreditet fogyaszthat, ezért a küldés előtti ellenőrzés újraszámolja a részek számát. Régi, előkészített kampányt a beállítás megváltoztatása után újra kell készíteni.</p>
+    </div>
     <details className="sms-card"><summary>Render-környezeti változók és SMSLink-bekötés</summary><p className="sms-caption">AIF_SMSLINK_CONNECTION_ID<br/>AIF_SMSLINK_PASSWORD<br/>AIF_SMS_PUBLIC_BASE_URL = a rendszer HTTPS eredetcíme, útvonal nélkül<br/>AIF_SMS_WEBHOOK_SECRET = véletlen, legalább 32 karakteres titok<br/>AIF_SMS_ALLOW_LIVE = false kezdetben, majd tudatosan true</p><p className="sms-caption">SMSLink DLR-cím: <code>/api/aif/sms/delivery?key=SAJÁT_TITOK</code> az eredetcím után. Kérd az opcionális connection_id és message_count mezőket is. A státusz itt csak a titok meglétét ellenőrzi, a szolgáltatói URL tényleges beállítását nem.</p></details>
     <div className="sms-flex"><p className="sms-caption">Minden módosítást az admin auditnapló őriz.</p><button type="button" className="sms-button primary" disabled={busy} onClick={()=>void save()}>{busy?<Loader2 className="sms-spin" size={17}/>:<Save size={17}/>} Beállítások mentése</button></div>
   </div>;
