@@ -5002,6 +5002,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       rw_sale.sell_price_ron,
       ${sellPriceRonSql("rw_sale.sell_price", "rw_sale.normalized", "COALESCE(r.exchange_rate_to_ron,1)")}
     )`;
+    const salesTvaFactorSql = `CASE
+      WHEN lower(COALESCE(rw_sale.normalized->>'salesPriceIncludesTva',rw_sale.normalized->>'sellPriceIncludesTva','true'))
+        IN ('false','0','no','nem','off')
+      THEN 1 + (
+        CASE WHEN replace(COALESCE(rw_sale.normalized->>'salesTvaRate',rw_sale.normalized->>'saleTvaRate','21'),',','.') ~ '^[0-9]+([.][0-9]+)?$'
+          THEN replace(COALESCE(rw_sale.normalized->>'salesTvaRate',rw_sale.normalized->>'saleTvaRate','21'),',','.')::numeric
+          ELSE 21::numeric
+        END
+      ) / 100
+      ELSE 1::numeric
+    END`;
     const sql = `
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
@@ -5020,6 +5031,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
         count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
         COALESCE(sale_totals.sales_total_ron,0)::numeric(14,2) AS sales_total_ron,
+        COALESCE(sale_totals.current_sales_total_ron,sale_totals.sales_total_ron,0)::numeric(14,2) AS current_sales_total_ron,
         (count(sm.id) > 0) AS has_stock_movements,
         (
           r.status <> 'committed'
@@ -5034,40 +5046,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
       LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
       LEFT JOIN LATERAL (
-        SELECT round(COALESCE(sum(
-          COALESCE(rw_sale.qty,0)::numeric *
-          COALESCE(${salesUnitPriceRonSql},0)::numeric *
-          CASE
-            WHEN lower(COALESCE(
-              rw_sale.normalized->>'salesPriceIncludesTva',
-              rw_sale.normalized->>'sellPriceIncludesTva',
-              'true'
-            )) IN ('false','0','no','nem','off')
-            THEN 1 + (
-              CASE
-                WHEN replace(COALESCE(
-                  rw_sale.normalized->>'salesTvaRate',
-                  rw_sale.normalized->>'saleTvaRate',
-                  '21'
-                ), ',', '.') ~ '^[0-9]+([.][0-9]+)?$'
-                THEN replace(COALESCE(
-                  rw_sale.normalized->>'salesTvaRate',
-                  rw_sale.normalized->>'saleTvaRate',
-                  '21'
-                ), ',', '.')::numeric
-                ELSE 21::numeric
-              END
-            ) / 100
-            ELSE 1::numeric
-          END
-        ),0),2)::numeric(14,2) AS sales_total_ron
+        SELECT
+          round(COALESCE(sum(
+            COALESCE(rw_sale.qty,0)::numeric * COALESCE(${salesUnitPriceRonSql},0)::numeric * (${salesTvaFactorSql})
+          ),0),2)::numeric(14,2) AS sales_total_ron,
+          round(COALESCE(sum(
+            COALESCE(rw_sale.qty,0)::numeric * CASE
+              WHEN rw_sale.status='committed' AND v_sale.sell_price > 0
+                THEN v_sale.sell_price::numeric
+              ELSE COALESCE(${salesUnitPriceRonSql},0)::numeric * (${salesTvaFactorSql})
+            END
+          ),0),2)::numeric(14,2) AS current_sales_total_ron
         FROM aif_import_batches b_sale
         JOIN aif_import_rows rw_sale ON rw_sale.batch_id=b_sale.id
-        WHERE b_sale.reception_id=r.id
-          AND rw_sale.status <> 'ignored'
+        LEFT JOIN aif_product_variants v_sale ON v_sale.id=rw_sale.variant_id
+        WHERE b_sale.reception_id=r.id AND rw_sale.status <> 'ignored'
       ) sale_totals ON true
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      GROUP BY r.id, s.name, l.name, po.order_number, sale_totals.sales_total_ron
+      GROUP BY r.id, s.name, l.name, po.order_number, sale_totals.sales_total_ron, sale_totals.current_sales_total_ron
       ORDER BY r.created_at DESC
       LIMIT ${limitParam}
     `;
@@ -5452,9 +5448,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT rw.id, rw.batch_id, rw.row_no, rw.raw, rw.normalized, rw.status, rw.error_messages,
                 rw.variant_id, rw.supplier_product_code, rw.supplier_variant_code, rw.supplier_color_code,
                 rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron, rw.sn_cod,
-                rw.purchase_order_id, rw.purchase_order_line_id
+                rw.purchase_order_id, rw.purchase_order_line_id,
+                CASE WHEN rw.status='committed' THEN v_live.sell_price ELSE NULL END AS current_sell_price_ron
          FROM aif_import_batches b
          JOIN aif_import_rows rw ON rw.batch_id=b.id
+         LEFT JOIN aif_product_variants v_live ON v_live.id=rw.variant_id
          WHERE b.reception_id=$1
          ORDER BY b.created_at ASC, rw.row_no ASC`,
         [item.rows[0].id]
@@ -5476,8 +5474,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const tva = aifPriceNumber(normalized.salesTvaRate ?? normalized.saleTvaRate);
         return sum + qty * unitRon * (includesTva ? 1 : 1 + (tva === null ? 21 : tva) / 100);
       }, 0);
+      const currentSalesTotalRon = rows.rows.reduce((sum, rw) => {
+        if (rw.status === 'ignored') return sum;
+        const currentPrice = rw.status === 'committed' ? aifPriceNumber(rw.current_sell_price_ron) : null;
+        const qty = Math.max(0, Number(rw.qty || 0));
+        if (currentPrice !== null && currentPrice > 0) return sum + qty * currentPrice;
+        const normalized = rw.normalized && typeof rw.normalized === 'object' ? rw.normalized : {};
+        const explicitRon = aifPriceNumber(rw.sell_price_ron);
+        const sourcePrice = aifPriceNumber(rw.sell_price);
+        const unitRon = explicitRon !== null ? explicitRon :
+          (sourcePrice === null ? 0 : sourcePrice * (isSellPriceRon(normalized) ? 1 : receiptExchangeRate));
+        const includesTva = !['false','0','no','nem','off'].includes(String(
+          normalized.salesPriceIncludesTva ?? normalized.sellPriceIncludesTva ?? 'true'
+        ).toLowerCase());
+        const tva = aifPriceNumber(normalized.salesTvaRate ?? normalized.saleTvaRate);
+        return sum + qty * unitRon * (includesTva ? 1 : 1 + (tva === null ? 21 : tva) / 100);
+      }, 0);
       res.json({
-        item: { ...item.rows[0], sales_total_ron: Math.round(salesTotalRon * 100) / 100 },
+        item: {
+          ...item.rows[0],
+          sales_total_ron: Math.round(salesTotalRon * 100) / 100,
+          current_sales_total_ron: Math.round(currentSalesTotalRon * 100) / 100,
+        },
         batches: batches.rows,
         rows: rows.rows,
       });
@@ -9687,6 +9705,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
       if (isCommitted) {
         nextNormalized.qty = row.qty ?? nextNormalized.qty;
+        // A lezárt receptió árai pillanatképek. Egy adatjavítás / Mentés nem lehet
+        // új eladásiár-döntés és nem állíthatja vissza a variáns régi árát.
+        const stored = row.normalized && typeof row.normalized === 'object' ? row.normalized : {};
+        const historicalKeys = [
+          'buyPrice','buy_price','buyPriceRon','sellPrice','sell_price','sellPriceRon',
+          'sellPriceGrossRon','sell_price_gross_ron','compareAtPrice','compare_at_price',
+          'sellPriceCurrency','sell_price_currency','sellPriceCurrencyMode','sell_price_currency_mode',
+          'sellPriceIsRon','sell_price_is_ron','sellPriceIncludesTva','sell_price_includes_tva',
+          'salesPriceIncludesTva','salesTvaRate','saleTvaRate',
+          'aifOriginalOfferedSellPriceRon','aifEffectiveSellPriceRon',
+          'aifPriceDecisionApplied','aifPriceDecisionVariantId',
+        ];
+        for (const key of historicalKeys) {
+          if (Object.prototype.hasOwnProperty.call(stored,key)) nextNormalized[key] = stored[key];
+          else delete nextNormalized[key];
+        }
+        nextNormalized.buyPrice = row.buy_price ?? stored.buyPrice ?? null;
+        nextNormalized.sellPrice = row.sell_price ?? stored.sellPrice ?? null;
       }
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
@@ -9713,9 +9749,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ...nr.normalized,
         currencyCode: row.currency_code,
         exchangeRateToRon: exchangeRate,
-        buyPriceRon,
-        sellPriceRon,
+        buyPriceRon: isCommitted ? row.buy_price_ron : buyPriceRon,
+        sellPriceRon: isCommitted ? row.sell_price_ron : sellPriceRon,
       };
+      if (isCommitted) {
+        const stored = row.normalized && typeof row.normalized === 'object' ? row.normalized : {};
+        const priceMetaKeys = [
+          'buyPrice','buy_price','buyPriceRon','sellPrice','sell_price','sellPriceRon',
+          'sellPriceGrossRon','sell_price_gross_ron','compareAtPrice','compare_at_price',
+          'sellPriceCurrency','sell_price_currency','sellPriceCurrencyMode','sell_price_currency_mode',
+          'sellPriceIsRon','sell_price_is_ron','sellPriceIncludesTva','sell_price_includes_tva',
+          'salesPriceIncludesTva','salesTvaRate','saleTvaRate',
+          'aifOriginalOfferedSellPriceRon','aifEffectiveSellPriceRon',
+          'aifPriceDecisionApplied','aifPriceDecisionVariantId',
+        ];
+        for (const key of priceMetaKeys) {
+          if (Object.prototype.hasOwnProperty.call(stored,key)) normalizedForDb[key] = stored[key];
+          else delete normalizedForDb[key];
+        }
+        normalizedForDb.buyPrice = row.buy_price ?? null;
+        normalizedForDb.sellPrice = row.sell_price ?? null;
+        normalizedForDb.buyPriceRon = row.buy_price_ron ?? null;
+        normalizedForDb.sellPriceRon = row.sell_price_ron ?? null;
+      }
 
       await client.query(
         `UPDATE aif_import_rows SET
@@ -9744,10 +9800,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           nr.normalized.supplierColorCode,
           nr.normalized.supplierSize,
           isCommitted ? row.qty : nr.normalized.qty,
-          nr.normalized.buyPrice,
-          buyPriceRon,
-          nr.normalized.sellPrice,
-          sellPriceRon,
+          isCommitted ? row.buy_price : nr.normalized.buyPrice,
+          isCommitted ? row.buy_price_ron : buyPriceRon,
+          isCommitted ? row.sell_price : nr.normalized.sellPrice,
+          isCommitted ? row.sell_price_ron : sellPriceRon,
           nr.normalized.snCod || nr.normalized.sn_cod,
         ]
       );
@@ -9756,14 +9812,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(
           `UPDATE aif_product_variants SET
              barcode=COALESCE($2, barcode),
-             sn_cod=COALESCE($9, sn_cod),
+             sn_cod=COALESCE($6, sn_cod),
              color_code=COALESCE($3, color_code),
              color_name=COALESCE($4, color_name),
              size=COALESCE($5, size),
-             buy_price=COALESCE($6, buy_price),
-             sell_price=COALESCE($7, sell_price),
-             compare_at_price=COALESCE($8, compare_at_price),
-             attributes=COALESCE(attributes,'{}'::jsonb) || $10::jsonb,
+             attributes=COALESCE(attributes,'{}'::jsonb) || $7::jsonb,
              updated_at=now()
            WHERE id=$1`,
           [
@@ -9772,9 +9825,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.colorCode,
             nr.normalized.colorName,
             nr.normalized.size,
-            buyPriceRon,
-            sellPriceRon,
-            nr.normalized.compareAtPrice,
             nr.normalized.snCod || nr.normalized.sn_cod,
             variantAttributesJsonFromNormalized(nr.normalized),
           ]
