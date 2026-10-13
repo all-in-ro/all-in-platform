@@ -7,6 +7,8 @@ import {
   CheckCircle2,
   Clock3,
   CreditCard,
+  ChevronDown,
+  Filter,
   Landmark,
   KeyRound,
   Loader2,
@@ -45,6 +47,7 @@ import {
   type AifShopSalePaymentMethod,
   type AifShopSaleResult,
 } from "../lib/aif/api";
+import { useAifCategorySizeRules, aifCategoryIsChildOf, aifMatchesCategory, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
 
 type Props = {
   locationCode: string;
@@ -266,6 +269,7 @@ export default function AllInMagazinSale({
   role = "shop",
   onLogout,
 }: Props) {
+  const categorySizeRules = useAifCategorySizeRules();
   const storageKey = `allin:shop-sale-cart:${locationCode}`;
   const extraDiscountStorageKey = `${storageKey}:extra-discount`;
   const shopId = shopIdProp || (
@@ -278,6 +282,10 @@ export default function AllInMagazinSale({
   const defaultCountyCode = defaultCountyCodeProp ?? preferredCountyCode(locationCode);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<AifShopSaleCatalogItem[]>([]);
+  const [saleFiltersOpen, setSaleFiltersOpen] = useState(false);
+  const [saleCategoryFilter, setSaleCategoryFilter] = useState("");
+  const [saleSubcategoryFilter, setSaleSubcategoryFilter] = useState("");
+  const [saleSizeFilter, setSaleSizeFilter] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [cart, setCart] = useState<CartLine[]>(() => {
     try {
@@ -433,6 +441,43 @@ export default function AllInMagazinSale({
       }
     };
   }, [administrationAccessOpen, administrationBusy, administrationCode]);
+
+  // Az eladói oldalon a szűrők CSAK a betöltött keresési találatokat szűkítik.
+  // A vonalkód / SKU pontos találata továbbra is automatikusan kosárba kerül.
+  const saleCategoryOptions = useMemo(() => {
+    if (categorySizeRules?.categories?.length) return categorySizeRules.categories
+      .filter((row) => row.is_active !== false && !(row.parent_id || row.parentId))
+      .map((row) => ({ value: String(row.name_ro || row.code), label: String(row.name_hu || row.name_ro || row.code) }))
+      .sort((a, b) => a.label.localeCompare(b.label, "hu"));
+    return [...new Set(products.map((row) => String(row.categoryName || "").trim()).filter(Boolean))]
+      .map((value) => ({ value, label: value })).sort((a, b) => a.label.localeCompare(b.label, "hu"));
+  }, [categorySizeRules, products]);
+  const saleSubcategoryOptions = useMemo(() => {
+    if (categorySizeRules?.categories?.length) return categorySizeRules.categories
+      .filter((row) => row.is_active !== false && Boolean(row.parent_id || row.parentId))
+      .filter((row) => aifCategoryIsChildOf(categorySizeRules, String(row.id), saleCategoryFilter))
+      .map((row) => ({ value: String(row.name_hu || row.name_ro || row.code), label: String(row.name_hu || row.name_ro || row.code) }))
+      .sort((a, b) => a.label.localeCompare(b.label, "hu"));
+    return [...new Set(products.filter((row) => aifMatchesCategory(categorySizeRules, row.categoryName, saleCategoryFilter))
+      .map((row) => String(row.subcategoryName || "").trim()).filter(Boolean))]
+      .map((value) => ({ value, label: value })).sort((a, b) => a.label.localeCompare(b.label, "hu"));
+  }, [categorySizeRules, products, saleCategoryFilter]);
+  const scopedSaleProducts = useMemo(() => products.filter((row) =>
+    aifMatchesCategory(categorySizeRules, row.categoryName, saleCategoryFilter) &&
+    aifMatchesCategory(categorySizeRules, row.subcategoryName, saleSubcategoryFilter)),
+    [products, categorySizeRules, saleCategoryFilter, saleSubcategoryFilter]);
+  const saleSizeOptions = useMemo(() => {
+    const sizes = [...new Set(scopedSaleProducts.map((row) => String(row.size || "").trim()).filter(Boolean))];
+    const allowed = aifSizeTypesForCategory(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter, sizes);
+    const mapped = allowed.map((row) => String(row.name || row.code || "").trim()).filter(Boolean);
+    if (!aifHasConfiguredSizeLink(categorySizeRules, saleCategoryFilter, saleSubcategoryFilter)) mapped.push(...sizes);
+    return [...new Set(mapped)].sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
+  }, [categorySizeRules, saleCategoryFilter, saleSubcategoryFilter, scopedSaleProducts]);
+  const displayedProducts = useMemo(() => scopedSaleProducts.filter((row) => {
+    if (!saleSizeFilter) return true;
+    const selectedType = categorySizeRules?.sizeTypes?.find((size) => aifSizeMatchesType(saleSizeFilter, size));
+    return selectedType ? aifSizeMatchesType(row.size, selectedType) : aifSizeKey(row.size) === aifSizeKey(saleSizeFilter);
+  }), [scopedSaleProducts, saleSizeFilter, categorySizeRules]);
 
   const subtotal = useMemo(
     () => roundMoney(cart.reduce((sum, line) => sum + roundMoney(numberValue(line.sellPrice)) * line.quantity, 0)),
@@ -970,9 +1015,44 @@ export default function AllInMagazinSale({
               </button>
             </div>
 
+            <div className="mt-3 rounded-2xl border border-white/12 bg-[#303b4d]/80 px-3 py-2.5">
+              <button type="button" onClick={() => setSaleFiltersOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 text-left text-xs text-white/75">
+                <span className="inline-flex items-center gap-2"><Filter size={15} className="text-[#91e5e1]" />Kategória / méret szűrők
+                  {saleCategoryFilter || saleSubcategoryFilter || saleSizeFilter ? <span className="rounded-lg border border-[#7bd7d4]/38 bg-[#2a8d8b]/26 px-2 py-0.5 text-[10px] text-[#d7fffd]">Aktív</span> : null}
+                </span>
+                <ChevronDown size={15} className={`transition-transform ${saleFiltersOpen ? "rotate-180" : ""}`} />
+              </button>
+              {saleFiltersOpen ? (
+                <div className="mt-3 grid gap-2 border-t border-white/10 pt-3 sm:grid-cols-3">
+                  <label className="grid gap-1 text-[10px] text-white/60">Főkategória
+                    <select className="h-10 w-full rounded-xl border border-white/20 bg-[#283648] px-2 text-xs text-white outline-none" value={saleCategoryFilter}
+                      onChange={(event) => { setSaleCategoryFilter(event.target.value); setSaleSubcategoryFilter(""); setSaleSizeFilter(""); }}>
+                      <option value="">Minden főkategória</option>{saleCategoryOptions.map((row) => <option key={row.value} value={row.value}>{row.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/60">Alkategória
+                    <select className="h-10 w-full rounded-xl border border-white/20 bg-[#283648] px-2 text-xs text-white outline-none" value={saleSubcategoryFilter}
+                      onChange={(event) => { setSaleSubcategoryFilter(event.target.value); setSaleSizeFilter(""); }}>
+                      <option value="">Minden alkategória</option>{saleSubcategoryOptions.map((row) => <option key={row.value} value={row.value}>{row.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/60">Méret
+                    <select className="h-10 w-full rounded-xl border border-white/20 bg-[#283648] px-2 text-xs text-white outline-none" value={saleSizeFilter}
+                      onChange={(event) => setSaleSizeFilter(event.target.value)}>
+                      <option value="">Minden méret</option>{saleSizeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/43">
+                    <span>A szűrők a keresés találatait szűkítik. Pontos vonalkódolvasást nem akadályoznak.</span>
+                    <button type="button" onClick={() => { setSaleCategoryFilter(""); setSaleSubcategoryFilter(""); setSaleSizeFilter(""); }} className="rounded-lg border border-white/16 px-2.5 py-1.5 text-white/75 hover:bg-white/10">Szűrők törlése</button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
               <p className="text-sm text-white/60">
-                {hasSearched ? `Találatok: ${products.length}` : "A termékek csak keresés vagy vonalkódolvasás után jelennek meg"}
+                {hasSearched ? `Találatok: ${displayedProducts.length}${displayedProducts.length !== products.length ? ` / ${products.length}` : ""}` : "A termékek csak keresés vagy vonalkódolvasás után jelennek meg"}
               </p>
               {hasSearched || query.trim() ? (
                 <button
@@ -989,9 +1069,9 @@ export default function AllInMagazinSale({
               <div className="flex min-h-[420px] items-center justify-center gap-3 text-white/60">
                 <Loader2 className="animate-spin" /> Termékek betöltése…
               </div>
-            ) : products.length ? (
+            ) : displayedProducts.length ? (
               <div className="mt-3 grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-                {products.map((item) => (
+                {displayedProducts.map((item) => (
                   <button
                     key={item.variantId}
                     type="button"

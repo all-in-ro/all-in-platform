@@ -56,6 +56,7 @@ import {
   type AifSalesCommandOverviewResponse,
   type AifSalesHistoryInputRow,
 } from "../lib/aif/api";
+import { useAifCategorySizeRules, aifCategoryIsChildOf, aifNarrowAvailableSizeLabels } from "../lib/aif/subcategorySizeFilters";
 
 type SourceFilter = "all" | "live" | "history";
 type BucketFilter = "auto" | "day" | "week" | "month";
@@ -2291,6 +2292,7 @@ function FinancialNotesModal({
 
 
 export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: string; role?: "admin" | "shop" }) {
+  const categorySizeRules = useAifCategorySizeRules();
   const initial = useMemo<FiltersState>(() => ({
     ...presetFilters("month"),
     location: "all",
@@ -2438,6 +2440,13 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
   function applyPatch(patch: Partial<FiltersState>, bringFiltersIntoView = true) {
     let next = { ...draft, ...patch };
+    // Kategóriaváltáskor egy korábbi ruhaméret ne szűrje ki a cipős adatokat.
+    if (patch.category !== undefined && patch.category !== draft.category) {
+      if (patch.subcategory === undefined) next.subcategory = "";
+      if (patch.size === undefined) next.size = "";
+    } else if (patch.subcategory !== undefined && patch.subcategory !== draft.subcategory && patch.size === undefined) {
+      next.size = "";
+    }
     if (patch.from !== undefined || patch.to !== undefined) next = automaticComparison(next);
     setDraft(next);
     setApplied(next);
@@ -2503,9 +2512,12 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const employeeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))], [data?.filterOptions.employees]);
   const brandOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))], [data?.filterOptions.brands]);
   const categoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden főkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.categories]);
-  const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories]);
+  const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || [])
+    .filter((value) => aifCategoryIsChildOf(categorySizeRules, value, draft.category))
+    .map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories, draft.category, categorySizeRules]);
   const genderOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden nem" }, ...(data?.filterOptions.genders || []).map((value) => ({ value, label: value }))], [data?.filterOptions.genders]);
-  const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...(data?.filterOptions.sizes || []).map((value) => ({ value, label: value }))], [data?.filterOptions.sizes]);
+  const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...aifNarrowAvailableSizeLabels(categorySizeRules, draft.category, draft.subcategory, data?.filterOptions.sizes || [])
+    .map((value) => ({ value, label: value }))], [data?.filterOptions.sizes, draft.category, draft.subcategory, categorySizeRules]);
   const colorOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden szín" }, ...(data?.filterOptions.colors || []).map((value) => ({ value, label: value }))], [data?.filterOptions.colors]);
   const paymentOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden fizetési mód" }, ...Array.from(new Map((data?.dimensions.payment || []).map((item) => [item.rawName || item.key, { value: item.rawName || item.key, label: paymentLabel(item.rawName || item.key || item.name) }])).values())], [data?.dimensions.payment]);
 
@@ -2629,8 +2641,8 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
               </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5">
                 <FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel>
-                <FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel>
-                <FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value, subcategory: "", size: "" })} options={categoryOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value, size: "" })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Nem"><SelectControl value={draft.gender} onChange={(value) => setDraft({ ...draft, gender: value })} options={genderOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel>

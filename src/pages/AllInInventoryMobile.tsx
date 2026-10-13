@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
 import {
   Barcode,
   CheckCircle2,
@@ -678,11 +679,13 @@ function MobileBackdrop({ onClose }: { onClose: () => void }) {
 }
 
 export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN" }: Props) {
+  const categorySizeRules = useAifCategorySizeRules();
   const aifBase = `${apiBase.replace(/\/$/, "")}/aif`;
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [location, setLocation] = useState("");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sizeFilter, setSizeFilter] = useState("all");
   const [lineFilter, setLineFilter] = useState<LineFilter>("all");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [counts, setCounts] = useState<InventoryCountSummary[]>([]);
@@ -879,10 +882,26 @@ export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN"
     return Array.from(set.entries()).sort((a, b) => a[1].localeCompare(b[1], "hu"));
   }, [active, stockRows]);
 
+  const inventorySizeOptions = useMemo(() => {
+    const source = active?.lines || stockRows;
+    const matching = source.filter((row) => categoryFilter === "all" || row.category_code === categoryFilter || row.category_name_ro === categoryFilter);
+    const observed = [...new Set(matching.map((row) => String(row.size || "").trim()).filter(Boolean))];
+    const types = aifSizeTypesForCategory(categorySizeRules, categoryFilter, "", observed);
+    const values = types.map((row) => String(row.name || row.code || "").trim()).filter(Boolean);
+    if (!aifHasConfiguredSizeLink(categorySizeRules, categoryFilter)) values.push(...observed);
+    return [...new Set(values)].sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
+  }, [active?.lines, stockRows, categoryFilter, categorySizeRules]);
+  const inventorySizeMatches = (rowSize?: string | null) => {
+    if (sizeFilter === "all") return true;
+    const chosen = categorySizeRules?.sizeTypes?.find((row) => aifSizeMatchesType(sizeFilter, row));
+    return chosen ? aifSizeMatchesType(rowSize, chosen) : aifSizeKey(rowSize) === aifSizeKey(sizeFilter);
+  };
+
   const filteredStockRows = useMemo(() => {
     const searchKey = barcodeLooseKey(search);
     return stockRows.filter((row) => {
       if (categoryFilter !== "all" && row.category_code !== categoryFilter && row.category_name_ro !== categoryFilter) return false;
+      if (!inventorySizeMatches(row.size)) return false;
       if (!searchKey) return true;
       const haystack = [
         productTitle(row), row.brand_name, row.category_name_ro, row.color_name, row.color_code, row.size,
@@ -890,13 +909,14 @@ export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN"
       ].map(barcodeLooseKey).join(" ");
       return haystack.includes(searchKey);
     });
-  }, [stockRows, categoryFilter, search]);
+  }, [stockRows, categoryFilter, sizeFilter, categorySizeRules, search]);
 
   const filteredLines = useMemo(() => {
     const lines = active?.lines || [];
     const searchKey = barcodeLooseKey(search);
     const filtered = lines.filter((line) => {
       if (categoryFilter !== "all" && line.category_code !== categoryFilter && line.category_name_ro !== categoryFilter) return false;
+      if (!inventorySizeMatches(line.size)) return false;
       if (searchKey) {
         const haystack = [
           productTitle(line), line.brand_name, line.category_name_ro, line.color_name, line.color_code, line.size,
@@ -922,7 +942,7 @@ export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN"
       if (bRank !== undefined) return 1;
       return 0;
     });
-  }, [active, categoryFilter, lineFilter, drafts, search, recentScannedLineIds]);
+  }, [active, categoryFilter, sizeFilter, categorySizeRules, lineFilter, drafts, search, recentScannedLineIds]);
 
   const lineTotalPages = Math.max(1, Math.ceil(filteredLines.length / linePageSize));
   const visibleLines = useMemo(() => {
@@ -932,7 +952,7 @@ export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN"
 
   useEffect(() => {
     setLinePage(1);
-  }, [active?.item.id, search, categoryFilter, lineFilter, linePageSize]);
+  }, [active?.item.id, search, categoryFilter, sizeFilter, lineFilter, linePageSize]);
 
   useEffect(() => {
     if (linePage > lineTotalPages) setLinePage(lineTotalPages);
@@ -1918,8 +1938,17 @@ export default function AllInInventoryMobile({ apiBase = "/api", actor = "ADMIN"
                 <InventoryMobileSelect
                   value={categoryFilter}
                   options={[{ value: "all", label: "Minden kategória" }, ...categories.map(([code, name]) => ({ value: code, label: name }))]}
-                  onChange={setCategoryFilter}
+                  onChange={(value) => { setCategoryFilter(value); setSizeFilter("all"); }}
                   ariaLabel="Kategória"
+                />
+              </label>
+
+              <label className={label}>Méret
+                <InventoryMobileSelect
+                  value={sizeFilter}
+                  options={[{ value: "all", label: "Minden méret" }, ...inventorySizeOptions.map((value) => ({ value, label: value }))]}
+                  onChange={setSizeFilter}
+                  ariaLabel="Méret"
                 />
               </label>
 

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
+import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
 
 type Props = {
   apiBase?: string;
@@ -1615,6 +1616,7 @@ function MobileHistorySheet({
 }
 
 export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
+  const categorySizeRules = useAifCategorySizeRules();
   const aifBase = `${apiBase.replace(/\/$/, "")}/aif`;
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
@@ -2433,11 +2435,44 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     .sort((a, b) => String(a.name || a.code).localeCompare(String(b.name || b.code), "hu", { sensitivity: "base" }))
     .map((row) => ({ value: String(row.code), label: String(row.name || row.code) })), [genderTypes]);
 
-  const sizeFilterOptions = useMemo<MobileSelectOption[]>(() => sizeTypes
-    .filter((row) => row.is_active !== false)
-    .slice()
-    .sort(compareMobileWarehouseSizeTypes)
-    .map((row) => ({ value: String(row.id || row.name || row.code), label: sizeTypeLabel(row) })), [sizeTypes]);
+  // A Törzsadatokban beállított alkategória–méret szabályok a mobil Raktárban is érvényesek.
+  // Beállítás nélküli alkategóriánál csak az ott ténylegesen szereplő méreteket javasoljuk.
+  const observedMobileSizes = useMemo(() => items.filter((item) =>
+    (category === "all" || itemMatchesMeta([item.category_code, item.category_name_ro, item.category_name_hu], category, categoryOptions)) &&
+    (subCategory === "all" || itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro, item.subcategory_name_hu], subCategory, subCategories))
+  ).map((item) => String(item.size || "")).filter(Boolean), [items, category, categoryOptions, subCategory, subCategories]);
+  const availableMobileSizeTypes = useMemo(() => {
+    if (!categorySizeRules) return sizeTypes;
+    return aifSizeTypesForCategory(categorySizeRules, category, subCategory, observedMobileSizes) as SizeType[];
+  }, [categorySizeRules, sizeTypes, category, subCategory, observedMobileSizes]);
+  const sizeFilterOptions = useMemo<MobileSelectOption[]>(() => {
+    const official = availableMobileSizeTypes.filter((row) => row.is_active !== false)
+      .slice().sort(compareMobileWarehouseSizeTypes)
+      .map((row) => ({ value: String(row.id || row.name || row.code), label: sizeTypeLabel(row) }));
+    if (!aifHasConfiguredSizeLink(categorySizeRules, category, subCategory)) {
+      const extra = [...new Set(observedMobileSizes)].filter((value) =>
+        !availableMobileSizeTypes.some((size) => aifSizeMatchesType(value, size)))
+        .sort(compareMobileWarehouseSizeLabels)
+        .map((value) => ({ value, label: value }));
+      official.push(...extra);
+    }
+    return official;
+  }, [availableMobileSizeTypes, categorySizeRules, category, subCategory, observedMobileSizes]);
+
+  const newProductAvailableSizes = useMemo(() => categorySizeRules
+    ? aifSizeTypesForCategory(categorySizeRules, newProduct.categoryCode, newProduct.subCategoryCode,
+        items.filter((item) =>
+          itemMatchesMeta([item.category_code, item.category_name_ro], newProduct.categoryCode, categoryOptions) &&
+          itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro], newProduct.subCategoryCode, subCategories))
+          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[]
+    : sizeTypes, [categorySizeRules, newProduct.categoryCode, newProduct.subCategoryCode, items, categoryOptions, subCategories, sizeTypes]);
+  const editAvailableSizes = useMemo(() => categorySizeRules
+    ? aifSizeTypesForCategory(categorySizeRules, edit.categoryCode, edit.subCategoryCode,
+        items.filter((item) =>
+          itemMatchesMeta([item.category_code, item.category_name_ro], edit.categoryCode, categoryOptions) &&
+          itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro], edit.subCategoryCode, subCategories))
+          .map((item) => String(item.size || "")).filter(Boolean)) as SizeType[]
+    : sizeTypes, [categorySizeRules, edit.categoryCode, edit.subCategoryCode, items, categoryOptions, subCategories, sizeTypes]);
 
   const selectedSizeMatchKeys = useMemo(() => mobileSelectedSizeMatchKeys(sizeFilters, sizeTypes), [sizeFilters, sizeTypes]);
 
@@ -3894,13 +3929,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 labelText="Főkategória"
                 value={category}
                 options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))}
-                onChange={(next) => { setCategory(next); setSubCategory("all"); setVisibleCount(40); }}
+                onChange={(next) => { setCategory(next); setSubCategory("all"); setSizeFilters([]); setVisibleCount(40); }}
               />
               <MobileSingleSelect
                 labelText="Alkategória / terméktípus"
                 value={subCategory}
                 options={subCategoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))}
-                onChange={(next) => { setSubCategory(next); setVisibleCount(40); }}
+                onChange={(next) => { setSubCategory(next); setSizeFilters([]); setVisibleCount(40); }}
               />
               <MobileMultiSelect labelText="Nem" values={genderFilters} options={genderFilterOptions} onChange={(next) => { setGenderFilters(next); setVisibleCount(40); }} />
               <MobileMultiSelect labelText="Méret" values={sizeFilters} options={sizeFilterOptions} onChange={(next) => { setSizeFilters(next); setVisibleCount(40); }} />
@@ -4045,12 +4080,12 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <MobileSingleSelect labelText="Beszállító" value={newProduct.supplierId} emptyValue="" emptyText="Nincs" options={suppliers.map((row) => ({ value: String(row.id), label: String(row.name || row.name_ro || row.code || row.id) }))} onChange={(next) => setNewProduct((x) => ({ ...x, supplierId: next }))} />
               <MobileSingleSelect labelText="Márka" value={newProduct.brandCode} emptyValue="" emptyText="Nincs" options={brands.map((row) => ({ value: String(row.code || row.id), label: String(row.name || row.name_ro || row.code || row.id) }))} onChange={(next) => setNewProduct((x) => ({ ...x, brandCode: next }))} />
               <div className="grid grid-cols-2 gap-2">
-                <MobileSingleSelect labelText="Főkategória" value={newProduct.categoryCode} emptyValue="" emptyText="Nincs" options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))} />
-                <MobileSingleSelect labelText="Alkategória" value={newProduct.subCategoryCode} emptyValue="" emptyText="Nincs" options={newProductSubCategoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, subCategoryCode: next }))} />
+                <MobileSingleSelect labelText="Főkategória" value={newProduct.categoryCode} emptyValue="" emptyText="Nincs" options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, categoryCode: next, subCategoryCode: "", size: "", supplierSize: "" }))} />
+                <MobileSingleSelect labelText="Alkategória" value={newProduct.subCategoryCode} emptyValue="" emptyText="Nincs" options={newProductSubCategoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, subCategoryCode: next, size: "", supplierSize: "" }))} />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <MobileSingleSelect labelText="Nem" value={newProduct.gender} showEmptyOption={false} options={genderTypes.map((row) => ({ value: String(row.code), label: String(row.name || row.code) }))} onChange={(next) => setNewProduct((x) => ({ ...x, gender: next }))} />
-                <MobileSingleSelect labelText="Méret" value={newProduct.size} emptyValue="" emptyText="Válassz" options={sizeTypes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, size: next, supplierSize: next }))} />
+                <MobileSingleSelect labelText="Méret" value={newProduct.size} emptyValue="" emptyText="Válassz" options={newProductAvailableSizes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, size: next, supplierSize: next }))} />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <MobileSingleSelect labelText="Szín" value={newProduct.colorName} emptyValue="" emptyText="Nincs" options={colorTypes.map((row) => ({ value: String(row.name_ro || row.code), label: colorTypeLabel(row), swatch: row.hex || undefined }))} onChange={(next) => setNewProduct((x) => ({ ...x, colorName: next }))} />
@@ -4139,7 +4174,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <MobileSingleSelect labelText="Nem" value={edit.gender} showEmptyOption={false} options={genderTypes.map((row) => ({ value: String(row.code), label: String(row.name || row.code) }))} onChange={(next) => setEdit((x) => ({ ...x, gender: next }))} />
-                <MobileSingleSelect labelText="Méret" value={edit.size} emptyValue="" emptyText="Nincs" options={[...(edit.size && !sizeTypes.some((row) => [row.name, row.name_hu, row.code, ...(row.aliases || [])].map(colorKey).includes(colorKey(edit.size))) ? [{ value: edit.size, label: edit.size, hint: "Jelenlegi érték" }] : []), ...sizeTypes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))]} onChange={(next) => setEdit((x) => ({ ...x, size: next }))} />
+                <MobileSingleSelect labelText="Méret" value={edit.size} emptyValue="" emptyText="Nincs" options={[...(edit.size && !editAvailableSizes.some((row) => aifSizeMatchesType(edit.size, row)) ? [{ value: edit.size, label: edit.size, hint: "Jelenlegi méret, megőrizve" }] : []), ...editAvailableSizes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))]} onChange={(next) => setEdit((x) => ({ ...x, size: next }))} />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <MobileSingleSelect labelText="Szín" value={edit.colorName} emptyValue="" emptyText="Nincs" options={[...(edit.colorName && !colorTypes.some((row) => colorValues(row).map(colorKey).includes(colorKey(edit.colorName))) ? [{ value: edit.colorName, label: edit.colorName, hint: "Jelenlegi érték" }] : []), ...colorTypes.map((row) => ({ value: String(row.name_ro || row.code), label: colorTypeLabel(row), swatch: row.hex || undefined }))]} onChange={(next) => setEdit((x) => ({ ...x, colorName: next }))} />

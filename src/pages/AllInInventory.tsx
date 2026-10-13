@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useAifCategorySizeRules, aifSizeTypesForCategory, aifSizeMatchesType, aifSizeKey, aifHasConfiguredSizeLink } from "../lib/aif/subcategorySizeFilters";
 import {
   ChevronDown,
   ChevronLeft,
@@ -1330,10 +1331,12 @@ async function fetchAllOpeningSessions(locationValue: string) {
 }
 
 export default function AllInInventory() {
+  const categorySizeRules = useAifCategorySizeRules();
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [location, setLocation] = useState("");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sizeFilter, setSizeFilter] = useState("all");
   const [lineFilter, setLineFilter] = useState<LineFilter>("all");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [counts, setCounts] = useState<InventoryCountSummary[]>([]);
@@ -1536,15 +1539,34 @@ export default function AllInInventory() {
     return Array.from(set.entries()).sort((a, b) => a[1].localeCompare(b[1], "hu"));
   }, [active, stockRows]);
 
+  // A leltár szűrői csak megjelenítési szűrők. A leltár adatbázis-sorain és
+  // a tényleges számoláson semmit nem módosítanak.
+  const inventorySizeOptions = useMemo(() => {
+    const source = active?.lines || stockRows;
+    const matching = source.filter((row) => categoryFilter === "all" || row.category_code === categoryFilter || row.category_name_ro === categoryFilter);
+    const observed = [...new Set(matching.map((row) => String(row.size || "").trim()).filter(Boolean))];
+    const types = aifSizeTypesForCategory(categorySizeRules, categoryFilter, "", observed);
+    const values = types.map((row) => String(row.name || row.code || "").trim()).filter(Boolean);
+    // Hiányos régi mérettörzs esetén a valódi készletsor mérete se tűnjön el.
+    if (!aifHasConfiguredSizeLink(categorySizeRules, categoryFilter)) values.push(...observed);
+    return [...new Set(values)].sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
+  }, [active?.lines, stockRows, categoryFilter, categorySizeRules]);
+  const inventorySizeMatches = (rowSize?: string | null) => {
+    if (sizeFilter === "all") return true;
+    const chosen = categorySizeRules?.sizeTypes?.find((row) => aifSizeMatchesType(sizeFilter, row));
+    return chosen ? aifSizeMatchesType(rowSize, chosen) : aifSizeKey(rowSize) === aifSizeKey(sizeFilter);
+  };
+
   const filteredStockRows = useMemo(() => {
-    return stockRows.filter((row) => categoryFilter === "all" || row.category_code === categoryFilter || row.category_name_ro === categoryFilter);
-  }, [stockRows, categoryFilter]);
+    return stockRows.filter((row) => (categoryFilter === "all" || row.category_code === categoryFilter || row.category_name_ro === categoryFilter) && inventorySizeMatches(row.size));
+  }, [stockRows, categoryFilter, sizeFilter, categorySizeRules]);
 
   const filteredLines = useMemo(() => {
     const lines = active?.lines || [];
     const searchKey = barcodeLooseKey(search);
     const filtered = lines.filter((line) => {
       if (categoryFilter !== "all" && line.category_code !== categoryFilter && line.category_name_ro !== categoryFilter) return false;
+      if (!inventorySizeMatches(line.size)) return false;
       if (searchKey) {
         const haystack = [
           productTitle(line),
@@ -1579,7 +1601,7 @@ export default function AllInInventory() {
       if (bRank !== undefined) return 1;
       return 0;
     });
-  }, [active, categoryFilter, lineFilter, drafts, search, recentScannedLineIds]);
+  }, [active, categoryFilter, sizeFilter, categorySizeRules, lineFilter, drafts, search, recentScannedLineIds]);
 
   const lineTotalPages = Math.max(1, Math.ceil(filteredLines.length / linePageSize));
   const visibleInventoryLines = useMemo(() => {
@@ -1589,7 +1611,7 @@ export default function AllInInventory() {
 
   useEffect(() => {
     setLinePage(1);
-  }, [active?.item.id, search, categoryFilter, lineFilter, linePageSize]);
+  }, [active?.item.id, search, categoryFilter, sizeFilter, lineFilter, linePageSize]);
 
   useEffect(() => {
     if (linePage > lineTotalPages) setLinePage(lineTotalPages);
@@ -2764,12 +2786,20 @@ export default function AllInInventory() {
             <label className={label}>Kategória
               <CompactSelect
                 value={categoryFilter}
-                onChange={setCategoryFilter}
+                onChange={(value) => { setCategoryFilter(value); setSizeFilter("all"); }}
                 placeholder="Minden kategória"
                 options={[
                   { value: "all", label: "Minden kategória" },
                   ...categories.map(([code, name]) => ({ value: code, label: name })),
                 ]}
+              />
+            </label>
+            <label className={label}>Méret
+              <CompactSelect
+                value={sizeFilter}
+                onChange={setSizeFilter}
+                placeholder="Minden méret"
+                options={[{ value: "all", label: "Minden méret" }, ...inventorySizeOptions.map((value) => ({ value, label: value }))]}
               />
             </label>
             <label className={`${label} lg:col-span-2`}>Leltár címe

@@ -53,6 +53,7 @@ import {
   type AifSalesCommandOverviewResponse,
   type AifSalesHistoryInputRow,
 } from "../lib/aif/api";
+import { useAifCategorySizeRules, aifCategoryIsChildOf, aifNarrowAvailableSizeLabels } from "../lib/aif/subcategorySizeFilters";
 
 type SourceFilter = "all" | "live" | "history";
 type BucketFilter = "auto" | "day" | "week" | "month";
@@ -549,6 +550,7 @@ function DetailMobile({ item, onClose }: { item: AifSalesCommandDetailItem | nul
 }
 
 export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { actor?: string; role?: "admin" | "shop" }) {
+  const categorySizeRules = useAifCategorySizeRules();
   const initial = useMemo<FiltersState>(() => ({ ...presetFilters("month"), location: "all", employee: "", brand: "", category: "", subcategory: "", gender: "", size: "", color: "", payment: "", product: "", snCod: "", search: "", source: "all", bucket: "auto" }), []);
   const [draft, setDraft] = useState<FiltersState>(initial);
   const [applied, setApplied] = useState<FiltersState>(initial);
@@ -598,6 +600,12 @@ export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { act
 
   function patch(patchValue: Partial<FiltersState>) {
     let next = { ...draft, ...patchValue };
+    if (patchValue.category !== undefined && patchValue.category !== draft.category) {
+      if (patchValue.subcategory === undefined) next.subcategory = "";
+      if (patchValue.size === undefined) next.size = "";
+    } else if (patchValue.subcategory !== undefined && patchValue.subcategory !== draft.subcategory && patchValue.size === undefined) {
+      next.size = "";
+    }
     if (patchValue.from !== undefined || patchValue.to !== undefined) next = automaticComparison(next);
     setDraft(next); setApplied(next); setActivePreset("custom");
   }
@@ -622,9 +630,12 @@ export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { act
   const employeeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))], [data?.filterOptions.employees]);
   const brandOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))], [data?.filterOptions.brands]);
   const categoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden főkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.categories]);
-  const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories]);
+  const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || [])
+    .filter((value) => aifCategoryIsChildOf(categorySizeRules, value, draft.category))
+    .map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories, draft.category, categorySizeRules]);
   const genderOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden nem" }, ...(data?.filterOptions.genders || []).map((value) => ({ value, label: value }))], [data?.filterOptions.genders]);
-  const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...(data?.filterOptions.sizes || []).map((value) => ({ value, label: value }))], [data?.filterOptions.sizes]);
+  const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...aifNarrowAvailableSizeLabels(categorySizeRules, draft.category, draft.subcategory, data?.filterOptions.sizes || [])
+    .map((value) => ({ value, label: value }))], [data?.filterOptions.sizes, draft.category, draft.subcategory, categorySizeRules]);
   const colorOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden szín" }, ...(data?.filterOptions.colors || []).map((value) => ({ value, label: value }))], [data?.filterOptions.colors]);
   const paymentOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden fizetés" }, ...Array.from(new Map((data?.dimensions.payment || []).map((item) => [item.rawName || item.key, { value: item.rawName || item.key, label: paymentLabel(item.rawName || item.key || item.name) }])).values())], [data?.dimensions.payment]);
 
@@ -782,8 +793,8 @@ export default function AllInSalesCommandCenterMobile({ actor = "ADMIN" }: { act
               <div className="rounded-2xl border border-white/10 bg-[#2b3749] p-2.5"><div className="mb-2 grid grid-cols-2 gap-1.5"><button type="button" onClick={() => { setPeriodMode("month"); setActivePreset("custom"); }} className={`h-8 rounded-lg border text-[10px] ${periodMode === "month" ? "border-[#8ce7e2]/40 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.03] text-white/48"}`}>Hónap</button><button type="button" onClick={() => { setPeriodMode("range"); setActivePreset("custom"); }} className={`h-8 rounded-lg border text-[10px] ${periodMode === "range" ? "border-[#8ce7e2]/40 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.03] text-white/48"}`}>Egyedi</button></div>{periodMode === "month" ? <label className="grid gap-1 text-[8px] uppercase text-white/44">Hónap<MobileMonthPicker value={draft.from.slice(0, 7)} onChange={setSelectedMonth} /></label> : <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Ettől<MobileDatePicker value={draft.from} onChange={(value) => setDraft(automaticComparison({ ...draft, from: value, to: draft.to < value ? value : draft.to }))} ariaLabel="Kezdő dátum" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Eddig<MobileDatePicker value={draft.to} onChange={(value) => setDraft(automaticComparison({ ...draft, to: value, from: draft.from > value ? value : draft.from }))} ariaLabel="Záró dátum" /></label></div>}<p className="mt-2 text-[9px] text-white/34">{monthDisplayLabel(draft.from.slice(0, 7))} ↔ előző év azonos időszaka</p></div>
               <label className="grid gap-1 text-[8px] uppercase text-white/44">Üzlet<MobileSelect value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} options={locationOptions} placeholder="Minden üzlet" /></label>
               <label className="grid gap-1 text-[8px] uppercase text-white/44">Eladó<MobileSelect value={draft.employee} onChange={(value) => setDraft({ ...draft, employee: value })} options={employeeOptions} placeholder="Minden eladó" /></label>
-              <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Márka<MobileSelect value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Márka" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Főkategória<MobileSelect value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Kategória" /></label></div>
-              <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Alkategória<MobileSelect value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Alkategória" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Nem<MobileSelect value={draft.gender} onChange={(value) => setDraft({ ...draft, gender: value })} options={genderOptions} placeholder="Nem" /></label></div>
+              <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Márka<MobileSelect value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Márka" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Főkategória<MobileSelect value={draft.category} onChange={(value) => patch({ category: value })} options={categoryOptions} placeholder="Kategória" /></label></div>
+              <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Alkategória<MobileSelect value={draft.subcategory} onChange={(value) => patch({ subcategory: value })} options={subcategoryOptions} placeholder="Alkategória" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Nem<MobileSelect value={draft.gender} onChange={(value) => setDraft({ ...draft, gender: value })} options={genderOptions} placeholder="Nem" /></label></div>
               <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Méret<MobileSelect value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Méret" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Szín<MobileSelect value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Szín" /></label></div>
               <label className="grid gap-1 text-[8px] uppercase text-white/44">Fizetés<MobileSelect value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Fizetés" /></label>
               <div className="grid grid-cols-2 gap-1.5"><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Adatforrás<MobileSelect value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő" }, { value: "history", label: "Csak történeti" }]} placeholder="Forrás" /></label><label className="grid min-w-0 gap-1 text-[8px] uppercase text-white/44">Grafikon<MobileSelect value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Bontás" /></label></div>
