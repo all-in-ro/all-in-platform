@@ -40,7 +40,7 @@ export function createCampaignService(pool,provider) {
         brands:unique(person.matched.map(p=>p.brand)).join(', ')||meta.brands.filter(b=>filters.brands.includes(b.id)).map(b=>b.name).join(', ')||(language==='ro'?`selectia ${messageSettings.storeName||location.name}`:`${messageSettings.storeName||location.name} valogatas`),
         categories:unique(person.matched.map(p=>p.category)).join(', ')||(language==='ro'?'produse selectate':'valogatott termekek'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
-      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true);
+      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true);
       if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget.`,'sms_too_long');
       recipients.push({...person,id:randomUUID(),couponCode:code,...rendered});
     }
@@ -99,7 +99,7 @@ export function createCampaignService(pool,provider) {
           if(Number(input.confirmCount)!==c.recipient_count)throw fail('A címzettszám visszaigazolása nem egyezik az előnézettel.');
           if(c.mode==='live'){
             if(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)throw fail('A leiratkozási szám hiányzik vagy megváltozott. Készíts új kampányt az aktuális beállítással.','sms_unsubscribe_contact',409);
-            if(!messageSettingsMatch(c.definition,s,c.location_code))throw fail('Az SMS fejléce, az üzlet neve/címe vagy a leiratkozási mód megváltozott. Készíts új kampányt.','sms_message_settings_changed',409);
+            if(!messageSettingsMatch(c.definition,s,c.location_code))throw fail('Az SMS fejléce, az üzlet neve/címe, a webáruház címe vagy a leiratkozási mód megváltozott. Készíts új kampányt.','sms_message_settings_changed',409);
             if(!s.liveEnabled||!providerConfig().enabled)throw fail('Az éles SMS-küldés nincs engedélyezve.','sms_live_disabled',403);
             if(providerConfig().secret.length<32)throw fail('Az SMS-visszaigazolásokhoz legalább 32 karakteres webhook-titok szükséges.');
             if(!withinSendHours(s))throw fail(`Most küldési csendidő van. Küldési időszak: ${s.sendFromHour}:00–${s.sendUntilHour}:00 (romániai idő).`,'sms_quiet_hours');

@@ -46,11 +46,27 @@ export const DEFAULT_SETTINGS = Object.freeze({
   unsubscribePhone:'', includeUnsubscribeLink:false,
   shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' },
   // No invented street addresses. The administrator enters each real store address.
-  shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''}
+  shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''},
+  // One webshop link for both stores. Enabled by default, editable by the admin.
+  websiteUrl:'www.allinfashion.ro', includeWebsite:true
 });
+// Allow only a website home address. Never include arbitrary schemes, credentials, SMS separators or control chars.
+export function normalizeWebsite(value) {
+  if(typeof value !== 'string') throw fail('A webáruház címe szöveg kell legyen.');
+  const raw=txt(value);
+  if(!raw) return '';
+  if(raw.length>160) throw fail('A webáruház címe túl hosszú (maximum 160 karakter).');
+  const result=/^(?:https:\/\/)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)\/?$/i.exec(raw);
+  if(!result) throw fail('Érvénytelen webáruház-cím. Például: www.allinfashion.ro vagy https://www.allinfashion.ro.');
+  const domain=result[1].toLowerCase();
+  const parts=domain.split('.');
+  if(parts.length<2||!/^([a-z]{2,63})$/.test(parts.at(-1))||parts.some(x=>x.length>63||x.startsWith('-')||x.endsWith('-')))
+    throw fail('Érvénytelen webáruház-domain.');
+  return domain; // Short, readable and without protocol, as requested for the SMS.
+}
 export function cleanSettings(input, current = DEFAULT_SETTINGS) {
   const o = { ...current };
-  for (const k of ['liveEnabled','sellersCanSend','requireApproval','includeUnsubscribeLink']) if (k in input) {
+  for (const k of ['liveEnabled','sellersCanSend','requireApproval','includeUnsubscribeLink','includeWebsite']) if (k in input) {
     if (typeof input[k] !== 'boolean') throw fail('Érvénytelen kapcsoló: '+k); o[k]=input[k];
   }
   for (const [k,min,max] of [['maxRecipients',1,5000],['maxSegments',1,4],['campaignSegmentLimit',1,20000],['dailySegmentLimit',1,50000],['frequencyHours',0,720],['sendFromHour',0,23],['sendUntilHour',1,24],['lowCredit',0,100000]]) if (k in input) {
@@ -64,6 +80,8 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
     if(raw&&!phone)throw fail('A leiratkozási kapcsolattartónál romániai mobilszám szükséges (például +40745123456).');
     o.unsubscribePhone=phone||'';
   }
+  if('websiteUrl' in input) o.websiteUrl=normalizeWebsite(input.websiteUrl);
+  if(o.includeWebsite&&!normalizeWebsite(o.websiteUrl))throw fail('Add meg az online üzlet weboldalát, vagy kapcsold ki az SMS-be illesztést.');
   const shopCodes=['main_warehouse','magazin_targu_secuiesc'];
   if(input.shopNames!==undefined) {
     if(!input.shopNames||typeof input.shopNames!=='object'||Array.isArray(input.shopNames))throw fail('Az üzletnevek adatai érvénytelenek.');
@@ -91,9 +109,11 @@ export function messageSettingsSnapshot(settings,locationCode) {
     includeUnsubscribeLink:settings.includeUnsubscribeLink===true,
     storeName:txt(settings.shopNames?.[locationCode]),
     storeAddress:txt(settings.shopAddresses?.[locationCode]),
-    // V2: the actual SMS prefix uses the saved location name, not a fixed product name.
-    // Old prepared campaigns must be prepared again before an SMS can be sent live.
-    messageFormatVersion:2
+    websiteUrl:txt(settings.websiteUrl),
+    includeWebsite:settings.includeWebsite===true,
+    // V3 adds the configured webshop URL to the SMS body when enabled.
+    // Old prepared campaigns must be prepared again before they can be sent live.
+    messageFormatVersion:3
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -149,7 +169,7 @@ export function couponTerms(rules, language='hu') {
     ? `Personal, o singura utilizare, doar in magazinul indicat. De la ${date}.${minimum} ${rules.stackable?'Cumulabil cu alte reduceri.':'Nu se cumuleaza cu alte reduceri.'}`
     : `Szemelyes, egyszeri, csak a megjelolt uzletben. Kezdete: ${date}.${minimum} ${rules.stackable?'Mas kedvezmennyel osszevonhato.':'Mas kedvezmennyel nem vonhato ossze.'}`;
 }
-export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false) {
+export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false) {
   const raw=blocks.map(b=>{
     if(b.type==='text') return b.value;
     const value=txt(values[b.value]); if(!value) throw fail('Nem tölthető ki az SMS adatmezője: '+b.value,'sms_missing_value'); return value;
@@ -164,7 +184,11 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   // is configured separately and may be a numeric sender.
   const storeName=txt(values.storeName);
   if(!storeName)throw fail('Az SMS feladó üzletneve nincs beállítva.','sms_missing_store_name');
-  return segmentInfo(`${storeName}: ${raw} ${terms} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
+  const webshop=includeWebsite?normalizeWebsite(websiteUrl):'';
+  if(includeWebsite&&!webshop)throw fail('Az SMS-hez bekapcsolt webáruház-cím nincs kitöltve.','sms_missing_website');
+  // Webshop after the business message and before the mandatory opt-out contact.
+  const sitePart=webshop?` Online: ${webshop}`:'';
+  return segmentInfo(`${storeName}: ${raw} ${terms}${sitePart} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
 }
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);
