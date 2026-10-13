@@ -37,7 +37,7 @@ export function ChipSelect({label,options,value,onChange}:{label:string;options:
 export function CheckRow({checked,onChange,title,hint,disabled=false}:{checked:boolean;onChange:(v:boolean)=>void;title:string;hint?:string;disabled?:boolean}){
   return <label className="sms-check"><input type="checkbox" checked={checked} disabled={disabled} onChange={e=>onChange(e.target.checked)}/><span><b>{title}</b>{hint?<small>{hint}</small>:null}</span></label>;
 }
-export function PhonePreview({message,subtitle='SMS · AllInFashion'}:{message:string;subtitle?:string}){
+export function PhonePreview({message,subtitle='SMS-előnézet'}:{message:string;subtitle?:string}){
   return <div className="sms-phone"><div className="sms-phone-title">{subtitle}</div><div className="sms-bubble">{message||'Itt jelenik meg a kliensnek szánt SMS.'}</div><p className="sms-phone-footer">Az SMS-linkek és kódok küldés előtt kitöltődnek.</p></div>;
 }
 export function Empty({children}:{children:ReactNode}){return <div className="sms-list-empty"><CheckCircle2 size={28} style={{margin:'0 auto 12px',opacity:.5}}/>{children}</div>;}
