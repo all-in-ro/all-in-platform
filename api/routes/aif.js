@@ -3462,6 +3462,68 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0].id;
   }
 
+  // Az importált eladási ár és a már eltárolt variáns ára közötti döntés.
+  // Fontos: a döntés csak a meglévő VARIÁNS aktuális árára vonatkozik,
+  // nem az áru beszerzési árára, készletére vagy más szín/méret rekordjára.
+  function applyIncomingPriceDecision({ normalized, variantId, previousSellPrice }) {
+    const previous = aifPriceNumber(previousSellPrice);
+    const incoming = aifPriceNumber(normalized?.sellPrice);
+    if (previous === null || incoming === null || !aifPriceChanged(previous, incoming)) return;
+    const requireChoice = normalized?.aifPriceDecisionRequired === true;
+    const decision = normalized?.aifPriceDecision;
+    const choice = typeof decision === 'string' ? decision : text(decision?.choice);
+    if (!['keep_existing','use_incoming'].includes(choice)) {
+      if (!requireChoice) return; // Régebbi import API-k kompatibilitása.
+      const err = new Error('Az eladási ár eltér a meglévőtől. A készletre vétel előtt dönteni kell a régi vagy az új ár mellett.');
+      err.statusCode = 409;
+      err.code = 'price_choice_required';
+      err.variantId = String(variantId);
+      throw err;
+    }
+    if (decision && typeof decision === 'object') {
+      const expectedVariant = text(decision.variantId || decision.variant_id);
+      const expectedPrevious = aifPriceNumber(decision.oldPrice ?? decision.old_price);
+      const expectedIncoming = aifPriceNumber(decision.incomingPrice ?? decision.incoming_price);
+      if ((expectedVariant && expectedVariant !== String(variantId)) ||
+          expectedPrevious === null || !Number.isFinite(expectedPrevious) || aifPriceChanged(expectedPrevious, previous) ||
+          expectedIncoming === null || !Number.isFinite(expectedIncoming) || aifPriceChanged(expectedIncoming, incoming)) {
+        const err = new Error('Közben változott az ár vagy a termékazonosítás. Frissítsd az ár-egyeztetést, majd döntsd el újra.');
+        err.statusCode = 409;
+        err.code = 'price_review_stale';
+        throw err;
+      }
+    } else if (requireChoice) {
+      const err = new Error('Az ár-egyeztetés érvényességét nem lehet ellenőrizni. Indítsd újra az ár-egyeztetést.');
+      err.statusCode = 409;
+      err.code = 'price_review_stale';
+      throw err;
+    }
+    normalized.aifOriginalOfferedSellPriceRon = incoming;
+    normalized.aifEffectiveSellPriceRon = choice === 'keep_existing' ? previous : incoming;
+    normalized.aifPriceDecisionApplied = choice;
+    normalized.aifPriceDecisionVariantId = String(variantId);
+    if (choice === 'keep_existing') {
+      // A régi variánsár kész, TVA-t tartalmazó RON végár. Az import
+      // korábbi pénznem- és TVA-jelzőit is át kell állítani: különben a
+      // Receptió eladási összértéke ismét átváltást/TVA-t tenne rá.
+      // Az eredetileg ajánlott ár az aifOriginalOfferedSellPriceRon mezőben,
+      // valamint az importsor raw forrásában továbbra is megmarad.
+      normalized.sellPrice = previous;
+      normalized.sellPriceRon = previous;
+      normalized.sellPriceGrossRon = previous;
+      normalized.sellPriceCurrencyMode = 'ron';
+      normalized.sell_price_currency_mode = 'ron';
+      normalized.sellPriceCurrency = 'RON';
+      normalized.sell_price_currency = 'RON';
+      normalized.salePriceCurrency = 'RON';
+      normalized.sellPriceIsRon = true;
+      normalized.sell_price_is_ron = true;
+      normalized.salesPriceIncludesTva = true;
+      normalized.sellPriceIncludesTva = true;
+      normalized.sell_price_includes_tva = true;
+    }
+  }
+
   async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active", priceChangeContext = null }) {
     const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
     const colorName = text(normalized.colorName || "");
@@ -3580,6 +3642,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [id]
       );
       const previousSellPrice = previousPriceRow.rows[0]?.sell_price;
+      applyIncomingPriceDecision({ normalized, variantId: id, previousSellPrice });
       if (priceChangeContext && normalized.sellPrice !== null && normalized.sellPrice !== undefined && aifPriceChanged(previousSellPrice, normalized.sellPrice)) {
         await recordAifPriceChangeDocumentLine(client, {
           ...priceChangeContext,
@@ -5159,10 +5222,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  ELSE round(rw.buy_price * $2::numeric, 2)
                END,
                sell_price_ron = CASE
+                 -- A jóváhagyott régi/új ár végleges, nem a fájlból számoljuk újra.
+                 WHEN rw.status='committed' THEN rw.sell_price_ron
                  WHEN rw.sell_price IS NULL THEN NULL
                  ELSE round(rw.sell_price * $3::numeric, 2)
                END,
-               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object(
+               normalized = CASE WHEN rw.status='committed'
+                 THEN COALESCE(rw.normalized,'{}'::jsonb)
+                 ELSE COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object(
                  'currencyCode', $4,
                  'exchangeRateToRon', $2,
                  'sellPriceCurrencyMode', $5,
@@ -5173,7 +5240,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  'sell_price_is_ron', $7,
                  'sellPriceGrossRon', CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $3::numeric, 2) END,
                  'sellPriceRon', CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $3::numeric, 2) END
-               ),
+               ) END,
                updated_at=now()
            FROM aif_import_batches b
            WHERE rw.batch_id=b.id
@@ -5392,7 +5459,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ORDER BY b.created_at ASC, rw.row_no ASC`,
         [item.rows[0].id]
       );
-      res.json({ item: item.rows[0], batches: batches.rows, rows: rows.rows });
+      // Az összesített eladási érték ugyanabból a mentett sorárból származik,
+      // amit a Receptió terméksorai és az áttekintő lista is használnak.
+      const receiptExchangeRate = Number(item.rows[0].exchange_rate_to_ron || 1);
+      const salesTotalRon = rows.rows.reduce((sum, rw) => {
+        if (rw.status === 'ignored') return sum;
+        const normalized = rw.normalized && typeof rw.normalized === 'object' ? rw.normalized : {};
+        const qty = Math.max(0, Number(rw.qty || 0));
+        const explicitRon = aifPriceNumber(rw.sell_price_ron);
+        const sourcePrice = aifPriceNumber(rw.sell_price);
+        const unitRon = explicitRon !== null ? explicitRon :
+          (sourcePrice === null ? 0 : sourcePrice * (isSellPriceRon(normalized) ? 1 : receiptExchangeRate));
+        const includesTva = !['false','0','no','nem','off'].includes(String(
+          normalized.salesPriceIncludesTva ?? normalized.sellPriceIncludesTva ?? 'true'
+        ).toLowerCase());
+        const tva = aifPriceNumber(normalized.salesTvaRate ?? normalized.saleTvaRate);
+        return sum + qty * unitRon * (includesTva ? 1 : 1 + (tva === null ? 21 : tva) / 100);
+      }, 0);
+      res.json({
+        item: { ...item.rows[0], sales_total_ron: Math.round(salesTotalRon * 100) / 100 },
+        batches: batches.rows,
+        rows: rows.rows,
+      });
     } catch (e) {
       console.error("AIF reception detail failed", e);
       res.status(500).json({ error: "failed to load reception" });
@@ -8650,13 +8738,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       canonicalModelCode: targetModel.model_code || null,
     };
 
+    // Az ár kiválasztása a régi, eltérő modellazonosítójú vonalkódos
+    // variánsnál is kötelező; a két importút nem viselkedhet eltérően.
+    const priceLock = await client.query(
+      `SELECT sell_price FROM aif_product_variants WHERE id=$1 FOR UPDATE`, [owner.id]
+    );
+    const previousLegacySellPrice = priceLock.rows[0]?.sell_price;
+    applyIncomingPriceDecision({ normalized, variantId: owner.id, previousSellPrice: previousLegacySellPrice });
+
     // Refresh commercial/current receipt data and normalize the model relation.
     // internal_sku / barcode / color / size stay untouched.
-    if (priceChangeContext && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(owner?.sell_price, normalized.sellPrice)) {
+    if (priceChangeContext && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(previousLegacySellPrice, normalized.sellPrice)) {
       await recordAifPriceChangeDocumentLine(client, {
         ...priceChangeContext,
         variantId: owner.id,
-        oldSellPrice: owner.sell_price,
+        oldSellPrice: previousLegacySellPrice,
         newSellPrice: normalized.sellPrice,
         productTitle: normalized?.titleRo || owner?.model_title_ro || null,
         barcode: owner?.barcode || normalized?.barcode || null,
@@ -8739,7 +8835,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
+  async function commitBatchRows(client, { batchId, rowIds = null, actor = "system", priceChoices = null, requirePriceChoice = false }) {
     if (!isUuidText(batchId)) {
       const e = new Error("Import csomag nem található.");
       e.statusCode = 404;
@@ -8863,6 +8959,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sellPriceOriginal = row.sell_price;
           normalized.sellPrice = Number(row.sell_price_ron);
         }
+        // A döntés csak ezen a véglegesítésen érvényes; a sima sormentés
+        // nem írhatja felül a változatlan régi készletárat.
+        normalized.aifPriceDecision = priceChoices && typeof priceChoices==='object'
+          ? priceChoices[String(row.id)] || null : null;
+        normalized.aifPriceDecisionRequired = requirePriceChoice === true;
 
         let matchedPurchaseOrderLine = null;
         if (batch.purchase_order_id) {
@@ -8984,6 +9085,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                purchase_order_id=$3,
                purchase_order_line_id=$4,
                normalized=$5::jsonb,
+               sell_price_ron=COALESCE($6::numeric,sell_price_ron),
                updated_at=now()
            WHERE id=$1`,
           [
@@ -8992,6 +9094,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             batch.purchase_order_id || null,
             purchaseOrderLineId || null,
             JSON.stringify(normalized),
+            normalized.aifPriceDecisionApplied === 'keep_existing' ? normalized.sellPrice : null,
           ]
         );
 
@@ -9013,6 +9116,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       } catch (rowError) {
         try { await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`); } catch {}
         try { await client.query(`RELEASE SAVEPOINT ${savepointName}`); } catch {}
+        if (['price_choice_required','price_review_stale'].includes(rowError?.code)) throw rowError;
 
         const rowMessage = `A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`;
         const rowFailure = {
@@ -9112,6 +9216,136 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  async function incomingReceptionPriceReview(client, receptionId, rowIds) {
+    if (!Array.isArray(rowIds) || !rowIds.length || rowIds.length > 1200) {
+      const err = new Error('Az ár-egyeztetéshez 1–1200 kijelölt terméksor szükséges.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const uniqueRowIds = [...new Set(rowIds.map(String))];
+    const found = await client.query(
+      `SELECT rw.id, rw.row_no, rw.status, rw.normalized, rw.qty, rw.sell_price_ron,
+              rw.supplier_product_code, rw.supplier_color_code, rw.supplier_size,
+              b.supplier_id, sp.code AS supplier_code
+       FROM aif_import_rows rw
+       JOIN aif_import_batches b ON b.id=rw.batch_id
+       JOIN aif_suppliers sp ON sp.id=b.supplier_id
+       WHERE b.reception_id::text=$1 AND rw.id::text = ANY($2::text[])
+         AND rw.status NOT IN ('committed','ignored')
+       ORDER BY rw.row_no, rw.id`,
+      [receptionId, uniqueRowIds]
+    );
+    if (found.rowCount !== uniqueRowIds.length) {
+      const err = new Error('Egy kijelölt sor már nem nyitott, vagy nem ehhez a receptióhoz tartozik. Frissítsd a receptiót.');
+      err.statusCode = 409;
+      throw err;
+    }
+    const groups = new Map();
+    const allPricesByVariant = new Map();
+    let selectedQty = 0;
+    for (const row of found.rows) {
+      const normalized = row.normalized && typeof row.normalized === 'object' ? row.normalized : {};
+      const qty = Math.max(0, Math.floor(Number(row.qty ?? normalized.qty ?? 0)));
+      selectedQty += qty;
+      const incomingPrice = aifPriceNumber(row.sell_price_ron ?? normalized.sellPriceRon ?? normalized.sellPrice);
+      if (incomingPrice === null || incomingPrice <= 0) continue;
+      const barcode = text(normalized.barcode || normalized.supplierBarcode || '');
+      const size = text(normalized.size || row.supplier_size);
+      const colorCode = normCode(normalized.colorCode || normalized.supplierColorCode || row.supplier_color_code);
+      const colorName = normCode(normalized.colorName || '');
+      const incomingBrand = normCode(normalized.brandCode || normalized.brandName || row.supplier_code || '');
+      const baseModelCode = normalized.modelCode || normalized.supplierProductCode || row.supplier_product_code || normalized.titleRo;
+      const modelCode = `${incomingBrand}:${normCode(baseModelCode)}`;
+      if (!size || !baseModelCode) continue;
+      const candidates = await client.query(
+        `SELECT v.id, v.size, v.barcode, v.color_code, v.color_name, v.sell_price,
+                m.model_code, m.title_ro, br.code AS brand_code, br.name AS brand_name,
+                COALESCE(stock.qty,0)::int AS existing_qty,
+                COALESCE(stock_locations.items,'[]'::jsonb) AS stock_locations
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands br ON br.id=m.brand_id
+         LEFT JOIN LATERAL (
+           SELECT sum(s.qty)::int AS qty FROM aif_stock s WHERE s.variant_id=v.id
+         ) stock ON true
+         LEFT JOIN LATERAL (
+           SELECT jsonb_agg(jsonb_build_object('location',l.name,'qty',s.qty) ORDER BY l.name) AS items
+           FROM aif_stock s JOIN aif_locations l ON l.id=s.location_id
+           WHERE s.variant_id=v.id AND s.qty>0
+         ) stock_locations ON true
+         WHERE (NULLIF($1,'') IS NOT NULL AND lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1)))
+            OR m.model_code=$2
+         ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END, v.created_at ASC
+         LIMIT 120`,
+        [barcode, modelCode]
+      );
+      const sameBrand = (v) => !incomingBrand || [v.brand_code,v.brand_name].some((name) => normCode(name)===incomingBrand);
+      const sameSize = (v) => sameAifVariantSize(v.size,size);
+      const matchingColor = (v) => colorCode
+        ? normCode(v.color_code)===colorCode || (!normCode(v.color_code) && colorName && normCode(v.color_name)===colorName)
+        : normCode(v.color_name)===colorName;
+      const direct = candidates.rows.filter((v) => barcode && text(v.barcode).toLowerCase()===barcode.toLowerCase() && sameBrand(v) && sameSize(v));
+      const modelCandidates = candidates.rows.filter((v) => v.model_code===modelCode && sameSize(v) && matchingColor(v));
+      const existing = direct.length===1 ? direct[0] : (direct.length===0 && modelCandidates.length===1 ? modelCandidates[0] : null);
+      if (!existing) continue;
+      const previousPrice = aifPriceNumber(existing.sell_price);
+      const variantPrices = allPricesByVariant.get(String(existing.id)) || new Set();
+      variantPrices.add(incomingPrice.toFixed(2));
+      allPricesByVariant.set(String(existing.id),variantPrices);
+      if (previousPrice===null || !aifPriceChanged(previousPrice,incomingPrice)) continue;
+      const groupKey = `${existing.id}|${incomingPrice.toFixed(2)}`;
+      const prior = groups.get(groupKey);
+      if (prior) {
+        prior.rowIds.push(String(row.id));
+        prior.incomingRowCount++;
+        prior.incomingQty+=qty;
+      } else {
+        groups.set(groupKey,{
+          variantId:String(existing.id),rowIds:[String(row.id)], incomingRowCount:1,incomingQty:qty,
+          currentQty:Math.max(0,Number(existing.existing_qty||0)),
+          stockLocations:existing.stock_locations||[],
+          oldPrice:previousPrice,incomingPrice,
+          productTitle:text(existing.title_ro||normalized.titleRo||''),
+          productCode:text(row.supplier_product_code||normalized.supplierProductCode||baseModelCode),
+          brandName:existing.brand_name||null,colorName:existing.color_name||normalized.colorName||null,
+          size:existing.size||size,
+        });
+      }
+    }
+    // Különböző ajánlott árak, beleértve azt is, amikor az egyik soron
+    // éppen a régi ár szerepel: a felhasználónak előbb az importsorokat
+    // kell egységesítenie, különben az utolsó sor felülírhatná a döntését.
+    for (const prices of allPricesByVariant.values()) {
+      if (prices.size > 1) {
+        const err=new Error('Ugyanaz a termék több különböző eladási áron szerepel a kijelölt sorokban. Előbb egységesítsd a receptió sorain az árat.');
+        err.statusCode=409;
+        throw err;
+      }
+    }
+    const seenPrices = new Map();
+    for (const item of groups.values()) {
+      const prev = seenPrices.get(item.variantId);
+      if (prev != null && aifPriceChanged(prev,item.incomingPrice)) {
+        const err = new Error(`Ugyanaz a termék több eltérő új áron szerepel a kijelölt importban (${item.productCode}). Előbb egységesítsd az eladási árát a receptió sorain.`);
+        err.statusCode=409;
+        throw err;
+      }
+      seenPrices.set(item.variantId,item.incomingPrice);
+    }
+    return { ok:true,items:Array.from(groups.values()), selectedRowCount:found.rowCount,selectedQty };
+  }
+
+  router.post('/receptions/:id/price-review',requireAuthed,async(req,res)=>{
+    try {
+      const result = await incomingReceptionPriceReview(pool,text(req.params.id),req.body?.rowIds);
+      return res.json(result);
+    } catch(error) {
+      const status=Number(error?.statusCode||500);
+      console.error('AIF reception price preview failed',error);
+      return res.status(status>=400&&status<600?status:500).json({error:error?.message||'Az ár-egyeztetés nem sikerült.'});
+    }
+  });
+
   router.post("/import-batches/:id/commit", requireAuthed, async (req, res) => {
     const batchId = text(req.params.id);
     if (!batchId) return res.status(400).json({ error: "Import azonosító kötelező." });
@@ -9119,10 +9353,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // A Bevételezés és a Receptiók ugyanazzal az előzetes árdöntéssel dolgozik.
+      // A hiányzó választás továbbra is megállítja a teljes véglegesítést.
+      const batchReceipt = await client.query(
+        `SELECT reception_id FROM aif_import_batches WHERE id::text=$1`, [batchId]
+      );
+      const receptionId = batchReceipt.rows[0]?.reception_id || null;
+      if (receptionId) {
+        const pending = await client.query(
+          `SELECT id::text AS id FROM aif_import_rows
+           WHERE batch_id::text=$1 AND status NOT IN ('ignored','committed')`, [batchId]
+        );
+        if (pending.rows.length) {
+          const preview = await incomingReceptionPriceReview(
+            client,String(receptionId),pending.rows.map((row)=>row.id)
+          );
+          if (preview.items.length) {
+            const choices = req.body?.priceChoices && typeof req.body.priceChoices==='object'
+              ? req.body.priceChoices : {};
+            const allApproved = preview.items.every((item) =>
+              item.rowIds.every((id) =>
+                ['keep_existing','use_incoming'].includes(String(choices[id]?.choice||''))
+                && String(choices[id]?.variantId||'')===String(item.variantId)
+              )
+            );
+            if (!allApproved) {
+              const err = new Error(`Ár-egyeztetés szükséges ${preview.items.length} terméknél. Válaszd ki a régi vagy új eladási árat a készletre vétel előtt.`);
+              err.code='price_review_required'; err.statusCode=409;
+              err.receptionId=String(receptionId);
+              throw err;
+            }
+          }
+        }
+      }
       const result = await commitBatchRows(client, {
         batchId,
         rowIds: null,
         actor: actorFrom(req),
+        priceChoices: req.body?.priceChoices || null,
+        requirePriceChoice:true,
       });
       await client.query("COMMIT");
       if (result.failedRows?.length && Number(result.committed || 0) <= 0) {
@@ -9139,8 +9408,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       console.error("AIF commit import batch failed", e);
       const status = Number(e?.statusCode || 500);
       res.status(status >= 400 && status < 600 ? status : 500).json({
-        error: e?.message || "A készletre vétel nem sikerült.",
+        error: e?.code === 'price_choice_required'
+          ? 'Az import eladási ára eltér a meglévőétől. Nyisd meg a számlát a Receptiókban, és ott válaszd ki az alkalmazandó árat.'
+          : (e?.message || "A készletre vétel nem sikerült."),
         code: e?.code || null,
+        receptionId: e?.receptionId || null,
         detail: e?.detail || null,
         constraint: e?.constraint || null,
         rowNo: e?.rowNo || null,
@@ -9197,6 +9469,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           batchId: b.id,
           rowIds: batchRowIds,
           actor: actorFrom(req),
+          priceChoices: req.body?.priceChoices || null,
+          // A Receptiók véglegesítésénél nincs automatikus árfelülírás.
+          requirePriceChoice: true,
         });
         committed += Number(result.committed || 0);
         details.push({ batchId: b.id, ...result });
@@ -9680,6 +9955,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           batchId: targetBatchId,
           rowIds: [String(row.id)],
           actor: actorFrom(req),
+          requirePriceChoice: true,
         });
         committed = Number(commitResult.committed || 0);
         if (committed < 1 || Number(commitResult.failedCount || 0) > 0) {
@@ -15170,7 +15446,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            l.brand_name AS "brandName",
            l.color_name AS "colorName",
            l.size,
-           l.image_url AS "imageUrl"
+           l.image_url AS "imageUrl",
+           COALESCE(import_stats.import_rows,0)::int AS "incomingRowCount",
+           COALESCE(import_stats.import_qty,0)::int AS "incomingQty"
          FROM input i
          JOIN aif_price_change_documents d
            ON d.reception_id::text=i.reception_id
@@ -15178,6 +15456,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          JOIN aif_price_change_document_lines l
            ON l.document_id=d.id
           AND l.variant_id::text=i.variant_id
+         LEFT JOIN LATERAL (
+           SELECT count(*)::int AS import_rows,COALESCE(sum(rw.qty),0)::int AS import_qty
+           FROM aif_import_batches b
+           JOIN aif_import_rows rw ON rw.batch_id=b.id
+           WHERE b.reception_id=d.reception_id AND rw.variant_id=l.variant_id
+             AND rw.status='committed'
+         ) import_stats ON true
          ORDER BY d.document_date DESC,d.created_at DESC`,
         [JSON.stringify(items.map((item) => ({ variant_id: item.variantId, reception_id: item.receptionId })))]
       );
@@ -15205,6 +15490,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             documentNumber: priceChange.priceChangeDocumentNumber,
             documentDate: priceChange.priceChangeDocumentDate,
             affectedQty: Number(priceChange.affectedQty || 0),
+            incomingRowCount: Number(priceChange.incomingRowCount || 0),
+            incomingQty: Number(priceChange.incomingQty || 0),
             oldSellPrice: Number(priceChange.oldSellPrice || 0),
             newSellPrice: Number(priceChange.newSellPrice || 0),
             locationBreakdown: priceChange.locationBreakdown || [],
