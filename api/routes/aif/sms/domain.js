@@ -113,9 +113,9 @@ export function messageSettingsSnapshot(settings,locationCode) {
     storeAddress:txt(settings.shopAddresses?.[locationCode]),
     websiteUrl:txt(settings.websiteUrl),
     includeWebsite:settings.includeWebsite===true&&Boolean(txt(settings.websiteUrl)),
-    // V3 adds the configured webshop URL to the SMS body when enabled.
-    // Old prepared campaigns must be prepared again before they can be sent live.
-    messageFormatVersion:3
+    // V4 separates the optional webshop URL and the mandatory opt-out contact
+    // onto their own physical SMS lines. Never send V3 drafts with old formatting.
+    messageFormatVersion:4
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -152,14 +152,15 @@ export function validateBlocks(blocks, kind) {
   if(!out.some(b=>b.type==='text'&&b.value.trim())) throw fail('Írj szöveget is az üzenethez.');
   return out;
 }
-// SMSLink HTTP documentation: 160 / 152 units; quotes, CR/LF and extension characters cost two.
-// This integration deliberately transliterates to a controlled ASCII subset. No unverified Unicode mode.
+// SMSLink HTTP documentation: 160 / 152 units; GSM extension characters cost two.
+// The SMS body is intentionally ASCII, except for the GSM line-feed character.
+// Preserve deliberate line breaks so the webshop and opt-out contact print on separate rows.
 export function smsText(raw) {
-  return String(raw??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘]/g,"'").replace(/[“”„]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/\u00a0/g,' ').replace(/[\r\n]+/g,' ').replace(/\s+/g,' ').trim();
+  return String(raw??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘]/g,"'").replace(/[“”„]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').replace(/[^\S\n]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 export function segmentInfo(text) {
   const message=smsText(text);
-  if(!message||/[^\x20-\x7e]/.test(message)) throw fail('Az SMS nem támogatott karaktert tartalmaz (például emojit). A küldéshez latin betűs, ékezetmentes szöveg készül.');
+  if(!message||/[^\x20-\x7e\n]/.test(message)) throw fail('Az SMS nem támogatott karaktert tartalmaz (például emojit). A küldéshez latin betűs, ékezetmentes szöveg készül.');
   const double=new Set('[\\]{}|^~"`');
   const units=[...message].reduce((n,c)=>n+(double.has(c)?2:1),0);
   return {message,units,segments:units<=160?1:Math.ceil(units/152)};
@@ -188,9 +189,13 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   if(!storeName)throw fail('Az SMS feladó üzletneve nincs beállítva.','sms_missing_store_name');
   // No website entered means no webshop text, regardless of stale enabled settings.
   const webshop=includeWebsite&&txt(websiteUrl)?normalizeWebsite(websiteUrl):'';
-  // Webshop after the business message and before the mandatory opt-out contact.
-  const sitePart=webshop?` Online: ${webshop}`:'';
-  return segmentInfo(`${storeName}: ${raw} ${terms}${sitePart} ${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
+  // Each footer item gets its own physical SMS line, not another space-separated sentence.
+  // The required opt-out contact is always the last line, even without a webshop URL.
+  const mainText=`${storeName}: ${raw}${terms?` ${terms}`:''}`.trim();
+  const lines=[mainText];
+  if(webshop)lines.push(`Online: ${webshop}`);
+  lines.push(`${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
+  return segmentInfo(lines.join('\n'));
 }
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);
