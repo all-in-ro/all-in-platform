@@ -4,6 +4,10 @@ import { providerConfig } from './provider.js';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Egy ASCII/GSM-7 resz: az SMSLink Unicode engedelye nelkul is tesztelheto.
+// Csak a szerver altal meghatarozott szoveg; a bongeszo nem kuldhet egyedi SMS-t.
+export const MANAGER_CONNECTION_TEST_TEXT='AllInFashion SMSLink PROBA: a kapcsolat mukodik. Ez egyetlen tesztuzenet a fonoki telefonra. Ugyfeleknek nem ment SMS.';
+
 /**
  * Sends one real, exactly personalized, already prepared SMS exclusively to the
  * server-stored manager test number. Never changes campaign recipient/coupon rows.
@@ -11,6 +15,62 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 export function createSmsTestSender(pool, provider) {
   return {
+    /**
+     * Kampany es ugyfeladat nelkuli, egyetlen valodi szolgaltatoi ellenorzo SMS.
+     * Kizarolag az admin endpoint hivhatja; nincs felhasznalo altal megadott cimszam.
+     * Minden teszt azonos szerveroldali korlatot hasznal, mint a kampanyteszt.
+     */
+    async sendConnectionTest({actor}) {
+      const conf=providerConfig();
+      if(!conf.enabled||!conf.id||!conf.password)
+        throw fail('Az első valódi teszt-SMS-hez a Renderben AIF_SMS_ALLOW_LIVE=true kell. Az ügyfélkampány főkapcsolója továbbra is maradhat kikapcsolva.','sms_test_not_configured',403);
+      const settings=await settingsFrom(pool);
+      const phone=phoneNumber(settings.testPhone);
+      if(!phone)throw fail('A Vezérlőpultban add meg és mentsd el a főnöki teszttelefonszámot.','sms_test_phone');
+      if(!withinSendHours(settings))
+        throw fail(`Teszt-SMS csak ${settings.sendFromHour}:00 és ${settings.sendUntilHour}:00 között küldhető, romániai idő szerint.`, 'sms_quiet_hours',409);
+      const message=MANAGER_CONNECTION_TEST_TEXT;
+      const parts=segmentInfo(message);
+      if(parts.encoding!=='GSM-7'||parts.segments!==1)
+        throw fail('A tesztüzenet hosszellenőrzése nem megfelelő. Nem küldünk fizetős SMS-t.','sms_test_message_invalid',500);
+      if(parts.segments>settings.maxSegments)
+        throw fail('A maximális SMS-hossz beállítása nem engedi a tesztüzenetet.','sms_test_segments',409);
+
+      const db=await pool.connect();
+      try {
+        await db.query('BEGIN');
+        // Megosztott zar minden Render peldanynak es mindket tesztmodnak.
+        await db.query(`SELECT pg_advisory_xact_lock(hashtext('aif_sms_real_test_sends_v1')::bigint)`);
+        const counts=(await db.query(`SELECT
+            count(*) FILTER(WHERE (created_at AT TIME ZONE 'Europe/Bucharest')::date=(now() AT TIME ZONE 'Europe/Bucharest')::date)::int AS today,
+            count(*) FILTER(WHERE created_at>now()-interval '90 seconds')::int AS recent
+          FROM aif_sms_audit WHERE event='sms_test_attempt'`)).rows[0]||{};
+        if(Number(counts.recent||0)>0)throw fail('A legutóbbi valódi teszt-SMS óta várj legalább 90 másodpercet.','sms_test_throttle',429);
+        if(Number(counts.today||0)>=10)throw fail('Elérted a napi 10 valódi főnöki teszt-SMS korlátot.','sms_test_daily_limit',429);
+        const credit=await provider.credit(true);
+        if(credit.credit<parts.segments)throw fail('Nincs elegendő SMSLink-kredit a próbához.','sms_credit_low',409);
+        // Mar a kuldes elott commit: bizonytalan halozati eredmenyt soha nem ismetlunk automatikusan.
+        await audit(db,{actor,event:'sms_test_attempt',payload:{kind:'manager_connection',testPhone:phone,segments:parts.segments}});
+        await db.query('COMMIT');
+      }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}
+      finally{db.release();}
+
+      let result;
+      try {
+        result=await provider.send({phone,message,sender:settings.sender,test:false});
+      }catch(e){
+        const unknown=!e.definitive;
+        try{await audit(pool,{actor,event:unknown?'sms_test_unknown':'sms_test_failed',payload:{kind:'manager_connection',testPhone:phone,code:e.code||'unknown'}});}
+        catch(auditError){console.error('AIF SMS direct test audit:',auditError.message);}
+        if(unknown)throw fail('Az SMSLink válasza bizonytalan. Az SMS megérkezhetett: ne ismételd meg, előbb ellenőrizd a telefonon és az SMSLink naplóban.','sms_test_unknown',502);
+        throw e;
+      }
+      // A szolgaltato sikeres valaszat akkor is kozoljuk, ha utolag az audit naplo irasa hibazna.
+      try{await audit(pool,{actor,event:'sms_test_accepted',payload:{kind:'manager_connection',testPhone:phone,providerId:result.providerId,segments:parts.segments}});}
+      catch(auditError){console.error('AIF SMS direct test accept audit:',auditError.message);}
+      return {ok:true,phone,segments:parts.segments,providerId:result.providerId,
+        message:'Az SMSLink átvette az egyetlen főnöki tesztüzenetet. A kézbesítést a telefonon kell megerősíteni.'};
+    },
     async send({campaignId,recipientId,actor}) {
       if(!UUID.test(String(campaignId))||!UUID.test(String(recipientId)))
         throw fail('Válassz egy előkészített kampányt és annak egyik címzettjét.');

@@ -174,6 +174,9 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   router.post('/campaigns',safe(async(req,res)=>{res.json(await campaigns.create(req.body,await location(req),actorFrom(req)));}));
   router.get('/campaigns/:id',safe(async(req,res)=>res.json(await campaigns.detail(pool,req.params.id,await scope(req)))));
   router.post('/campaigns/:id/test-sms',adminOnly,safe(async(req,res)=>{res.json(await testSender.send({campaignId:req.params.id,recipientId:req.body?.recipientId,actor:actorFrom(req)}));}));
+  // Fonoeki, kampanytol es ugyfelcimzettol fuggetlen SMSLink kapcsolatproba.
+  // A telefonszamot csak a DB-ben mentett admin beallitas adhatja.
+  router.post('/manager-connection-test',adminOnly,safe(async(req,res)=>{res.json(await testSender.sendConnectionTest({actor:actorFrom(req)}));}));
   router.post('/campaigns/:id/:action',safe(async(req,res)=>{res.json(await campaigns.action(req.params.id,req.params.action,req.body,await scope(req),actorFrom(req),admin(req)));}));
   router.get('/audit',adminOnly,safe(async(req,res)=>{
     const id=txt(req.query.campaignId),offset=Math.max(0,Math.floor(Number(req.query.offset)||0));
