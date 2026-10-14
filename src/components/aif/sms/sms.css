@@ -67,3 +67,33 @@
 .aif-sms .sms-token .sms-field-label{display:none}
 .aif-sms .sms-token .sms-select-trigger{min-height:36px;padding:7px 9px;background:#293f52}
 @media(max-width:680px){.aif-sms .sms-calendar-grid>button{min-height:31px}.aif-sms .sms-test-recipient strong{font-size:15px}}
+
+/* Compact, accessible info bubble instead of paragraphs under the SMS phone. */
+.aif-sms .sms-preview-help{display:flex;justify-content:flex-end;margin-top:11px;padding-right:4px}
+.aif-sms .sms-help-wrapper{position:relative;display:inline-flex;z-index:4}
+.aif-sms .sms-help-dot{display:grid;place-items:center;width:29px;height:29px;border-radius:50%;border:1px solid #8dd6cd70;background:#36576a;color:#cffef1;cursor:help;box-shadow:0 2px 9px #09162633}
+.aif-sms .sms-help-dot:hover,.aif-sms .sms-help-dot:focus-visible{outline:2px solid #a8edda;outline-offset:2px;background:#2c8278}
+.aif-sms .sms-help-popover{position:absolute;bottom:calc(100% + 12px);right:0;z-index:10;width:min(325px,calc(100vw - 48px));padding:14px 16px;border:1px solid #9be7d6a6;border-radius:13px;background:#193446;color:#f0fcff;box-shadow:0 18px 55px #081725cc;opacity:0;visibility:hidden;transform:translateY(5px);transition:opacity .12s ease,transform .12s ease,visibility .12s;pointer-events:none;font-size:11px;line-height:1.6}
+.aif-sms .sms-help-popover strong{font-size:12px;color:#baffea}
+.aif-sms .sms-help-popover p{margin:7px 0 0}
+.aif-sms .sms-help-wrapper:hover .sms-help-popover,.aif-sms .sms-help-wrapper:focus-within .sms-help-popover{opacity:1;visibility:visible;transform:none}
+/* The two optional coupon copy lines are actual editable campaign/template data. */
+.aif-sms .sms-coupon-copy{margin-top:16px;padding:15px;border:1px solid #92d8c269;border-radius:15px;background:#20485270;display:flex;flex-direction:column;gap:12px}
+.aif-sms .sms-coupon-copy h3{font-size:14px;margin:0}
+.aif-sms .sms-coupon-copy label{font-size:11px;display:flex;flex-direction:column;gap:7px;color:#d7ecf0}
+.aif-sms .sms-coupon-copy textarea{display:block;width:100%;min-height:56px;resize:vertical;font-size:13px;line-height:1.5}
+/* Saved-template management: rename and safely confirmed delete. */
+.aif-sms .sms-template-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.aif-sms .sms-template-title{display:flex;flex-wrap:wrap;gap:7px;align-items:center;min-width:0;flex:1}
+.aif-sms .sms-template-title h3{margin:0;font-size:15px;overflow-wrap:anywhere}
+.aif-sms .sms-template-actions{display:flex;gap:6px;flex-shrink:0}
+.aif-sms .sms-template-actions button{display:grid;place-items:center;width:34px;height:34px;border:1px solid #7cb4b76e;border-radius:10px;background:#293e52;color:#deefed;cursor:pointer}
+.aif-sms .sms-template-actions button:hover{background:#35616a;border-color:#93e3cf}
+.aif-sms .sms-template-actions button:last-child:hover{color:#ffb6bb;border-color:#f5adb1}
+.aif-sms .sms-template-preview{margin-top:15px;padding:12px;border:1px solid #7fb8b650;border-radius:12px;background:#2538499e;color:#dce8f0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:132px;overflow:auto;font-size:12px;line-height:1.6}
+.aif-sms .sms-template-edit,.aif-sms .sms-template-confirm{display:flex;flex-direction:column;gap:9px;padding:13px;margin-top:12px;border:1px solid #84d2c566;background:#233b4d;border-radius:12px}
+.aif-sms .sms-template-confirm{border-color:#e4a99299;background:#593e465c}
+.aif-sms .sms-template-confirm strong{font-size:12px}
+.aif-sms .sms-template-edit input{margin-top:7px;width:100%}
+.aif-sms .sms-button.danger{border-color:#e0a6aa;background:#814550;color:#ffe7e9}
+@media(max-width:680px){.aif-sms .sms-preview-help{padding-right:14px}.aif-sms .sms-template-heading{align-items:center}.aif-sms .sms-coupon-copy{padding:12px}}

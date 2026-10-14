@@ -1,8 +1,20 @@
 import {ArrowUp,ArrowDown,Trash2,Plus,Tag} from 'lucide-react';
 import type {SmsBlock,SmsOption} from '../../../lib/aif/smsApi';
 import {SmsSelect} from './SmsFields';
+// Text blocks deliberately contain line breaks: every important SMS item
+// is a separate readable line in the phone preview and the actual SMS.
 export function initialBlocks(kind:'arrival'|'promotion',language:'hu'|'ro'):SmsBlock[]{
-  return kind==='arrival'?(language==='hu'?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'! Uj aruk erkeztek: '},{type:'token',value:'brands'},{type:'text',value:'. Varunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]:[{type:'text',value:'Buna, '},{type:'token',value:'name'},{type:'text',value:'! Au sosit noutati '},{type:'token',value:'brands'},{type:'text',value:'. Te asteptam la '},{type:'token',value:'store'},{type:'text',value:'.'}]):(language==='hu'?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'! Szemelyes kedvezmenyed: '},{type:'token',value:'discount'},{type:'text',value:'. Kod: '},{type:'token',value:'coupon'},{type:'text',value:'. Felhasznalhato: '},{type:'token',value:'expiry'},{type:'text',value:'-ig. Varunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]:[{type:'text',value:'Buna, '},{type:'token',value:'name'},{type:'text',value:'! Reducerea ta: '},{type:'token',value:'discount'},{type:'text',value:'. Cod unic: '},{type:'token',value:'coupon'},{type:'text',value:'. Valabil pana la '},{type:'token',value:'expiry'},{type:'text',value:' inclusiv. '},{type:'token',value:'store'},{type:'text',value:'.'}]);
+  if(kind==='arrival')return language==='hu'
+    ?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'!\nÚj áruk érkeztek: '},{type:'token',value:'brands'},{type:'text',value:'.\nVárunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]
+    :[{type:'text',value:'Bună, '},{type:'token',value:'name'},{type:'text',value:'!\nAu sosit noutăți: '},{type:'token',value:'brands'},{type:'text',value:'.\nTe așteptăm la: '},{type:'token',value:'store'},{type:'text',value:'.'}];
+  return language==='hu'
+    ?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'! Személyes kedvezményed: '},{type:'token',value:'discount'},{type:'text',value:'.\nKód: '},{type:'token',value:'coupon'},{type:'text',value:'\nFelhasználható: '},{type:'token',value:'expiry'},{type:'text',value:'-ig.\nVárunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]
+    :[{type:'text',value:'Bună, '},{type:'token',value:'name'},{type:'text',value:'! Reducerea ta personală: '},{type:'token',value:'discount'},{type:'text',value:'.\nCod: '},{type:'token',value:'coupon'},{type:'text',value:'\nValabil până la: '},{type:'token',value:'expiry'},{type:'text',value:' inclusiv.\nTe așteptăm la: '},{type:'token',value:'store'},{type:'text',value:'.'}];
+}
+export function defaultCouponCopy(language:'hu'|'ro',stackable:boolean){
+  return language==='hu'
+    ?{eligibility:'Személyes, egyszer használható, csak a megjelölt üzletben.',stacking:stackable?'Más kedvezménnyel összevonható.':'Más kedvezménnyel nem vonható össze.'}
+    :{eligibility:'Personal, o singură utilizare, doar în magazinul indicat.',stacking:stackable?'Se poate cumula cu alte reduceri.':'Nu se cumulează cu alte reduceri.'};
 }
 export function SmsBlockEditor({blocks,onChange,tokens,kind}:{blocks:SmsBlock[];onChange:(value:SmsBlock[])=>void;tokens:SmsOption[];kind:'arrival'|'promotion'}){
   const allowed=tokens.filter(t=>kind==='promotion'||!['coupon','discount','expiry'].includes(t.id));
