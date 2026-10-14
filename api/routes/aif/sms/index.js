@@ -5,6 +5,7 @@ import { ensureSmsSchema, settingsFrom, audit } from './schema.js';
 import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourceDetailsFor, sourceProducts } from './data.js';
 import { providerConfig, publicBase, createProvider } from './provider.js';
 import { createCampaignService } from './campaigns.js';
+import { discardPreparedSmsCampaigns, discardableSmsPreparationSql } from './cleanup.js';
 import { createCouponService } from './coupons.js';
 import { createSmsTestSender } from './testSend.js';
 import { startSmsWorker } from './worker.js';
@@ -177,11 +178,19 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
     }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
   }));
   router.get('/campaigns',safe(async(req,res)=>{
-    const loc=await scope(req);res.json({items:(await pool.query(`SELECT c.*, (SELECT count(*)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id AND r.status='delivered') AS delivered,
+    const loc=await scope(req);res.json({items:(await pool.query(`SELECT c.*, ${discardableSmsPreparationSql('c')} AS can_discard,
+      (SELECT min(r.segments)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id) AS min_sms_parts,
+      (SELECT max(r.segments)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id) AS max_sms_parts,
+      (SELECT count(*)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id AND r.status='delivered') AS delivered,
       (SELECT count(*)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id AND r.status IN('failed','unknown','undelivered')) AS attention
       FROM aif_sms_campaigns c WHERE ($1::uuid IS NULL OR location_id=$1) ORDER BY created_at DESC LIMIT 100`,[loc])).rows});
   }));
   router.post('/campaigns',safe(async(req,res)=>{res.json(await campaigns.create(req.body,await location(req),actorFrom(req)));}));
+  // Only admin may discard preparations without ANY sending/test evidence.
+  // Client selects exact campaign IDs and confirms their count; server rechecks under locks.
+  router.post('/campaigns/discard-prepared',adminOnly,safe(async(req,res)=>{
+    res.json({ok:true,...await discardPreparedSmsCampaigns(pool,req.body?.ids,actorFrom(req),req.body?.confirmCount)});
+  }));
   router.get('/campaigns/:id',safe(async(req,res)=>res.json(await campaigns.detail(pool,req.params.id,await scope(req)))));
   router.post('/campaigns/:id/test-sms',adminOnly,safe(async(req,res)=>{res.json(await testSender.send({campaignId:req.params.id,recipientId:req.body?.recipientId,actor:actorFrom(req)}));}));
   // Fonoeki, kampanytol es ugyfelcimzettol fuggetlen SMSLink kapcsolatproba.

@@ -25,7 +25,7 @@ export type SmsPreference = {
 export type SmsProfileStatus = { error?: boolean; id: string; enabled: boolean; arrivals: boolean; promotions: boolean; brands: string[]; genders: string[]; suppressed: boolean };
 export type SmsSourceLine = {lineNo:number;title:string;code:string;brand:string;color:string;size:string;category:string;qty:number};
 export type SmsSourceDetails = {source:SmsSource;items:SmsSourceLine[]};
-export type SmsTestPreview = {templateId:string;templateName:string;locationCode:string;phone:string;message:string;segments:number;encoding:string;fingerprint:string;sampleBrandId?:string;sampleCategoryId?:string;encodingMode?:'original'|'gsm7';modifiedForGsm7?:boolean;blockedReason?:string|null};
+export type SmsTestPreview = {templateId:string;templateName:string;locationCode:string;phone:string;message:string;segments:number;encoding:string;fingerprint:string;sampleBrandId?:string;sampleCategoryId?:string;encodingMode?:'auto'|'original'|'gsm7';sampleSource?:string;modifiedForGsm7?:boolean;blockedReason?:string|null};
 export type SmsExcludedReason = {reason:string;count:number};
 export type SmsApiError = Error & {code?:string;excludedReasons?:SmsExcludedReason[];checkedClients?:number};
 export type SmsSource = { id: string; type: string; title: string; date: string; qty: number; variants: number };
@@ -35,7 +35,7 @@ export type SmsDraft = { title:string; kind:'arrival'|'promotion'; location:stri
 export type SmsCampaign = {
   id:string; title:string; kind:'arrival'|'promotion'; location_code:string; mode:'test'|'live'; status:string;
   recipient_count:number; segment_count:number; created_by:string; created_at:string; approved_by?:string; approved_at?:string;
-  launched_by?:string; launched_at?:string; note?:string; delivered?:number; attention?:number;
+  launched_by?:string; launched_at?:string; note?:string; delivered?:number; attention?:number; can_discard?:boolean; min_sms_parts?:number|null; max_sms_parts?:number|null;
   definition: SmsDraft & {sender:string;unsubscribePhone?:string;messageSettings?:{unsubscribePhone:string;includeUnsubscribeLink:boolean;storeName:string;storeAddress:string;websiteUrl?:string;includeWebsite?:boolean;messageFormatVersion?:number};unknownGender:number;excluded:Array<{id:string;name:string;phone:string;reason:string}>};
 };
 export type SmsRecipient = { id:string;customer_id:string; customer_name:string;phone:string;message:string;segments:number;status:string;reason?:string;provider_id?:string;accepted_at?:string;delivered_at?:string;coupon_code?:string;coupon_status?:string;used_at?:string;used_by?:string;used_sale_id?:string };

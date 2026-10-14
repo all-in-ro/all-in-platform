@@ -66,7 +66,7 @@ function SmsCenter({locationCode,status,statusError,reloadStatus,onClose}:{locat
         {!status||!meta?<Empty><Loader2 className="sms-spin" size={22}/> SMS-rendszer betöltése…</Empty>:<>
           {tab==='overview'?<Overview status={status} onTab={setTab}/>:null}
           {tab==='arrival'||tab==='promotion'?<Composer key={`${tab}-${template?.id||'new'}`} kind={tab} status={status} meta={meta} locationCode={preferredLocation||locationCode} onLocationChange={setPreferredLocation} template={template} onPrepared={d=>{setDetail(d);smsChanged();}}/>:null}
-          {tab==='history'?<CampaignHistory onShow={id=>void show(id)}/>:null}
+          {tab==='history'?<CampaignHistory onShow={id=>void show(id)} isAdmin={Boolean(isAdmin)}/>:null}
           {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
           {tab==='templates'?<Templates isAdmin={status.role==='admin'} tokens={meta.tokens} onUse={t=>{const loc=smsTemplateLocation(t,meta);if(loc)setPreferredLocation(loc);setTemplate(t);setTab(t.kind);}}/>:null}
           {tab==='audit'&&isAdmin?<AuditPanel/>:null}
@@ -190,12 +190,61 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
     </SmsModal>:null}
   </div>;
 }
-function CampaignHistory({onShow}:{onShow:(id:string)=>void}){
+function CampaignHistory({onShow,isAdmin}:{onShow:(id:string)=>void;isAdmin:boolean}){
   const[items,setItems]=useState<SmsCampaign[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState('');
+  const[confirmIds,setConfirmIds]=useState<string[]|null>(null),[deleting,setDeleting]=useState(false);
   const load=useCallback(async()=>{setLoading(true);try{setItems((await smsApi<{items:SmsCampaign[]}>('/campaigns')).items);setError('');}catch(e){setError(errText(e));}finally{setLoading(false);}},[]);
   useEffect(()=>{void load();},[load]);
-  return <div className="sms-section"><div className="sms-flex"><div><h2>Küldési napló</h2><SmsHint text="Az utolsó 100 kampányt látod; egy sorra kattintva a teljes üzenet és a címzettlista is megnyílik."/></div><button type="button" className="sms-button" onClick={()=>void load()}><RefreshCw className={loading?'sms-spin':''} size={16}/> Frissítés</button></div>{error?<div className="sms-error">{error}</div>:null}
-    {items.length?<div className="sms-table-wrap"><table className="sms-table"><thead><tr><th>Kampány / üzlet</th><th>Indította</th><th>Címzett / SMS-rész</th><th>Állapot</th><th>Időpont</th></tr></thead><tbody>{items.map(c=><tr key={c.id} className="selectable" onClick={()=>onShow(c.id)}><td><strong style={{fontWeight:500}}>{c.title}</strong><br/><small>{c.location_code==='main_warehouse'?'Csíkszereda':c.location_code==='magazin_targu_secuiesc'?'Kézdivásárhely':c.location_code||'Ismeretlen üzlet'} · {c.kind==='arrival'?'Új áru':'Kupon'}</small></td><td>{c.launched_by||'Még nincs indítva'}<br/><small>Előkészítette: {c.created_by}</small></td><td>{c.recipient_count} kliens · {c.segment_count} rész<br/><small>{c.delivered||0} kézbesítve</small></td><td><span className={`sms-pill ${c.status}`}>{SMS_STATUS[c.status]||c.status}</span><br/><small>{c.mode==='test'?'Próbamód':'Éles'}</small></td><td>{smsDate(c.launched_at||c.created_at)}</td></tr>)}</tbody></table></div>:<Empty>{loading?'Kampányok betöltése…':'Még nincs SMS-kampány.'}</Empty>}
+  const discardable=items.filter(c=>c.can_discard===true);
+  const partsLabel=(c:SmsCampaign)=>{const count=Number(c.recipient_count||0),total=Number(c.segment_count||0),lo=c.min_sms_parts,hi=c.max_sms_parts;return count>0&&lo!=null&&hi!=null&&lo===hi&&lo*count===total?`${count} címzett × ${lo} rész`:`${count} címzett · ${total} rész összesen`;};
+  const confirmedItems=(confirmIds||[]).map(id=>items.find(c=>c.id===id)).filter((c):c is SmsCampaign=>Boolean(c));
+  async function discardConfirmed(){
+    if(!confirmIds?.length||deleting)return;
+    setDeleting(true);setError('');
+    try{
+      const result=await smsApi<{ok:boolean;deleted:number}>('/campaigns/discard-prepared',{ids:confirmIds,confirmCount:confirmIds.length});
+      setConfirmIds(null);
+      await load();smsChanged();
+      if(result.deleted!==confirmIds.length)throw new Error('A törölt előkészítések darabszáma nem egyezik.');
+    }catch(e){setError(errText(e));}
+    finally{setDeleting(false);}
+  }
+  return <div className="sms-section">
+    <div className="sms-flex"><div><h2>Küldési napló</h2><SmsHint text="Az előkészített kampány nem elküldött SMS. A valóban elindított kampányok és a tényleges tesztküldések naplója megmarad."/></div>
+      <div className="sms-actions">
+        {isAdmin&&discardable.length>0?<button type="button" className="sms-button danger" disabled={loading||deleting} onClick={()=>setConfirmIds(discardable.map(c=>c.id))}><Trash2 size={15}/> Előkészítések törlése ({discardable.length})</button>:null}
+        <button type="button" className="sms-button" disabled={loading||deleting} onClick={()=>void load()}><RefreshCw className={loading?'sms-spin':''} size={16}/> Frissítés</button>
+      </div>
+    </div>
+    {error?<div className="sms-error">{error}</div>:null}
+    {items.length?<div className="sms-table-wrap"><table className="sms-table"><thead><tr>
+      <th>Kampány / üzlet</th><th>Indította</th><th>Címzett / becsült SMS <SmsHint text="Példa: 2 címzett × 2 rész = összesen 4 fizetős SMS-rész. Az előkészítés önmagában nem von le kreditet."/></th><th>Állapot</th><th>Időpont</th>{isAdmin?<th aria-label="Előkészítés törlése"/>:null}
+    </tr></thead><tbody>{items.map(c=><tr key={c.id} className="selectable" onClick={()=>onShow(c.id)}>
+      <td><strong style={{fontWeight:500}}>{c.title}</strong><br/><small>{c.location_code==='main_warehouse'?'Csíkszereda':c.location_code==='magazin_targu_secuiesc'?'Kézdivásárhely':c.location_code||'Ismeretlen üzlet'} · {c.kind==='arrival'?'Új áru':'Kupon'}</small></td>
+      <td>{c.launched_by||'Még nincs indítva'}<br/><small>Előkészítette: {c.created_by}</small></td>
+      <td>{partsLabel(c)}<br/>
+        <small>{c.segment_count} rész összesen · {!c.launched_at?'nincs elküldve':`${c.delivered||0} kézbesítve`}</small>
+      </td>
+      <td><span className={`sms-pill ${c.status}`}>{SMS_STATUS[c.status]||c.status}</span><br/><small>{c.mode==='test'?'Próbamód':c.launched_at?'Éles':'Élesre előkészítve'}</small></td>
+      <td>{smsDate(c.launched_at||c.created_at)}</td>
+      {isAdmin?<td>{c.can_discard===true?<button type="button" className="sms-button danger icon" title="Nem indított előkészítés törlése" aria-label={`${c.title} előkészítésének törlése`} onClick={e=>{e.stopPropagation();setConfirmIds([c.id]);}} disabled={deleting}><Trash2 size={16}/></button>:<SmsHint text="Csak olyan előkészítés törölhető, amelynél nem volt kampányindítás, valódi teszt-SMS, szolgáltatói küldés vagy aktív kupon."/>}</td>:null}
+    </tr>)}</tbody></table></div>:<Empty>{loading?'Kampányok betöltése…':'Még nincs SMS-kampány.'}</Empty>}
+    {confirmIds?<SmsModal compact title="Előkészítések törlése" eyebrow="SMS · ADMIN" onClose={()=>{if(!deleting)setConfirmIds(null);}}>
+      <div className="sms-content">
+        <div className="sms-card">
+          <div className="sms-flex"><h3>{confirmedItems.length} nem indított előkészítés</h3><span className="sms-pill unknown">0 kiküldött SMS</span></div>
+          <div className="sms-message-list" style={{marginTop:12,maxHeight:260}}>
+            {confirmedItems.map(c=><div className="sms-message-row" key={c.id}><strong>{c.title}</strong><br/><small>{c.location_code==='main_warehouse'?'Csíkszereda':'Kézdivásárhely'} · {smsDate(c.created_at)} · {c.recipient_count} tervezett címzett</small></div>)}
+          </div>
+          <p className="sms-caption">Csak a küldés nélküli előkészítések és függő címzettlistáik törlődnek. Küldés vagy próba-SMS nyoma esetén a szerver megállítja az egész műveletet.</p>
+        </div>
+        {error?<div className="sms-error" style={{marginTop:12}}>{error}</div>:null}
+        <div className="sms-actions" style={{marginTop:15,justifyContent:'flex-end'}}>
+          <button type="button" className="sms-button" disabled={deleting} onClick={()=>setConfirmIds(null)}>Mégse</button>
+          <button type="button" className="sms-button danger" disabled={deleting||confirmedItems.length!==confirmIds.length} onClick={()=>void discardConfirmed()}>{deleting?<Loader2 className="sms-spin" size={16}/>:<Trash2 size={16}/>} Törlés megerősítése</button>
+        </div>
+      </div>
+    </SmsModal>:null}
   </div>;
 }
 function CampaignModal({initial,status,onClose}:{initial:SmsCampaignDetail;status:SmsStatus;onClose:()=>void}){
@@ -400,7 +449,7 @@ function Templates({onUse,isAdmin,tokens}:{onUse:(t:Template)=>void;isAdmin:bool
     </SmsModal>:null}
   </div>;
 }
-const EVENT_LABEL:Record<string,string>={campaign_finished:'Kampány feldolgozva',campaign_prepared:'Kampány előkészítve',sms_test_attempt:'Teszt-SMS indítva',sms_test_accepted:'Teszt-SMS átadva',sms_test_failed:'Teszt-SMS elutasítva',sms_test_unknown:'Teszt-SMS eredménye bizonytalan',approval_requested:'Jóváhagyás kérve',campaign_approve:'Kampány jóváhagyva',campaign_launch:'Kampány indítva',campaign_pause:'Kampány szüneteltetve',campaign_auto_paused:'Automatikus szüneteltetés',campaign_cancel:'Kampány leállítva',consent_granted:'SMS-hozzájárulás rögzítve',consent_revoked:'SMS-hozzájárulás visszavonva',preferences_saved:'Érdeklődések módosítva',settings_saved:'SMS-beállítások módosítva',template_created:'Sablon létrehozva',template_updated:'Sablon módosítva',template_renamed:'Sablon átnevezve',template_deleted:'Sablon törölve',send_started:'SMS-küldés indítva',send_simulated:'Próbafeldolgozás',provider_accepted:'SMSLink átvette',send_failed:'SMSLink elutasította',send_unknown:'Bizonytalan küldés',recipient_skipped:'Címzett kihagyva',delivery_confirmed:'Kézbesítés visszaigazolva',delivery_failed:'Kézbesítés sikertelen',coupon_redeemed:'Kupon beváltva',provider_manually_reconciled:'Küldés kézzel egyeztetve'};
+const EVENT_LABEL:Record<string,string>={campaign_finished:'Kampány feldolgozva',campaign_prepared:'Kampány előkészítve',campaign_discarded:'Előkészítés törölve',sms_test_attempt:'Teszt-SMS indítva',sms_test_accepted:'Teszt-SMS átadva',sms_test_failed:'Teszt-SMS elutasítva',sms_test_unknown:'Teszt-SMS eredménye bizonytalan',approval_requested:'Jóváhagyás kérve',campaign_approve:'Kampány jóváhagyva',campaign_launch:'Kampány indítva',campaign_pause:'Kampány szüneteltetve',campaign_auto_paused:'Automatikus szüneteltetés',campaign_cancel:'Kampány leállítva',consent_granted:'SMS-hozzájárulás rögzítve',consent_revoked:'SMS-hozzájárulás visszavonva',preferences_saved:'Érdeklődések módosítva',settings_saved:'SMS-beállítások módosítva',template_created:'Sablon létrehozva',template_updated:'Sablon módosítva',template_renamed:'Sablon átnevezve',template_deleted:'Sablon törölve',send_started:'SMS-küldés indítva',send_simulated:'Próbafeldolgozás',provider_accepted:'SMSLink átvette',send_failed:'SMSLink elutasította',send_unknown:'Bizonytalan küldés',recipient_skipped:'Címzett kihagyva',delivery_confirmed:'Kézbesítés visszaigazolva',delivery_failed:'Kézbesítés sikertelen',coupon_redeemed:'Kupon beváltva',provider_manually_reconciled:'Küldés kézzel egyeztetve'};
 function AuditPanel({campaignId}:{campaignId?:string}){
   const[rows,setRows]=useState<SmsAuditRow[]>([]),[offset,setOffset]=useState(0),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const load=useCallback(async()=>{setBusy(true);try{const r=await smsApi<{items:SmsAuditRow[]}>(`/audit?offset=${offset}&campaignId=${encodeURIComponent(campaignId||'')}`);setRows(r.items);setError('');}catch(e){setError(errText(e));}finally{setBusy(false);}},[offset,campaignId]);
