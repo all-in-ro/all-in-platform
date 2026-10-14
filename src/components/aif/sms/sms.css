@@ -10,3 +10,60 @@
 .aif-sms.sms-coupon-box .sms-caption{font-size:11px;margin:8px 0}
 .aif-sms.sms-coupon-box .sms-error,.aif-sms.sms-coupon-box .sms-ok{margin-top:10px;font-size:11px}
 .aif-sms.sms-coupon-box .sms-button{font-size:11px;padding:9px 11px;min-height:40px}
+
+/* AllIn-styled dropdowns and Hungarian date pickers across the SMS module. */
+.aif-sms .sms-field{display:flex;flex-direction:column;gap:7px;min-width:0}
+.aif-sms .sms-field-label{font-size:12px;color:#ccdae7;font-weight:400}
+.aif-sms .sms-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:11px;width:100%;min-height:43px;min-width:0;padding:10px 12px;border:1px solid #7997ac70;border-radius:12px;background:#263548;color:#f4fbff;text-align:left;font-size:13px;box-shadow:none;transition:border-color .15s,box-shadow .15s}
+.aif-sms .sms-select-trigger>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aif-sms .sms-select-trigger>svg{color:#b0c5d2;transition:transform .15s}
+.aif-sms .sms-select-trigger.is-open>svg{transform:rotate(180deg)}
+.aif-sms .sms-select-trigger:hover,.aif-sms .sms-select-trigger.is-open,.aif-sms .sms-select-trigger:focus-visible{border-color:#83efda;box-shadow:0 0 0 3px #83efda20;outline:none}
+.aif-sms .sms-placeholder{color:#a7b7c8}
+.aif-sms.sms-floating-picker{overflow:hidden;border:1px solid #88d9d188;border-radius:15px;background:#26374c;color:#f4fbff;box-shadow:0 22px 70px #020d1cdd;font-size:13px;display:flex;flex-direction:column}
+.aif-sms .sms-picker-search{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid #8caeba33;background:#33485b;color:#a9d5d4}
+.aif-sms .sms-picker-search input{flex:1;min-width:0;padding:8px 10px;background:#203147;font-size:12px;color:#fff}
+.aif-sms .sms-picker-search button{display:grid;place-items:center;width:27px;height:27px;background:transparent;border:0;color:#c1dbe1}
+.aif-sms .sms-picker-options{overflow:auto;min-height:0;padding:6px;scrollbar-color:#67869c #243346}
+.aif-sms .sms-picker-options button{display:flex;justify-content:space-between;align-items:center;gap:11px;min-height:37px;width:100%;border:1px solid transparent;border-radius:9px;padding:8px 10px;background:transparent;color:#e2ecf3;text-align:left}
+.aif-sms .sms-picker-options button:hover,.aif-sms .sms-picker-options button:focus-visible{background:#496376;border-color:#8adbd241;outline:0}
+.aif-sms .sms-picker-options button.chosen{background:#26787073;color:#d6fff4;border-color:#7cdbcd4d}
+.aif-sms .sms-picker-options strong{font-size:12px;font-weight:500}
+.aif-sms .sms-picker-options button small{display:block;color:#b1cbda;margin-top:2px}
+.aif-sms .sms-picker-empty{padding:16px;color:#b6c9d6;text-align:center;font-size:12px}
+.aif-sms .sms-date-input{display:flex;align-items:center;min-height:43px;border:1px solid #7997ac70;border-radius:12px;background:#263548;overflow:hidden}
+.aif-sms .sms-date-input:focus-within,.aif-sms .sms-date-input.is-open{border-color:#83efda;box-shadow:0 0 0 3px #83efda20}
+.aif-sms .sms-date-input input{flex:1;min-width:0;width:100%;border:0;background:transparent;box-shadow:none;padding:10px 12px;font-size:13px;font-variant-numeric:tabular-nums;letter-spacing:.035em;color:#f4fbff}
+.aif-sms .sms-date-input input:focus{border:0;box-shadow:none}
+.aif-sms .sms-date-input button{display:grid;place-items:center;min-width:43px;min-height:41px;border:0;border-left:1px solid #7997ac44;border-radius:0;background:#31485c;color:#95e6da}
+.aif-sms .sms-date-input button:hover{background:#355f64}
+.aif-sms .sms-date-hint{line-height:1.5;font-size:11px;color:#bdeee2}
+.aif-sms .sms-calendar{padding:11px;overflow:auto}
+.aif-sms .sms-calendar-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}
+.aif-sms .sms-calendar-header strong{font-weight:600;font-size:13px;color:#e6fff9}
+.aif-sms .sms-calendar-header button{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;border:1px solid #7997ac4d;background:#344b60;color:#d8e8ef}
+.aif-sms .sms-calendar-header button:hover{background:#436579}
+.aif-sms .sms-calendar-days,.aif-sms .sms-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.aif-sms .sms-calendar-days{margin-bottom:5px}
+.aif-sms .sms-calendar-days span{font-size:10px;font-weight:600;color:#95b4c4;padding:7px 0}
+.aif-sms .sms-calendar-grid>button,.aif-sms .sms-calendar-grid>span{display:grid;place-items:center;min-height:33px;aspect-ratio:1/1;min-width:0}
+.aif-sms .sms-calendar-grid>button{border:1px solid transparent;background:transparent;border-radius:9px;color:#e4f2f5;font-size:12px;font-weight:400;font-variant-numeric:tabular-nums}
+.aif-sms .sms-calendar-grid>button:hover:not(:disabled){border-color:#70d9c3;background:#385f61}
+.aif-sms .sms-calendar-grid>button.today{border-color:#99e5d69c}
+.aif-sms .sms-calendar-grid>button.picked{border-color:#b8fff0;background:#238d80;color:#fff;font-weight:700}
+.aif-sms .sms-calendar-grid>button:disabled{color:#6c8191;opacity:.42}
+.aif-sms .sms-calendar-footer{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #9dbbc03a;margin-top:9px;padding:9px 4px 0;font-size:11px;color:#9ab6c7}
+.aif-sms .sms-calendar-footer button{border:0;background:transparent;color:#a5f2d9;font-size:12px}
+.aif-sms .sms-validity-example{margin-top:12px;padding:12px 14px;border:1px solid #87bcca5c;border-radius:12px;background:#213a49a8;color:#daedf1;font-size:12px;line-height:1.7}
+.aif-sms .sms-validity-example strong,.aif-sms .sms-validity-example b{color:#befff0;font-weight:600}
+.aif-sms .sms-validity-example small{font-size:11px}
+.aif-sms .sms-test-card{border-color:#83c9ba80;background:linear-gradient(130deg,#294d52,#344b5c)}
+.aif-sms .sms-test-card .sms-caption{margin-top:11px!important}
+.aif-sms .sms-test-recipient{display:flex;flex-direction:column;gap:3px;margin-top:13px;padding:11px 14px;border:1px solid #86d8c966;background:#213f43;border-radius:12px}
+.aif-sms .sms-test-recipient span{font-size:11px;color:#bed4d7}
+.aif-sms .sms-test-recipient strong{font-size:17px;color:#c9fff0;font-weight:600}
+.aif-sms .sms-test-card .sms-note,.aif-sms .sms-test-card .sms-ok{margin-top:12px}
+.aif-sms .sms-token .sms-field{flex:1}
+.aif-sms .sms-token .sms-field-label{display:none}
+.aif-sms .sms-token .sms-select-trigger{min-height:36px;padding:7px 9px;background:#293f52}
+@media(max-width:680px){.aif-sms .sms-calendar-grid>button{min-height:31px}.aif-sms .sms-test-recipient strong{font-size:15px}}

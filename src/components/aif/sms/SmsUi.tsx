@@ -12,8 +12,8 @@ export function SmsModal({title,eyebrow='ALLINFASHION · SMS KÖZPONT',children,
     panel.current?.focus();
     const key=(e:KeyboardEvent)=>{
       const overlays=document.querySelectorAll('.sms-overlay');if(overlays[overlays.length-1]!==root.current)return;
-      if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();close.current();}
-      if(e.key==='Tab'){
+      if(e.key==='Escape'){if(document.querySelector('[data-sms-popover="true"]'))return;e.preventDefault();e.stopImmediatePropagation();close.current();}
+      if(e.key==='Tab'){if(document.querySelector('[data-sms-popover="true"]'))return;
         const els=panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]');
         const items=els?Array.from(els).filter(el=>el.offsetParent!==null):[];
         if(!items.length){e.preventDefault();return;}
