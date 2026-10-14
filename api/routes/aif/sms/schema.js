@@ -27,6 +27,8 @@ export function ensureSmsSchema(pool) {
         language text NOT NULL CHECK(language IN('hu','ro')), blocks jsonb NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now(), updated_by text
       )`);
+      await db.query('ALTER TABLE aif_sms_templates ADD COLUMN IF NOT EXISTS coupon_copy jsonb');
+      await db.query('ALTER TABLE aif_sms_templates ADD COLUMN IF NOT EXISTS coupon_stackable boolean');
       await db.query(`CREATE TABLE IF NOT EXISTS aif_sms_campaigns (
         id uuid PRIMARY KEY, request_key text NOT NULL UNIQUE, request_hash text NOT NULL,
         title text NOT NULL, kind text NOT NULL CHECK(kind IN('arrival','promotion')),
@@ -75,7 +77,7 @@ export function ensureSmsSchema(pool) {
 export async function settingsFrom(db) {
   const {rows}=await db.query('SELECT settings FROM aif_sms_settings WHERE id=1');
   const saved=rows[0]?.settings||{};
-  return {...DEFAULT_SETTINGS,...saved,shopNames:{...DEFAULT_SETTINGS.shopNames,...saved.shopNames},shopAddresses:{...DEFAULT_SETTINGS.shopAddresses,...saved.shopAddresses}};
+  return {...DEFAULT_SETTINGS,...saved,shopNames:{...DEFAULT_SETTINGS.shopNames,...saved.shopNames}};
 }
 export function audit(db,{campaignId=null,customerId=null,locationId=null,actor,event,payload={}}) {
   return db.query(`INSERT INTO aif_sms_audit(campaign_id,customer_id,location_id,actor,event,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)`,[campaignId,customerId,locationId,actor||'system',event,JSON.stringify(payload)]);

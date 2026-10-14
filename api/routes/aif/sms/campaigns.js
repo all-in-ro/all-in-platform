@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch, compactSmsNames } from './domain.js';
+import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch, compactSmsNames, cleanCouponCopy, segmentInfo } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { metadata, sourceProducts, audienceFor } from './data.js';
 import { publicBase, providerConfig } from './provider.js';
@@ -21,12 +21,13 @@ export function createCampaignService(pool,provider) {
     const meta=await metadata(db);
     if(filters.brands.some(id=>!meta.brands.some(b=>b.id===id))||filters.categories.some(id=>!meta.categories.some(c=>c.id===id))||filters.genders.some(id=>!meta.genders.some(g=>g.id===id)))throw fail('Ismeretlen célcsoportszűrő.');
     const coupon=kind==='promotion'?cleanCouponRules(input.coupon):null;
+    const couponCopy=coupon?cleanCouponCopy(input.couponCopy,language,coupon.stackable):null;
     if(mode==='live'&&!settings.unsubscribePhone)throw fail('Éles kampány előtt állítsd be a leiratkozási telefonszámot az SMS Vezérlőpultban.','sms_unsubscribe_contact');
     if(coupon){const today=(await db.query(`SELECT ((now() AT TIME ZONE 'Europe/Bucharest')::date)::text AS date`)).rows[0].date;if(coupon.validUntil<today)throw fail('A promóció nem járhatott már le.');}
     const loaded=kind==='arrival'?await sourceProducts(db,location.id,input.sources):{products:[],sources:[],unknownGender:0};
     const products=loaded.products.filter(p=>(!filters.brands.length||filters.brands.includes(p.brand_id))&&(!filters.genders.length||filters.genders.includes(genderKey(p.gender)))&&(!filters.categories.length||filters.categories.includes(p.category_id)||filters.categories.includes(p.subcategory_id)));
     if(kind==='arrival'&&!products.length)throw fail('A szállítmányból nincs aktív, készleten lévő termék a kiválasztott szűrésben.');
-    const definition={kind,title,language,filters,blocks,coupon,sources:unique(input.sources)};
+    const definition={kind,title,language,filters,blocks,coupon,couponCopy,sources:unique(input.sources)};
     const audience=await audienceFor(db,location.id,definition,products,settings,mode);
     if(!audience.eligible.length)throw fail('Nincs megfelelő, SMS-hez hozzájárult kliens ebben az üzletben. Ellenőrizd az érdeklődéseket, nyelvet és küldési korlátot.','sms_empty_audience');
     if(audience.eligible.length>settings.maxRecipients)throw fail(`A kampány ${audience.eligible.length} címzettje meghaladja a ${settings.maxRecipients} fős korlátot.`);
@@ -37,11 +38,11 @@ export function createCampaignService(pool,provider) {
       const code=coupon?codes[i]:null;
       const values={name:person.name,store:storeLabel(settings,location.code,location.name),
         storeName:messageSettings.storeName||location.name,storeAddress:messageSettings.storeAddress,
-        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language)||(language==='ro'?'marcile preferate':'kedvenc markaid'),
-        categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories')||(language==='ro'?'produse selectate':'valogatott termekek'),
+        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language)||(language==='ro'?'mărcile preferate':'kedvenc márkáid'),
+        categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories')||(language==='ro'?'produse selectate':'válogatott termékek'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
-      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true);
-      if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget.`,'sms_too_long');
+      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language,couponCopy):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true);
+      if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget, vagy a Vezérlőpultban ellenőrizd a megengedett SMS-részeket.`,'sms_too_long');
       recipients.push({...person,id:randomUUID(),couponCode:code,...rendered});
     }
     const segments=recipients.reduce((n,r)=>n+r.segments,0);
@@ -100,6 +101,10 @@ export function createCampaignService(pool,provider) {
           if(c.mode==='live'){
             if(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)throw fail('A leiratkozási szám hiányzik vagy megváltozott. Készíts új kampányt az aktuális beállítással.','sms_unsubscribe_contact',409);
             if(!messageSettingsMatch(c.definition,s,c.location_code))throw fail('Az SMS fejléce, az üzlet neve/címe, a webáruház címe vagy a leiratkozási mód megváltozott. Készíts új kampányt.','sms_message_settings_changed',409);
+            if(!providerConfig().unicodeEnabled){
+              const sample=(await db.query('SELECT message FROM aif_sms_recipients WHERE campaign_id=$1 AND status=\'pending\' LIMIT 1',[c.id])).rows[0];
+              if(sample&&segmentInfo(sample.message).encoding==='UCS-2')throw fail('Ez ékezetes (Unicode) SMS. Az SMSLink Unicode-támogatását előbb igazolni és engedélyezni kell, különben nem indítunk fizetős küldést.','sms_unicode_not_confirmed',409);
+            }
             if(!s.liveEnabled||!providerConfig().enabled)throw fail('Az éles SMS-küldés nincs engedélyezve.','sms_live_disabled',403);
             if(providerConfig().secret.length<32)throw fail('Az SMS-visszaigazolásokhoz legalább 32 karakteres webhook-titok szükséges.');
             if(!withinSendHours(s))throw fail(`Most küldési csendidő van. Küldési időszak: ${s.sendFromHour}:00–${s.sendUntilHour}:00 (romániai idő).`,'sms_quiet_hours');

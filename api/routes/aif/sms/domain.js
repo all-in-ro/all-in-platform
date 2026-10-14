@@ -45,7 +45,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // A phone-only SMS is shorter. A personal opt-out link is optional and separately configurable.
   unsubscribePhone:'', includeUnsubscribeLink:false,
   testPhone:'', // Separate manager-only real test recipient, never a campaign audience member.
-  shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' },
+  shopNames:{ main_warehouse:'AllInFashion Csíkszereda', magazin_targu_secuiesc:'AllInFashion Kézdivásárhely' },
   // No invented street addresses. The administrator enters each real store address.
   shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''},
   // Optional webshop link for both shops. Empty by default; the admin opts in explicitly.
@@ -70,7 +70,7 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
   for (const k of ['liveEnabled','sellersCanSend','requireApproval','includeUnsubscribeLink','includeWebsite']) if (k in input) {
     if (typeof input[k] !== 'boolean') throw fail('Érvénytelen kapcsoló: '+k); o[k]=input[k];
   }
-  for (const [k,min,max] of [['maxRecipients',1,5000],['maxSegments',1,4],['campaignSegmentLimit',1,20000],['dailySegmentLimit',1,50000],['frequencyHours',0,720],['sendFromHour',0,23],['sendUntilHour',1,24],['lowCredit',0,100000]]) if (k in input) {
+  for (const [k,min,max] of [['maxRecipients',1,5000],['maxSegments',1,8],['campaignSegmentLimit',1,20000],['dailySegmentLimit',1,50000],['frequencyHours',0,720],['sendFromHour',0,23],['sendUntilHour',1,24],['lowCredit',0,100000]]) if (k in input) {
     const n=Number(input[k]); if (!Number.isInteger(n)||n<min||n>max) throw fail('Érvénytelen határérték: '+k); o[k]=n;
   }
   if(o.sendFromHour>=o.sendUntilHour) throw fail('A küldési időszak kezdete legyen korábbi a végénél.');
@@ -122,7 +122,7 @@ export function messageSettingsSnapshot(settings,locationCode) {
     includeWebsite:settings.includeWebsite===true&&Boolean(txt(settings.websiteUrl)),
     // V4 separates the optional webshop URL and the mandatory opt-out contact
     // onto their own physical SMS lines. Never send V3 drafts with old formatting.
-    messageFormatVersion:5
+    messageFormatVersion:6
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -135,6 +135,23 @@ export function storeLabel(settings,locationCode,fallbackName='') {
   const name=txt(settings.shopNames?.[locationCode])||txt(fallbackName);
   const address=txt(settings.shopAddresses?.[locationCode]);
   return [name,address].filter(Boolean).join(', ');
+}
+// Show/use legacy saved Hungarian templates with the new punctuation and lines.
+// This does not overwrite an archived campaign or modify the saved DB template.
+export function upgradeLegacyTemplateBlocks(blocks,language='hu') {
+  if(!Array.isArray(blocks)||language!=='hu')return blocks;
+  return blocks.map(block=>{
+    if(block?.type!=='text'||typeof block.value!=='string')return block;
+    let value=block.value
+      .replace(/! Uj aruk erkeztek:/g,'!\nÚj áruk érkeztek:')
+      .replace(/Szemelyes kedvezmenyed:/g,'Személyes kedvezményed:')
+      .replace(/\. (?:Kod|Kód): ?/g,'.\nKód: ')
+      .replace(/^\. (?:Felhasznalhato|Felhasználható): ?/,'\nFelhasználható: ')
+      .replace(/\. (?:Ervenyes|Érvényes): ?/g,'.\nÉrvényes: ')
+      .replace(/\. (?:Varunk|Várunk): ?/g,'.\nVárunk: ')
+      .replace(/\bVarunk:/g,'Várunk:');
+    return value===block.value?block:{...block,value};
+  });
 }
 export function validateBlocks(blocks, kind) {
   if(!Array.isArray(blocks)||!blocks.length||blocks.length>40) throw fail('Az üzenethez 1–40 szöveg- vagy adatblokk szükséges.');
@@ -159,29 +176,63 @@ export function validateBlocks(blocks, kind) {
   if(!out.some(b=>b.type==='text'&&b.value.trim())) throw fail('Írj szöveget is az üzenethez.');
   return out;
 }
-// SMSLink HTTP documentation: 160 / 152 units; GSM extension characters cost two.
-// The SMS body is intentionally ASCII, except for the GSM line-feed character.
-// Preserve deliberate line breaks so the webshop and opt-out contact print on separate rows.
+// Preserve Hungarian and Romanian accents in the prepared and sent SMS.
+// SMSLink documents GSM-7; Unicode content is enabled for physical sending only
+// after the provider confirms that this account/connection supports UCS-2.
 export function smsText(raw) {
-  return String(raw??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘]/g,"'").replace(/[“”„]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').replace(/[^\S\n]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return String(raw??'').normalize('NFC')
+    .replace(/[’‘]/g,"'").replace(/[“”„]/g,'"').replace(/[–—]/g,'-')
+    .replace(/…/g,'...').replace(/\u00a0/g,' ')
+    .replace(/\r\n?/g,'\n').replace(/[^\S\n]+/g,' ')
+    .replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
+// GSM-7 basic + extension alphabet, SMSLink HTTP's conservative counting.
+// HTTP quotes/backticks and LF take two units per SMSLink's documentation.
+const GSM_BASIC=new Set([...`@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà`]);
+const GSM_EXT=new Set([...`^{}\\[~]|€\"\``]);
 export function segmentInfo(text) {
   const message=smsText(text);
-  if(!message||/[^\x20-\x7e\n]/.test(message)) throw fail('Az SMS nem támogatott karaktert tartalmaz (például emojit). A küldéshez latin betűs, ékezetmentes szöveg készül.');
-  const double=new Set('[\\]{}|^~"`');
-  const units=[...message].reduce((n,c)=>n+(double.has(c)?2:1),0);
-  return {message,units,segments:units<=160?1:Math.ceil(units/152)};
+  if(!message||/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(message)||[...message].some(c=>c.codePointAt(0)>0xFFFF))
+    throw fail('Az SMS üres, tiltott vezérlőkaraktert vagy nem támogatott jelet (például emojit) tartalmaz.');
+  let units=0,unicode=false;
+  for(const c of message) {
+    if(c==='\n'||GSM_EXT.has(c))units+=2;
+    else if(GSM_BASIC.has(c))units++;
+    else unicode=true;
+  }
+  if(unicode) {
+    units=message.length; // UTF-16 code units, BMP only: Hungarian/Romanian accents count one.
+    return {message,units,segments:units<=70?1:Math.ceil(units/67),encoding:'UCS-2'};
+  }
+  return {message,units,segments:units<=160?1:Math.ceil(units/152),encoding:'GSM-7'};
 }
-export function couponTerms(rules, language='hu') {
-  const date=rules.validFrom.split('-').reverse().join('.');
-  const minimum=rules.minimum>0 ? (language==='ro'?` Min. ${rules.minimum} RON.`:` Min. vasarlas: ${rules.minimum} RON.`) : '';
+export function defaultCouponCopy(language='hu',stackable=false) {
   return language==='ro'
-    ? `Personal, o singura utilizare, doar in magazinul indicat. De la ${date}.${minimum} ${rules.stackable?'Cumulabil cu alte reduceri.':'Nu se cumuleaza cu alte reduceri.'}`
-    : `Szemelyes, egyszeri, csak a megjelolt uzletben. Kezdete: ${date}.${minimum} ${rules.stackable?'Mas kedvezmennyel osszevonhato.':'Mas kedvezmennyel nem vonhato ossze.'}`;
+    ? {eligibility:'Personal, o singură utilizare, doar în magazinul indicat.',stacking:stackable?'Se poate cumula cu alte reduceri.':'Nu se cumulează cu alte reduceri.'}
+    : {eligibility:'Személyes, egyszer használható, csak a megjelölt üzletben.',stacking:stackable?'Más kedvezménnyel összevonható.':'Más kedvezménnyel nem vonható össze.'};
+}
+export function cleanCouponCopy(input,language='hu',stackable=false) {
+  const fallback=defaultCouponCopy(language,stackable);
+  if(input===undefined||input===null)return fallback;
+  if(!input||typeof input!=='object'||Array.isArray(input))throw fail('Érvénytelen kuponszöveg.');
+  const out={};
+  for(const key of ['eligibility','stacking']) {
+    if(typeof input[key]!=='string')throw fail('A kuponfeltételek szövege hiányzik.');
+    const value=txt(input[key]);
+    if(!value||value.length>180||/[{}\x00-\x1f\x7f]/.test(value))throw fail('A kuponfeltételek két szövege legyen kitöltve, egysoros és legfeljebb 180 karakteres.');
+    out[key]=value;
+  }
+  return out;
+}
+export function couponTerms(rules,language='hu',copy=null) {
+  const words=cleanCouponCopy(copy,language,rules.stackable);
+  const date=rules.validFrom.split('-').reverse().join('.');
+  const minimum=rules.minimum>0?(language==='ro'?`Cumpărături minime: ${rules.minimum} RON.`:`Minimum vásárlás: ${rules.minimum} RON.`):'';
+  return [words.eligibility,language==='ro'?`Începând cu: ${date}.`:`Kezdete: ${date}.`,minimum,words.stacking].filter(Boolean).join('\n');
 }
 export function compactSmsNames(values,language='hu',kind='brands') {
   const uniqueNames=unique(values);
-  const suffix=kind==='categories'?(language==='ro'?'si alte produse':'es tovabbi termekek'):(language==='ro'?'si alte marci':'es tovabbi markak');
+  const suffix=kind==='categories'?(language==='ro'?'și alte produse':'és további termékek'):(language==='ro'?'și alte mărci':'és további márkák');
   return uniqueNames.length>2?`${uniqueNames.slice(0,2).join(', ')} ${suffix}`:uniqueNames.join(', ');
 }
 export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false) {
@@ -203,10 +254,10 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   const webshop=includeWebsite&&txt(websiteUrl)?normalizeWebsite(websiteUrl):'';
   // Each footer item gets its own physical SMS line, not another space-separated sentence.
   // The required opt-out contact is always the last line, even without a webshop URL.
-  const mainText=`${raw}${terms?` ${terms}`:''}`.trim();
+  const mainText=[raw.trim(),terms].filter(Boolean).join('\n');
   const lines=[mainText];
-  if(webshop)lines.push(`Online: ${webshop}`);
-  lines.push(`${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);
+  if(webshop)lines.push('',`Online: ${webshop}`);
+  lines.push(`${language==='ro'?'Dezabonare':'Leiratkozás'}: ${optOut}`);
   return segmentInfo(lines.join('\n'));
 }
 export function profileMatchesProduct(pref, product) {

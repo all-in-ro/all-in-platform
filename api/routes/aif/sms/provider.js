@@ -1,9 +1,9 @@
-import { fail, txt } from './domain.js';
+import { fail, txt, segmentInfo } from './domain.js';
 // Official SMSLink HTTPS POST API. Credentials never enter URLs or browser responses.
 const ENDPOINT='https://secure.smslink.ro/sms/gateway/communicate/index.php';
 export function providerConfig() {
   return {id:txt(process.env.AIF_SMSLINK_CONNECTION_ID),password:txt(process.env.AIF_SMSLINK_PASSWORD),
-    enabled:process.env.AIF_SMS_ALLOW_LIVE==='true',secret:txt(process.env.AIF_SMS_WEBHOOK_SECRET),base:txt(process.env.AIF_SMS_PUBLIC_BASE_URL).replace(/\/$/,'')};
+    enabled:process.env.AIF_SMS_ALLOW_LIVE==='true',unicodeEnabled:process.env.AIF_SMSLINK_ALLOW_UNICODE==='true',secret:txt(process.env.AIF_SMS_WEBHOOK_SECRET),base:txt(process.env.AIF_SMS_PUBLIC_BASE_URL).replace(/\/$/,'')};
 }
 export function publicBase() {
   const base=providerConfig().base;
@@ -46,6 +46,7 @@ export function createProvider(fetchFn=globalThis.fetch) {
     invalidateCredit(){cached=null;},
     async send({phone,message,sender,test}) {
       if(!test&&!providerConfig().enabled) throw Object.assign(fail('Az éles küldés szerveroldalon tiltva van.','sms_live_disabled',403),{definitive:true});
+      if(segmentInfo(message).encoding==='UCS-2'&&!providerConfig().unicodeEnabled)throw Object.assign(fail('Az ékezetes (Unicode) SMS küldését az SMSLinknél előbb igazolni kell. Nem alakítjuk át és nem küldjük ki ékezet nélkül.','sms_unicode_not_confirmed',409),{definitive:true});
       const result=await post({to:phone,message,sender:sender||'numeric',test:test?'1':'0'});
       cached=null; return result;
     }

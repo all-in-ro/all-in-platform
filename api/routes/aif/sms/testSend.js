@@ -38,6 +38,7 @@ export function createSmsTestSender(pool, provider) {
         if(!messageSettingsMatch(row.definition,settings,row.location_code))
           throw fail('Az SMS beállításai megváltoztak. Készíts új előnézetet a tesztküldés előtt.','sms_test_stale',409);
         parts=segmentInfo(row.message);
+        if(parts.encoding==='UCS-2'&&!conf.unicodeEnabled)throw fail('Ékezetes SMS. Az SMSLink Unicode-támogatása még nincs igazolva; nem indítunk fizetős tesztküldést.','sms_unicode_not_confirmed',409);
         if(parts.segments>settings.maxSegments||parts.segments!==Number(row.segments))
           throw fail('A kész SMS hossza időközben nem egyezik a beállításokkal.','sms_test_message_changed',409);
         const counts=(await db.query(`SELECT

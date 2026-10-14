@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
-import { txt, fail, cleanSettings, validateBlocks, unique, TOKENS } from './domain.js';
+import { txt, fail, cleanSettings, validateBlocks, unique, TOKENS, cleanCouponCopy, upgradeLegacyTemplateBlocks } from './domain.js';
 import { ensureSmsSchema, settingsFrom, audit } from './schema.js';
 import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourceProducts } from './data.js';
 import { providerConfig, publicBase, createProvider } from './provider.js';
@@ -123,11 +123,48 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   }));
   router.get('/sources',safe(async(req,res)=>{const l=await location(req);res.json({items:await sourcesFor(pool,l.id)});}));
   router.post('/source-products',safe(async(req,res)=>{const l=await location(req);res.json(await sourceProducts(pool,l.id,req.body.sources));}));
-  router.get('/templates',safe(async(_req,res)=>res.json({items:(await pool.query('SELECT * FROM aif_sms_templates ORDER BY name')).rows})));
+  router.get('/templates',safe(async(_req,res)=>{const rows=(await pool.query('SELECT * FROM aif_sms_templates ORDER BY name')).rows;res.json({items:rows.map(t=>({...t,blocks:upgradeLegacyTemplateBlocks(t.blocks,t.language)}))});}));
   router.post('/templates',adminOnly,safe(async(req,res)=>{
-    const b=req.body,name=txt(b.name).slice(0,100);if(name.length<3)throw fail('Adj sablonnevet.');if(!['arrival','promotion'].includes(b.kind))throw fail('Érvénytelen sablontípus.');
-    const blocks=validateBlocks(b.blocks,b.kind),id=randomUUID();await pool.query(`INSERT INTO aif_sms_templates(id,name,kind,language,blocks,updated_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,[id,name,b.kind,b.language==='ro'?'ro':'hu',JSON.stringify(blocks),actorFrom(req)]);
-    await audit(pool,{actor:actorFrom(req),event:'template_created',payload:{id,name,kind:b.kind}});res.json({ok:true,id});
+    const b=req.body||{},name=txt(b.name);if(name.length<3||name.length>100)throw fail('A sablonnév 3–100 karakterből álljon.');if(!['arrival','promotion'].includes(b.kind))throw fail('Érvénytelen sablontípus.');
+    const blocks=validateBlocks(b.blocks,b.kind),id=randomUUID(),language=b.language==='ro'?'ro':'hu';
+    const copy=b.kind==='promotion'?cleanCouponCopy(b.couponCopy,language,Boolean(b.stackable)):null;
+    const db=await pool.connect();
+    try{
+      await db.query('BEGIN');
+      await db.query(`INSERT INTO aif_sms_templates(id,name,kind,language,blocks,coupon_copy,coupon_stackable,updated_by) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8)`,[id,name,b.kind,language,JSON.stringify(blocks),copy?JSON.stringify(copy):null,b.kind==='promotion'?Boolean(b.stackable):null,actorFrom(req)]);
+      await audit(db,{actor:actorFrom(req),event:'template_created',payload:{id,name,kind:b.kind}});
+      await db.query('COMMIT');res.json({ok:true,id});
+    }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
+  }));
+  // Saved templates are independent snapshots. Renaming/removing one does not
+  // rewrite an already prepared campaign or an SMS previously sent.
+  router.patch('/templates/:id',adminOnly,safe(async(req,res)=>{
+    const id=txt(req.params.id),name=txt(req.body?.name);
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))throw fail('Érvénytelen sablonazonosító.');
+    if(name.length<3||name.length>100)throw fail('A sablonnév 3–100 karakterből álljon.');
+    const db=await pool.connect();
+    try{
+      await db.query('BEGIN');
+      const previous=(await db.query('SELECT name FROM aif_sms_templates WHERE id=$1 FOR UPDATE',[id])).rows[0];
+      if(!previous)throw fail('A sablon már nem található.','sms_template_missing',404);
+      await db.query('UPDATE aif_sms_templates SET name=$2,updated_by=$3,updated_at=now() WHERE id=$1',[id,name,actorFrom(req)]);
+      await audit(db,{actor:actorFrom(req),event:'template_renamed',payload:{id,previousName:previous.name,name}});
+      await db.query('COMMIT');res.json({ok:true,id,name});
+    }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
+  }));
+  router.delete('/templates/:id',adminOnly,safe(async(req,res)=>{
+    const id=txt(req.params.id);
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))throw fail('Érvénytelen sablonazonosító.');
+    // Require explicit UI confirmation; the server also requires a confirmation body.
+    if(req.body?.confirm!==true)throw fail('A sablon törlését külön meg kell erősíteni.');
+    const db=await pool.connect();
+    try{
+      await db.query('BEGIN');
+      const deleted=(await db.query('DELETE FROM aif_sms_templates WHERE id=$1 RETURNING name,kind,language',[id])).rows[0];
+      if(!deleted)throw fail('A sablon már nem található.','sms_template_missing',404);
+      await audit(db,{actor:actorFrom(req),event:'template_deleted',payload:{id,...deleted}});
+      await db.query('COMMIT');res.json({ok:true,id});
+    }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
   }));
   router.get('/campaigns',safe(async(req,res)=>{
     const loc=await scope(req);res.json({items:(await pool.query(`SELECT c.*, (SELECT count(*)::int FROM aif_sms_recipients r WHERE r.campaign_id=c.id AND r.status='delivered') AS delivered,
