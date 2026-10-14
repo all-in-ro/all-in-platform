@@ -24,8 +24,9 @@ export type SmsPreference = {
 };
 export type SmsProfileStatus = { error?: boolean; id: string; enabled: boolean; arrivals: boolean; promotions: boolean; brands: string[]; genders: string[]; suppressed: boolean };
 export type SmsSource = { id: string; type: string; title: string; date: string; qty: number; variants: number };
+export type SmsCouponCopy = {eligibility:string;stacking:string};
 export type SmsRules = { type:'percent'|'fixed'; value:number; minimum:number; validFrom:string; validUntil:string; stackable:boolean };
-export type SmsDraft = { title:string; kind:'arrival'|'promotion'; location:string; language:'hu'|'ro'; sources:string[]; filters:{brands:string[];genders:string[];categories:string[]}; blocks:SmsBlock[]; coupon:SmsRules };
+export type SmsDraft = { title:string; kind:'arrival'|'promotion'; location:string; language:'hu'|'ro'; sources:string[]; filters:{brands:string[];genders:string[];categories:string[]}; blocks:SmsBlock[]; couponCopy?:SmsCouponCopy; coupon:SmsRules };
 export type SmsCampaign = {
   id:string; title:string; kind:'arrival'|'promotion'; location_code:string; mode:'test'|'live'; status:string;
   recipient_count:number; segment_count:number; created_by:string; created_at:string; approved_by?:string; approved_at?:string;
