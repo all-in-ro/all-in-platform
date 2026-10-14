@@ -22,6 +22,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
+import AllInLegacyExport from "./AllInLegacyExport";
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
@@ -44,6 +45,12 @@ type CarRow = {
   parking_start?: string;
   parking_months?: number;
 };
+
+const FORIT_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon.jpeg";
+
+function ForitExcelIcon({ className }: { className?: string }) {
+  return <img src={FORIT_EXCEL_ICON} alt="" className={`${className || ""} rounded-sm object-contain`} loading="lazy" />;
+}
 
 type MenuItem = {
   key?: string;
@@ -76,6 +83,7 @@ const incomingItems: MenuItem[] = [
   { key: "suppliers", label: "Beszállítók", hash: "#allinsuppliers", icon: Building2 },
   { key: "orders", label: "Rendelések", hash: "#allinorderhistory", icon: History },
   { key: "legacy_import", label: "Régi rendszer import", hash: "#allinincoming", icon: History },
+  { key: "legacy_export", label: "Régi rendszer export", icon: ForitExcelIcon },
 ];
 
 function justDate(value?: string | null): string | undefined {
@@ -320,6 +328,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   const [carsSoonDays, setCarsSoonDays] = useState<number | null>(null);
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
+  const [foritExportOpen, setForitExportOpen] = useState(false);
   const [reservationAlert, setReservationAlert] = useState({ overdue: 0, today: 0, tomorrow: 0 });
 
   useEffect(() => {
@@ -469,6 +478,10 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   };
 
   const handleIncomingItem = (item: MenuItem) => {
+    if (item.key === "legacy_export") {
+      setForitExportOpen(true);
+      return;
+    }
     try {
       if (item.key === "legacy_import") window.sessionStorage.setItem(AIF_LEGACY_IMPORT_MODE_KEY, "1");
       else window.sessionStorage.removeItem(AIF_LEGACY_IMPORT_MODE_KEY);
@@ -570,6 +583,8 @@ export default function AllInHome(props: { onLogout?: () => void }) {
           </button>
         </footer>
       </div>
+
+      {foritExportOpen ? <AllInLegacyExport onClose={() => setForitExportOpen(false)} /> : null}
 
       <AllInAdminShopWorkflows
         open={shopAdminModule !== null}
