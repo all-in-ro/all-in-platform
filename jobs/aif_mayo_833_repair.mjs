@@ -13,7 +13,8 @@ import pg from 'pg';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(here, 'data/mayo_833_original.json'), 'utf8'));
 const BATCH = manifest.batchId;
-const KEY = `mayo_833_20261014_v1:${BATCH}`;
+const KEY = `mayo_833_20261014_v2:${BATCH}`;
+const PREVIOUS_BATCH = 'bebf7410-053a-4cf9-856e-bae5003a30cd';
 const APPLY = process.argv.includes('--apply');
 const silent = process.argv.includes('--json');
 const TYPE_MAP = {
@@ -32,6 +33,9 @@ const int = value => Number(value || 0);
 const assert = (ok, message) => { if (!ok) throw Error(message); };
 const qident = value => '"' + String(value).replace(/"/g, '""') + '"';
 const isUuid = value => /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value ?? ''));
+const normalizedSize = value => ['one size','one-size','onesize','os','osfm','uni'].includes(norm(value)) ? 'one_size' : norm(value);
+const sameSize = (a,b) => normalizedSize(a) !== '' && normalizedSize(a) === normalizedSize(b);
+
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
 let client;
@@ -158,80 +162,158 @@ async function load() {
     }
   }
   const external=await fieldRefs(variants);
+  // A nullás ForIT migráció csak termékazonosító, nem 0 feletti készlet.
+  // Csak a pontosan bizonyított nulla sor engedhető át, minden más referencia blokkol.
+  const legacyRefs=await tableExists('aif_legacy_migration_rows')
+    ? await rows(`SELECT * FROM aif_legacy_migration_rows WHERE variant_id=ANY($1::uuid[])`,[variants]) : [];
+  const benignLegacy=legacyRefs.every(x =>
+    int(x.target_qty)===0 && int(x.stock_before)===0 && int(x.stock_after)===0 &&
+    String(x.variant_id)==='4d2962fc-b1e1-41d3-b1d8-6f6dd9b7c062' && x.process_status==='done');
+  const realExternal=external.filter(x=>x.table!=='aif_legacy_migration_rows');
   const unexpectedMovements=movements.filter(m=>
     m.source_type!=='import_batch' || String(m.source_id)!==BATCH ||
     !byId.has(String(m.raw?.rowId || m.raw?.row_id || ''))
   );
-  // A javító script csak az érintett variánsok mozgásait tölti be.
-  // A többi 57-es számlasor nem hiányzó mozgás, ezért nem itt vizsgáljuk.
   const badMovementRows=importRows.filter(r=>repairIds.has(String(r.variant_id))).filter(r=>{
     const mv=rowMovements.get(String(r.id)) || [];
     return mv.length!==1 || String(mv[0].variant_id)!==String(r.variant_id) ||
       int(mv[0].qty_delta)!==int(r.qty) || String(mv[0].location_id)!==String(batch.target_location_id);
   });
   const problems=[];
-  if(external.length) problems.push(`Más modul is hivatkozik ezekre a variánsokra: ${JSON.stringify(external)}`);
-  if(unexpectedMovements.length) problems.push(`${unexpectedMovements.length} nem vizsgált készletmozgás van.`);
+  if(realExternal.length) problems.push(`Más modul is hivatkozik ezekre a variánsokra: ${JSON.stringify(realExternal)}`);
+  if(!benignLegacy) problems.push('A ForIT migráció nem kizárólag nulla mennyiségű MONTEVERDI történeti sor.');
+  if(unexpectedMovements.length) problems.push(`${unexpectedMovements.length} nem vizsgált készletmozgás van a 833-as érintett variánsokon.`);
   if(badMovementRows.length) problems.push(`${badMovementRows.length} import sorhoz nem egyértelmű készletmozgás tartozik.`);
-  if(stocks.some(s=>int(s.reserved_qty)!==0)) problems.push('Van lefoglalt készlet.');
+  if(stocks.some(s=>int(s.reserved_qty)!==0)) problems.push('Van lefoglalt készlet a 833-as eredeti variánsokon.');
   for(const vid of variants){
     const s=stocks.filter(x=>String(x.variant_id)===vid);
     const m=movements.filter(x=>String(x.variant_id)===vid);
     const sum=int(m.reduce((acc,row)=>acc+int(row.qty_delta),0));
-    const q=int(s.reduce((acc,row)=>acc+int(row.qty),0));
-    if(sum!==q) problems.push(`Készlet és mozgások nem egyeznek: ${vid} ${q} ≠ ${sum}`);
+    const qty=int(s.reduce((acc,row)=>acc+int(row.qty),0));
+    if(sum!==qty) problems.push(`833 készlet és tényleges mozgás nem egyezik: ${vid} ${qty} ≠ ${sum}`);
     if(s.some(x=>String(x.location_id)!==String(batch.target_location_id)))
-      problems.push(`Más helyen is van készlet: ${vid}`);
+      problems.push(`A 833-as forrás más helyen is készlettel rendelkezik: ${vid}`);
     if((supplierCodeByVariant.get(vid)||[]).length!==1)
-      problems.push(`Nem egyértelmű a beszállítói kapcsolat: ${vid}`);
+      problems.push(`Nem egyértelmű 833-as beszállítói kapcsolat: ${vid}`);
     const b=books.filter(x=>String(x.variant_id)===vid);
-    if(b.length>1) problems.push(`Több retail book sor: ${vid}`);
-    if(b.length && (int(b[0].qty)!==q || String(b[0].location_id)!==String(batch.target_location_id)))
-      problems.push(`Retail book mennyiség/hely eltérés: ${vid}`);
+    if(b.length!==1 || int(b[0].qty)!==qty || String(b[0].location_id)!==String(batch.target_location_id))
+      problems.push(`833 retail book mennyiség/hely eltérés: ${vid}`);
     if(b.length && byVariant.has(vid)){
-      const expectedBookValue=money(byVariant.get(vid).reduce((acc,r)=>acc+int(r.qty)*money(r.sell_price_ron),0));
+      // Az Excelből számolunk, nem az egyszer már hibásan feldolgozott sorárból.
+      // Például a MONTEVERDI 60A: 279 RON a helyes könyvérték, nem 339.
+      const expectedBookValue=money(byVariant.get(vid).reduce((acc,r)=>
+        acc+int(r.qty)*money(lookup.get(int(r.row_no)).sellPrice),0));
       if(Math.abs(money(b[0].book_value)-expectedBookValue)>0.02)
-        problems.push(`Retail könyvérték eltérés: ${vid} (könyv ${b[0].book_value}, import ${expectedBookValue})`);
+        problems.push(`Retail könyvérték a forrás Excelhez képest eltér: ${vid} (könyv ${b[0].book_value}, Excel ${expectedBookValue})`);
     }
   }
+
+  // Kizárólag a korábbi 832-es számla biztos, színhelyes variánsai lehetnek
+  // célpontok: az ottani árakat, eladásokat és bevételezési sorokat megőrizzük.
+  const previousSourceRows=await rows(`SELECT id,variant_id,qty FROM aif_import_rows WHERE batch_id=$1`,[PREVIOUS_BATCH]);
+  assert(previousSourceRows.length===118,'A 832-es referencia 118 soros állománya időközben változott.');
+  const previousRows=await rows(`SELECT rw.id AS source_row_id, rw.variant_id,
+      rw.supplier_product_code, rw.supplier_size, rw.qty,
+      rw.normalized->>'colorName' AS incoming_color,
+      rw.normalized->>'titleRo' AS incoming_title,
+      v.id, v.model_id, v.color_code, v.color_name, v.size, v.barcode,
+      v.buy_price, v.sell_price, v.status,
+      m.title_ro, m.brand_id,m.model_code,
+      sc.id AS supplier_code_id, sc.supplier_id, sc.supplier_product_code AS link_code,
+      sc.supplier_color_code AS link_color_code,sc.supplier_color_name AS link_color_name,
+      sc.supplier_size AS link_size
+    FROM aif_import_rows rw
+    JOIN aif_import_batches b ON b.id=rw.batch_id
+    JOIN aif_product_variants v ON v.id=rw.variant_id
+    JOIN aif_product_models m ON m.id=v.model_id
+    JOIN aif_variant_supplier_codes sc ON sc.variant_id=v.id AND sc.supplier_id=b.supplier_id
+    WHERE b.id=$1 AND rw.status='committed' AND b.status='committed'`,[PREVIOUS_BATCH]);
+  const sourceVariantSet=new Set(importRows.map(r=>String(r.variant_id)));
+  const oldVariantDetails=new Map(variantDetails.map(x=>[String(x.id),x]));
+  const oldModelDetails=new Map(models.map(x=>[String(x.id),x]));
+  const reuseIds=new Set();
   const plans=[];
   for(const [vid,rr] of byVariant){
     const colors=[...new Set(rr.map(r=>norm(lookup.get(int(r.row_no)).color)))];
     if(colors.length<2) continue;
-    const existing=variantDetails.find(v=>String(v.id)===vid);
+    const existing=oldVariantDetails.get(vid);
     assert(existing,`Hiányzó érintett variáns: ${vid}`);
     const keeperColor=norm(existing.color_name);
-    if(!colors.includes(keeperColor)) problems.push(`Egyik eredeti szín sem egyezik a megtartott variánssal: ${vid}`);
-    const groups=colors.map(c=>({
-      color:rr.find(r=>norm(lookup.get(int(r.row_no)).color)===c)
-        ? lookup.get(int(rr.find(r=>norm(lookup.get(int(r.row_no)).color)===c).row_no)).color : c,
-      key:colKey(c),
-      qty:rr.filter(r=>norm(lookup.get(int(r.row_no)).color)===c).reduce((s,r)=>s+int(r.qty),0),
-      rowNumbers:rr.filter(r=>norm(lookup.get(int(r.row_no)).color)===c).map(r=>int(r.row_no)),
-      keep:c===keeperColor,
-    }));
-    const existingAll=await rows(`SELECT id,color_name,size,color_code FROM aif_product_variants
+    if(!colors.includes(keeperColor)) problems.push(`Egyik eredeti szín sem egyezik az eredeti variánssal: ${vid}`);
+    const oldModel=oldModelDetails.get(String(existing.model_id));
+    const sourceLink=(supplierCodeByVariant.get(vid)||[])[0];
+    const liveSiblings=await rows(`SELECT id,color_name,size,color_code FROM aif_product_variants
       WHERE model_id=$1 AND id<>$2 AND COALESCE(status,'active')<>'archived'`,[existing.model_id,vid]);
-    for(const g of groups) {
-      const collision=existingAll.find(x=>norm(x.size)===norm(existing.size) &&
-        (norm(x.color_name)===norm(g.color) || norm(x.color_code)===norm(g.key)));
-      if(collision) problems.push(`Már létezik az elérni kívánt szín-/méretvariáns: ${vid} -> ${g.color} / ${existing.size} (${collision.id})`);
-    }
-    // Supplier key must be unique, including all variants from earlier invoices.
+    const groups=colors.map(c=>{
+      const colorRows=rr.filter(r=>norm(lookup.get(int(r.row_no)).color)===c);
+      const ref=lookup.get(int(colorRows[0].row_no));
+      return {color:ref.color,key:colKey(c),qty:colorRows.reduce((s,r)=>s+int(r.qty),0),
+        rowNumbers:colorRows.map(r=>int(r.row_no)),keep:c===keeperColor,
+        sourceCode:ref.code,sourceSize:ref.size,sourceTitle:ref.title,
+        buyPrice:ref.buyPrice,sellPrice:ref.sellPrice,
+        targetType:c===keeperColor?'keep':'create',targetVariantId:c===keeperColor?vid:null};
+    });
     for(const g of groups){
-      const originalSupplier=(supplierCodeByVariant.get(vid)||[])[0];
-      if(!originalSupplier)continue;
-      const dup=await rows(`SELECT id,variant_id FROM aif_variant_supplier_codes
-        WHERE supplier_id=$1
-          AND lower(btrim(COALESCE(supplier_product_code,'')))=lower(btrim($2))
+      const previous=previousRows.filter(x=>
+        !sourceVariantSet.has(String(x.id)) &&
+        norm(x.supplier_product_code)===norm(g.sourceCode) &&
+        sameSize(x.supplier_size,g.sourceSize) && sameSize(x.size,g.sourceSize) &&
+        norm(x.color_name)===norm(g.color) && norm(x.incoming_color)===norm(g.color) &&
+        norm(x.title_ro)===norm(g.sourceTitle) && norm(x.incoming_title)===norm(g.sourceTitle) &&
+        String(x.brand_id)===String(oldModel?.brand_id) &&
+        norm(x.link_code)===norm(g.sourceCode) && sameSize(x.link_size,g.sourceSize) &&
+        (norm(x.link_color_name)===norm(g.color) || norm(x.link_color_code)===norm(g.key)) &&
+        String(x.supplier_id)===String(batch.supplier_id) &&
+        x.status!=='archived');
+      const unique=[...new Map(previous.map(x=>[String(x.id),x])).values()];
+      if(unique.length>1) problems.push(`Több 832-es célvariáns: ${g.sourceCode} / ${g.color} / ${g.sourceSize}`);
+      if(unique.length===1){
+        const candidate=unique[0];
+        if(money(candidate.sell_price)!==money(g.sellPrice) || money(candidate.buy_price)!==money(g.buyPrice))
+          problems.push(`832-es variánsár eltér az Exceltől: ${g.sourceCode} / ${g.color} / ${g.sourceSize} (${candidate.buy_price}/${candidate.sell_price})`);
+        g.targetType='reuse';g.targetVariantId=String(candidate.id);
+        reuseIds.add(String(candidate.id));
+      }
+      const sameModelConflict=liveSiblings.filter(x=>sameSize(x.size,existing.size) &&
+        (norm(x.color_name)===norm(g.color) || norm(x.color_code)===norm(g.key)));
+      if(sameModelConflict.length) problems.push(`A 833-as modellen belül már létezik külön szín-/méretvariáns: ${vid} / ${g.color} -> ${sameModelConflict[0].id}`);
+      // Új vagy megtartott variánsnál új beszállítói kulcs szükséges; régi 832-es
+      // felhasználásánál NEM hozunk létre új kapcsolatsort.
+      if(g.targetType!=='reuse' && sourceLink){
+        const duplicates=await rows(`SELECT id,variant_id FROM aif_variant_supplier_codes
+          WHERE supplier_id=$1 AND lower(btrim(COALESCE(supplier_product_code,'')))=lower(btrim($2))
           AND lower(btrim(COALESCE(supplier_size,'')))=lower(btrim($3))
           AND lower(btrim(COALESCE(supplier_color_code,'')))=lower(btrim($4))
-          AND id<>$5`,[originalSupplier.supplier_id,originalSupplier.supplier_product_code,
-          originalSupplier.supplier_size,g.key,originalSupplier.id]);
-      if(dup.length)problems.push(`Már létezik szín szerinti beszállítói kulcs: ${vid} / ${g.color} -> ${dup[0].variant_id}`);
+          AND id<>$5`,[sourceLink.supplier_id,sourceLink.supplier_product_code,sourceLink.supplier_size,g.key,sourceLink.id]);
+        if(duplicates.length)problems.push(`Nem 832-es, ellenőrizendő beszállítói kulcs: ${vid} / ${g.color} -> ${duplicates[0].variant_id}`);
+      }
     }
-    plans.push({ oldVariant:vid, modelCode:rr[0].live_model_code, name:rr[0].live_title,
-      size:existing.size, totalQty:rr.reduce((s,r)=>s+int(r.qty),0), groups });
+    plans.push({oldVariant:vid,modelCode:rr[0].live_model_code,name:rr[0].live_title,
+      size:existing.size,totalQty:rr.reduce((s,r)=>s+int(r.qty),0),groups});
+  }
+  // A 832-es variáns lehet már eladással érintett. A 833-as készletet HOZZÁADJUK,
+  // a régi készletet és mozgást soha nem írjuk újra.
+  const reuseIdsArray=[...reuseIds];
+  const candidateStocks=reuseIdsArray.length?await rows(`SELECT * FROM aif_stock WHERE variant_id=ANY($1::uuid[])`,[reuseIdsArray]):[];
+  const candidateBooks=reuseIdsArray.length && await tableExists('aif_stock_retail_book')
+    ? await rows(`SELECT * FROM aif_stock_retail_book WHERE variant_id=ANY($1::uuid[])`,[reuseIdsArray]):[];
+  const candidateVariants=reuseIdsArray.length?await rows(`SELECT * FROM aif_product_variants WHERE id=ANY($1::uuid[])`,[reuseIdsArray]):[];
+  const candidateMovements=reuseIdsArray.length?await rows(`SELECT * FROM aif_stock_movements WHERE variant_id=ANY($1::uuid[]) ORDER BY created_at,id`,[reuseIdsArray]):[];
+  for(const vid of reuseIdsArray){
+    const s=candidateStocks.filter(x=>String(x.variant_id)===vid);
+    const b=candidateBooks.filter(x=>String(x.variant_id)===vid);
+    const quantity=s.reduce((n,x)=>n+int(x.qty),0);
+    if(!s.length||s.some(x=>int(x.reserved_qty)!==0))problems.push(`832-es célváltozat készlete hiányzik vagy foglalt: ${vid}`);
+    if(b.length!==s.length || b.some(x=>{
+       const match=s.find(st=>String(st.location_id)===String(x.location_id));
+       return !match || Math.abs(int(x.qty)-int(match.qty))>0.001;
+    }))problems.push(`832-es célváltozat retail könyv nem egyezik a készlettel: ${vid}`);
+    const realMovements=candidateMovements.filter(x=>String(x.variant_id)===vid && x.source_type!=='stock_table_audit');
+    if(realMovements.some(x=>!['import_batch','shop_sale'].includes(x.source_type)))
+      problems.push(`832-es célváltozat ismeretlen készletmozgással: ${vid}`);
+    const physicalByMovement=realMovements.reduce((n,x)=>n+int(x.qty_delta),0);
+    if(Math.abs(physicalByMovement-quantity)>0.001)
+      problems.push(`832-es célváltozat valós készletmozgásai nem adják ki a fizikai készletet: ${vid}: ${physicalByMovement}/${quantity}`);
   }
   const priceCorrections=importRows.filter(r=>money(r.sell_price_ron)!==money(lookup.get(int(r.row_no)).sellPrice))
     .map(r=>({rowNo:int(r.row_no),variantId:String(r.variant_id),previous:money(r.sell_price_ron),excel:lookup.get(int(r.row_no)).sellPrice, qty:int(r.qty)}));
@@ -275,17 +357,20 @@ async function load() {
   return { batch, importRows, byId, byVariant, variants, models, categories, categoryByCode,
     movements,rowMovements,stocks,books,supp,variantDetails,plans,priceCorrections,modelTitleCollisions,
     problems, totals:{rows:importRows.length,qty:importRows.reduce((s,r)=>s+int(r.qty),0)},
-    external, expected:manifest.rows };
+    external, expected:manifest.rows, legacyRefs, reuseIds:reuseIdsArray,
+    candidateStocks,candidateBooks,candidateVariants,candidateMovements,previousSourceRows };
 }
 
 function report(d){
-  const moved=d.plans.reduce((s,p)=>s+p.groups.filter(g=>!g.keep).reduce((n,g)=>n+g.qty,0),0);
   console.log('\n=== MAYO CHIX 833 | '+(APPLY?'JAVÍTÁS ELŐTTI ELLENŐRZÉS':'CSAK OLVASÓ ELŐNÉZET')+' ===');
   console.log('Számla:',d.batch.invoice_number,'| sor:',d.totals.rows,'| darab:',d.totals.qty);
-  console.log('Szétválasztandó variánscsoport:',d.plans.length,'| új változatok:',d.plans.reduce((n,p)=>n+p.groups.filter(g=>!g.keep).length,0),'| átkönyvelendő db:',moved);
+  console.log('Szétválasztandó variánscsoport:',d.plans.length,
+    '| valóban ÚJ variánsok:',d.plans.reduce((n,p)=>n+p.groups.filter(g=>g.targetType==='create').length,0),
+    '| 832-es meglévőhöz csatlakozik:',d.plans.reduce((n,p)=>n+p.groups.filter(g=>g.targetType==='reuse').length,0),
+    '| átvezetett db:',d.plans.reduce((n,p)=>n+p.groups.filter(g=>g.targetType!=='keep').reduce((acc,g)=>acc+g.qty,0),0));
   for(const p of d.plans){
     console.log('\n'+p.name+' '+p.size+' (eredeti variáns '+p.oldVariant+')');
-    console.table(p.groups.map(g=>({szin:g.color,kod:g.key,db:g.qty,import_sor:g.rowNumbers.join(','),muvelet:g.keep?'meglévő megtartása':'új variáns'})));
+    console.table(p.groups.map(g=>({szin:g.color,kod:g.key,db:g.qty,import_sor:g.rowNumbers.join(','),muvelet:g.targetType==='reuse'?'832-eshez hozzáad':g.targetType==='keep'?'833-as megtartása':'új variáns',cel:g.targetVariantId || '-'})));
   }
   console.log('\nKülön modellt igénylő ütközések:',d.modelTitleCollisions.length);
   for(const p of d.modelTitleCollisions)console.log(p.modelCode,'-> MONTEVERDI NAGY CSILI / DOMBOR HIMZES');
@@ -308,216 +393,326 @@ async function uniqueBarcode(){
 
 async function apply(d){
   assert(!d.problems.length,'Az előellenőrzésben eltérés van. Semmi nem módosítható.');
-  // Create persistent, full original snapshot INSIDE the same transaction; rollback removes it too.
+  // A teljes célzott pillanatkép és minden átvezetés ugyanabban a tranzakcióban történik.
   await client.query(`CREATE TABLE IF NOT EXISTS aif_data_repair_backups (
-    repair_key text PRIMARY KEY,
-    batch_id uuid NOT NULL,
-    snapshot jsonb NOT NULL,
-    repair_note text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
+    repair_key text PRIMARY KEY, batch_id uuid NOT NULL, snapshot jsonb NOT NULL,
+    repair_note text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
   )`);
-  assert(!(await one(`SELECT 1 FROM aif_data_repair_backups WHERE repair_key=$1`,[KEY])),'Korábban már megtörtént a javítás.');
+  assert(!(await one(`SELECT 1 FROM aif_data_repair_backups WHERE repair_key=$1`,[KEY])),
+    'Ez a helyreállítás már korábban megtörtént.');
   const snapshot={
-    batch:d.batch,
-    importRows:d.importRows.map(r=>({...r})),
-    models:d.models,
-    variants:d.variantDetails,
-    supplierCodes:d.supp,
-    stock:d.stocks,
-    movements:d.movements,
-    retailBook:d.books,
-    originalExcel:d.expected,
-    anticipatedPlan:d.plans,
-    priceCorrections:d.priceCorrections,
-    capturedAt:new Date().toISOString(),
+    batch:d.batch, importRows:d.importRows, models:d.models,
+    originalVariants:d.variantDetails,originalSupplierCodes:d.supp,
+    originalStock:d.stocks,originalMovements:d.movements,originalRetailBook:d.books,
+    reusedEarlierVariants:d.candidateVariants,
+    reusedEarlierStock:d.candidateStocks,
+    reusedEarlierRetailBook:d.candidateBooks,
+    reusedEarlierMovements:d.candidateMovements,
+    previous832SourceRows:d.previousSourceRows,
+    zeroQuantityLegacyReferences:d.legacyRefs,
+    originalExcel:d.expected,plans:d.plans,priceCorrections:d.priceCorrections,
+    capturedAt:new Date().toISOString()
   };
   await client.query(`INSERT INTO aif_data_repair_backups(repair_key,batch_id,snapshot,repair_note)
-    VALUES ($1,$2,$3::jsonb,$4)`,[KEY,BATCH,JSON.stringify(snapshot),'MAYO CHIX 833: összevont színek, kategóriák, MONTEVERDI név, 60A eladási ár']);
+    VALUES($1,$2,$3::jsonb,$4)`,[KEY,BATCH,JSON.stringify(snapshot),
+    'MAYO CHIX 833: 832-es színhelyes variánsok újrahasznosítása, 833 szín/cikkszám/kategória és MONTEVERDI ár/modell javítás']);
 
-  const targetIdByRow = new Map(d.importRows.map(r=>[int(r.row_no),String(r.variant_id)]));
-  const updatedVariants=new Set();
+  // Minden 833-as forrássor célvariánsát egyszer, még a mozgások előtt eldöntjük.
+  const originalLedgerTotal=money([...d.books,...d.candidateBooks].reduce((n,b)=>n+Number(b.book_value||0),0));
+  const originalStockTotal=[...d.stocks,...d.candidateStocks].reduce((n,s)=>n+Number(s.qty||0),0);
+  const targetIdByRow=new Map(d.importRows.map(r=>[int(r.row_no),String(r.variant_id)]));
+  const changedVariants=new Set();
+  const newVariants=new Set();
+  const groupByOld=new Map(d.plans.map(p=>[p.oldVariant,p]));
   for(const plan of d.plans){
-    const keeper=plan.groups.find(x=>x.keep);
-    assert(keeper,`A megtartandó szín hiányzik: ${plan.oldVariant}`);
-    await client.query(`UPDATE aif_product_variants
-      SET color_code=$2,color_name=$3,updated_at=now() WHERE id=$1`,
-      [plan.oldVariant,keeper.key,keeper.color]);
-    updatedVariants.add(plan.oldVariant);
     for(const group of plan.groups){
-      if(group.keep)continue;
-      const barcode=await uniqueBarcode();
-      const item=await one(`INSERT INTO aif_product_variants (
-        model_id,barcode,color_code,color_name,color_hex,size,buy_price,sell_price,
-        compare_at_price,weight_grams,image_url,sn_cod,attributes,status)
-        SELECT model_id,$2,$3,$4,NULL,size,buy_price,sell_price,
-          compare_at_price,weight_grams,image_url,sn_cod,
-          COALESCE(attributes,'{}'::jsonb)||$5::jsonb,'active'
-        FROM aif_product_variants WHERE id=$1
-        RETURNING id`,[plan.oldVariant,barcode,group.key,group.color,
-          JSON.stringify({aifRepair:{batchId:BATCH,originalVariantId:plan.oldVariant,source:'color_split',color:group.color}})]);
-      assert(item?.id,'Új variáns létrehozása nem sikerült.');
-      updatedVariants.add(String(item.id));
-      for(const rowNo of group.rowNumbers)targetIdByRow.set(rowNo,String(item.id));
-    }
-  }
-  // Each original import row retains its identity and qty, but points to its own real color.
-  for(const r of d.importRows){
-    const x=manifest.rows.find(m=>int(m.rowNo)===int(r.row_no));
-    const variant=targetIdByRow.get(int(r.row_no));
-    if(String(r.variant_id)!==variant){
-      await client.query(`UPDATE aif_import_rows SET variant_id=$2,
-        supplier_color_code=$3,
-        normalized=COALESCE(normalized,'{}'::jsonb)||$4::jsonb,
-        updated_at=now() WHERE id=$1`,[r.id,variant,colKey(x.color),JSON.stringify({
-          colorCode:colKey(x.color),supplierColorCode:colKey(x.color),colorName:x.color,
-          aifColorIdentitySource:'color_name_without_explicit_code',
-          aifDataRepair:{key:KEY,originalVariantId:String(r.variant_id),correctColor:x.color},
-        })]);
-    } else if(d.plans.some(p=>p.oldVariant===String(r.variant_id))){
-      await client.query(`UPDATE aif_import_rows SET supplier_color_code=$2,
-        normalized=COALESCE(normalized,'{}'::jsonb)||$3::jsonb,updated_at=now()
-        WHERE id=$1`,[r.id,colKey(x.color),JSON.stringify({
-          colorCode:colKey(x.color),supplierColorCode:colKey(x.color),colorName:x.color,
-          aifColorIdentitySource:'color_name_without_explicit_code',
-          aifDataRepair:{key:KEY,originalVariantId:String(r.variant_id),correctColor:x.color}
-        })]);
-    }
-  }
-  // Rebuild the supplier-code mapping for split groups, without touching other batches.
-  for(const plan of d.plans){
-    const supplierRow=d.supp.find(s=>String(s.variant_id)===plan.oldVariant);
-    assert(supplierRow && String(supplierRow.supplier_id)===String(d.batch.supplier_id),'Beszállítói kapcsolat megváltozott.');
-    for(const group of plan.groups){
-      const targetId=targetIdByRow.get(group.rowNumbers[0]);
-      if(group.keep){
-        await client.query(`UPDATE aif_variant_supplier_codes SET
-          supplier_color_code=$2,supplier_color_name=$3,raw=COALESCE(raw,'{}'::jsonb)||$4::jsonb,
-          updated_at=now() WHERE id=$1`,[supplierRow.id,group.key,group.color,
-          JSON.stringify({colorCode:group.key,supplierColorCode:group.key,colorName:group.color,
-            supplierColorName:group.color,aifDataRepair:{key:KEY,color:group.color}})]);
-      } else {
-        await client.query(`INSERT INTO aif_variant_supplier_codes (
-          variant_id,supplier_id,supplier_product_code,supplier_variant_code,
-          supplier_color_code,supplier_color_name,supplier_size,supplier_barcode,supplier_sku,raw,is_active)
-          SELECT $2,supplier_id,supplier_product_code,supplier_variant_code,
-            $3,$4,supplier_size,NULL,supplier_sku,COALESCE(raw,'{}'::jsonb)||$5::jsonb,true
-          FROM aif_variant_supplier_codes WHERE id=$1`,[
-          supplierRow.id,targetId,group.key,group.color,
-          JSON.stringify({colorCode:group.key,supplierColorCode:group.key,colorName:group.color,
-            supplierColorName:group.color,aifDataRepair:{key:KEY,color:group.color}})
-        ]);
+      let variantId=group.targetVariantId;
+      if(group.targetType==='create'){
+        const barcode=await uniqueBarcode();
+        const inserted=await one(`INSERT INTO aif_product_variants(
+          model_id,barcode,color_code,color_name,color_hex,size,buy_price,sell_price,
+          compare_at_price,weight_grams,image_url,sn_cod,attributes,status)
+          SELECT model_id,$2,$3,$4,NULL,size,$6,$7,
+            compare_at_price,weight_grams,image_url,sn_cod,
+            COALESCE(attributes,'{}'::jsonb)||$5::jsonb,'active'
+          FROM aif_product_variants WHERE id=$1
+          RETURNING id`,[plan.oldVariant,barcode,group.key,group.color,
+            JSON.stringify({aifDataRepair:{key:KEY,originalVariantId:plan.oldVariant,
+              color:group.color,sourceInvoice:d.batch.invoice_number}}),
+            group.buyPrice,group.sellPrice]);
+        assert(inserted?.id,`Nem sikerült variánst létrehozni: ${group.sourceCode} / ${group.color}`);
+        variantId=String(inserted.id);
+        newVariants.add(variantId);
+        changedVariants.add(variantId);
       }
+      assert(isUuid(variantId),`Nincs biztonságos célvariáns: ${plan.name} ${group.color}`);
+      group.targetVariantId=variantId;
+      for(const rowNo of group.rowNumbers)targetIdByRow.set(rowNo,variantId);
     }
+    const keeper=plan.groups.find(g=>g.targetType==='keep');
+    if(keeper){
+      await client.query(`UPDATE aif_product_variants
+        SET color_code=$2,color_name=$3,updated_at=now() WHERE id=$1`,
+        [plan.oldVariant,keeper.key,keeper.color]);
+    }else{
+      // A rosszul felvett 833-as, most már üres variáns nem aktív termék.
+      // Nem töröljük: helyreállítási nyoma és vonalkódja megmarad.
+      await client.query(`UPDATE aif_product_variants SET status='archived',updated_at=now()
+        WHERE id=$1 AND COALESCE(status,'active')<>'archived'`,[plan.oldVariant]);
+    }
+    changedVariants.add(plan.oldVariant);
   }
-  // Assign historic *incoming* movement to the correct source row's new variant.
-  // No quantity/source/timestamp is deleted or changed.
+
+  // Az 57 sor száma, eredeti kódja, mennyisége megmarad. Csak a bizonyított
+  // hibás színvariáns-kapcsolatok javulnak.
   for(const r of d.importRows){
-    const oldVariant=String(r.variant_id);
-    const newVariant=targetIdByRow.get(int(r.row_no));
-    if(newVariant===oldVariant)continue;
-    const oldMovement=d.rowMovements.get(String(r.id))?.[0];
-    assert(oldMovement,'Az import mozgás hiányzik.');
-    await client.query(`UPDATE aif_stock_movements
-      SET variant_id=$2,raw=COALESCE(raw,'{}'::jsonb)||$3::jsonb
-      WHERE id=$1`,[oldMovement.id,newVariant,
-      JSON.stringify({aifDataRepair:{key:KEY,originalVariantId:oldVariant,correctVariantId:newVariant}})]);
+    const plan=groupByOld.get(String(r.variant_id));
+    if(!plan)continue;
+    const x=manifest.rows.find(m=>int(m.rowNo)===int(r.row_no));
+    const variantId=targetIdByRow.get(int(r.row_no));
+    await client.query(`UPDATE aif_import_rows
+      SET variant_id=$2,supplier_color_code=$3,
+          normalized=COALESCE(normalized,'{}'::jsonb)||$4::jsonb,
+          updated_at=now()
+      WHERE id=$1`,[r.id,variantId,colKey(x.color),JSON.stringify({
+        colorCode:colKey(x.color),supplierColorCode:colKey(x.color),colorName:x.color,
+        aifColorIdentitySource:'color_name_without_explicit_code',
+        aifDataRepair:{key:KEY,originalVariantId:String(r.variant_id),
+          correctVariantId:variantId,correctColor:x.color},
+      })]);
   }
-  // Move the virtual stock and retail book values atomically with the movements.
+
+  // A 832-es beszállítói azonosítókat nem írjuk át. Az újonnan létrehozott
+  // 833-as színhez külön beszállítói kapcsolatsor kell.
   for(const plan of d.plans){
-    const targets=new Map();
-    for(const group of plan.groups){
-      const id=targetIdByRow.get(group.rowNumbers[0]);
-      const value=group.rowNumbers.reduce((sum,rowNo)=>{
-        const r=d.importRows.find(x=>int(x.row_no)===rowNo);
-        return sum+int(r.qty)*money(manifest.rows.find(x=>int(x.rowNo)===rowNo).sellPrice);
-      },0);
-      targets.set(id,{qty:group.qty,book:money(value)});
+    const supplier=d.supp.find(s=>String(s.variant_id)===plan.oldVariant);
+    assert(supplier && String(supplier.supplier_id)===String(d.batch.supplier_id),
+      `Beszállítói kapcsolat időközben változott: ${plan.oldVariant}`);
+    const keeper=plan.groups.find(g=>g.targetType==='keep');
+    if(keeper){
+      await client.query(`UPDATE aif_variant_supplier_codes SET
+        supplier_color_code=$2,supplier_color_name=$3,
+        raw=COALESCE(raw,'{}'::jsonb)||$4::jsonb,updated_at=now()
+        WHERE id=$1`,[supplier.id,keeper.key,keeper.color,
+          JSON.stringify({colorCode:keeper.key,supplierColorCode:keeper.key,
+            colorName:keeper.color,supplierColorName:keeper.color,
+            aifDataRepair:{key:KEY,color:keeper.color}})]);
+    }else{
+      await client.query(`UPDATE aif_variant_supplier_codes
+        SET is_active=false,updated_at=now() WHERE id=$1`,[supplier.id]);
     }
-    for(const [variantId,values] of targets){
+    for(const group of plan.groups.filter(g=>g.targetType==='create')){
+      const targetId=group.targetVariantId;
+      await client.query(`INSERT INTO aif_variant_supplier_codes (
+        variant_id,supplier_id,supplier_product_code,supplier_variant_code,
+        supplier_color_code,supplier_color_name,supplier_size,supplier_barcode,
+        supplier_sku,raw,is_active)
+        SELECT $2,supplier_id,supplier_product_code,supplier_variant_code,
+          $3,$4,supplier_size,NULL,supplier_sku,
+          COALESCE(raw,'{}'::jsonb)||$5::jsonb,true
+        FROM aif_variant_supplier_codes WHERE id=$1`,[
+        supplier.id,targetId,group.key,group.color,
+        JSON.stringify({colorCode:group.key,supplierColorCode:group.key,
+          colorName:group.color,supplierColorName:group.color,
+          aifDataRepair:{key:KEY,color:group.color}})
+      ]);
+    }
+  }
+
+  // Darab- és könyvérték-delták: forrásból kivonjuk, célhoz HOZZÁADJUK.
+  // Egy korábban eladott 832-es terméknél a jelenlegi készlet nem írható felül!
+  const deltas=new Map();
+  const addDelta=(id,qty,value)=>{
+    const current=deltas.get(id)||{qty:0,value:0};
+    current.qty+=qty;current.value=money(current.value+value);
+    deltas.set(id,current);
+  };
+  for(const plan of d.plans){
+    for(const group of plan.groups){
+      if(group.targetVariantId===plan.oldVariant)continue;
+      const value=money(group.rowNumbers.reduce((total,rowNo)=>{
+        const r=d.importRows.find(x=>int(x.row_no)===rowNo);
+        const x=manifest.rows.find(x=>int(x.rowNo)===rowNo);
+        return total+int(r.qty)*money(x.sellPrice);
+      },0));
+      addDelta(plan.oldVariant,-group.qty,-value);
+      addDelta(group.targetVariantId,+group.qty,+value);
+    }
+  }
+
+  // Csak a saját 833-as készletbevételezési esemény variánsát változtatjuk.
+  // A korábbi 832-es számlasorok, eladások, stock_table_audit bejegyzések maradnak.
+  for(const r of d.importRows){
+    if(!groupByOld.has(String(r.variant_id)))continue;
+    const newVariant=targetIdByRow.get(int(r.row_no));
+    if(newVariant===String(r.variant_id))continue;
+    const event=d.rowMovements.get(String(r.id))?.[0];
+    assert(event && String(event.source_id)===BATCH,'A 833-as sor bevételezési mozgása hiányzik.');
+    await client.query(`UPDATE aif_stock_movements SET variant_id=$2,
+      raw=COALESCE(raw,'{}'::jsonb)||$3::jsonb
+      WHERE id=$1 AND variant_id=$4`,[event.id,newVariant,
+      JSON.stringify({aifDataRepair:{key:KEY,originalVariantId:String(r.variant_id),correctVariantId:newVariant}}),r.variant_id]);
+  }
+
+  const locationId=String(d.batch.target_location_id);
+  for(const [id,delta] of deltas){
+    if(!delta.qty)continue;
+    if(delta.qty<0){
+      const existing=await one(`UPDATE aif_stock SET qty=qty+$3,updated_at=now()
+        WHERE location_id=$1 AND variant_id=$2 AND qty >= abs($3)
+        AND COALESCE(reserved_qty,0)=0 RETURNING qty`,[locationId,id,delta.qty]);
+      assert(existing,`Nem vonható le a 833-as készlet ${id} variánsról.`);
+      if(await tableExists('aif_stock_retail_book')){
+        const book=await one(`UPDATE aif_stock_retail_book
+          SET qty=qty+$3,book_value=round((book_value+$4)::numeric,2),
+          seeded=false,updated_at=now()
+          WHERE location_id=$1 AND variant_id=$2
+          AND qty >= abs($3) AND book_value+$4>=-0.01
+          RETURNING qty,book_value`,[locationId,id,delta.qty,delta.value]);
+        assert(book,`Nem vonható le a 833-as könyvérték ${id} variánsról.`);
+      }
+    }else{
       await client.query(`INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
-        VALUES ($1,$2,$3,0,now())
-        ON CONFLICT(location_id,variant_id)
-        DO UPDATE SET qty=EXCLUDED.qty,updated_at=now()`,[d.batch.target_location_id,variantId,values.qty]);
+        VALUES($1,$2,$3,0,now())
+        ON CONFLICT(location_id,variant_id) DO UPDATE SET
+          qty=aif_stock.qty+EXCLUDED.qty,updated_at=now()`,[locationId,id,delta.qty]);
       if(await tableExists('aif_stock_retail_book')){
         await client.query(`INSERT INTO aif_stock_retail_book(location_id,variant_id,qty,book_value,seeded,updated_at)
-          VALUES ($1,$2,$3,$4,false,now())
-          ON CONFLICT(location_id,variant_id)
-          DO UPDATE SET qty=EXCLUDED.qty,book_value=EXCLUDED.book_value,seeded=false,updated_at=now()`,
-          [d.batch.target_location_id,variantId,values.qty,values.book]);
+          VALUES($1,$2,$3,$4,false,now())
+          ON CONFLICT(location_id,variant_id) DO UPDATE SET
+            qty=aif_stock_retail_book.qty+EXCLUDED.qty,
+            book_value=round((aif_stock_retail_book.book_value+EXCLUDED.book_value)::numeric,2),
+            seeded=false,updated_at=now()`,[locationId,id,delta.qty,delta.value]);
       }
     }
   }
-  // Recalculate the before/after history per affected variant, chronological order.
-  const affectedIds=[...new Set([...d.plans.map(p=>p.oldVariant), ...updatedVariants])];
-  for(const id of affectedIds){
-    const moves=await rows(`SELECT id,qty_delta FROM aif_stock_movements
-      WHERE variant_id=$1 ORDER BY created_at,id`,[id]);
-    let amount=0;
-    for(const m of moves){
-      const before=amount;amount+=int(m.qty_delta);
-      assert(amount>=0,`Negatív időrendbeli készlet: ${id}`);
-      await client.query(`UPDATE aif_stock_movements SET qty_before=$2,qty_after=$3 WHERE id=$1`,
-        [m.id,before,amount]);
+
+  // A stock_table_audit duplikáló, nem fizikai árumozgás, így nem vesz részt
+  // a darabok időrendi rekonstruálásában. A valódi 832-es események adatát nem
+  // írjuk át. A 833-as események helyes, új variánshoz tartozó pillanatképet kapnak.
+  const touched=[...new Set([...d.plans.map(x=>x.oldVariant),...d.reuseIds,...newVariants])];
+  for(const id of touched){
+    const movements=await rows(`SELECT id,location_id,source_type,source_id,qty_delta,
+         created_at,qty_before,qty_after
+         FROM aif_stock_movements WHERE variant_id=$1
+         ORDER BY created_at,id`,[id]);
+    const ledger=new Map();
+    for(const event of movements){
+      if(event.source_type==='stock_table_audit')continue;
+      const key=String(event.location_id);
+      const before=ledger.get(key)||0;
+      const after=before+int(event.qty_delta);
+      assert(after>=0,`Időrendben negatív készlet: ${id} / ${key}`);
+      ledger.set(key,after);
+      if(event.source_type==='import_batch' && String(event.source_id)===BATCH){
+        await client.query(`UPDATE aif_stock_movements SET qty_before=$2,qty_after=$3
+          WHERE id=$1`,[event.id,before,after]);
+      }
     }
-    const stockQty=int((await one(`SELECT qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2`,[d.batch.target_location_id,id]))?.qty);
-    assert(amount===stockQty,`Készletmozgás és készlet nem egyezik a javítás végén: ${id}`);
+    const stock=await rows(`SELECT location_id,qty,reserved_qty
+      FROM aif_stock WHERE variant_id=$1`,[id]);
+    const locations=new Set([...ledger.keys(),...stock.map(x=>String(x.location_id))]);
+    for(const loc of locations){
+      const q=stock.find(x=>String(x.location_id)===loc);
+      assert(Math.abs((ledger.get(loc)||0)-int(q?.qty))<0.001,
+        `Készletmozgások és fizikai készlet eltér: ${id} / ${loc} (${ledger.get(loc)||0} / ${q?.qty||0})`);
+    }
   }
-  // Give MONTEVERDI NAGY CSILI its own stable model, without rewriting DOMBOR's title.
+
+  // Két MONTEVERDI megnevezéshez két modell kell. A 60A krém L ForIT
+  // migrációs kapcsolata a DOMBOR modellben marad, azon 0 készlet volt.
   for(const c of d.modelTitleCollisions){
     const main=await one(`SELECT * FROM aif_product_models WHERE id=$1`,[c.modelId]);
-    assert(norm(main.title_ro)==='monteverdi dombor himzes','MONTEVERDI megnevezése időközben megváltozott.');
+    assert(norm(main.title_ro)==='monteverdi dombor himzes',
+      'MONTEVERDI modellneve időközben megváltozott.');
     const altCode=`${main.model_code}__monteverdi_nagy_csili`;
-    assert(!(await one(`SELECT id FROM aif_product_models WHERE model_code=$1`,[altCode])),`Már létezik a MONTEVERDI külön modell: ${altCode}`);
-    const m=await one(`INSERT INTO aif_product_models (
+    assert(!(await one(`SELECT id FROM aif_product_models WHERE model_code=$1`,[altCode])),
+      `Már létezik a MONTEVERDI külön modell: ${altCode}`);
+    const fresh=await one(`INSERT INTO aif_product_models (
       brand_id,category_id,subcategory_id,model_code,title_ro,title_hu,description_ro,
       gender,product_type,season,material,shopify_title,status)
       SELECT brand_id,category_id,subcategory_id,$2,$3,title_hu,description_ro,
         gender,product_type,season,material,$3,'active'
-      FROM aif_product_models WHERE id=$1 RETURNING id`,[c.modelId,altCode,'MONTEVERDI NAGY CSILI']);
+      FROM aif_product_models WHERE id=$1 RETURNING id`,
+      [c.modelId,altCode,'MONTEVERDI NAGY CSILI']);
     for(const entry of c.names.filter(x=>norm(x.title)==='monteverdi nagy csili')){
-      await client.query(`UPDATE aif_product_variants SET model_id=$2,updated_at=now() WHERE id=$1`,[entry.variantId,m.id]);
+      assert(!d.legacyRefs.some(x=>String(x.variant_id)===entry.variantId),
+        'ForIT történettel rendelkező MONTEVERDI variáns nem helyezhető át név alapján.');
+      await client.query(`UPDATE aif_product_variants SET model_id=$2,updated_at=now()
+        WHERE id=$1`,[entry.variantId,fresh.id]);
     }
   }
-  // Restore known category + true product type. No new category is created.
+
+  // Meglévő törzskategóriákat használunk; egyetlen kategóriát sem hozunk létre.
   for(const r of d.importRows){
     const source=manifest.rows.find(x=>int(x.rowNo)===int(r.row_no));
     const codes=TYPE_MAP[source.type];
-    assert(codes,`Ismeretlen típus: ${source.type}`);
+    assert(codes,`Ismeretlen eredeti típus: ${source.type}`);
     const cat=d.categoryByCode.get(norm(codes[0]));
     const sub=codes[1]?d.categoryByCode.get(norm(codes[1])):null;
     const variantId=targetIdByRow.get(int(r.row_no));
-    const mm=await one(`SELECT model_id FROM aif_product_variants WHERE id=$1`,[variantId]);
-    assert(mm,'Eltűnt az import variánsa.');
-    const titleModels=await rows(`SELECT id,title_ro FROM aif_product_models WHERE id=$1`,[mm.model_id]);
-    assert(norm(titleModels[0].title_ro)===norm(source.title),
-      `Modell név eltérés a ${r.row_no}. sorban: ${titleModels[0].title_ro} / ${source.title}`);
-    await client.query(`UPDATE aif_product_models SET category_id=$2,subcategory_id=$3,product_type=$4,updated_at=now()
-      WHERE id=$1`,[mm.model_id,cat.id,sub?.id || null,source.type]);
-    // After a correction, this committed row has the original correct, non-generic classification.
+    const model=await one(`SELECT m.id,m.title_ro,m.product_type FROM aif_product_variants v
+      JOIN aif_product_models m ON m.id=v.model_id WHERE v.id=$1`,[variantId]);
+    assert(model && norm(model.title_ro)===norm(source.title),
+      `Modellnév eltérés: ${r.row_no}. sor (${model?.title_ro} / ${source.title})`);
+    await client.query(`UPDATE aif_product_models SET
+      category_id=$2,subcategory_id=$3,product_type=$4,updated_at=now()
+      WHERE id=$1`,[model.id,cat.id,sub?.id||null,source.type]);
     await client.query(`UPDATE aif_import_rows SET
       normalized=COALESCE(normalized,'{}'::jsonb)||$2::jsonb,updated_at=now()
       WHERE id=$1`,[r.id,JSON.stringify({
-        productType:source.type,categoryCode:cat.code,subcategoryCode:sub?.code || null,
-        aifCategorySource:'original_rodescr_excel_verified',
+        productType:source.type,categoryCode:cat.code,subcategoryCode:sub?.code||null,
+        aifCategorySource:'original_rodescr_excel_verified'
       })]);
   }
-  // Fix the invoice/source discrepancy on the 60A cream L item after the 57-row audit.
-  for(const correction of d.priceCorrections){
-    const r=d.importRows.find(x=>int(x.row_no)===correction.rowNo);
-    const vid=targetIdByRow.get(correction.rowNo);
-    await client.query(`UPDATE aif_import_rows SET sell_price=$2,sell_price_ron=$2,
+
+  // A 60A eladási árát visszaállítjuk 139,50-re. A 279 RON könyvérték
+  // MÁR ELEVE HELYES: nem könyveljük rá újra a 2 db árát.
+  for(const fix of d.priceCorrections){
+    const r=d.importRows.find(x=>int(x.row_no)===fix.rowNo);
+    const vid=targetIdByRow.get(fix.rowNo);
+    await client.query(`UPDATE aif_import_rows SET
+      sell_price=$2,sell_price_ron=$2,
       normalized=COALESCE(normalized,'{}'::jsonb)||$3::jsonb,updated_at=now()
-      WHERE id=$1`,[r.id,correction.excel,JSON.stringify({
-        sellPrice:correction.excel,sellPriceRon:correction.excel,
-        sellPriceGrossRon:correction.excel,
-        aifOriginalExcelPriceCorrection:{key:KEY,old:correction.previous,new:correction.excel}
+      WHERE id=$1`,[r.id,fix.excel,JSON.stringify({
+        sellPrice:fix.excel,sellPriceRon:fix.excel,sellPriceGrossRon:fix.excel,
+        aifOriginalExcelPriceCorrection:{key:KEY,old:fix.previous,new:fix.excel}
       })]);
-    await client.query(`UPDATE aif_product_variants SET sell_price=$2,updated_at=now() WHERE id=$1`,
-      [vid,correction.excel]);
-    if(await tableExists('aif_stock_retail_book')){
-      await client.query(`UPDATE aif_stock_retail_book SET book_value=$2*qty,updated_at=now()
-        WHERE variant_id=$1`,[vid,correction.excel]);
-    }
+    const corrected=await one(`UPDATE aif_product_variants
+      SET sell_price=$2,updated_at=now()
+      WHERE id=$1 AND sell_price=$3 RETURNING id`,[vid,fix.excel,fix.previous]);
+    assert(corrected,`Az ár időközben változott: ${vid}`);
+  }
+
+  // A helyreállítás nem módosíthatja a teljes készlet darabszámát és könyvértékét.
+  // A 60A 279 lejes könyvértéke már eleve a helyes forrásár volt.
+  const conservationIds=[...new Set([...d.variants,...d.reuseIds,...newVariants])];
+  const stockAfter=await rows(`SELECT location_id,variant_id,qty,reserved_qty
+    FROM aif_stock WHERE variant_id=ANY($1::uuid[])`,[conservationIds]);
+  const booksAfter=await rows(`SELECT location_id,variant_id,qty,book_value
+    FROM aif_stock_retail_book WHERE variant_id=ANY($1::uuid[])`,[conservationIds]);
+  const finalStockTotal=stockAfter.reduce((n,x)=>n+Number(x.qty||0),0);
+  const finalBookTotal=money(booksAfter.reduce((n,x)=>n+Number(x.book_value||0),0));
+  assert(Math.abs(originalStockTotal-finalStockTotal)<0.001,
+    `Készletkonzervációs hiba: előtte ${originalStockTotal}, utána ${finalStockTotal}`);
+  assert(Math.abs(originalLedgerTotal-finalBookTotal)<0.02,
+    `Könyvérték-konzervációs hiba: előtte ${originalLedgerTotal}, utána ${finalBookTotal}`);
+  for(const s of stockAfter){
+    const book=booksAfter.find(x=>String(x.variant_id)===String(s.variant_id)
+      && String(x.location_id)===String(s.location_id));
+    assert(book && Math.abs(int(s.qty)-Number(book.qty||0))<0.001,
+      `Retail könyv és fizikai készlet nem egyezik: ${s.variant_id}`);
+  }
+  // A 832-es számlát adatbázisban is újra ellenőrizzük: sorazonosítók,
+  // kötött variánsok és számlán szereplő mennyiségek nem változhattak.
+  const previousSourceRows=await rows(`SELECT rw.id,rw.variant_id,rw.qty
+    FROM aif_import_rows rw WHERE rw.batch_id=$1`,[PREVIOUS_BATCH]);
+  assert(previousSourceRows.length===118,'A 832-es számla 118 forrássora hiányzik.');
+  const originalPrevious=new Map(d.previousSourceRows.map(x=>[String(x.id),x]));
+  for(const r of previousSourceRows){
+    const old=originalPrevious.get(String(r.id));
+    assert(old && String(old.variant_id)===String(r.variant_id) && int(old.qty)===int(r.qty),
+      `A 832-es számla forrássora megváltozott: ${r.id}`);
   }
   const finalRows=await rows(`SELECT rw.row_no,rw.qty,rw.variant_id::text AS variant_id,
     rw.normalized->>'colorName' AS color_name,v.color_name AS live_color,
@@ -563,12 +758,27 @@ try {
     await client.query(`SELECT id FROM aif_import_batches WHERE id=$1 FOR UPDATE`,[BATCH]);
     // A konkurens eladás, átadás, készletkorrekció nem módosíthatja közben
     // ugyanazokat a fizikai készletsorokat. MINDEN érintett sort csak ezután olvasunk.
-    await client.query(`SELECT v.id FROM aif_product_variants v
+    // A 832-es lehetséges célvariánsokat is zároljuk a döntés ELŐTT.
+    // Más kassza nem adhatja el közben az áthelyezés céljául kiválasztott darabot.
+    const lockIds=await rows(`SELECT DISTINCT v.id::text AS id
+      FROM aif_product_variants v
       WHERE v.id IN (SELECT DISTINCT variant_id FROM aif_import_rows WHERE batch_id=$1)
-      ORDER BY v.id FOR UPDATE`,[BATCH]);
-    await client.query(`SELECT s.location_id,s.variant_id FROM aif_stock s
-      WHERE s.variant_id IN (SELECT DISTINCT variant_id FROM aif_import_rows WHERE batch_id=$1)
-      ORDER BY s.location_id,s.variant_id FOR UPDATE`,[BATCH]);
+         OR v.id IN (
+           SELECT sc.variant_id FROM aif_variant_supplier_codes sc
+           JOIN aif_import_batches b ON b.id=$1 AND b.supplier_id=sc.supplier_id
+           WHERE sc.supplier_product_code IN (
+             SELECT supplier_product_code FROM aif_import_rows WHERE batch_id=$1
+           )
+         ) ORDER BY id`,[BATCH]);
+    const allIds=lockIds.map(x=>x.id);
+    await client.query(`SELECT id FROM aif_product_variants WHERE id=ANY($1::uuid[])
+      ORDER BY id FOR UPDATE`,[allIds]);
+    await client.query(`SELECT location_id,variant_id FROM aif_stock
+      WHERE variant_id=ANY($1::uuid[]) ORDER BY location_id,variant_id FOR UPDATE`,[allIds]);
+    if(await tableExists('aif_stock_retail_book')){
+      await client.query(`SELECT location_id,variant_id FROM aif_stock_retail_book
+        WHERE variant_id=ANY($1::uuid[]) ORDER BY location_id,variant_id FOR UPDATE`,[allIds]);
+    }
   }
   const d=await load();
   if(!silent)report(d);
