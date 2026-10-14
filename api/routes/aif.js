@@ -4004,6 +4004,51 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
+  // MAYO CHIX 832/833 és más történeti importok: ugyanaz a beszállítói kód +
+  // VALÓDI szín + méret akár két eltérő régi model_code alatt is létezhet.
+  // Az előző importot nem másoljuk át új modellre; biztos egyezésnél annak
+  // meglévő variánsát használjuk. A beszállítói kapcsolatsort sem szabad ellopni.
+  async function findExactExistingSupplierVariant(client, { supplierId, normalized, newModelId }) {
+    const productCode = text(normalized?.supplierProductCode);
+    const colorName = text(normalized?.colorName);
+    const colorCode = text(normalized?.colorCode || normalized?.supplierColorCode);
+    const size = text(normalized?.size || normalized?.supplierSize);
+    if (!supplierId || !productCode || !colorName || !size || normalized?.barcode) return null;
+    const r = await client.query(`
+      SELECT DISTINCT v.id,v.model_id,v.color_code,v.color_name,v.size,
+             v.barcode,m.title_ro,m.brand_id,
+             sc.supplier_color_code,sc.supplier_color_name,sc.supplier_size
+      FROM aif_variant_supplier_codes sc
+      JOIN aif_product_variants v ON v.id=sc.variant_id
+      JOIN aif_product_models m ON m.id=v.model_id
+      WHERE sc.supplier_id=$1
+        AND lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($2))
+        AND COALESCE(sc.is_active,true)=true
+        AND COALESCE(v.status,'active')<>'archived'
+      ORDER BY v.id`, [supplierId, productCode]);
+    const base = await client.query(`SELECT brand_id FROM aif_product_models WHERE id=$1`,[newModelId]);
+    const wantedBrand = String(base.rows[0]?.brand_id || '');
+    const candidates = r.rows.filter(row =>
+      sameAifVariantSize(row.size,size) && sameAifVariantSize(row.supplier_size,size) &&
+      normCode(row.color_name)===normCode(colorName) &&
+      normCode(row.title_ro)===normCode(normalized.titleRo) &&
+      String(row.brand_id || '')===wantedBrand &&
+      (normCode(row.supplier_color_name)===normCode(colorName) ||
+       normCode(row.supplier_color_code)===normCode(colorCode)));
+    const unique=[...new Map(candidates.map(x=>[String(x.id),x])).values()];
+    if(unique.length>1) {
+      const err=new Error('Ugyanaz a beszállítói termékkód, szín és méret több termékhez tartozik. Kézi ellenőrzés szükséges.');
+      err.statusCode=409; err.code='supplier_variant_ambiguous'; throw err;
+    }
+    const candidate=unique[0] || null;
+    if(candidate && colorCode && normCode(candidate.color_code) &&
+       normCode(candidate.color_code)!==normCode(colorCode)) {
+      const err=new Error('A meglévő beszállítói termék színkódja eltér az érkezőétől. Nem egyesíthető automatikusan.');
+      err.statusCode=409;err.code='supplier_variant_color_code_conflict';throw err;
+    }
+    return candidate;
+  }
+
   async function upsertSupplierCode(client, { variantId, supplierId, normalized }) {
     const supplierProductCode = text(normalized.supplierProductCode || "");
     const supplierVariantCode = text(normalized.supplierVariantCode || "");
@@ -9227,13 +9272,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             updateStatus: "active",
             preserveExistingClassification: true,
           });
+          const previousSupplierVariant = await findExactExistingSupplierVariant(client, {
+            supplierId: batch.supplier_id, normalized, newModelId: modelId,
+          });
           variantId = await upsertVariant(client, {
-            modelId,
+            modelId: previousSupplierVariant?.model_id || modelId,
             normalized,
             createStatus: "active",
             updateStatus: "active",
             priceChangeContext,
           });
+          if (previousSupplierVariant && String(variantId)!==String(previousSupplierVariant.id)) {
+            const err = new Error('A régebbi beszállítói termékazonosítás és a variáns nem ugyanazt a terméket találta.');
+            err.statusCode = 409; err.code = 'supplier_variant_match_stale'; throw err;
+          }
           await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         }
 
