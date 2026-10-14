@@ -3562,10 +3562,10 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   color:#333;
 }
 .aifWhZebraLabel .aifWhLabelTitle {
-  flex:0 0 4.55mm;
-  min-height:4.55mm;
-  max-height:4.55mm;
-  margin:0;
+  flex:0 0 4.35mm;
+  min-height:4.35mm;
+  max-height:4.35mm;
+  margin:0 0 .18mm;
   padding:0 .15mm;
   display:-webkit-box;
   -webkit-box-orient:vertical;
@@ -3582,7 +3582,7 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
 .aifWhZebraLabel .aifWhLabelMeta {
   flex:0 0 auto;
   min-height:0;
-  margin:.12mm 0 .32mm;
+  margin:0 0 .34mm;
   font-size:7.1px;
   line-height:1;
   color:#111;
@@ -3606,8 +3606,8 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
 }
 .aifWhZebraLabel .aifWhBarcodeSvgWrap {
   width:calc(100% + .35mm);
-  height:12.25mm;
-  flex:0 0 12.25mm;
+  height:11.6mm;
+  flex:0 0 11.6mm;
   margin:0 0 0 -.175mm;
   overflow:hidden;
   display:flex;
@@ -3622,16 +3622,16 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   max-height:none;
 }
 .aifWhZebraBarcodeText {
-  height:3.2mm;
-  margin:.08mm 0 .32mm;
+  height:3.85mm;
+  margin:.18mm 0 .34mm;
   overflow:hidden;
   white-space:nowrap;
   text-align:center;
   font-family:"Courier New", monospace;
-  font-size:8.35px;
+  font-size:9.35px;
   font-weight:700;
-  line-height:3mm;
-  letter-spacing:.075em;
+  line-height:3.55mm;
+  letter-spacing:.09em;
   color:#080808;
 }
 .aifWhZebraInfo {
