@@ -5,7 +5,7 @@ import {SmsModal,ChipSelect,CheckRow,PhonePreview,Empty,SmsHint} from './SmsUi';
 import {SmsSelect,SmsDatePicker,smsDisplayDate} from './SmsFields';
 import {SmsBlockEditor,defaultCouponCopy,initialBlocks} from './SmsBlockEditor';
 type Tab='overview'|'arrival'|'promotion'|'history'|'templates'|'settings'|'audit';
-type Template={id:string;name:string;kind:'arrival'|'promotion';language:'hu'|'ro';blocks:SmsBlock[];coupon_copy?:SmsCouponCopy|null;coupon_stackable?:boolean|null};
+type Template={id:string;name:string;kind:'arrival'|'promotion';language:'hu'|'ro';blocks:SmsBlock[];coupon_copy?:SmsCouponCopy|null;coupon_stackable?:boolean|null;updated_at?:string};
 
 // A sablonhoz nem tartozik DB-ben uzletkod. Az egyertelmu nevvel mentett
 // uzletsablonoknal a nev alapjan valasztunk, mas esetben a megorzott uzlet az elso.
@@ -37,7 +37,7 @@ function SmsInfoHelp(){
       <strong>Az SMS-előnézetről</strong>
       <p>A végleges üzenetben a kliens saját neve, érdeklődésének megfelelő márkái és személyes kuponkódja szerepel.</p>
       <p>A márkalista legfeljebb két márkanevet emel ki. A kupon, a leiratkozás és az SMS-részek minden címzettnél külön ellenőrződnek.</p>
-      <p>Ékezetek esetén Unicode SMS-re lehet szükség: ez több kreditet fogyaszthat, és az SMSLinknél előzetesen igazolni kell a támogatást.</p>
+      <p>A magyar sablonokat ékezetesen mentjük. Küldés előtt a rendszer az SMSLink által elfogadott karakterekre készíti elő a szöveget.</p>
     </div>
   </div></div>;
 }
@@ -67,8 +67,8 @@ function SmsCenter({locationCode,status,statusError,reloadStatus,onClose}:{locat
           {tab==='overview'?<Overview status={status} onTab={setTab}/>:null}
           {tab==='arrival'||tab==='promotion'?<Composer key={`${tab}-${template?.id||'new'}`} kind={tab} status={status} meta={meta} locationCode={preferredLocation||locationCode} onLocationChange={setPreferredLocation} template={template} onPrepared={d=>{setDetail(d);smsChanged();}}/>:null}
           {tab==='history'?<CampaignHistory onShow={id=>void show(id)}/>:null}
-          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} meta={meta} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
-          {tab==='templates'?<Templates isAdmin={status.role==='admin'} onUse={t=>{const loc=smsTemplateLocation(t,meta);if(loc)setPreferredLocation(loc);setTemplate(t);setTab(t.kind);}}/>:null}
+          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
+          {tab==='templates'?<Templates isAdmin={status.role==='admin'} tokens={meta.tokens} onUse={t=>{const loc=smsTemplateLocation(t,meta);if(loc)setPreferredLocation(loc);setTemplate(t);setTab(t.kind);}}/>:null}
           {tab==='audit'&&isAdmin?<AuditPanel/>:null}
         </>}
       </div>
@@ -91,6 +91,7 @@ function Overview({status:s,onTab}:{status:SmsStatus;onTab:(tab:Tab)=>void}){
 function Composer({kind,status,meta,locationCode,onLocationChange,template,onPrepared}:{kind:'arrival'|'promotion';status:SmsStatus;meta:SmsMeta;locationCode?:string;onLocationChange:(code:string)=>void;template:Template|null;onPrepared:(detail:SmsCampaignDetail)=>void}){
   const [draft,setDraft]=useState<SmsDraft>(()=>({title:kind==='arrival'?'Új áru érkezett':'Személyes promóció',kind,location:smsDefaultLocation(meta,locationCode),language:template?.language||'hu',sources:[],filters:{brands:[],genders:[],categories:[]},blocks:template?.blocks||initialBlocks(kind,template?.language||'hu'),couponCopy:template?.coupon_copy||defaultCouponCopy(template?.language||'hu',template?.coupon_stackable===true),coupon:{type:'percent',value:0,minimum:0,validFrom:smsToday(),validUntil:smsToday(30),stackable:template?.coupon_stackable===true}}));
   const [couponValueText,setCouponValueText]=useState('');
+  const [selectedTemplateId,setSelectedTemplateId]=useState(template?.id||'');
   const[sources,setSources]=useState<SmsSource[]>([]),[templates,setTemplates]=useState<Template[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[sourceBusy,setSourceBusy]=useState(false),[saveNotice,setSaveNotice]=useState(''),locked=useRef(false),requestKey=useRef('');
   const [sourceDetail,setSourceDetail]=useState<{loading:boolean;source:SmsSource;details?:SmsSourceDetails;error?:string}|null>(null);
   const [emptyAudience,setEmptyAudience]=useState(false),[emptyAudienceReasons,setEmptyAudienceReasons]=useState<Array<{reason:string;count:number}>>([]),[emptyAudienceChecked,setEmptyAudienceChecked]=useState(0);
@@ -119,12 +120,38 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
       setSourceDetail(current=>current?.source.id===source.id?{loading:false,source,details:result}:current);
     }catch(e){setSourceDetail(current=>current?.source.id===source.id?{loading:false,source,error:errText(e)}:current);}
   }
-    async function saveTemplate(){setBusy(true);setError('');try{await smsApi('/templates',{name:draft.title,kind,language:draft.language,blocks:draft.blocks,couponCopy:draft.couponCopy,stackable:draft.coupon.stackable});setSaveNotice('A sablon mentve.');setTemplates((await smsApi<{items:Template[]}>('/templates')).items);}catch(e){setError(errText(e));}finally{setBusy(false);}}
+  async function saveTemplate(){
+    setBusy(true);setError('');setSaveNotice('');
+    try {
+      // The campaign title is NOT the template's name when updating a saved one.
+      const selected=templates.find(t=>t.id===selectedTemplateId)||
+        (template?.id===selectedTemplateId?template:null);
+      if(selectedTemplateId&&!selected)throw new Error('A mentett sablon időközben eltűnt. Frissítsd a listát.');
+      let createdId='';
+      if(selected){
+        await smsApi(`/templates/${encodeURIComponent(selected.id)}`,{
+          blocks:draft.blocks,...(kind==='promotion'?{couponCopy:draft.couponCopy,stackable:draft.coupon.stackable}:{}),
+          expectedUpdatedAt:selected.updated_at
+        },'PATCH');
+        setSaveNotice(`Sablon frissítve: ${selected.name}`);
+      }else{
+        const created=await smsApi<{id:string}>('/templates',{
+          name:draft.title,kind,language:draft.language,blocks:draft.blocks,
+          ...(kind==='promotion'?{couponCopy:draft.couponCopy,stackable:draft.coupon.stackable}:{})
+        });
+        createdId=created.id;
+        setSaveNotice('Új sablon létrehozva. A következő Mentés már ezt frissíti.');
+      }
+      const refreshed=(await smsApi<{items:Template[]}>('/templates')).items;
+      setTemplates(refreshed);
+      if(createdId)setSelectedTemplateId(createdId);
+    }catch(e){setError(errText(e));}finally{setBusy(false);}
+  }
   return <div className="sms-section">
     <div><p className="sms-overline">{kind==='arrival'?'BEÉRKEZETT ÁRU · ÉRDEKLŐDÉS ALAPJÁN':'PROMÓCIÓ · EGY KLIENS, EGY KÓD'}</p><h2>{kind==='arrival'?'Új áru érkezett az üzletbe':'Személyes kuponkampány'}</h2><SmsHint text="A címzettlista és az SMS-ek előnézete először elkészül. Éles küldés csak külön jóváhagyással indul."/></div>
     {error?<div className="sms-error">{error}</div>:null}{saveNotice?<div className="sms-ok">{saveNotice}</div>:null}
     <fieldset disabled={busy} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="sms-section">
-      <div className="sms-card"><div className="sms-grid three"><label>Kampány neve<input value={draft.title} maxLength={120} onChange={e=>patch({title:e.target.value})}/></label><SmsSelect label="Üzlet" value={draft.location} onChange={value=>{onLocationChange(value);setSources([]);patch({location:value,sources:[]});}} options={meta.locations.map(l=>({value:l.code||'',label:l.name}))}/><SmsSelect label="Üzenet nyelve" value={draft.language} onChange={value=>{const language=value as 'hu'|'ro';patch({language,blocks:initialBlocks(kind,language),couponCopy:defaultCouponCopy(language,draft.coupon.stackable)});}} options={[{value:'hu',label:'Magyar'},{value:'ro',label:'Román'}]}/></div><SmsHint text="Az üzlet, SMS-típus, nyelv és igazolt hozzájárulás együtt számít. Nyelvváltáskor az alapsablon töltődik be."/></div>
+      <div className="sms-card"><div className="sms-grid three"><label>Kampány neve<input value={draft.title} maxLength={120} onChange={e=>patch({title:e.target.value})}/></label><SmsSelect label="Üzlet" value={draft.location} onChange={value=>{onLocationChange(value);setSources([]);patch({location:value,sources:[]});}} options={meta.locations.map(l=>({value:l.code||'',label:l.name}))}/><SmsSelect label="Üzenet nyelve" value={draft.language} onChange={value=>{const language=value as 'hu'|'ro';setSelectedTemplateId('');patch({language,blocks:initialBlocks(kind,language),couponCopy:defaultCouponCopy(language,draft.coupon.stackable)});}} options={[{value:'hu',label:'Magyar'},{value:'ro',label:'Román'}]}/></div><SmsHint text="Az üzlet, SMS-típus, nyelv és igazolt hozzájárulás együtt számít. Nyelvváltáskor az alapsablon töltődik be."/></div>
       {kind==='arrival'?<div className="sms-card">
         <div className="sms-flex"><h3>Bevételezések és PV-k</h3><SmsHint text="Kattints a Tételek gombra a bizonylat tartalmához. Csak a pipával választod ki az SMS-kampányba. Az eredeti átvett mennyiséget mutatjuk."/></div>
         {sourceBusy?<p className="sms-caption">Betöltés…</p>:sources.length?<div className="sms-source-list">
@@ -141,7 +168,7 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
         </div>:<Empty>Nincs bevételezés.</Empty>}
       </div>:<div className="sms-card teal"><h3>Kupon feltételei</h3><div className="sms-grid three" style={{marginTop:14}}><SmsSelect label="Kedvezmény típusa" value={draft.coupon.type} onChange={value=>patch({coupon:{...draft.coupon,type:value as 'percent'|'fixed'}})} options={[{value:'percent',label:'Százalék'},{value:'fixed',label:'Fix összeg · RON'}]}/><label>Kedvezmény értéke *<input type="number" min="0.01" max={draft.coupon.type==='percent'?90:5000} step="0.01" placeholder="Add meg a kedvezményt" value={couponValueText} onChange={e=>{setCouponValueText(e.target.value);patch({coupon:{...draft.coupon,value:e.target.value===''?0:Number(e.target.value)}});}}/></label><label>Minimum vásárlás · RON<input type="number" min="0" step="0.01" value={draft.coupon.minimum} onChange={e=>patch({coupon:{...draft.coupon,minimum:Number(e.target.value)}})}/></label><SmsDatePicker label="Kedvezmény kezdete" value={draft.coupon.validFrom} max={draft.coupon.validUntil} onChange={value=>patch({coupon:{...draft.coupon,validFrom:value}})}/><SmsDatePicker label="Felhasználható eddig" value={draft.coupon.validUntil} min={draft.coupon.validFrom} hint="Az utolsó napon is, 23:59-ig érvényes." onChange={value=>patch({coupon:{...draft.coupon,validUntil:value}})}/></div><div className="sms-validity-example"><strong>A kliensnek egyértelműen:</strong> {smsDisplayDate(draft.coupon.validFrom)} napjától <b>{smsDisplayDate(draft.coupon.validUntil)} 23:59-ig</b> használható (romániai idő szerint).<br/><small>Az SMS-ben: {draft.language==='ro'?'Valabil până la':'Felhasználható'} {smsDisplayDate(draft.coupon.validUntil)}{draft.language==='hu'?'-ig':''}.</small></div>{couponMissing?<p className="sms-note" style={{marginTop:12}}>Nincs automatikus 10% kedvezmény. A kampány csak az általad beírt százalékkal vagy RON-összeggel készíthető elő.</p>:null}<CheckRow checked={draft.coupon.stackable} onChange={v=>{const current=draft.couponCopy||defaultCouponCopy(draft.language,draft.coupon.stackable);patch({coupon:{...draft.coupon,stackable:v},couponCopy:{...current,stacking:defaultCouponCopy(draft.language,v).stacking}});}} title="Más kedvezménnyel is összevonható" hint="Alapból nem. A teljes kosárra érvényes, személyes, üzlethez kötött kupon. A minimum, kezdőnap és összevonhatóság feltételei automatikusan bekerülnek a végleges SMS-be."/></div>}
       <details className="sms-card"><summary>{kind==='arrival'?'Szállítmány szűkítése':'Célcsoport szűkítése'} · opcionális</summary><div className="sms-section"><ChipSelect label="Márkák" options={meta.brands} value={draft.filters.brands} onChange={brands=>patch({filters:{...draft.filters,brands}})}/><ChipSelect label="Termékkör" options={meta.genders} value={draft.filters.genders} onChange={genders=>patch({filters:{...draft.filters,genders}})}/><ChipSelect label="Kategóriák" options={meta.categories} value={draft.filters.categories} onChange={categories=>patch({filters:{...draft.filters,categories}})}/><p className="sms-caption">Új árunál minden megadott feltételnek ugyanazon terméken kell egyeznie. A kliens saját érdeklődéseit akkor is figyelembe vesszük, ha itt semmit nem szűkítesz.</p></div></details>
-      <div className="sms-composer"><div className="sms-card"><SmsSelect label="Mentett sablon" value="" onChange={value=>{const t=templates.find(x=>x.id===value);if(t)patch({blocks:t.blocks,coupon:{...draft.coupon,stackable:t.coupon_stackable===true},couponCopy:t.coupon_copy||defaultCouponCopy(draft.language,t.coupon_stackable===true)});}} placeholder="Válassz sablont, vagy szerkeszd az alábbit" options={templates.filter(t=>t.kind===kind&&t.language===draft.language).map(t=>({value:t.id,label:t.name}))}/><div className="sms-divider"/><SmsBlockEditor kind={kind} blocks={draft.blocks} tokens={meta.tokens} onChange={blocks=>patch({blocks})}/>{kind==='promotion'?<div className="sms-coupon-copy"><h3>Kuponfeltételek szövege · szerkeszthető</h3><p className="sms-caption">Ezek a mondatok is bekerülnek az SMS-be. A kezdőnap és a minimum vásárlás a kupon beállításaiból kerül melléjük.</p><label>Személyes felhasználásról szóló szöveg<textarea rows={2} maxLength={180} value={draft.couponCopy?.eligibility||''} onChange={e=>patch({couponCopy:{...(draft.couponCopy||defaultCouponCopy(draft.language,draft.coupon.stackable)),eligibility:e.target.value}})}/></label><label>Más kedvezményekkel való összevonás szövege<textarea rows={2} maxLength={180} value={draft.couponCopy?.stacking||''} onChange={e=>patch({couponCopy:{...(draft.couponCopy||defaultCouponCopy(draft.language,draft.coupon.stackable)),stacking:e.target.value}})}/></label><small className="sms-caption">A szöveg feleljen meg a ténylegesen beállított kuponszabálynak.</small></div>:null}{unsafe?<p className="sms-error" style={{marginTop:12}}>A kapcsos zárójelet töröld a szövegből. Adatmezőt a listából válassz.</p>:null}{status.role==='admin'?<button type="button" className="sms-button subtle" style={{marginTop:14}} onClick={()=>void saveTemplate()}><Save size={15}/> Mentés új sablonként</button>:null}</div><div className="sms-sticky"><PhonePreview message={preview} subtitle={`SMS-előnézet · ${shopName}`}/><SmsInfoHelp/></div></div>
+      <div className="sms-composer"><div className="sms-card"><SmsSelect label="Mentett sablon" value={selectedTemplateId} onChange={value=>{setSelectedTemplateId(value);const t=templates.find(x=>x.id===value);if(t)patch({blocks:t.blocks,coupon:{...draft.coupon,stackable:t.coupon_stackable===true},couponCopy:t.coupon_copy||defaultCouponCopy(draft.language,t.coupon_stackable===true)});else setSaveNotice('');}} placeholder="Új sablon (vagy válassz meglévőt)" options={templates.filter(t=>t.kind===kind&&t.language===draft.language).map(t=>({value:t.id,label:t.name}))}/><div className="sms-divider"/><SmsBlockEditor kind={kind} blocks={draft.blocks} tokens={meta.tokens} onChange={blocks=>patch({blocks})}/>{kind==='promotion'?<div className="sms-coupon-copy"><h3>Kuponfeltételek szövege · szerkeszthető</h3><p className="sms-caption">Ezek a mondatok is bekerülnek az SMS-be. A kezdőnap és a minimum vásárlás a kupon beállításaiból kerül melléjük.</p><label>Személyes felhasználásról szóló szöveg<textarea rows={2} maxLength={180} value={draft.couponCopy?.eligibility||''} onChange={e=>patch({couponCopy:{...(draft.couponCopy||defaultCouponCopy(draft.language,draft.coupon.stackable)),eligibility:e.target.value}})}/></label><label>Más kedvezményekkel való összevonás szövege<textarea rows={2} maxLength={180} value={draft.couponCopy?.stacking||''} onChange={e=>patch({couponCopy:{...(draft.couponCopy||defaultCouponCopy(draft.language,draft.coupon.stackable)),stacking:e.target.value}})}/></label><small className="sms-caption">A szöveg feleljen meg a ténylegesen beállított kuponszabálynak.</small></div>:null}{unsafe?<p className="sms-error" style={{marginTop:12}}>A kapcsos zárójelet töröld a szövegből. Adatmezőt a listából válassz.</p>:null}{status.role==='admin'?<button type="button" className="sms-button subtle" style={{marginTop:14}} onClick={()=>void saveTemplate()}><Save size={15}/> {selectedTemplateId?'Sablon módosításainak mentése':'Új sablon mentése'}</button>:null}</div><div className="sms-sticky"><PhonePreview message={preview} subtitle={`SMS-előnézet · ${shopName}`}/><SmsInfoHelp/></div></div>
       <div className="sms-card"><div className="sms-flex"><div><h3>{live(status)?'Készen áll az ellenőrzésre?':'Próbakampány előkészítése'}</h3><SmsHint text="Csak előnézetet és címzettlistát készít, SMS-t nem küld."/></div><button type="button" className="sms-button primary" disabled={busy||unsafe||couponMissing||!draft.location||(kind==='arrival'&&!draft.sources.length)} onClick={()=>void prepare()}>{busy?<Loader2 className="sms-spin" size={18}/>:<Users size={18}/>} Címzettek ellenőrzése <ArrowRight size={16}/></button></div></div>
     </div></fieldset>
     {sourceDetail?<SmsModal title={`${sourceDetail.source.title} · tételek`} eyebrow="ALLINFASHION · BIZONYLAT" compact onClose={()=>setSourceDetail(null)} extra={<span className="sms-pill">{sourceDetail.source.qty} db</span>}>
@@ -221,36 +248,31 @@ function Reconcile({recipient,onSaved}:{recipient:SmsRecipient;onSaved:()=>void}
   async function save(){setBusy(true);setError('');try{await smsApi(`/recipients/${recipient.id}/reconcile`,{result,providerId,note});onSaved();}catch(e){setError(errText(e));}finally{setBusy(false);}}
   return <details className="sms-card soft" style={{marginTop:15}}><summary>Bizonytalan küldés kézi egyeztetése</summary><p className="sms-caption">Csak az SMSLink naplójában végzett ellenőrzés után. Ez nem küld új SMS-t.</p>{error?<div className="sms-error">{error}</div>:null}<div className="sms-section" style={{marginTop:12}}><SmsSelect label="Ellenőrzött eredmény" value={result} onChange={setResult} options={[{value:'accepted',label:'SMSLink átvette'},{value:'delivered',label:'SMSLink szerint kézbesítve'},{value:'failed',label:'Biztosan nem került elküldésre'}]}/><label>SMSLink üzenetazonosító<input value={providerId} onChange={e=>setProviderId(e.target.value)}/></label><label>Ellenőrzés részletei<textarea value={note} onChange={e=>setNote(e.target.value)}/></label><button type="button" className="sms-button" disabled={busy||note.length<12} onClick={()=>void save()}>Ellenőrzött eredmény rögzítése</button></div></details>;
 }
-function SmsSettingsPanel({status,meta,onSaved}:{status:SmsStatus;meta:SmsMeta;onSaved:()=>void}){
+function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
   const[s,setS]=useState<SmsSettings>(status.settings),[busy,setBusy]=useState(false),[error,setError]=useState(''),[ok,setOk]=useState('');
   const[testConfirm,setTestConfirm]=useState(false),[testBusy,setTestBusy]=useState(false),[testError,setTestError]=useState(''),[testOk,setTestOk]=useState('');
   const[testTemplates,setTestTemplates]=useState<Template[]>([]),[testTemplateId,setTestTemplateId]=useState(''),[testLocation,setTestLocation]=useState('main_warehouse');
-  const[testBrandId,setTestBrandId]=useState(''),[testCategoryId,setTestCategoryId]=useState(''),[testEncodingMode,setTestEncodingMode]=useState<'original'|'gsm7'>('original');
-  const testSelectedTemplate=testTemplates.find(t=>t.id===testTemplateId);
-  const testRequiresBrand=Boolean(testSelectedTemplate?.blocks.some(b=>b.type==='token'&&b.value==='brands'));
-  const testRequiresCategory=Boolean(testSelectedTemplate?.blocks.some(b=>b.type==='token'&&b.value==='categories'));
-  const testBrandMissing=testRequiresBrand&&!testBrandId;
-  const testCategoryMissing=testRequiresCategory&&!testCategoryId;
+
   const[testPreview,setTestPreview]=useState<SmsTestPreview|null>(null),[testPreviewError,setTestPreviewError]=useState(''),[testPreviewBusy,setTestPreviewBusy]=useState(false);
   const testPhoneSaved=Boolean(status.settings.testPhone)&&s.testPhone===status.settings.testPhone;
   useEffect(()=>{let active=true;smsApi<{items:Template[]}>('/templates').then(r=>{if(active)setTestTemplates(r.items);}).catch(e=>{if(active)setTestPreviewError(errText(e));});return()=>{active=false;};},[]);
   useEffect(()=>{
     let active=true;
     setTestPreview(null);setTestPreviewError('');setTestConfirm(false);
-    if(!testTemplateId||testBrandMissing||testCategoryMissing)return;
+    if(!testTemplateId)return;
     setTestPreviewBusy(true);
-    smsApi<SmsTestPreview>('/manager-connection-test/preview',{templateId:testTemplateId,locationCode:testLocation,sampleBrandId:testRequiresBrand?testBrandId:undefined,sampleCategoryId:testRequiresCategory?testCategoryId:undefined,encodingMode:testEncodingMode})
+    smsApi<SmsTestPreview>('/manager-connection-test/preview',{templateId:testTemplateId,locationCode:testLocation})
       .then(r=>{if(active)setTestPreview(r);})
       .catch(e=>{if(active)setTestPreviewError(errText(e));})
       .finally(()=>{if(active)setTestPreviewBusy(false);});
     return()=>{active=false;};
-  },[testTemplateId,testLocation,testBrandId,testCategoryId,testEncodingMode,testRequiresBrand,testRequiresCategory,testBrandMissing,testCategoryMissing,status.settings.testPhone]);
+  },[testTemplateId,testLocation,status.settings.testPhone]);
   async function sendConnectionTest(){
     if(testBusy||!testConfirm||!testPhoneSaved||!status.configured||!status.serverLiveEnabled||!testPreview||testPreview.blockedReason)return;
     setTestBusy(true);setTestError('');setTestOk('');
     try{
       const r=await smsApi<{ok:boolean;phone:string;segments:number;providerId:string;message:string}>('/manager-connection-test',{
-        templateId:testTemplateId,locationCode:testLocation,sampleBrandId:testRequiresBrand?testBrandId:undefined,sampleCategoryId:testRequiresCategory?testCategoryId:undefined,encodingMode:testEncodingMode,previewFingerprint:testPreview.fingerprint
+        templateId:testTemplateId,locationCode:testLocation,previewFingerprint:testPreview.fingerprint
       },'POST');
       setTestOk(`SMSLink átvette: ${r.phone} · ${r.segments} rész · ${r.providerId}`);
       setTestConfirm(false);smsChanged();
@@ -267,17 +289,14 @@ function SmsSettingsPanel({status,meta,onSaved}:{status:SmsStatus;meta:SmsMeta;o
       <label style={{marginTop:13}}>Teszttelefonszám<input type="tel" inputMode="tel" autoComplete="tel" value={s.testPhone||''} placeholder="+40745123456" onChange={e=>{patch({testPhone:e.target.value});setTestConfirm(false);setTestOk('');}}/></label>
       {!testPhoneSaved?<div className="sms-actions" style={{marginTop:9}}><button type="button" className="sms-button" disabled={busy||!s.testPhone?.trim()} onClick={()=>void save()}>{busy?<Loader2 size={15} className="sms-spin"/>:<Save size={15}/>} Szám mentése</button></div>:<div className="sms-short-note" style={{marginTop:10}}><span className="sms-pill live">Mentett szám</span></div>}
       <div className="sms-grid two" style={{marginTop:17}}>
-        <SmsSelect label="Küldendő sablon" value={testTemplateId} onChange={value=>{setTestTemplateId(value);setTestBrandId('');setTestCategoryId('');setTestConfirm(false);setTestOk('');}} options={[{value:'connection',label:'Kapcsolatpróba · alap'},...testTemplates.map(t=>({value:t.id,label:`${t.name} · ${t.language.toUpperCase()}`}))]} placeholder="Válaszd ki az üzenetet"/>
+        <SmsSelect label="Küldendő sablon" value={testTemplateId} onChange={value=>{setTestTemplateId(value);setTestConfirm(false);setTestOk('');}} options={[{value:'connection',label:'Kapcsolatpróba · alap'},...testTemplates.map(t=>({value:t.id,label:`${t.name} · ${t.language.toUpperCase()}`}))]} placeholder="Válaszd ki az üzenetet"/>
         <SmsSelect label="Üzlet a mintában" value={testLocation} onChange={value=>{setTestLocation(value);setTestConfirm(false);}} options={[{value:'main_warehouse',label:'Csíkszereda'},{value:'magazin_targu_secuiesc',label:'Kézdivásárhely'}]}/>
       </div>
       {testTemplateId?<div style={{marginTop:13}}>
-        {testRequiresBrand?<SmsSelect label="Mintamárka · a sablon márkamezőjéhez" value={testBrandId} onChange={value=>{setTestBrandId(value);setTestConfirm(false);}} options={meta.brands.map(b=>({value:b.id,label:b.name}))} placeholder="Válassz márkát"/>:null}
-        {testRequiresCategory?<div style={{marginTop:10}}><SmsSelect label="Mintakategória" value={testCategoryId} onChange={value=>{setTestCategoryId(value);setTestConfirm(false);}} options={meta.categories.map(c=>({value:c.id,label:c.name}))} placeholder="Válassz kategóriát"/></div>:null}
-        <div style={{marginTop:10}}><SmsSelect label="Tesztkódolás" value={testEncodingMode} onChange={value=>{setTestEncodingMode(value as 'original'|'gsm7');setTestConfirm(false);}} options={[{value:'original',label:'Eredeti szöveg, ékezetesen'},{value:'gsm7',label:'GSM-7 próba, ékezet nélkül'}]}/></div>
-        <div className="sms-short-note" style={{marginTop:13}}><strong>Az elküldendő szöveg</strong><SmsHint text="A mentett sablon szövege, a választott márkával és üzlettel kitöltve. Nem teszünk hozzá önkényes Teszt-SMS sort. A GSM-7 változat csak külön kiválasztásra készül. Kliensnek nem küldünk."/></div>
-        {testBrandMissing||testCategoryMissing?<p className="sms-caption">Válaszd ki a sablonban használt mintaadatokat.</p>:testPreviewBusy?<p className="sms-caption">Előnézet betöltése…</p>:testPreview?<>
+        <div className="sms-short-note" style={{marginTop:13}}><strong>Pontosan ezt küldjük</strong><SmsHint text="A mentett sablonból készül. A márkákat a tesztszámhoz tartozó kliens mentett érdeklődése alapján tölti ki. Az SMSLink-kompatibilis szöveg automatikusan készül, a sablon ékezetei megmaradnak."/></div>
+        {testPreviewBusy?<p className="sms-caption">Előnézet betöltése…</p>:testPreview?<>
           <pre className="sms-test-body">{testPreview.message}</pre>
-          <span className="sms-pill">{testPreview.encoding} · {testPreview.segments} SMS-rész{testPreview.modifiedForGsm7?' · ékezet nélkül':''}</span>
+          <span className="sms-pill">{testPreview.segments} SMS-rész{testPreview.modifiedForGsm7?' · SMSLink-kompatibilis szöveg':''}</span>{testPreview.sampleSource?<SmsHint text={`Mintaadatok forrása: ${testPreview.sampleSource}. A küldendő szöveg fent teljes egészében látszik.`}/>:null}
           {testPreview.blockedReason?<div className="sms-error" style={{marginTop:10}}>{testPreview.blockedReason}</div>:null}
         </>:null}
         {testPreviewError?<div className="sms-error" style={{marginTop:10}}>{testPreviewError}</div>:null}
@@ -317,17 +336,29 @@ function SmsSettingsPanel({status,meta,onSaved}:{status:SmsStatus;meta:SmsMeta;o
     <div className="sms-flex"><p className="sms-caption">Minden módosítást az admin auditnapló őriz.</p><button type="button" className="sms-button primary" disabled={busy} onClick={()=>void save()}>{busy?<Loader2 className="sms-spin" size={17}/>:<Save size={17}/>} Beállítások mentése</button></div>
   </div>;
 }
-function Templates({onUse,isAdmin}:{onUse:(t:Template)=>void;isAdmin:boolean}){
+function Templates({onUse,isAdmin,tokens}:{onUse:(t:Template)=>void;isAdmin:boolean;tokens:SmsMeta['tokens']}){
   const[items,setItems]=useState<Template[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState('');
-  const[editing,setEditing]=useState(''),[editName,setEditName]=useState(''),[deleting,setDeleting]=useState(''),[busyId,setBusyId]=useState('');
+  const[editing,setEditing]=useState<Template|null>(null),[editName,setEditName]=useState(''),
+    [editBlocks,setEditBlocks]=useState<SmsBlock[]>([]),[editCouponCopy,setEditCouponCopy]=useState<SmsCouponCopy|null>(null);
+  const[deleting,setDeleting]=useState(''),[busyId,setBusyId]=useState('');
   const refresh=useCallback(async()=>{setItems((await smsApi<{items:Template[]}>('/templates')).items);},[]);
   useEffect(()=>{void refresh().catch(e=>setError(errText(e)));},[refresh]);
-  async function rename(t:Template){
-    const name=editName.trim();if(name.length<3||name.length>100){setError('A sablonnév 3–100 karakter hosszú legyen.');return;}
-    setBusyId(t.id);setError('');setNotice('');
+  function startEdit(t:Template){
+    setDeleting('');setEditing(t);setEditName(t.name);setEditBlocks(t.blocks.map(b=>({...b})));
+    setEditCouponCopy(t.kind==='promotion'?{...(t.coupon_copy||defaultCouponCopy(t.language,t.coupon_stackable===true))}:null);
+    setError('');setNotice('');
+  }
+  async function saveEdit(){
+    if(!editing||busyId)return;
+    const name=editName.trim();
+    if(name.length<3||name.length>100){setError('A sablonnév 3–100 karakter hosszú legyen.');return;}
+    setBusyId(editing.id);setError('');setNotice('');
     try{
-      await smsApi(`/templates/${encodeURIComponent(t.id)}`,{name},'PATCH');
-      await refresh();setEditing('');setNotice(`Sablon átnevezve: ${name}`);
+      await smsApi(`/templates/${encodeURIComponent(editing.id)}`,{
+        name,blocks:editBlocks,expectedUpdatedAt:editing.updated_at,
+        ...(editing.kind==='promotion'?{couponCopy:editCouponCopy,stackable:editing.coupon_stackable===true}:{})
+      },'PATCH');
+      await refresh();setEditing(null);setNotice(`Sablon mentve: ${name}`);
     }catch(e){setError(errText(e));}finally{setBusyId('');}
   }
   async function remove(t:Template){
@@ -338,19 +369,38 @@ function Templates({onUse,isAdmin}:{onUse:(t:Template)=>void;isAdmin:boolean}){
       await refresh();setDeleting('');setNotice(`Sablon törölve: ${t.name}`);
     }catch(e){setError(errText(e));}finally{setBusyId('');}
   }
-  return <div className="sms-section"><div><h2>Üzenetsablonok</h2><p className="sms-caption">A saját, mentett sablonokat itt átnevezheted vagy törölheted. A korábban előkészített kampányok üzenete nem változik.</p></div>
-    {error?<div className="sms-error">{error}</div>:null}{notice?<div className="sms-ok">{notice}</div>:null}
+  const editPreview=editBlocks.map(b=>b.type==='token'?`[${tokens.find(t=>t.id===b.value)?.name||b.value}]`:b.value).join('').trim();
+  return <div className="sms-section"><div className="sms-flex"><h2>Üzenetsablonok</h2><SmsHint text="Ceruza: név és teljes SMS-szöveg módosítása. Mentéskor ugyanaz a sablon frissül, az előző kampányok nem."/></div>
+    {error&&!editing?<div className="sms-error">{error}</div>:null}{notice?<div className="sms-ok">{notice}</div>:null}
     {items.length?<div className="sms-grid two">{items.map(t=><div className="sms-card sms-template-card" key={t.id}>
       <div className="sms-template-heading"><div className="sms-template-title"><h3>{t.name}</h3><span className="sms-pill">{t.language.toUpperCase()} · {t.kind==='arrival'?'Új áru':'Kupon'}</span></div>
-      {isAdmin?<div className="sms-template-actions"><button type="button" aria-label={`${t.name} átnevezése`} title="Átnevezés" disabled={!!busyId} onClick={()=>{setDeleting('');setEditing(t.id);setEditName(t.name);setError('');}}><Pencil size={15}/></button><button type="button" aria-label={`${t.name} törlése`} title="Törlés" disabled={!!busyId} onClick={()=>{setEditing('');setDeleting(t.id);setError('');}}><Trash2 size={15}/></button></div>:null}</div>
-      {editing===t.id?<div className="sms-template-edit"><label>Új sablonnév<input autoFocus maxLength={100} value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();void rename(t);}if(e.key==='Escape')setEditing('');}}/></label><div className="sms-actions"><button type="button" className="sms-button primary" disabled={!!busyId} onClick={()=>void rename(t)}><Save size={14}/> Név mentése</button><button type="button" className="sms-button" disabled={!!busyId} onClick={()=>setEditing('')}>Mégse</button></div></div>:null}
-      {deleting===t.id?<div className="sms-template-confirm"><strong>Biztosan törlöd ezt a sablont?</strong><p className="sms-caption">A sablon eltűnik a listából. A régebbi kampányok megmaradnak.</p><div className="sms-actions"><button type="button" className="sms-button danger" disabled={!!busyId} onClick={()=>void remove(t)}><Trash2 size={14}/> Végleges törlés</button><button type="button" className="sms-button" disabled={!!busyId} onClick={()=>setDeleting('')}>Mégse</button></div></div>:null}
+      {isAdmin?<div className="sms-template-actions"><button type="button" aria-label={`${t.name} szerkesztése`} title="Név és üzenet szerkesztése" disabled={!!busyId} onClick={()=>startEdit(t)}><Pencil size={15}/></button><button type="button" aria-label={`${t.name} törlése`} title="Törlés" disabled={!!busyId} onClick={()=>{setEditing(null);setDeleting(t.id);setError('');}}><Trash2 size={15}/></button></div>:null}</div>
+      {deleting===t.id?<div className="sms-template-confirm"><strong>Biztosan törlöd ezt a sablont?</strong><div className="sms-actions" style={{marginTop:10}}><button type="button" className="sms-button danger" disabled={!!busyId} onClick={()=>void remove(t)}><Trash2 size={14}/> Törlés</button><button type="button" className="sms-button" disabled={!!busyId} onClick={()=>setDeleting('')}>Mégse</button></div></div>:null}
       <div className="sms-template-preview">{t.blocks.map(b=>b.type==='token'?`[${b.value}]`:b.value).join('').trim()}{t.kind==='promotion'&&t.coupon_copy?`\n${t.coupon_copy.eligibility}\n${t.coupon_copy.stacking}`:''}</div>
-      <button type="button" className="sms-button primary" style={{marginTop:14}} disabled={!!busyId} onClick={()=>onUse(t)}>Új kampány ezzel a sablonnal <ArrowRight size={15}/></button>
-    </div>)}</div>:<Empty>Még nincs saját elmentett sablon. A beépített minták az SMS-szerkesztőben érhetők el.</Empty>}
+      <button type="button" className="sms-button primary" style={{marginTop:14}} disabled={!!busyId} onClick={()=>onUse(t)}>Kampány készítése <ArrowRight size={15}/></button>
+    </div>)}</div>:<Empty>Még nincs mentett sablon.</Empty>}
+    {editing?<SmsModal title="Sablon szerkesztése" eyebrow="ALLINFASHION · ÜZENETSABLON" compact onClose={()=>{if(!busyId){setEditing(null);setError('');}}}>
+      <div className="sms-content sms-section">
+        <div className="sms-card">
+          <label>Sablon neve<input autoFocus maxLength={100} value={editName} disabled={!!busyId} onChange={e=>setEditName(e.target.value)}/></label>
+          <div className="sms-flex" style={{marginTop:12}}><span className="sms-pill">{editing.language.toUpperCase()} · {editing.kind==='arrival'?'Új áru':'Kupon'}</span><SmsHint text="A meglévő sablon frissül, nem készül másolat. Az SMS változó adatait listából választhatod."/></div>
+        </div>
+        {error?<div className="sms-error">{error}</div>:null}
+        <fieldset disabled={!!busyId} style={{border:0,padding:0,margin:0,minWidth:0}}>
+          <div className="sms-card"><SmsBlockEditor kind={editing.kind} blocks={editBlocks} tokens={tokens} onChange={setEditBlocks}/>
+            {editing.kind==='promotion'&&editCouponCopy?<div className="sms-coupon-copy" style={{marginTop:16}}>
+              <label>Személyes kupon feltétele<textarea rows={2} maxLength={180} value={editCouponCopy.eligibility} onChange={e=>setEditCouponCopy(x=>x?{...x,eligibility:e.target.value}:x)}/></label>
+              <label>Összevonhatóság szövege<textarea rows={2} maxLength={180} value={editCouponCopy.stacking} onChange={e=>setEditCouponCopy(x=>x?{...x,stacking:e.target.value}:x)}/></label>
+            </div>:null}
+          </div>
+          <div className="sms-card soft"><h3>Üzenet előnézete</h3><pre className="sms-template-preview" style={{whiteSpace:'pre-wrap',marginTop:10}}>{editPreview}{editing.kind==='promotion'&&editCouponCopy?`\n${editCouponCopy.eligibility}\n${editCouponCopy.stacking}`:''}</pre></div>
+          <div className="sms-actions" style={{justifyContent:'flex-end'}}><button type="button" className="sms-button" onClick={()=>{setEditing(null);setError('');}}>Mégse</button><button type="button" className="sms-button primary" onClick={()=>void saveEdit()}><Save size={16}/> Módosítások mentése</button></div>
+        </fieldset>
+      </div>
+    </SmsModal>:null}
   </div>;
 }
-const EVENT_LABEL:Record<string,string>={campaign_finished:'Kampány feldolgozva',campaign_prepared:'Kampány előkészítve',sms_test_attempt:'Teszt-SMS indítva',sms_test_accepted:'Teszt-SMS átadva',sms_test_failed:'Teszt-SMS elutasítva',sms_test_unknown:'Teszt-SMS eredménye bizonytalan',approval_requested:'Jóváhagyás kérve',campaign_approve:'Kampány jóváhagyva',campaign_launch:'Kampány indítva',campaign_pause:'Kampány szüneteltetve',campaign_auto_paused:'Automatikus szüneteltetés',campaign_cancel:'Kampány leállítva',consent_granted:'SMS-hozzájárulás rögzítve',consent_revoked:'SMS-hozzájárulás visszavonva',preferences_saved:'Érdeklődések módosítva',settings_saved:'SMS-beállítások módosítva',template_created:'Sablon létrehozva',template_renamed:'Sablon átnevezve',template_deleted:'Sablon törölve',send_started:'SMS-küldés indítva',send_simulated:'Próbafeldolgozás',provider_accepted:'SMSLink átvette',send_failed:'SMSLink elutasította',send_unknown:'Bizonytalan küldés',recipient_skipped:'Címzett kihagyva',delivery_confirmed:'Kézbesítés visszaigazolva',delivery_failed:'Kézbesítés sikertelen',coupon_redeemed:'Kupon beváltva',provider_manually_reconciled:'Küldés kézzel egyeztetve'};
+const EVENT_LABEL:Record<string,string>={campaign_finished:'Kampány feldolgozva',campaign_prepared:'Kampány előkészítve',sms_test_attempt:'Teszt-SMS indítva',sms_test_accepted:'Teszt-SMS átadva',sms_test_failed:'Teszt-SMS elutasítva',sms_test_unknown:'Teszt-SMS eredménye bizonytalan',approval_requested:'Jóváhagyás kérve',campaign_approve:'Kampány jóváhagyva',campaign_launch:'Kampány indítva',campaign_pause:'Kampány szüneteltetve',campaign_auto_paused:'Automatikus szüneteltetés',campaign_cancel:'Kampány leállítva',consent_granted:'SMS-hozzájárulás rögzítve',consent_revoked:'SMS-hozzájárulás visszavonva',preferences_saved:'Érdeklődések módosítva',settings_saved:'SMS-beállítások módosítva',template_created:'Sablon létrehozva',template_updated:'Sablon módosítva',template_renamed:'Sablon átnevezve',template_deleted:'Sablon törölve',send_started:'SMS-küldés indítva',send_simulated:'Próbafeldolgozás',provider_accepted:'SMSLink átvette',send_failed:'SMSLink elutasította',send_unknown:'Bizonytalan küldés',recipient_skipped:'Címzett kihagyva',delivery_confirmed:'Kézbesítés visszaigazolva',delivery_failed:'Kézbesítés sikertelen',coupon_redeemed:'Kupon beváltva',provider_manually_reconciled:'Küldés kézzel egyeztetve'};
 function AuditPanel({campaignId}:{campaignId?:string}){
   const[rows,setRows]=useState<SmsAuditRow[]>([]),[offset,setOffset]=useState(0),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const load=useCallback(async()=>{setBusy(true);try{const r=await smsApi<{items:SmsAuditRow[]}>(`/audit?offset=${offset}&campaignId=${encodeURIComponent(campaignId||'')}`);setRows(r.items);setError('');}catch(e){setError(errText(e));}finally{setBusy(false);}},[offset,campaignId]);

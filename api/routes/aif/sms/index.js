@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
-import { txt, fail, cleanSettings, validateBlocks, unique, TOKENS, cleanCouponCopy, upgradeLegacyTemplateBlocks } from './domain.js';
+import { txt, fail, cleanSettings, validateBlocks, unique, TOKENS, cleanCouponCopy, upgradeLegacyTemplateBlocks, normalizeSavedSmsTemplateUpdate } from './domain.js';
 import { ensureSmsSchema, settingsFrom, audit } from './schema.js';
 import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourceDetailsFor, sourceProducts } from './data.js';
 import { providerConfig, publicBase, createProvider } from './provider.js';
@@ -137,20 +137,29 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
       await db.query('COMMIT');res.json({ok:true,id});
     }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
   }));
-  // Saved templates are independent snapshots. Renaming/removing one does not
-  // rewrite an already prepared campaign or an SMS previously sent.
+  // Change the SAME saved template record, not create a new one. Prior prepared
+  // campaigns / recipient messages remain immutable and do not reference these blocks.
   router.patch('/templates/:id',adminOnly,safe(async(req,res)=>{
-    const id=txt(req.params.id),name=txt(req.body?.name);
+    const id=txt(req.params.id);
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))throw fail('Érvénytelen sablonazonosító.');
-    if(name.length<3||name.length>100)throw fail('A sablonnév 3–100 karakterből álljon.');
     const db=await pool.connect();
     try{
       await db.query('BEGIN');
-      const previous=(await db.query('SELECT name FROM aif_sms_templates WHERE id=$1 FOR UPDATE',[id])).rows[0];
+      const previous=(await db.query('SELECT * FROM aif_sms_templates WHERE id=$1 FOR UPDATE',[id])).rows[0];
       if(!previous)throw fail('A sablon már nem található.','sms_template_missing',404);
-      await db.query('UPDATE aif_sms_templates SET name=$2,updated_by=$3,updated_at=now() WHERE id=$1',[id,name,actorFrom(req)]);
-      await audit(db,{actor:actorFrom(req),event:'template_renamed',payload:{id,previousName:previous.name,name}});
-      await db.query('COMMIT');res.json({ok:true,id,name});
+      const next=normalizeSavedSmsTemplateUpdate(previous,req.body||{});
+      const changedNames=previous.name!==next.name;
+      const updated=(await db.query(`UPDATE aif_sms_templates
+        SET name=$2,blocks=$3::jsonb,coupon_copy=$4::jsonb,coupon_stackable=$5,
+            updated_by=$6,updated_at=now() WHERE id=$1 RETURNING *`,[
+        id,next.name,JSON.stringify(next.blocks),next.couponCopy==null?null:JSON.stringify(next.couponCopy),
+        next.stackable,actorFrom(req)
+      ])).rows[0];
+      await audit(db,{actor:actorFrom(req),event:next.bodyChanged?'template_updated':'template_renamed',
+        payload:{id,previousName:previous.name,name:next.name,kind:previous.kind,
+          fields:[...(changedNames?['name']:[]),...(next.bodyChanged?['message']:[])]}});
+      await db.query('COMMIT');
+      res.json({ok:true,id,item:{...updated,blocks:upgradeLegacyTemplateBlocks(updated.blocks,updated.language)}});
     }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
   }));
   router.delete('/templates/:id',adminOnly,safe(async(req,res)=>{

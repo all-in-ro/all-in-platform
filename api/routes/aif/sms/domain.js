@@ -176,6 +176,40 @@ export function validateBlocks(blocks, kind) {
   if(!out.some(b=>b.type==='text'&&b.value.trim())) throw fail('Írj szöveget is az üzenethez.');
   return out;
 }
+// Admin-only saved-template edits reuse the original UUID. Prepared campaign messages
+// and already-sent SMSes are independent snapshots and must never be rewritten.
+export function normalizeSavedSmsTemplateUpdate(previous, input = {}) {
+  if (!previous || typeof previous !== 'object') throw fail('A sablon nem található.', 'sms_template_missing', 404);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('Érvénytelen sablonmódosítás.');
+  const has = key => Object.prototype.hasOwnProperty.call(input, key);
+  if (has('kind') && input.kind !== previous.kind) throw fail('A sablon típusa nem változtatható meg.');
+  if (has('language') && input.language !== previous.language) throw fail('A sablon nyelve nem változtatható meg.');
+  const name = has('name') ? txt(input.name) : txt(previous.name);
+  if (name.length < 3 || name.length > 100) throw fail('A sablonnév 3–100 karakterből álljon.');
+  const bodyChanged = has('blocks') || has('couponCopy') || has('stackable');
+  if (!bodyChanged && !has('name')) throw fail('Nincs mentendő sablonmódosítás.');
+  if (bodyChanged) {
+    const expected = input.expectedUpdatedAt;
+    const oldTime = new Date(previous.updated_at).getTime();
+    if (typeof expected !== 'string' || !Number.isFinite(Date.parse(expected)) ||
+        !Number.isFinite(oldTime) || Date.parse(expected) !== oldTime) {
+      throw fail('A sablont közben módosították. Frissítsd a listát, mielőtt újra mentenéd.', 'sms_template_stale', 409);
+    }
+  }
+  const blocks = has('blocks') ? validateBlocks(input.blocks, previous.kind) : previous.blocks;
+  if (previous.kind !== 'promotion' && (has('couponCopy') || has('stackable'))) {
+    throw fail('Kuponszöveg csak promóciós sablonban módosítható.');
+  }
+  if (has('stackable') && typeof input.stackable !== 'boolean') throw fail('Érvénytelen kupon-összevonhatóság.');
+  const stackable = previous.kind === 'promotion'
+    ? (has('stackable') ? input.stackable : previous.coupon_stackable === true)
+    : null;
+  const couponCopy = previous.kind === 'promotion'
+    ? (has('couponCopy') ? cleanCouponCopy(input.couponCopy, previous.language, stackable) : previous.coupon_copy)
+    : null;
+  return { name, blocks, couponCopy, stackable, bodyChanged };
+}
+
 // Preserve Hungarian and Romanian accents in the prepared and sent SMS.
 // SMSLink documents GSM-7; Unicode content is enabled for physical sending only
 // after the provider confirms that this account/connection supports UCS-2.
@@ -206,8 +240,10 @@ export function segmentInfo(text) {
   }
   return {message,units,segments:units<=160?1:Math.ceil(units/152),encoding:'GSM-7'};
 }
-// KIZAROLAG kulon, kifejezetten valasztott GSM-7 tesztmodhoz.
-// A mentett sablont es a vegleges kampany szoveget soha nem modositja.
+// A sablon az adatbazisban eredeti magyar / roman ekezetekkel marad.
+// Az SMSLink HTTP Gateway dokumentalt GSM-7 karakterkeszletehez az
+// elkuldendo peldanyt kulon allitjuk elo; a kliens pontosan ezt latja.
+// Soha nem modositjuk a mentett sablon szoveget.
 export function gsm7TestAlternative(raw) {
   const normalized = smsText(raw).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[ŁłĐđÐðÞþŒœÆæß]/g, character => ({
@@ -217,6 +253,20 @@ export function gsm7TestAlternative(raw) {
   const result = segmentInfo(normalized);
   if (result.encoding !== 'GSM-7') throw fail('A sablonban nem alakítható át minden karakter GSM-7-re. Az ékezetes változathoz SMSLink-megerősítés szükséges.', 'sms_test_gsm7_unavailable', 409);
   return result.message;
+}
+export function smsLinkTransportText(raw, unicodeEnabled=false) {
+  const original=segmentInfo(raw);
+  if(original.encoding==='GSM-7'||unicodeEnabled)return {...original,converted:false};
+  // Az SMSLink altal tamogatott ekezetek (pl. e/é, ö, ü) megmaradnak.
+  // CSAK a GSM-7-ben nem letezo magyar/roman karakterek alakulnak at.
+  const extra={'Ł':'L','ł':'l','Đ':'D','đ':'d','Ð':'D','ð':'d','Þ':'Th','þ':'th','Œ':'OE','œ':'oe'};
+  const compatible=[...original.message].map(c=>{
+    if(c==='\n'||GSM_BASIC.has(c)||GSM_EXT.has(c))return c;
+    return extra[c]||c.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  }).join('');
+  const ready=segmentInfo(compatible);
+  if(ready.encoding!=='GSM-7')throw fail('Az SMSLink nem tamogat minden karaktert ebben az uzenetben. Ellenorizd a kuldendo szoveget.','sms_unsupported_characters',409);
+  return {...ready,converted:ready.message!==original.message};
 }
 export function defaultCouponCopy(language='hu',stackable=false) {
   return language==='ro'
@@ -247,7 +297,7 @@ export function compactSmsNames(values,language='hu',kind='brands') {
   const suffix=kind==='categories'?(language==='ro'?'și alte produse':'és további termékek'):(language==='ro'?'și alte mărci':'és további márkák');
   return uniqueNames.length>2?`${uniqueNames.slice(0,2).join(', ')} ${suffix}`:uniqueNames.join(', ');
 }
-export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false) {
+export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false, unicodeEnabled=false) {
   const raw=blocks.map(b=>{
     if(b.type==='text') return b.value;
     const value=txt(values[b.value]); if(!value) throw fail('Nem tölthető ki az SMS adatmezője: '+b.value,'sms_missing_value'); return value;
@@ -270,7 +320,7 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   const lines=[mainText];
   if(webshop)lines.push('',`Online: ${webshop}`);
   lines.push(`${language==='ro'?'Dezabonare':'Leiratkozás'}: ${optOut}`);
-  return segmentInfo(lines.join('\n'));
+  return smsLinkTransportText(lines.join('\n'),unicodeEnabled);
 }
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);
