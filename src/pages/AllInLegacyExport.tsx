@@ -6,10 +6,17 @@ import {
   UploadCloud, X,
 } from 'lucide-react';
 
-type Problem = { rowNo: number; code: string; name: string; reason: string };
+const EXPORT_VERSION = '20261015.2';
+type Problem = { rowNo: number; cell?: string; code: string; name: string; reason: string; reasonCode?: string };
+type FilledRow = { rowNo: number; cell: string; code: string; name: string; barcode: string; source: string };
 type Result = {
   fileName: string;
-  url: string;
+  url: string | null;
+  verified: boolean;
+  message: string;
+  barcodeColumn: string;
+  sourceCounts: { variant: number; supplier: number; import: number };
+  filledRows: FilledRow[];
   count: number;
   filled: number;
   existing: number;
@@ -25,12 +32,12 @@ function downloadName(value: string) {
 
 function base64Blob(encoded: string) {
   // Decode in slices to avoid quadratic memory usage on larger ForIT workbooks.
-  const parts: Uint8Array[] = [];
+  const parts: BlobPart[] = [];
   for (let pos = 0; pos < encoded.length; pos += 16384) {
     const text = atob(encoded.slice(pos, pos + 16384));
     const bytes = new Uint8Array(text.length);
     for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
-    parts.push(bytes);
+    parts.push(bytes.buffer);
   }
   return new Blob(parts, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
@@ -43,6 +50,8 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
   const [error, setError] = useState('');
   const [result, setResult] = useState<Result | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
+  const [filledOpen, setFilledOpen] = useState(false);
+  const busyRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const downloadRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -65,7 +74,11 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
   }, []);
 
   const chooseFile = (next: File | null) => {
-    if (!next) return;
+    if (!next || busyRef.current) return;
+    if (downloadRef.current) { URL.revokeObjectURL(downloadRef.current); downloadRef.current = null; }
+    setFile(null);
+    setProblemsOpen(false);
+    setFilledOpen(false);
     setError('');
     setResult(null);
     setProgress({ percent: 0, step: '', done: 0, total: 0 });
@@ -82,11 +95,13 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
   };
 
   async function convert() {
-    if (!file || busy) return;
+    if (!file || busyRef.current) return;
+    busyRef.current = true;
     if (downloadRef.current) { URL.revokeObjectURL(downloadRef.current); downloadRef.current = null; }
     setResult(null);
     setError('');
     setProblemsOpen(false);
+    setFilledOpen(false);
     setProgress({ percent: 2, step: 'Fájl feltöltése', done: 0, total: 0 });
     setBusy(true);
     const abort = new AbortController();
@@ -120,17 +135,34 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
         } else if (message.type === 'error') {
           throw new Error(message.message || 'A ForIT-export nem sikerült.');
         } else if (message.type === 'result') {
-          const blob = base64Blob(message.base64);
-          const url = URL.createObjectURL(blob);
-          downloadRef.current = url;
+          if (hasResult) throw new Error('A szerver több, egymásnak ellentmondó eredményt küldött.');
+          if (message.version !== EXPORT_VERSION) {
+            throw new Error('A szerveren még nem a javított ForIT-export fut. A csomag három backendfájljának telepítése és a Render deploy befejezése szükséges.');
+          }
+          const count = Number(message.count), filled = Number(message.filled);
+          const existing = Number(message.existing), missing = Number(message.missing), ambiguous = Number(message.ambiguous);
+          if (![count, filled, existing, missing, ambiguous].every(v => Number.isInteger(v) && v >= 0) ||
+              filled + existing + missing + ambiguous !== count) throw new Error('A feldolgozott sorok összesítése hibás. A letöltést leállítottam.');
+          let url: string | null = null;
+          if (message.downloadable) {
+            if (filled < 1 || message.verified !== true || message.changed !== true || typeof message.base64 !== 'string' || !message.base64) {
+              throw new Error('A szerver nem igazolta a vonalkódok tényleges beírását. Változatlan fájlt nem töltünk le.');
+            }
+            url = URL.createObjectURL(base64Blob(message.base64));
+            downloadRef.current = url;
+          } else if (filled || message.base64) {
+            throw new Error('Hiányos exporteredmény érkezett. A letöltést leállítottam.');
+          }
           hasResult = true;
-          setResult({ fileName: downloadName(message.fileName), url,
-            count: Number(message.count || 0), filled: Number(message.filled || 0),
-            existing: Number(message.existing || 0), missing: Number(message.missing || 0),
-            ambiguous: Number(message.ambiguous || 0),
+          setResult({ fileName: url ? downloadName(message.fileName) : '', url,
+            count, filled, existing, missing, ambiguous, verified: message.verified === true,
+            message: String(message.message || ''), barcodeColumn: String(message.barcodeColumn || 'Codbare'),
+            sourceCounts: { variant: Number(message.sourceCounts?.variant || 0), supplier: Number(message.sourceCounts?.supplier || 0), import: Number(message.sourceCounts?.import || 0) },
             problems: Array.isArray(message.problems) ? message.problems : [],
+            filledRows: Array.isArray(message.filledRows) ? message.filledRows : [],
           });
-          setProgress({ percent: 100, step: 'Letölthető', done: Number(message.count || 0), total: Number(message.count || 0) });
+          setProblemsOpen(missing + ambiguous > 0);
+          setProgress({ percent: 100, step: url ? 'A kész Excel ellenőrizve' : 'Ellenőrzés befejezve, új fájl nem készült', done: count, total: count });
         }
       };
       while (true) {
@@ -144,19 +176,24 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
           readEvent(line);
         }
       }
+      lineBuffer += decoder.decode();
       if (lineBuffer.trim()) readEvent(lineBuffer);
       if (!hasResult) throw new Error('A szerver nem adott letölthető eredményt.');
     } catch (caught) {
+      abort.abort();
+      if (downloadRef.current) { URL.revokeObjectURL(downloadRef.current); downloadRef.current = null; }
+      setResult(null);
       setError(caught instanceof Error ? caught.message : 'Nem sikerült kitölteni a ForIT-fájlt.');
       setProgress({ percent: 0, step: '', done: 0, total: 0 });
     } finally {
       abortRef.current = null;
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   function download() {
-    if (!result) return;
+    if (!result?.url || !result.verified || result.filled < 1) return;
     const link = document.createElement('a');
     link.href = result.url;
     link.download = result.fileName;
@@ -229,24 +266,44 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
           </div>
 
           {result && !busy ? (
-            <section className="mt-5 overflow-hidden rounded-[22px] border border-[#8eedd1]/40 bg-gradient-to-br from-[#1f665b]/48 via-[#254b50]/55 to-[#26394b] shadow-[0_12px_35px_rgba(0,0,0,0.16)]">
+            <section className={`mt-5 overflow-hidden rounded-[22px] border shadow-[0_12px_35px_rgba(0,0,0,0.16)] ${skipped ? 'border-[#f4c780]/45 bg-[#3a3d44]' : 'border-[#8eedd1]/40 bg-[#254b50]/55'}`}>
               <div className="flex flex-wrap items-center justify-between gap-3 p-4 sm:p-5">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-[#a0ffe0]/35 bg-[#27a786]/25 text-[#a9ffdf]"><CheckCircle2 size={24}/></div>
-                  <div className="min-w-0"><h3 className="text-base font-medium text-white">A fájl letölthető</h3><p className="mt-1 break-all text-xs text-white/57">{result.fileName}</p></div>
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${skipped || !result.url ? 'border-[#f1cf9c]/35 bg-[#b58b45]/15 text-[#ffdfa7]' : 'border-[#a0ffe0]/35 bg-[#27a786]/25 text-[#a9ffdf]'}`}>{skipped || !result.url ? <CircleAlert size={24}/> : <CheckCircle2 size={24}/>}</div>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-medium text-white">{!result.url ? 'Új fájl nem készült' : skipped ? 'Részben kitöltve, ellenőrzött Excel' : 'A vonalkódok beírva, az Excel ellenőrizve'}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-white/80">{result.message}</p>
+                    {result.fileName ? <p className="mt-2 break-all text-[11px] text-white/55">{result.fileName}</p> : null}
+                  </div>
                 </div>
-                <button type="button" onClick={download} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-[#b7ffd6]/60 bg-[#259c7e] px-5 text-sm font-medium text-white shadow-[0_6px_22px_rgba(37,156,126,0.30)] transition hover:bg-[#2dac8d]"><Download size={17}/> Excel letöltése</button>
+                {result.url ? <button type="button" onClick={download} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-[#b7ffd6]/60 bg-[#259c7e] px-5 text-sm font-medium text-white shadow-[0_6px_22px_rgba(37,156,126,0.30)] transition hover:bg-[#2dac8d]"><Download size={17}/> Kitöltött Excel letöltése</button> : null}
               </div>
-              <div className="grid grid-cols-3 gap-px border-t border-white/10 bg-white/10">
-                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[10px] text-white/52">Összes sor</p><p className="mt-1 text-xl font-medium text-white">{result.count}</p></div>
-                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[10px] text-white/52">Kitöltve</p><p className="mt-1 text-xl font-medium text-[#adffe1]">{result.filled}</p></div>
-                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[10px] text-white/52">Hiányzik</p><p className={`mt-1 text-xl font-medium ${skipped ? 'text-[#ffd49d]' : 'text-white'}`}>{skipped}</p></div>
+              <div className="grid grid-cols-2 gap-px border-t border-white/10 bg-white/10 sm:grid-cols-4">
+                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[11px] text-white/70">Összes terméksor</p><p className="mt-1 text-xl font-medium text-white">{result.count}</p></div>
+                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[11px] text-white/70">Most beírt vonalkód</p><p className="mt-1 text-xl font-medium text-[#adffe1]">{result.filled}</p></div>
+                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[11px] text-white/70">Már ki volt töltve</p><p className="mt-1 text-xl font-medium text-white">{result.existing}</p></div>
+                <div className="bg-[#273d4b] p-3 text-center"><p className="text-[11px] text-white/70">Üresen / érintetlenül maradt</p><p className={`mt-1 text-xl font-medium ${skipped ? 'text-[#ffd49d]' : 'text-white'}`}>{skipped}</p></div>
               </div>
+              {result.filled > 0 ? <div className="border-t border-white/10 px-4 py-3 text-[11px] leading-relaxed text-white/75">
+                Cél: <strong className="text-white">{result.barcodeColumn} · Codbare</strong> · Variánsnál mentett: {result.sourceCounts.variant} · Beszállítónál mentett: {result.sourceCounts.supplier} · Importban mentett: {result.sourceCounts.import}
+              </div> : null}
+              {result.filledRows.length ? <div className="border-t border-white/10 p-4">
+                <div className="mb-3 flex items-center justify-between gap-2"><h4 className="text-sm text-[#bcffe7]">Ezek már a kész Excelben vannak</h4>{result.filledRows.length > 4 ? <button type="button" className="text-xs text-white/75 underline underline-offset-4" onClick={() => setFilledOpen(v => !v)}>{filledOpen ? 'Kevesebb sor' : `Kitöltött sorok (${result.filledRows.length})`}</button> : null}</div>
+                <div className="space-y-2">
+                  {(filledOpen ? result.filledRows : result.filledRows.slice(0, 4)).map(item => <div key={item.rowNo} className="grid grid-cols-[3rem_1fr] gap-x-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5 text-xs sm:grid-cols-[3rem_1fr_auto]">
+                    <span className="font-mono text-white/60">{item.cell}</span>
+                    <span className="min-w-0 break-words text-white/85">{item.name.split('--')[1] || item.name || item.code}</span>
+                    <strong className="col-start-2 mt-1 break-all font-mono text-sm tracking-wide text-[#baffdf] sm:col-start-auto sm:mt-0">{item.barcode}</strong>
+                  </div>)}
+                </div>
+                {result.filled > result.filledRows.length ? <p className="mt-2 text-[11px] text-white/60">A lista az első {result.filledRows.length} kitöltött sort mutatja; az Excel mind a {result.filled} beírt vonalkódot tartalmazza.</p> : null}
+              </div> : null}
               {skipped > 0 ? (
-                <div className="p-4">
-                  <button type="button" className="flex w-full items-center justify-between gap-2 text-left text-sm text-[#ffdfa7]" onClick={() => setProblemsOpen(v => !v)}><span><CircleAlert size={15} className="mr-2 inline"/>{skipped} sor nem tölthető ki biztosan</span><span>{problemsOpen ? 'Bezárás' : 'Részletek'}</span></button>
-                  {problemsOpen ? <div className="mt-3 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-black/10 p-2">
-                    {result.problems.map(problem => <div key={problem.rowNo} className="border-b border-white/10 px-2 py-2 text-xs last:border-0"><span className="text-white">{problem.rowNo}. sor · {problem.code}</span><p className="mt-1 text-[#ffd4a1]">{problem.reason}</p></div>)}
+                <div className="border-t border-white/10 p-4">
+                  <button type="button" className="flex w-full items-center justify-between gap-2 text-left text-sm text-[#ffdfa7]" onClick={() => setProblemsOpen(v => !v)}><span><CircleAlert size={15} className="mr-2 inline"/>{skipped} kimaradt sor, pontos okkal</span><span>{problemsOpen ? 'Elrejtés' : 'Részletek'}</span></button>
+                  {problemsOpen ? <div className="mt-3 space-y-2">
+                    {result.problems.map(problem => <div key={problem.rowNo} className="rounded-xl border border-[#f4c780]/20 bg-black/10 px-3 py-3 text-xs"><span className="text-white">{problem.cell || `${problem.rowNo}. sor`} · {problem.name.split('--')[1] || problem.name || problem.code}</span><p className="mt-1 break-all text-[11px] text-white/55">{problem.code}</p><p className="mt-2 leading-relaxed text-[#ffdbad]">{problem.reason}</p></div>)}
+                    {skipped > result.problems.length ? <p className="text-[11px] text-white/60">Az első {result.problems.length} kimaradt sor részletei láthatók.</p> : null}
                   </div> : null}
                 </div>
               ) : null}
@@ -254,7 +311,7 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
           ) : null}
         </div>
         <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-white/12 bg-[#263346] px-5 py-3 text-xs text-white/43 sm:px-7">
-          <span><FileCheck2 size={13} className="mr-1.5 inline"/>Csak olvasó művelet · ForIT kompatibilis XLSX</span>
+          <span><FileCheck2 size={13} className="mr-1.5 inline"/>Csak olvasó művelet · ForIT v2 <span className="ml-1 font-mono text-white/50">{EXPORT_VERSION}</span></span>
           <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-white/15 bg-white/[0.06] px-4 py-2 text-xs text-white/80 transition hover:bg-white/10 disabled:opacity-40">Bezárás</button>
         </footer>
       </section>
