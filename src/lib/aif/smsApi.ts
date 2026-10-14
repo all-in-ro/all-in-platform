@@ -23,6 +23,9 @@ export type SmsPreference = {
   restoreSuppressed?: boolean;
 };
 export type SmsProfileStatus = { error?: boolean; id: string; enabled: boolean; arrivals: boolean; promotions: boolean; brands: string[]; genders: string[]; suppressed: boolean };
+export type SmsSourceLine = {lineNo:number;title:string;code:string;brand:string;color:string;size:string;category:string;qty:number};
+export type SmsSourceDetails = {source:SmsSource;items:SmsSourceLine[]};
+export type SmsTestPreview = {templateId:string;templateName:string;locationCode:string;phone:string;message:string;segments:number;encoding:string;fingerprint:string;blockedReason?:string|null};
 export type SmsSource = { id: string; type: string; title: string; date: string; qty: number; variants: number };
 export type SmsCouponCopy = {eligibility:string;stacking:string};
 export type SmsRules = { type:'percent'|'fixed'; value:number; minimum:number; validFrom:string; validUntil:string; stackable:boolean };
