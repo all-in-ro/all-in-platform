@@ -7,6 +7,7 @@ import createAifShopIncomingRouter from "./aif/shopIncoming.js";
 import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
+import createAifLegacyExportRouter from "./aif/legacyExport.js";
 import { createHash } from "node:crypto";
 import { aifImageGallery, aifImageUrl, aifValidatedGallery } from "../lib/aifImageGallery.js";
 import { ensureAifShopifyImageSchema, enqueueAifShopifyImagesForVariant } from "../lib/aifShopifyImages.js";
@@ -32341,6 +32342,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     normCode,
     isUuidText,
   }));
+
+  // ForIT XLSX visszaexport: csak a Codbare oszlopot tölti ki.
+  // A híd teljes logikája külön modulban marad.
+  router.use("/legacy-export", createAifLegacyExportRouter({ pool, requireAdminOrSecret }));
 
   // Az admin üzletmonitor soraihoz tartozó rövid eladási megjegyzések.
   // Külön, célzott kérésben jönnek, hogy a fő overview válasz ne hízzon feleslegesen,
