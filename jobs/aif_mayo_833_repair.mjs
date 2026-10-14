@@ -9,10 +9,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
+import { checkReusePrices } from './lib/mayo_833_price_policy.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(here, 'data/mayo_833_original.json'), 'utf8'));
 const BATCH = manifest.batchId;
+// FONTOS: a V2-vel AZONOS azonosító. Két kiadás soha nem könyvelheti át kétszer ugyanazt a számlát.
 const KEY = `mayo_833_20261014_v2:${BATCH}`;
 const PREVIOUS_BATCH = 'bebf7410-053a-4cf9-856e-bae5003a30cd';
 const APPLY = process.argv.includes('--apply');
@@ -106,6 +108,10 @@ async function load() {
       if (norm(a)!==norm(b)) mismatches.push({rowNo:r.row_no,field,db:a,excel:b});
     }
     if (int(r.qty)!==x.qty) mismatches.push({rowNo:r.row_no,field:'mennyiség',db:r.qty,excel:x.qty});
+    // A 833-as eredeti vételár NEM függhet a 832-es ugyanilyen termékétől.
+    if (r.buy_price_ron === null || r.buy_price_ron === undefined ||
+        money(r.buy_price_ron)!==money(x.buyPrice))
+      mismatches.push({rowNo:r.row_no,field:'833-as számla vételára',db:r.buy_price_ron,excel:x.buyPrice});
   }
   assert(!mismatches.length,`Az adatbázis eltér az eredeti Excel soraitól: ${JSON.stringify(mismatches.slice(0,12))}`);
   const byId=new Map(importRows.map(r=>[String(r.id),r]));
@@ -210,9 +216,12 @@ async function load() {
 
   // Kizárólag a korábbi 832-es számla biztos, színhelyes variánsai lehetnek
   // célpontok: az ottani árakat, eladásokat és bevételezési sorokat megőrizzük.
-  const previousSourceRows=await rows(`SELECT id,variant_id,qty FROM aif_import_rows WHERE batch_id=$1`,[PREVIOUS_BATCH]);
+  const previousSourceRows=await rows(`SELECT id,variant_id,qty,buy_price,buy_price_ron,sell_price,sell_price_ron
+    FROM aif_import_rows WHERE batch_id=$1`,[PREVIOUS_BATCH]);
   assert(previousSourceRows.length===118,'A 832-es referencia 118 soros állománya időközben változott.');
   const previousRows=await rows(`SELECT rw.id AS source_row_id, rw.variant_id,
+      rw.buy_price_ron AS previous_invoice_buy_price,
+      rw.sell_price_ron AS previous_invoice_sell_price,
       rw.supplier_product_code, rw.supplier_size, rw.qty,
       rw.normalized->>'colorName' AS incoming_color,
       rw.normalized->>'titleRo' AS incoming_title,
@@ -232,6 +241,7 @@ async function load() {
   const oldVariantDetails=new Map(variantDetails.map(x=>[String(x.id),x]));
   const oldModelDetails=new Map(models.map(x=>[String(x.id),x]));
   const reuseIds=new Set();
+  const buyPriceDifferences=[];
   const plans=[];
   for(const [vid,rr] of byVariant){
     const colors=[...new Set(rr.map(r=>norm(lookup.get(int(r.row_no)).color)))];
@@ -269,8 +279,35 @@ async function load() {
       if(unique.length>1) problems.push(`Több 832-es célvariáns: ${g.sourceCode} / ${g.color} / ${g.sourceSize}`);
       if(unique.length===1){
         const candidate=unique[0];
-        if(money(candidate.sell_price)!==money(g.sellPrice) || money(candidate.buy_price)!==money(g.buyPrice))
-          problems.push(`832-es variánsár eltér az Exceltől: ${g.sourceCode} / ${g.color} / ${g.sourceSize} (${candidate.buy_price}/${candidate.sell_price})`);
+        // Nem hiba, ha ugyanazt a szín/méret terméket a 832-es számlán
+        // 64,33-ért, a 833-ason 81,69-ért vásároltuk. Ez KÉT történeti
+        // beszerzési ár, nem két termék vagy két eladási ár.
+        const sourceInvoiceRows=previous.filter(x=>String(x.id)===String(candidate.id));
+        const oldInvoicePrices=[...new Set(sourceInvoiceRows
+          .filter(x=>x.previous_invoice_sell_price!==null)
+          .map(x=>money(x.previous_invoice_sell_price)))];
+        const historicalSell=oldInvoicePrices.length===1 ? oldInvoicePrices[0] : null;
+        if(oldInvoicePrices.length!==1) problems.push(`Nem egyértelmű 832-es forrássori eladási ár: ${g.sourceCode} / ${g.color} / ${g.sourceSize}`);
+        const priceGuard=checkReusePrices({
+          existingBuyPrice:candidate.buy_price,
+          existingSellPrice:candidate.sell_price,
+          incomingBuyPrice:g.buyPrice,
+          incomingSellPrice:g.sellPrice,
+          previousInvoiceSellPrice:historicalSell,
+        });
+        if(!priceGuard.ok) problems.push(`832-es célvariáns árütközés: ${g.sourceCode} / ${g.color} / ${g.sourceSize}: ${priceGuard.reason}`);
+        if(priceGuard.ok && priceGuard.historicalBuyPriceDiffers){
+          buyPriceDifferences.push({
+            kod:g.sourceCode,szin:g.color,meret:g.sourceSize,uj_db:g.qty,
+            regi_varians_vetelar:priceGuard.oldBuyPrice,
+            uj_szamla_vetelar:priceGuard.incomingBuyPrice,
+            eladasi_ar:priceGuard.sellPrice,
+            cel_varians:String(candidate.id),
+            regi_szamla_vetelarak:[...new Set(sourceInvoiceRows
+              .filter(x=>x.previous_invoice_buy_price!==null)
+              .map(x=>money(x.previous_invoice_buy_price)))],
+          });
+        }
         g.targetType='reuse';g.targetVariantId=String(candidate.id);
         reuseIds.add(String(candidate.id));
       }
@@ -355,7 +392,7 @@ async function load() {
       problems.push('Ez a helyreállítás már korábban megtörtént. Újrafuttatás tilos.');
   }
   return { batch, importRows, byId, byVariant, variants, models, categories, categoryByCode,
-    movements,rowMovements,stocks,books,supp,variantDetails,plans,priceCorrections,modelTitleCollisions,
+    movements,rowMovements,stocks,books,supp,variantDetails,plans,priceCorrections,modelTitleCollisions,buyPriceDifferences,
     problems, totals:{rows:importRows.length,qty:importRows.reduce((s,r)=>s+int(r.qty),0)},
     external, expected:manifest.rows, legacyRefs, reuseIds:reuseIdsArray,
     candidateStocks,candidateBooks,candidateVariants,candidateMovements,previousSourceRows };
@@ -374,7 +411,19 @@ function report(d){
   }
   console.log('\nKülön modellt igénylő ütközések:',d.modelTitleCollisions.length);
   for(const p of d.modelTitleCollisions)console.log(p.modelCode,'-> MONTEVERDI NAGY CSILI / DOMBOR HIMZES');
-  console.log('Excelhez viszonyított áreltérések:',JSON.stringify(d.priceCorrections));
+  console.log('Excelhez viszonyított eladásiár-eltérések:',JSON.stringify(d.priceCorrections));
+  if(d.buyPriceDifferences.length){
+    console.log('\n=== NEM HIBA: ELTÉRŐ BESZERZÉSI ÁR A KÉT SZÁMLÁN ===');
+    console.table(d.buyPriceDifferences.map(x=>({
+      kod:x.kod,szin:x.szin,meret:x.meret,uj_db:x.uj_db,
+      regi_varians_vetelar:x.regi_varians_vetelar,
+      regi_szamla_vetelarak:x.regi_szamla_vetelarak.join(', '),
+      uj_szamla_vetelar:x.uj_szamla_vetelar,
+      eladasi_ar:x.eladasi_ar,
+    })));
+    console.log('A 832-es vételár adatot NEM írjuk felül. A 833-as vételár az eredeti 833-as importsorban marad.');
+    console.log('A termék aktuális variáns-vételára és a számlasor történeti vételára két külön mező!');
+  }
   console.log('Kategóriahelyreállítás: az összes 57 sor szerinti 7 terméktípus, a meglévő kategóriatörzsben.');
   if(d.problems.length){
     console.log('\n!!! A javítás NEM INDÍTHATÓ !!!');
@@ -411,6 +460,7 @@ async function apply(d){
     previous832SourceRows:d.previousSourceRows,
     zeroQuantityLegacyReferences:d.legacyRefs,
     originalExcel:d.expected,plans:d.plans,priceCorrections:d.priceCorrections,
+    differentHistoricalPurchasePrices:d.buyPriceDifferences,
     capturedAt:new Date().toISOString()
   };
   await client.query(`INSERT INTO aif_data_repair_backups(repair_key,batch_id,snapshot,repair_note)
@@ -482,6 +532,7 @@ async function apply(d){
       })]);
   }
 
+  // A 832-es vételár sem íródhat felül az új számla magasabb vételárával.
   // A 832-es beszállítói azonosítókat nem írjuk át. Az újonnan létrehozott
   // 833-as színhez külön beszállítói kapcsolatsor kell.
   for(const plan of d.plans){
@@ -705,18 +756,22 @@ async function apply(d){
   }
   // A 832-es számlát adatbázisban is újra ellenőrizzük: sorazonosítók,
   // kötött variánsok és számlán szereplő mennyiségek nem változhattak.
-  const previousSourceRows=await rows(`SELECT rw.id,rw.variant_id,rw.qty
+  const previousSourceRows=await rows(`SELECT rw.id,rw.variant_id,rw.qty,
+    rw.buy_price,rw.buy_price_ron,rw.sell_price,rw.sell_price_ron
     FROM aif_import_rows rw WHERE rw.batch_id=$1`,[PREVIOUS_BATCH]);
   assert(previousSourceRows.length===118,'A 832-es számla 118 forrássora hiányzik.');
   const originalPrevious=new Map(d.previousSourceRows.map(x=>[String(x.id),x]));
   for(const r of previousSourceRows){
     const old=originalPrevious.get(String(r.id));
-    assert(old && String(old.variant_id)===String(r.variant_id) && int(old.qty)===int(r.qty),
-      `A 832-es számla forrássora megváltozott: ${r.id}`);
+    assert(old && String(old.variant_id)===String(r.variant_id) && int(old.qty)===int(r.qty) &&
+      ['buy_price','buy_price_ron','sell_price','sell_price_ron'].every(field =>
+        (r[field] == null && old[field] == null) ||
+        (r[field] != null && old[field] != null && money(r[field])===money(old[field]))),
+      `A 832-es számla forrássora vagy történeti ára megváltozott: ${r.id}`);
   }
   const finalRows=await rows(`SELECT rw.row_no,rw.qty,rw.variant_id::text AS variant_id,
     rw.normalized->>'colorName' AS color_name,v.color_name AS live_color,
-    rw.sell_price_ron,v.sell_price AS live_price,m.title_ro,m.product_type,
+    rw.buy_price_ron,rw.sell_price_ron,v.sell_price AS live_price,m.title_ro,m.product_type,
     c.code AS category_code,sc.code AS subcategory_code
     FROM aif_import_rows rw JOIN aif_product_variants v ON v.id=rw.variant_id
     JOIN aif_product_models m ON m.id=v.model_id
@@ -729,6 +784,7 @@ async function apply(d){
     assert(norm(rw.live_color)===norm(reference.color),`Végső szín eltérés: ${rw.row_no}`);
     assert(norm(rw.title_ro)===norm(reference.title),`Végső megnevezés eltérés: ${rw.row_no}`);
     assert(norm(rw.product_type)===norm(reference.type),`Végső terméktípus eltérés: ${rw.row_no}`);
+    assert(money(rw.buy_price_ron)===reference.buyPrice,`833-as eredeti vételár eltérés: ${rw.row_no}`);
     assert(money(rw.live_price)===reference.sellPrice && money(rw.sell_price_ron)===reference.sellPrice,
       `Végső eladási ár eltérés: ${rw.row_no}`);
     const cats=TYPE_MAP[reference.type];
