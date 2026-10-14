@@ -2560,14 +2560,123 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  function applyProductCodeSplit(normalized) {
+  // A beszállítói termékkód -01/-10 végződése NEM bizonyítja, hogy az színkód.
+  // MAYO CHIX: 121907100-01, S méret: külön MARO és NEGRU, üres COD CULOARE oszloppal.
+  // Ilyenkor a színt kell azonosítónak használnunk, nem a termékkód utolsó részét.
+  const AIF_SOURCE_COLOR_CODE_HEADERS = [
+    "COD CULOARE", "COD CULOARE ", "CODCULOARE", "COD CULOARE PRODUS",
+    "COLOR CODE", "COLOUR CODE", "SZINKOD", "SZÍNKÓD"
+  ];
+  const AIF_SOURCE_COLOR_NAME_HEADERS = ["CULOARE", "COLOR", "COLOUR", "SZIN", "SZÍN"];
+
+  function applyProductCodeSplit(normalized, sourceRaw = null) {
     if (!normalized || typeof normalized !== "object") return normalized;
     const split = splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
     if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
-    const suffixIsSupplierColor = /^\d{1,4}$/.test(String(split.colorCode || ""));
-    if (split.colorCode && (!normalized.colorCode || suffixIsSupplierColor)) normalized.colorCode = split.colorCode;
-    if (split.colorCode && (!normalized.supplierColorCode || suffixIsSupplierColor)) normalized.supplierColorCode = split.colorCode;
+
+    const explicitSourceCode = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_CODE_HEADERS);
+    const sourceColorName = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_NAME_HEADERS);
+    if (!normalized.colorName && sourceColorName) normalized.colorName = sourceColorName;
+    const colorName = text(normalized.colorName || normalized.color_name || sourceColorName);
+    const suffix = text(split.colorCode);
+    const numericSuffix = /^\d{1,4}$/.test(suffix);
+    const existingCode = text(normalized.colorCode || normalized.color_code);
+    const supplierCode = text(normalized.supplierColorCode || normalized.supplier_color_code);
+
+    if (explicitSourceCode) {
+      normalized.colorCode = explicitSourceCode;
+      normalized.supplierColorCode = explicitSourceCode;
+      normalized._aifColorCodeFromName = false;
+      normalized.aifColorIdentitySource = "explicit_supplier_color_code";
+    } else if (colorName && numericSuffix &&
+               (Boolean(sourceColorName) || normalized._aifColorCodeFromName === true) &&
+               (!existingCode || normCode(existingCode) === normCode(suffix) ||
+                normalized._aifColorCodeFromName === true) &&
+               (!supplierCode || normCode(supplierCode) === normCode(suffix) ||
+                normalized._aifColorCodeFromName === true)) {
+      // Explicit színkód NINCS. A különböző színeknek külön adatbázis-kulcs kell.
+      // A normCode ékezet- és betűméret-független, ezért későbbi importoknál is stabil.
+      const distinctColorKey = normCode(colorName).toUpperCase();
+      if (distinctColorKey) {
+        normalized.colorCode = distinctColorKey;
+        normalized.supplierColorCode = distinctColorKey;
+        normalized._aifColorCodeFromName = true;
+        normalized.aifColorIdentitySource = "color_name_without_explicit_code";
+      }
+    } else {
+      if (suffix && !existingCode) normalized.colorCode = suffix;
+      if (suffix && !supplierCode) normalized.supplierColorCode = suffix;
+      normalized._aifColorCodeFromName = Boolean(normalized._aifColorCodeFromName);
+    }
+    return normalized;
+  }
+
+  // A COLECTIE=FASHION nem terméktípus. A RODESCR és a tényleges alkategória az.
+  // A HAJGUMI/ELASTIC DE PAR kiegészítő, nem ruha (ROCHIE).
+  const AIF_IMPORTED_PRODUCT_TYPES = Object.freeze({
+    BLUZA: ["BLUZA", "imbracaminte_bluza"],
+    BLUGI: ["BLUGI", "imbracaminte_blugi"],
+    PANTALONI: ["PANTALONI", "imbracaminte_pantaloni"],
+    ROCHIE: ["ROCHIE", "imbracaminte_rochie"],
+    TRENING: ["TRENING", "imbracaminte_treninguri"],
+    GEACA: ["GEACA", "jachete_jachete"],
+    ELASTIC_DE_PAR: ["ELASTIC DE PAR", null],
+  });
+  function correctImportedClassification(normalized, sourceRaw = null) {
+    if (!normalized || typeof normalized !== "object") return normalized;
+    const originalType = rawValueByHeaders(sourceRaw, ["RODESCR", "RO DESCR", "RO_DESCR"]);
+    const fromRaw = normCode(originalType);
+    const fromTitle = normCode(normalized.titleRo || normalized.title_ro);
+    const suppliedType = normCode(normalized.productType || normalized.product_type);
+    const suppliedSub = normCode(normalized.subcategoryCode || normalized.subcategory_code || normalized.subcategoryName);
+    const isGeneric = !suppliedType || ["fashion", "apparel", "street", "casual", "sport"].includes(suppliedType);
+    let detected = Object.keys(AIF_IMPORTED_PRODUCT_TYPES).find(k => normCode(k) === fromRaw) || null;
+    if (!detected && (fromTitle === "hajgumi" || suppliedType === "elastic_de_par")) detected = "ELASTIC_DE_PAR";
+    if (!detected && isGeneric) detected = Object.keys(AIF_IMPORTED_PRODUCT_TYPES).find(k =>
+      AIF_IMPORTED_PRODUCT_TYPES[k][1] && normCode(AIF_IMPORTED_PRODUCT_TYPES[k][1]) === suppliedSub
+    ) || null;
+    if (!detected) return normalized;
+    const [productType, subcategoryCode] = AIF_IMPORTED_PRODUCT_TYPES[detected];
+    // A tényleges RODESCR megbízhatóbb, mint egy korábbi téves oszloptársítás.
+    // Egy kézzel megadott speciális típusba csak akkor nem szólunk bele,
+    // ha a forrásban nincs RODESCR és a felhasználó nem generikus típust adott meg.
+    if (!fromRaw && !isGeneric && suppliedType !== normCode(productType)) return normalized;
+    normalized.productType = productType;
+    // Korábbi oszloptársításból maradt UUID/alias nem előzheti meg a helyes törzskódot.
+    normalized.categoryId = null;
+    normalized.category_id = null;
+    normalized.parentCategoryId = null;
+    normalized.parent_category_id = null;
+    normalized.parentCategoryCode = null;
+    normalized.parent_category_code = null;
+    normalized.parentCategoryName = null;
+    normalized.parent_category_name = null;
+    normalized.subcategoryId = null;
+    normalized.subcategory_id = null;
+    normalized.subCategoryId = null;
+    normalized.sub_category_id = null;
+    normalized.subCategoryCode = null;
+    normalized.sub_category_code = null;
+    normalized.subCategoryName = null;
+    normalized.sub_category_name = null;
+    if (detected === "ELASTIC_DE_PAR") {
+      normalized.categoryId = null;
+      normalized.categoryCode = "ACCESORII";
+      normalized.categoryName = "Accesorii";
+      normalized.subcategoryId = null;
+      normalized.subcategoryCode = null;
+      normalized.subcategoryName = null;
+    } else {
+      // A korábban tévesen társított kategória UUID sem maradhat elsőbbségben.
+      normalized.categoryId = null;
+      normalized.categoryCode = "IMBRACAMINTE";
+      normalized.categoryName = "Îmbrăcăminte";
+      normalized.subcategoryCode = subcategoryCode;
+      normalized.subcategoryName = null;
+      normalized.subcategoryId = null;
+    }
+    normalized.aifProductTypeFromSource = detected;
     return normalized;
   }
 
@@ -2577,7 +2686,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       row.supplier_product_code || row.product_code || normalized.modelCode || normalized.model_code
     );
     const split = splitBrandProductCode(productCode);
-    const color = text(split.colorCode || normalized.supplierColorCode || normalized.supplier_color_code || normalized.colorCode || normalized.color_code || row.supplier_color_code || "");
+    const color = text(normalized.colorCode || normalized.color_code || normalized.supplierColorCode || normalized.supplier_color_code || normalized.colorName || normalized.color_name || row.supplier_color_code || split.colorCode || "");
     const size = text(normalized.supplierSize || normalized.supplier_size || normalized.size || row.supplier_size || "");
     const code = text(split.fullCode || productCode || split.modelCode || normalized.modelCode || normalized.model_code || "");
     return {
@@ -3206,7 +3315,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       _seasonExplicit: aifSeasonExplicit(raw, src),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
-      colorName: emptyToNull(src.colorName || src.color_name),
+      colorName: emptyToNull(src.colorName || src.color_name || rawValueByHeaders(raw, AIF_SOURCE_COLOR_NAME_HEADERS)),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
       size: emptyToNull(src.size || supplierSize || rawSize),
       barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode),
@@ -3235,6 +3344,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       qty: toInt(src.qty ?? src.quantity ?? input?.qty ?? rawQty),
     };
 
+    correctImportedClassification(normalized, raw);
+    applyProductCodeSplit(normalized, raw);
     const errors = [];
     if (!normalized.titleRo) errors.push("product name/title missing");
     if (!normalized.size) errors.push("size missing");
@@ -3303,9 +3414,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const r = await client.query(
       `SELECT id FROM aif_categories
        WHERE id::text=$1
-          OR code=$1
-          OR code=$2
-          OR lower(name_ro)=lower($1)
+           OR lower(code)=lower($1)
+           OR lower(code)=lower($2)
+           OR lower(name_ro)=lower($1)
           OR lower(COALESCE(name_hu,''))=lower($1)
           OR EXISTS (
             SELECT 1 FROM unnest(COALESCE(aliases, '{}'::text[])) a
@@ -3332,11 +3443,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let parentFilter = "";
     if (parentRaw) {
       args.push(parentRaw, normCode(parentRaw));
-      parentFilter = ` AND (parent_id IS NULL OR parent_id IN (SELECT id FROM aif_categories WHERE id::text=$3 OR code=$3 OR code=$4 OR lower(name_ro)=lower($3) OR lower(COALESCE(name_hu,''))=lower($3)))`;
+      parentFilter = ` AND (parent_id IS NULL OR parent_id IN (SELECT id FROM aif_categories WHERE id::text=$3 OR lower(code)=lower($3) OR lower(code)=lower($4) OR lower(name_ro)=lower($3) OR lower(COALESCE(name_hu,''))=lower($3)))`;
     }
     const r = await client.query(
       `SELECT id FROM aif_categories
-       WHERE (id::text=$1 OR code=$1 OR code=$2 OR lower(name_ro)=lower($1) OR lower(COALESCE(name_hu,''))=lower($1)
+       WHERE (id::text=$1 OR lower(code)=lower($1) OR lower(code)=lower($2) OR lower(name_ro)=lower($1) OR lower(COALESCE(name_hu,''))=lower($1)
           OR EXISTS (SELECT 1 FROM unnest(COALESCE(aliases, '{}'::text[])) a WHERE lower(a)=lower($1) OR lower(a)=lower($2)))
          ${parentFilter}
        ORDER BY parent_id IS NULL ASC, is_active DESC, sort_order ASC
@@ -3377,7 +3488,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     applyProductCodeSplit(safeNormalized);
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
-    const modelCode = `${brandKey}:${normCode(baseModelCode)}`;
+    let modelCode = `${brandKey}:${normCode(baseModelCode)}`;
+    // Külön megnevezésű termékek nem írhatják felül egymás modellszintű nevét.
+    // Például MONTEVERDI NAGY CSILI és MONTEVERDI DOMBOR HIMZES ugyanazzal a
+    // 112430-as számtörzzsel érkezhet. A második cím stabil, névalapú alt-kódot kap.
+    const baseModel = await client.query(
+      `SELECT id,title_ro FROM aif_product_models WHERE model_code=$1 LIMIT 1`, [modelCode]
+    );
+    if (baseModel.rowCount && safeNormalized.titleRo && baseModel.rows[0].title_ro &&
+        normCode(baseModel.rows[0].title_ro) !== normCode(safeNormalized.titleRo)) {
+      const altCode = `${modelCode}__${normCode(safeNormalized.titleRo).slice(0,90)}`;
+      const alternative = await client.query(
+        `SELECT id,title_ro FROM aif_product_models WHERE model_code=$1 LIMIT 1`, [altCode]
+      );
+      if (alternative.rowCount && normCode(alternative.rows[0].title_ro) !== normCode(safeNormalized.titleRo)) {
+        const error = new Error("Az azonos modellkódhoz különböző terméknevek tartoznak. Kézi modellazonosítás szükséges.");
+        error.statusCode = 409;
+        error.code = "model_title_collision";
+        throw error;
+      }
+      modelCode = altCode;
+    }
     const modelCreateStatus = cleanModelLifecycleStatus(safeNormalized.modelStatus || safeNormalized.model_status || createStatus, "active");
     const modelUpdateStatus = updateStatus === null || updateStatus === undefined
       ? null
@@ -3584,9 +3715,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const ownerName = normCode(owner.color_name || "");
       const incomingCode = normCode(colorCode || "");
       const incomingName = normCode(colorName || "");
-      if (ownerCode && incomingCode && ownerCode !== incomingCode) return true;
-      if (ownerName && incomingName && ownerName !== incomingName) return true;
-      return false;
+      // Az egyező, ismert színnév erősebb az örökölt (régen rosszul kinyert) színkódnál.
+      if (ownerName && incomingName) return ownerName !== incomingName;
+      return Boolean(ownerCode && incomingCode && ownerCode !== incomingCode);
     };
 
     const barcodeColorResolution = normCode(
@@ -3698,7 +3829,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let result;
       if (colorCode) {
         result = await client.query(
-          `SELECT id, barcode, status, created_at, size
+          `SELECT id, barcode, status, created_at, size, color_code, color_name
            FROM aif_product_variants
            WHERE model_id=$1
              AND lower(btrim(COALESCE(color_code,'')))=lower(btrim($2))
@@ -3715,10 +3846,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const byCode = pickEquivalentSize(result.rows);
         if (byCode) return byCode;
 
+        // A régi import hibás (pl. 01) színkódja helyett a pontos színnevet
+        // is használhatjuk, DE csak egyetlen, egyértelmű meglévő variánsnál.
+        if (colorName && normalized._aifColorCodeFromName === true) {
+          const nameCandidates = await client.query(
+            `SELECT id, barcode, status, created_at, size, color_code, color_name
+             FROM aif_product_variants
+             WHERE model_id=$1 AND lower(btrim(COALESCE(color_name,'')))=lower(btrim($2))
+               AND COALESCE(status,'active') <> 'archived'`,
+            [modelId, colorName]
+          );
+          const equivalent = nameCandidates.rows.filter(row => sameAifVariantSize(row.size,size));
+          if (equivalent.length > 1) {
+            const error = new Error('Több meglévő variáns egyezik a színnel és mérettel. Az importot kézzel kell egyeztetni.');
+            error.statusCode = 409;
+            error.code = 'variant_identity_ambiguous';
+            throw error;
+          }
+          if (equivalent.length === 1) return equivalent[0];
+        }
+
         // Régi adatoknál előfordulhat, hogy a színkód még üres, de a normalizált színnév már megvan.
         if (colorName) {
           result = await client.query(
-            `SELECT id, barcode, status, created_at, size
+            `SELECT id, barcode, status, created_at, size, color_code, color_name
              FROM aif_product_variants
              WHERE model_id=$1
                AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
@@ -3735,7 +3886,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       result = await client.query(
-        `SELECT id, barcode, status, created_at, size
+        `SELECT id, barcode, status, created_at, size, color_code, color_name
          FROM aif_product_variants
          WHERE model_id=$1
            AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
@@ -3793,7 +3944,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
 
     const existing = await findIdentityCandidate();
-    if (existing) return updateVariantById(existing.id);
+    if (existing) {
+      if (existing.color_name && colorName && normCode(existing.color_name) !== normCode(colorName)) {
+        const error = new Error(`Színütközés! A ${size} méretű variáns ${existing.color_name} színű, az import ${colorName} színt tartalmaz. Két színt nem vonunk össze.`);
+        error.statusCode = 409;
+        error.code = 'import_color_identity_collision';
+        throw error;
+      }
+      return updateVariantById(existing.id);
+    }
 
     try {
       const inserted = await client.query(
@@ -3827,7 +3986,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // A DB egyedi indexe a párhuzamos kérésnél gyorsabb lehetett. Újra lekérjük
       // a nyertes sort, és arra vezetjük rá az importot. Vonalkód nélkül nem gyártunk másolatot.
       const concurrentExisting = await findIdentityCandidate();
-      if (concurrentExisting) return updateVariantById(concurrentExisting.id);
+      if (concurrentExisting) {
+        if (concurrentExisting.color_name && colorName && normCode(concurrentExisting.color_name) !== normCode(colorName)) {
+          const error = new Error(`Azonos modell/színkód/méret alatt eltérő szín található: ${concurrentExisting.color_name} / ${colorName}.`);
+          error.statusCode = 409;
+          error.code = 'import_color_identity_collision';
+          throw error;
+        }
+        return updateVariantById(concurrentExisting.id);
+      }
 
       if (barcode) {
         const barcodeOwner = await findBarcodeOwner(barcode, null);
@@ -4204,7 +4371,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   async function enrichNormalizedRow(client, nr) {
     if (nr?.normalized) {
-      applyProductCodeSplit(nr.normalized);
+      correctImportedClassification(nr.normalized, nr.raw);
+      applyProductCodeSplit(nr.normalized, nr.raw);
       const brandColorMapped = await applyBrandColorCodeMapping(client, nr.normalized);
       if (!brandColorMapped && nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
       // Régi kliens még Unisex-et küldhet a GEN=BAIAT/FETE mellé.
@@ -8940,7 +9108,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sn_cod = rowSnCod;
         }
         applySalesTvaSettingsToNormalized(normalized, salesTvaSettings);
-        applyProductCodeSplit(normalized);
+        correctImportedClassification(normalized, row.raw);
+        applyProductCodeSplit(normalized, row.raw);
         normalized.gender = canonicalGender(normalized.gender);
         const brandColorMapped = await applyBrandColorCodeMapping(client, normalized);
         if (!brandColorMapped && normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
@@ -12952,7 +13121,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || rawMaterial),
         shopifyTitle: emptyToNull(src.shopifyTitle || src.shopify_title || src.titleRo || src.title_ro),
         colorCode: emptyToNull(src.colorCode || src.color_code || src.supplierColorCode || src.supplier_color_code),
-        colorName: emptyToNull(src.colorName || src.color_name),
+        colorName: emptyToNull(src.colorName || src.color_name || rawValueByHeaders(manualRaw, AIF_SOURCE_COLOR_NAME_HEADERS)),
         colorHex: emptyToNull(src.colorHex || src.color_hex),
         size: emptyToNull(src.size || src.standardSize || src.standard_size || src.supplierSize || src.supplier_size),
         barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode),
