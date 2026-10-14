@@ -1,6 +1,6 @@
 import {useEffect,useRef,type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
-import {X,Radio,CheckCircle2} from 'lucide-react';
+import {X,Radio,CheckCircle2,Info} from 'lucide-react';
 import type {SmsOption} from '../../../lib/aif/smsApi';
 import './sms.css';
 let depth=0,originalOverflow='';
@@ -12,8 +12,8 @@ export function SmsModal({title,eyebrow='ALLINFASHION · SMS KÖZPONT',children,
     panel.current?.focus();
     const key=(e:KeyboardEvent)=>{
       const overlays=document.querySelectorAll('.sms-overlay');if(overlays[overlays.length-1]!==root.current)return;
-      if(e.key==='Escape'){if(document.querySelector('[data-sms-popover="true"]'))return;e.preventDefault();e.stopImmediatePropagation();close.current();}
-      if(e.key==='Tab'){if(document.querySelector('[data-sms-popover="true"]'))return;
+      if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();close.current();}
+      if(e.key==='Tab'){
         const els=panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]');
         const items=els?Array.from(els).filter(el=>el.offsetParent!==null):[];
         if(!items.length){e.preventDefault();return;}
@@ -31,13 +31,19 @@ export function SmsModal({title,eyebrow='ALLINFASHION · SMS KÖZPONT',children,
     </section>
   </div>,document.body);
 }
+export function SmsHint({text}:{text:string}) {
+  return <span className="sms-tip">
+    <span tabIndex={0} className="sms-tip-button" aria-label="Részletek" role="img"><Info size={13}/></span>
+    <span className="sms-tip-content" role="tooltip">{text}</span>
+  </span>;
+}
 export function ChipSelect({label,options,value,onChange}:{label:string;options:SmsOption[];value:string[];onChange:(value:string[])=>void}){
   return <div><p className="sms-label">{label}</p><div className="sms-chipset">{options.map(o=><button type="button" key={o.id} className={value.includes(o.id)?'selected':''} aria-pressed={value.includes(o.id)} onClick={()=>onChange(value.includes(o.id)?value.filter(id=>id!==o.id):[...value,o.id])}>{value.includes(o.id)?'✓ ':''}{o.name}</button>)}</div></div>;
 }
 export function CheckRow({checked,onChange,title,hint,disabled=false}:{checked:boolean;onChange:(v:boolean)=>void;title:string;hint?:string;disabled?:boolean}){
-  return <label className="sms-check"><input type="checkbox" checked={checked} disabled={disabled} onChange={e=>onChange(e.target.checked)}/><span><b>{title}</b>{hint?<small>{hint}</small>:null}</span></label>;
+  return <label className="sms-check"><input type="checkbox" checked={checked} disabled={disabled} onChange={e=>onChange(e.target.checked)}/><span><b>{title}{hint?<SmsHint text={hint}/>:null}</b></span></label>;
 }
-export function PhonePreview({message,subtitle='SMS-előnézet'}:{message:string;subtitle?:string}){
+export function PhonePreview({message,subtitle='SMS · AllInFashion'}:{message:string;subtitle?:string}){
   return <div className="sms-phone"><div className="sms-phone-title">{subtitle}</div><div className="sms-bubble">{message||'Itt jelenik meg a kliensnek szánt SMS.'}</div><p className="sms-phone-footer">Az SMS-linkek és kódok küldés előtt kitöltődnek.</p></div>;
 }
 export function Empty({children}:{children:ReactNode}){return <div className="sms-list-empty"><CheckCircle2 size={28} style={{margin:'0 auto 12px',opacity:.5}}/>{children}</div>;}
