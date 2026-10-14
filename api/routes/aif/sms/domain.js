@@ -171,7 +171,7 @@ export function validateBlocks(blocks, kind) {
   const fullStore=out.some(b=>b.type==='token'&&b.value==='store');
   const splitStore=['storeName','storeAddress'].every(key=>out.some(b=>b.type==='token'&&b.value===key));
   if(!fullStore&&!splitStore) throw fail('Az SMS-ben kötelező az üzlet neve és címe. Használd az összetett mezőt vagy a név és cím mezőket együtt.');
-  if(kind==='arrival'&&!out.some(b=>b.type==='token'&&b.value==='brands')) throw fail('Az újáru-értesítésben kötelező az érdeklődésnek megfelelő márkák adatmező.');
+  // A markamezo opcionális: csak az admin által ténylegesen hozzáadott blokkok mehetnek az SMS-be.
   if(kind==='promotion') for(const key of ['coupon','discount','expiry']) if(!out.some(b=>b.type==='token'&&b.value===key)) throw fail('A promóciós üzenetben kötelező a kuponkód, kedvezmény és lejárat adatblokk.');
   if(!out.some(b=>b.type==='text'&&b.value.trim())) throw fail('Írj szöveget is az üzenethez.');
   return out;
@@ -294,8 +294,9 @@ export function couponTerms(rules,language='hu',copy=null) {
 }
 export function compactSmsNames(values,language='hu',kind='brands') {
   const uniqueNames=unique(values);
-  const suffix=kind==='categories'?(language==='ro'?'și alte produse':'és további termékek'):(language==='ro'?'și alte mărci':'és további márkák');
-  return uniqueNames.length>2?`${uniqueNames.slice(0,2).join(', ')} ${suffix}`:uniqueNames.join(', ');
+  // Soha nem teszunk hozza kitalalt marketingmondatot (pl. 'es tovabbi markak').
+  // A dinamiku(s) mezoben kizarolag valodi, illeszkedo markanevek szerepelnek.
+  return uniqueNames.slice(0,2).join(', ');
 }
 export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false, unicodeEnabled=false) {
   const raw=blocks.map(b=>{

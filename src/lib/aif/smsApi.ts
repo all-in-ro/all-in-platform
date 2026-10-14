@@ -11,7 +11,7 @@ export type SmsSettings = {
 };
 export type SmsStatus = {
   ok: boolean; role: 'admin'|'shop'; settings: SmsSettings; configured: boolean;
-  serverLiveEnabled: boolean; webhookReady: boolean; publicUrlReady: boolean;
+  serverLiveEnabled: boolean; providerUnicodeEnabled?: boolean; webhookReady: boolean; publicUrlReady: boolean;
   balance: { credit: number; checkedAt: string } | null; balanceError: string;
   stats: { campaigns: number; running: number; delivered: number; accepted: number; attention: number; simulated: number; subscribers: number };
 };

@@ -45,10 +45,10 @@ export function createCampaignService(pool,provider) {
       const code=coupon?codes[i]:null;
       const values={name:person.name,store:storeLabel(settings,location.code,location.name),
         storeName:messageSettings.storeName||location.name,storeAddress:messageSettings.storeAddress,
-        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language)||(language==='ro'?'mărcile preferate':'kedvenc márkáid'),
-        categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories')||(language==='ro'?'produse selectate':'válogatott termékek'),
+        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language),
+        categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
-      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language,couponCopy):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true);
+      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language,couponCopy):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true,providerConfig().unicodeEnabled);
       if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget, vagy a Vezérlőpultban ellenőrizd a megengedett SMS-részeket.`,'sms_too_long');
       recipients.push({...person,id:randomUUID(),couponCode:code,...rendered});
     }

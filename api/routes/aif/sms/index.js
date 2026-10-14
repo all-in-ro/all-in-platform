@@ -99,7 +99,7 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
       count(*) FILTER(WHERE r.status='simulated')::int AS simulated
       FROM aif_sms_recipients r JOIN aif_sms_campaigns c ON c.id=r.campaign_id WHERE ($1::uuid IS NULL OR c.location_id=$1)`,[locationId])).rows[0];
     const subscribers=(await pool.query(`SELECT count(*)::int AS n FROM aif_sms_preferences p JOIN aif_shop_customers c ON c.id=p.customer_id WHERE p.consent=true AND c.is_active=true AND ($1::uuid IS NULL OR c.location_id=$1)`,[locationId])).rows[0].n;
-    res.json({ok:true,role:admin(req)?'admin':'shop',settings:s,balance,balanceError,configured:!!(config.id&&config.password),serverLiveEnabled:config.enabled,webhookReady:config.secret.length>=32,publicUrlReady,stats:{...stats,...totals,subscribers}});
+    res.json({ok:true,role:admin(req)?'admin':'shop',settings:s,balance,balanceError,configured:!!(config.id&&config.password),serverLiveEnabled:config.enabled,providerUnicodeEnabled:config.unicodeEnabled===true,webhookReady:config.secret.length>=32,publicUrlReady,stats:{...stats,...totals,subscribers}});
   }));
   router.get('/meta',safe(async(req,res)=>{const meta=await metadata(pool);if(!admin(req)){const id=String(await scope(req));meta.locations=meta.locations.filter(l=>l.id===id);}res.json({...meta,tokens:TOKENS});}));
   router.patch('/settings',adminOnly,safe(async(req,res)=>{

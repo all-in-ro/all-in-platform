@@ -5,8 +5,8 @@ import {SmsSelect} from './SmsFields';
 // is a separate readable line in the phone preview and the actual SMS.
 export function initialBlocks(kind:'arrival'|'promotion',language:'hu'|'ro'):SmsBlock[]{
   if(kind==='arrival')return language==='hu'
-    ?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'!\nÚj áruk érkeztek: '},{type:'token',value:'brands'},{type:'text',value:'.\nVárunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]
-    :[{type:'text',value:'Bună, '},{type:'token',value:'name'},{type:'text',value:'!\nAu sosit noutăți: '},{type:'token',value:'brands'},{type:'text',value:'.\nTe așteptăm la: '},{type:'token',value:'store'},{type:'text',value:'.'}];
+    ?[{type:'text',value:'Új áruk érkeztek!\nVárunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]
+    :[{type:'text',value:'Au sosit produse noi!\nTe așteptăm la: '},{type:'token',value:'store'},{type:'text',value:'.'}];
   return language==='hu'
     ?[{type:'text',value:'Szia '},{type:'token',value:'name'},{type:'text',value:'! Személyes kedvezményed: '},{type:'token',value:'discount'},{type:'text',value:'.\nKód: '},{type:'token',value:'coupon'},{type:'text',value:'\nFelhasználható: '},{type:'token',value:'expiry'},{type:'text',value:'-ig.\nVárunk: '},{type:'token',value:'store'},{type:'text',value:'.'}]
     :[{type:'text',value:'Bună, '},{type:'token',value:'name'},{type:'text',value:'! Reducerea ta personală: '},{type:'token',value:'discount'},{type:'text',value:'.\nCod: '},{type:'token',value:'coupon'},{type:'text',value:'\nValabil până la: '},{type:'token',value:'expiry'},{type:'text',value:' inclusiv.\nTe așteptăm la: '},{type:'token',value:'store'},{type:'text',value:'.'}];
