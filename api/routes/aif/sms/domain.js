@@ -206,6 +206,18 @@ export function segmentInfo(text) {
   }
   return {message,units,segments:units<=160?1:Math.ceil(units/152),encoding:'GSM-7'};
 }
+// KIZAROLAG kulon, kifejezetten valasztott GSM-7 tesztmodhoz.
+// A mentett sablont es a vegleges kampany szoveget soha nem modositja.
+export function gsm7TestAlternative(raw) {
+  const normalized = smsText(raw).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ŁłĐđÐðÞþŒœÆæß]/g, character => ({
+      'Ł':'L', 'ł':'l', 'Đ':'D', 'đ':'d', 'Ð':'D', 'ð':'d',
+      'Þ':'Th', 'þ':'th', 'Œ':'OE', 'œ':'oe', 'Æ':'AE', 'æ':'ae', 'ß':'ss'
+    })[character]);
+  const result = segmentInfo(normalized);
+  if (result.encoding !== 'GSM-7') throw fail('A sablonban nem alakítható át minden karakter GSM-7-re. Az ékezetes változathoz SMSLink-megerősítés szükséges.', 'sms_test_gsm7_unavailable', 409);
+  return result.message;
+}
 export function defaultCouponCopy(language='hu',stackable=false) {
   return language==='ro'
     ? {eligibility:'Personal, o singură utilizare, doar în magazinul indicat.',stacking:stackable?'Se poate cumula cu alte reduceri.':'Nu se cumulează cu alte reduceri.'}

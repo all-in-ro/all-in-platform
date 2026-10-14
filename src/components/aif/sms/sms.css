@@ -120,3 +120,8 @@
 .sms-short-note{display:flex;align-items:center;gap:5px;min-width:0;}
 .sms-compact-stat{display:inline-flex;align-items:center;gap:7px;}
 @media(max-width:650px){.sms-source-entry{flex-wrap:wrap}.sms-source-inspect{margin-left:auto}.sms-source-table th,.sms-source-table td{padding:7px 5px;font-size:11px}.sms-tip-content{left:auto;right:0}}
+
+/* Nulla cimzett: csak okok es darabszamok, kliensadat nelkul. */
+.aif-sms .sms-audience-reasons{display:grid;gap:6px;border-top:1px solid rgba(168,199,207,.16);padding-top:9px;}
+.aif-sms .sms-audience-reasons>.sms-flex{font-size:12px;align-items:center;gap:12px;}
+.aif-sms .sms-audience-reasons>.sms-flex strong{margin-left:auto;font-variant-numeric:tabular-nums;}

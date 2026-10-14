@@ -29,7 +29,14 @@ export function createCampaignService(pool,provider) {
     if(kind==='arrival'&&!products.length)throw fail('A szállítmányból nincs aktív, készleten lévő termék a kiválasztott szűrésben.');
     const definition={kind,title,language,filters,blocks,coupon,couponCopy,sources:unique(input.sources)};
     const audience=await audienceFor(db,location.id,definition,products,settings,mode);
-    if(!audience.eligible.length)throw fail('Nincs megfelelő, SMS-hez hozzájárult kliens ebben az üzletben. Ellenőrizd az érdeklődéseket, nyelvet és küldési korlátot.','sms_empty_audience');
+    if(!audience.eligible.length){
+      const counts=new Map();
+      for(const entry of audience.excluded){const reason=txt(entry.reason)||'Más kizárási ok';counts.set(reason,(counts.get(reason)||0)+1);}
+      const error=fail('Nincs megfelelő SMS-címzett az üzletben.','sms_empty_audience');
+      error.checkedClients=audience.excluded.length;
+      error.excludedReasons=[...counts].map(([reason,count])=>({reason,count})).sort((a,b)=>b.count-a.count);
+      throw error;
+    }
     if(audience.eligible.length>settings.maxRecipients)throw fail(`A kampány ${audience.eligible.length} címzettje meghaladja a ${settings.maxRecipients} fős korlátot.`);
     const base=publicBase(),recipients=[];
     const messageSettings=messageSettingsSnapshot(settings,location.code);

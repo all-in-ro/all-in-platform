@@ -13,7 +13,7 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   const router=express.Router(),provider=createProvider(),campaigns=createCampaignService(pool,provider),coupons=createCouponService(pool),testSender=createSmsTestSender(pool,provider);
   let ready=null;
   const ensure=()=>ready||(ready=ensureAifShopSalesSchema().then(()=>ensureSmsSchema(pool)).catch(e=>{ready=null;throw e;}));
-  const safe=fn=>async(req,res)=>{try{await ensure();await fn(req,res);}catch(e){const status=Number(e.statusCode||500);if(status>=500)console.error('AIF SMS route:',e.code||'error',e.message);res.status(status>=400&&status<600?status:500).json({error:status>=500&&!e.code?.startsWith('sms_')?'Az SMS-modul művelete nem sikerült. Ellenőrizd a szervernaplót.':e.message,code:e.code||'sms_error'});}};
+  const safe=fn=>async(req,res)=>{try{await ensure();await fn(req,res);}catch(e){const status=Number(e.statusCode||500);if(status>=500)console.error('AIF SMS route:',e.code||'error',e.message);res.status(status>=400&&status<600?status:500).json({error:status>=500&&!e.code?.startsWith('sms_')?'Az SMS-modul művelete nem sikerült. Ellenőrizd a szervernaplót.':e.message,code:e.code||'sms_error',...(e.code==='sms_empty_audience'?{excludedReasons:e.excludedReasons||[],checkedClients:e.checkedClients||0}:{})});}};
   const admin=req=>req.session?.role==='admin';
   const adminOnly=(req,res,next)=>admin(req)?next():res.status(403).json({error:'Ez a művelet csak adminisztrátornak engedélyezett.',code:'sms_forbidden'});
   const scope=async req=>admin(req)?null:(await aifResolveShopLocation(req,pool,req.query.location||req.body?.location)).id;
@@ -177,8 +177,8 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   router.post('/campaigns/:id/test-sms',adminOnly,safe(async(req,res)=>{res.json(await testSender.send({campaignId:req.params.id,recipientId:req.body?.recipientId,actor:actorFrom(req)}));}));
   // Fonoeki, kampanytol es ugyfelcimzettol fuggetlen SMSLink kapcsolatproba.
   // A telefonszamot csak a DB-ben mentett admin beallitas adhatja.
-  router.post('/manager-connection-test/preview',adminOnly,safe(async(req,res)=>{res.json(await testSender.previewConnectionTest({templateId:req.body?.templateId,locationCode:req.body?.locationCode}));}));
-  router.post('/manager-connection-test',adminOnly,safe(async(req,res)=>{if(!req.body?.templateId||!req.body?.previewFingerprint)throw fail('Előbb válassz sablont és nézd meg az SMS előnézetét.','sms_test_preview_required',400);res.json(await testSender.sendConnectionTest({actor:actorFrom(req),templateId:req.body?.templateId,locationCode:req.body?.locationCode,previewFingerprint:req.body?.previewFingerprint}));}));
+  router.post('/manager-connection-test/preview',adminOnly,safe(async(req,res)=>{res.json(await testSender.previewConnectionTest({templateId:req.body?.templateId,locationCode:req.body?.locationCode,sampleBrandId:req.body?.sampleBrandId,sampleCategoryId:req.body?.sampleCategoryId,encodingMode:req.body?.encodingMode}));}));
+  router.post('/manager-connection-test',adminOnly,safe(async(req,res)=>{if(!req.body?.templateId||!req.body?.previewFingerprint)throw fail('Előbb válassz sablont és nézd meg az SMS előnézetét.','sms_test_preview_required',400);res.json(await testSender.sendConnectionTest({actor:actorFrom(req),templateId:req.body?.templateId,locationCode:req.body?.locationCode,sampleBrandId:req.body?.sampleBrandId,sampleCategoryId:req.body?.sampleCategoryId,encodingMode:req.body?.encodingMode,previewFingerprint:req.body?.previewFingerprint}));}));
   router.post('/campaigns/:id/:action',safe(async(req,res)=>{res.json(await campaigns.action(req.params.id,req.params.action,req.body,await scope(req),actorFrom(req),admin(req)));}));
   router.get('/audit',adminOnly,safe(async(req,res)=>{
     const id=txt(req.query.campaignId),offset=Math.max(0,Math.floor(Number(req.query.offset)||0));

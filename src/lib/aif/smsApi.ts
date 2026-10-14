@@ -25,7 +25,9 @@ export type SmsPreference = {
 export type SmsProfileStatus = { error?: boolean; id: string; enabled: boolean; arrivals: boolean; promotions: boolean; brands: string[]; genders: string[]; suppressed: boolean };
 export type SmsSourceLine = {lineNo:number;title:string;code:string;brand:string;color:string;size:string;category:string;qty:number};
 export type SmsSourceDetails = {source:SmsSource;items:SmsSourceLine[]};
-export type SmsTestPreview = {templateId:string;templateName:string;locationCode:string;phone:string;message:string;segments:number;encoding:string;fingerprint:string;blockedReason?:string|null};
+export type SmsTestPreview = {templateId:string;templateName:string;locationCode:string;phone:string;message:string;segments:number;encoding:string;fingerprint:string;sampleBrandId?:string;sampleCategoryId?:string;encodingMode?:'original'|'gsm7';modifiedForGsm7?:boolean;blockedReason?:string|null};
+export type SmsExcludedReason = {reason:string;count:number};
+export type SmsApiError = Error & {code?:string;excludedReasons?:SmsExcludedReason[];checkedClients?:number};
 export type SmsSource = { id: string; type: string; title: string; date: string; qty: number; variants: number };
 export type SmsCouponCopy = {eligibility:string;stacking:string};
 export type SmsRules = { type:'percent'|'fixed'; value:number; minimum:number; validFrom:string; validUntil:string; stackable:boolean };
@@ -43,7 +45,7 @@ export type SmsAuditRow = {id:string;campaign_id?:string;actor:string;event:stri
 export async function smsApi<T>(path:string, body?:unknown, method=body===undefined?'GET':'POST'):Promise<T> {
   const res=await fetch(`/api/aif/sms${path}`,{method,credentials:'include',cache:'no-store',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
   const data=await res.json().catch(()=>null);
-  if(!res.ok){const e=new Error(data?.error||`SMS-kérés sikertelen (${res.status})`) as Error&{code?:string};e.code=data?.code;throw e;}
+  if(!res.ok){const e=new Error(data?.error||`SMS-kérés sikertelen (${res.status})`) as SmsApiError;e.code=data?.code;e.excludedReasons=Array.isArray(data?.excludedReasons)?data.excludedReasons:[];e.checkedClients=Number(data?.checkedClients||0);throw e;}
   return data as T;
 }
 export function smsKey() { return crypto.randomUUID(); }

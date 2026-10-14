@@ -16,9 +16,9 @@ export const MANAGER_CONNECTION_TEST_TEXT='AllInFashion SMSLink PROBA: a kapcsol
  */
 export function createSmsTestSender(pool, provider) {
   return {
-    async previewConnectionTest({templateId,locationCode}) {
+    async previewConnectionTest({templateId,locationCode,sampleBrandId,sampleCategoryId,encodingMode}) {
       const settings=await settingsFrom(pool);
-      const plan=await managerTemplatePreview(pool,settings,templateId,locationCode);
+      const plan=await managerTemplatePreview(pool,settings,templateId,locationCode,{sampleBrandId,sampleCategoryId,encodingMode});
       const conf=providerConfig();
       const blockedReason=plan.encoding==='UCS-2'&&!conf.unicodeEnabled
         ? 'Az ékezetes SMS-ekhez előbb engedélyezni kell az SMSLink Unicode-küldést.'
@@ -30,7 +30,7 @@ export function createSmsTestSender(pool, provider) {
      * Kizarolag az admin endpoint hivhatja; nincs felhasznalo altal megadott cimszam.
      * Minden teszt azonos szerveroldali korlatot hasznal, mint a kampanyteszt.
      */
-    async sendConnectionTest({actor,templateId,locationCode,previewFingerprint}) {
+    async sendConnectionTest({actor,templateId,locationCode,sampleBrandId,sampleCategoryId,encodingMode,previewFingerprint}) {
       const conf=providerConfig();
       if(!conf.enabled||!conf.id||!conf.password)
         throw fail('Az első valódi teszt-SMS-hez a Renderben AIF_SMS_ALLOW_LIVE=true kell. Az ügyfélkampány főkapcsolója továbbra is maradhat kikapcsolva.','sms_test_not_configured',403);
@@ -39,7 +39,7 @@ export function createSmsTestSender(pool, provider) {
       if(!phone)throw fail('A Vezérlőpultban add meg és mentsd el a Kerekes Zsolt teszttelefonszámát.','sms_test_phone');
       if(!withinSendHours(settings))
         throw fail(`Teszt-SMS csak ${settings.sendFromHour}:00 és ${settings.sendUntilHour}:00 között küldhető, romániai idő szerint.`, 'sms_quiet_hours',409);
-      const plan=templateId ? await managerTemplatePreview(pool,settings,templateId,locationCode) : null;
+      const plan=templateId ? await managerTemplatePreview(pool,settings,templateId,locationCode,{sampleBrandId,sampleCategoryId,encodingMode}) : null;
       if(plan && (!/^[a-f0-9]{64}$/.test(String(previewFingerprint||'')) || plan.fingerprint!==previewFingerprint))
         throw fail('Az SMS-előnézet megváltozott. Nézd meg újra a küldendő szöveget.', 'sms_test_preview_stale', 409);
       const message=plan?.message||MANAGER_CONNECTION_TEST_TEXT;

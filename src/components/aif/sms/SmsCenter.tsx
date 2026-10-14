@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {Activity,ArrowRight,CheckCircle2,ClipboardList,Eye,FileText,Gift,History,Info,Loader2,MessageSquare,Package,Pause,Pencil,Radio,RefreshCw,Save,Send,Settings,ShieldCheck,Trash2,Users,X} from 'lucide-react';
-import {smsApi,smsChanged,smsDate,smsKey,smsToday,SMS_STATUS,type SmsAuditRow,type SmsBlock,type SmsCampaign,type SmsCampaignDetail,type SmsCouponCopy,type SmsDraft,type SmsMeta,type SmsRecipient,type SmsSettings,type SmsSource,type SmsSourceDetails,type SmsStatus,type SmsTestPreview} from '../../../lib/aif/smsApi';
+import {smsApi,smsChanged,smsDate,smsKey,smsToday,SMS_STATUS,type SmsAuditRow,type SmsBlock,type SmsCampaign,type SmsCampaignDetail,type SmsCouponCopy,type SmsDraft,type SmsMeta,type SmsRecipient,type SmsApiError,type SmsSettings,type SmsSource,type SmsSourceDetails,type SmsStatus,type SmsTestPreview} from '../../../lib/aif/smsApi';
 import {SmsModal,ChipSelect,CheckRow,PhonePreview,Empty,SmsHint} from './SmsUi';
 import {SmsSelect,SmsDatePicker,smsDisplayDate} from './SmsFields';
 import {SmsBlockEditor,defaultCouponCopy,initialBlocks} from './SmsBlockEditor';
@@ -67,7 +67,7 @@ function SmsCenter({locationCode,status,statusError,reloadStatus,onClose}:{locat
           {tab==='overview'?<Overview status={status} onTab={setTab}/>:null}
           {tab==='arrival'||tab==='promotion'?<Composer key={`${tab}-${template?.id||'new'}`} kind={tab} status={status} meta={meta} locationCode={preferredLocation||locationCode} onLocationChange={setPreferredLocation} template={template} onPrepared={d=>{setDetail(d);smsChanged();}}/>:null}
           {tab==='history'?<CampaignHistory onShow={id=>void show(id)}/>:null}
-          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
+          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} meta={meta} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
           {tab==='templates'?<Templates isAdmin={status.role==='admin'} onUse={t=>{const loc=smsTemplateLocation(t,meta);if(loc)setPreferredLocation(loc);setTemplate(t);setTab(t.kind);}}/>:null}
           {tab==='audit'&&isAdmin?<AuditPanel/>:null}
         </>}
@@ -93,7 +93,7 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
   const [couponValueText,setCouponValueText]=useState('');
   const[sources,setSources]=useState<SmsSource[]>([]),[templates,setTemplates]=useState<Template[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[sourceBusy,setSourceBusy]=useState(false),[saveNotice,setSaveNotice]=useState(''),locked=useRef(false),requestKey=useRef('');
   const [sourceDetail,setSourceDetail]=useState<{loading:boolean;source:SmsSource;details?:SmsSourceDetails;error?:string}|null>(null);
-  const [emptyAudience,setEmptyAudience]=useState(false);
+  const [emptyAudience,setEmptyAudience]=useState(false),[emptyAudienceReasons,setEmptyAudienceReasons]=useState<Array<{reason:string;count:number}>>([]),[emptyAudienceChecked,setEmptyAudienceChecked]=useState(0);
   const patch=(values:Partial<SmsDraft>)=>{requestKey.current='';setDraft(d=>({...d,...values}));setSaveNotice('');};
   useEffect(()=>{let active=true;setSourceBusy(true);if(kind==='arrival'&&draft.location)smsApi<{items:SmsSource[]}>(`/sources?location=${encodeURIComponent(draft.location)}`).then(r=>{if(active)setSources(r.items);}).catch(e=>{if(active)setError(errText(e));}).finally(()=>{if(active)setSourceBusy(false);});else setSourceBusy(false);return()=>{active=false;};},[draft.location,kind]);
   useEffect(()=>{smsApi<{items:Template[]}>('/templates').then(r=>setTemplates(r.items)).catch(()=>{});},[]);
@@ -111,7 +111,7 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
   ].join('\n');
   const couponMissing=kind==='promotion'&&(!Number.isFinite(draft.coupon.value)||draft.coupon.value<=0||draft.coupon.value>(draft.coupon.type==='percent'?90:5000));
   const unsafe=draft.blocks.some(b=>b.type==='text'&&/[{}]/.test(b.value));
-  async function prepare(){if(locked.current)return;if(couponMissing){setError('A kampány előtt add meg a kedvezmény értékét.');return;}locked.current=true;setBusy(true);setError('');try{if(!requestKey.current)requestKey.current=smsKey();const d=await smsApi<SmsCampaignDetail>('/campaigns',{...draft,requestKey:requestKey.current});onPrepared(d);}catch(e){const code=(e as {code?:string})?.code;if(code==='sms_empty_audience'||errText(e).includes('Nincs megfelelő, SMS-hez hozzájárult')){setEmptyAudience(true);setError('');}else setError(errText(e));}finally{locked.current=false;setBusy(false);}}
+  async function prepare(){if(locked.current)return;if(couponMissing){setError('A kampány előtt add meg a kedvezmény értékét.');return;}locked.current=true;setBusy(true);setError('');try{if(!requestKey.current)requestKey.current=smsKey();const d=await smsApi<SmsCampaignDetail>('/campaigns',{...draft,requestKey:requestKey.current});onPrepared(d);}catch(e){const code=(e as {code?:string})?.code;if(code==='sms_empty_audience'||errText(e).includes('Nincs megfelelő, SMS-hez hozzájárult')){const reason=e as SmsApiError;setEmptyAudienceReasons(reason.excludedReasons||[]);setEmptyAudienceChecked(reason.checkedClients||0);setEmptyAudience(true);setError('');}else setError(errText(e));}finally{locked.current=false;setBusy(false);}}
   async function inspectSource(source:SmsSource){
     setSourceDetail({loading:true,source});
     try{
@@ -156,7 +156,10 @@ function Composer({kind,status,meta,locationCode,onLocationChange,template,onPre
       </div>
     </SmsModal>:null}
     {emptyAudience?<SmsModal title="Nincs megfelelő SMS-címzett" eyebrow="SMS · CÍMZETTEK ELLENŐRZÉSE" compact onClose={()=>setEmptyAudience(false)}>
-      <div className="sms-content"><div className="sms-card"><div className="sms-flex"><span className="sms-pill unknown">0 címzett</span><SmsHint text="A kliensnek az adott üzletben igazolt SMS-hozzájárulás, megfelelő nyelv, márka és termékkör szükséges. A kiválasztott szállítmány adatait is ellenőrizzük."/></div><h3 style={{marginTop:13}}>Nincs olyan kliens, akinek most küldhető SMS.</h3></div><div className="sms-actions" style={{justifyContent:'flex-end'}}><button type="button" className="sms-button primary" onClick={()=>setEmptyAudience(false)}>Rendben</button></div></div>
+      <div className="sms-content"><div className="sms-card"><div className="sms-flex"><span className="sms-pill unknown">0 címzett</span><SmsHint text="A kliensnek az adott üzletben igazolt SMS-hozzájárulás, megfelelő nyelv, márka és termékkör szükséges. A kiválasztott szállítmány adatait is ellenőrizzük."/></div><h3 style={{marginTop:13}}>Nincs most küldhető címzett.</h3>
+        {emptyAudienceChecked>0?<div style={{marginTop:12}}><span className="sms-pill">{emptyAudienceChecked} ellenőrzött kliens</span></div>:<p className="sms-caption" style={{marginTop:10}}>Ebben az üzletben nincs ellenőrizhető aktív kliens.</p>}
+        {emptyAudienceReasons.length>0?<div className="sms-audience-reasons" style={{marginTop:10}}>{emptyAudienceReasons.map(x=><div className="sms-flex" key={x.reason}><span>{x.reason}</span><strong>{x.count}</strong></div>)}</div>:null}
+      </div><div className="sms-actions" style={{justifyContent:'flex-end'}}><button type="button" className="sms-button primary" onClick={()=>setEmptyAudience(false)}>Rendben</button></div></div>
     </SmsModal>:null}
   </div>;
 }
@@ -218,30 +221,36 @@ function Reconcile({recipient,onSaved}:{recipient:SmsRecipient;onSaved:()=>void}
   async function save(){setBusy(true);setError('');try{await smsApi(`/recipients/${recipient.id}/reconcile`,{result,providerId,note});onSaved();}catch(e){setError(errText(e));}finally{setBusy(false);}}
   return <details className="sms-card soft" style={{marginTop:15}}><summary>Bizonytalan küldés kézi egyeztetése</summary><p className="sms-caption">Csak az SMSLink naplójában végzett ellenőrzés után. Ez nem küld új SMS-t.</p>{error?<div className="sms-error">{error}</div>:null}<div className="sms-section" style={{marginTop:12}}><SmsSelect label="Ellenőrzött eredmény" value={result} onChange={setResult} options={[{value:'accepted',label:'SMSLink átvette'},{value:'delivered',label:'SMSLink szerint kézbesítve'},{value:'failed',label:'Biztosan nem került elküldésre'}]}/><label>SMSLink üzenetazonosító<input value={providerId} onChange={e=>setProviderId(e.target.value)}/></label><label>Ellenőrzés részletei<textarea value={note} onChange={e=>setNote(e.target.value)}/></label><button type="button" className="sms-button" disabled={busy||note.length<12} onClick={()=>void save()}>Ellenőrzött eredmény rögzítése</button></div></details>;
 }
-function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
+function SmsSettingsPanel({status,meta,onSaved}:{status:SmsStatus;meta:SmsMeta;onSaved:()=>void}){
   const[s,setS]=useState<SmsSettings>(status.settings),[busy,setBusy]=useState(false),[error,setError]=useState(''),[ok,setOk]=useState('');
   const[testConfirm,setTestConfirm]=useState(false),[testBusy,setTestBusy]=useState(false),[testError,setTestError]=useState(''),[testOk,setTestOk]=useState('');
   const[testTemplates,setTestTemplates]=useState<Template[]>([]),[testTemplateId,setTestTemplateId]=useState(''),[testLocation,setTestLocation]=useState('main_warehouse');
+  const[testBrandId,setTestBrandId]=useState(''),[testCategoryId,setTestCategoryId]=useState(''),[testEncodingMode,setTestEncodingMode]=useState<'original'|'gsm7'>('original');
+  const testSelectedTemplate=testTemplates.find(t=>t.id===testTemplateId);
+  const testRequiresBrand=Boolean(testSelectedTemplate?.blocks.some(b=>b.type==='token'&&b.value==='brands'));
+  const testRequiresCategory=Boolean(testSelectedTemplate?.blocks.some(b=>b.type==='token'&&b.value==='categories'));
+  const testBrandMissing=testRequiresBrand&&!testBrandId;
+  const testCategoryMissing=testRequiresCategory&&!testCategoryId;
   const[testPreview,setTestPreview]=useState<SmsTestPreview|null>(null),[testPreviewError,setTestPreviewError]=useState(''),[testPreviewBusy,setTestPreviewBusy]=useState(false);
   const testPhoneSaved=Boolean(status.settings.testPhone)&&s.testPhone===status.settings.testPhone;
   useEffect(()=>{let active=true;smsApi<{items:Template[]}>('/templates').then(r=>{if(active)setTestTemplates(r.items);}).catch(e=>{if(active)setTestPreviewError(errText(e));});return()=>{active=false;};},[]);
   useEffect(()=>{
     let active=true;
     setTestPreview(null);setTestPreviewError('');setTestConfirm(false);
-    if(!testTemplateId)return;
+    if(!testTemplateId||testBrandMissing||testCategoryMissing)return;
     setTestPreviewBusy(true);
-    smsApi<SmsTestPreview>('/manager-connection-test/preview',{templateId:testTemplateId,locationCode:testLocation})
+    smsApi<SmsTestPreview>('/manager-connection-test/preview',{templateId:testTemplateId,locationCode:testLocation,sampleBrandId:testRequiresBrand?testBrandId:undefined,sampleCategoryId:testRequiresCategory?testCategoryId:undefined,encodingMode:testEncodingMode})
       .then(r=>{if(active)setTestPreview(r);})
       .catch(e=>{if(active)setTestPreviewError(errText(e));})
       .finally(()=>{if(active)setTestPreviewBusy(false);});
     return()=>{active=false;};
-  },[testTemplateId,testLocation,status.settings.testPhone]);
+  },[testTemplateId,testLocation,testBrandId,testCategoryId,testEncodingMode,testRequiresBrand,testRequiresCategory,testBrandMissing,testCategoryMissing,status.settings.testPhone]);
   async function sendConnectionTest(){
     if(testBusy||!testConfirm||!testPhoneSaved||!status.configured||!status.serverLiveEnabled||!testPreview||testPreview.blockedReason)return;
     setTestBusy(true);setTestError('');setTestOk('');
     try{
       const r=await smsApi<{ok:boolean;phone:string;segments:number;providerId:string;message:string}>('/manager-connection-test',{
-        templateId:testTemplateId,locationCode:testLocation,previewFingerprint:testPreview.fingerprint
+        templateId:testTemplateId,locationCode:testLocation,sampleBrandId:testRequiresBrand?testBrandId:undefined,sampleCategoryId:testRequiresCategory?testCategoryId:undefined,encodingMode:testEncodingMode,previewFingerprint:testPreview.fingerprint
       },'POST');
       setTestOk(`SMSLink átvette: ${r.phone} · ${r.segments} rész · ${r.providerId}`);
       setTestConfirm(false);smsChanged();
@@ -258,14 +267,17 @@ function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
       <label style={{marginTop:13}}>Teszttelefonszám<input type="tel" inputMode="tel" autoComplete="tel" value={s.testPhone||''} placeholder="+40745123456" onChange={e=>{patch({testPhone:e.target.value});setTestConfirm(false);setTestOk('');}}/></label>
       {!testPhoneSaved?<div className="sms-actions" style={{marginTop:9}}><button type="button" className="sms-button" disabled={busy||!s.testPhone?.trim()} onClick={()=>void save()}>{busy?<Loader2 size={15} className="sms-spin"/>:<Save size={15}/>} Szám mentése</button></div>:<div className="sms-short-note" style={{marginTop:10}}><span className="sms-pill live">Mentett szám</span></div>}
       <div className="sms-grid two" style={{marginTop:17}}>
-        <SmsSelect label="Küldendő sablon" value={testTemplateId} onChange={value=>{setTestTemplateId(value);setTestConfirm(false);setTestOk('');}} options={[{value:'connection',label:'Kapcsolatpróba · alap'},...testTemplates.map(t=>({value:t.id,label:`${t.name} · ${t.language.toUpperCase()}`}))]} placeholder="Válaszd ki az üzenetet"/>
+        <SmsSelect label="Küldendő sablon" value={testTemplateId} onChange={value=>{setTestTemplateId(value);setTestBrandId('');setTestCategoryId('');setTestConfirm(false);setTestOk('');}} options={[{value:'connection',label:'Kapcsolatpróba · alap'},...testTemplates.map(t=>({value:t.id,label:`${t.name} · ${t.language.toUpperCase()}`}))]} placeholder="Válaszd ki az üzenetet"/>
         <SmsSelect label="Üzlet a mintában" value={testLocation} onChange={value=>{setTestLocation(value);setTestConfirm(false);}} options={[{value:'main_warehouse',label:'Csíkszereda'},{value:'magazin_targu_secuiesc',label:'Kézdivásárhely'}]}/>
       </div>
       {testTemplateId?<div style={{marginTop:13}}>
-        <div className="sms-short-note"><strong>Az elküldendő szöveg</strong><SmsHint text="Ez a tényleges SMS pontos szövege. A [név], márka és kupon adatmezőkben tesztadatot használunk. Tesztkupon nem váltható be."/></div>
-        {testPreviewBusy?<p className="sms-caption">Előnézet betöltése…</p>:testPreview?<>
+        {testRequiresBrand?<SmsSelect label="Mintamárka · a sablon márkamezőjéhez" value={testBrandId} onChange={value=>{setTestBrandId(value);setTestConfirm(false);}} options={meta.brands.map(b=>({value:b.id,label:b.name}))} placeholder="Válassz márkát"/>:null}
+        {testRequiresCategory?<div style={{marginTop:10}}><SmsSelect label="Mintakategória" value={testCategoryId} onChange={value=>{setTestCategoryId(value);setTestConfirm(false);}} options={meta.categories.map(c=>({value:c.id,label:c.name}))} placeholder="Válassz kategóriát"/></div>:null}
+        <div style={{marginTop:10}}><SmsSelect label="Tesztkódolás" value={testEncodingMode} onChange={value=>{setTestEncodingMode(value as 'original'|'gsm7');setTestConfirm(false);}} options={[{value:'original',label:'Eredeti szöveg, ékezetesen'},{value:'gsm7',label:'GSM-7 próba, ékezet nélkül'}]}/></div>
+        <div className="sms-short-note" style={{marginTop:13}}><strong>Az elküldendő szöveg</strong><SmsHint text="A mentett sablon szövege, a választott márkával és üzlettel kitöltve. Nem teszünk hozzá önkényes Teszt-SMS sort. A GSM-7 változat csak külön kiválasztásra készül. Kliensnek nem küldünk."/></div>
+        {testBrandMissing||testCategoryMissing?<p className="sms-caption">Válaszd ki a sablonban használt mintaadatokat.</p>:testPreviewBusy?<p className="sms-caption">Előnézet betöltése…</p>:testPreview?<>
           <pre className="sms-test-body">{testPreview.message}</pre>
-          <span className="sms-pill">{testPreview.encoding} · {testPreview.segments} SMS-rész</span>
+          <span className="sms-pill">{testPreview.encoding} · {testPreview.segments} SMS-rész{testPreview.modifiedForGsm7?' · ékezet nélkül':''}</span>
           {testPreview.blockedReason?<div className="sms-error" style={{marginTop:10}}>{testPreview.blockedReason}</div>:null}
         </>:null}
         {testPreviewError?<div className="sms-error" style={{marginTop:10}}>{testPreviewError}</div>:null}
