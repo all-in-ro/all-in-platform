@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { checkReusePrices } from './lib/mayo_833_price_policy.mjs';
+import { reconcileStockQuantity, reconcileRetailBook } from './lib/mayo_833_stock_reconcile.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(here, 'data/mayo_833_original.json'), 'utf8'));
@@ -18,6 +19,8 @@ const BATCH = manifest.batchId;
 const KEY = `mayo_833_20261014_v2:${BATCH}`;
 const PREVIOUS_BATCH = 'bebf7410-053a-4cf9-856e-bae5003a30cd';
 const APPLY = process.argv.includes('--apply');
+const TRIAL = process.argv.includes('--trial');
+const EXECUTE = APPLY || TRIAL;
 const silent = process.argv.includes('--json');
 const TYPE_MAP = {
   BLUZA: ['IMBRACAMINTE', 'imbracaminte_bluza'],
@@ -399,7 +402,7 @@ async function load() {
 }
 
 function report(d){
-  console.log('\n=== MAYO CHIX 833 | '+(APPLY?'JAVÍTÁS ELŐTTI ELLENŐRZÉS':'CSAK OLVASÓ ELŐNÉZET')+' ===');
+  console.log('\n=== MAYO CHIX 833 | '+(TRIAL?'TELJES TRANZAKCIÓS PRÓBA, VÉGÉN ROLLBACK':APPLY?'JAVÍTÁS ELŐTTI ELLENŐRZÉS':'CSAK OLVASÓ ELŐNÉZET')+' ===');
   console.log('Számla:',d.batch.invoice_number,'| sor:',d.totals.rows,'| darab:',d.totals.qty);
   console.log('Szétválasztandó variánscsoport:',d.plans.length,
     '| valóban ÚJ variánsok:',d.plans.reduce((n,p)=>n+p.groups.filter(g=>g.targetType==='create').length,0),
@@ -428,7 +431,7 @@ function report(d){
   if(d.problems.length){
     console.log('\n!!! A javítás NEM INDÍTHATÓ !!!');
     for(const x of d.problems)console.log(' -',x);
-  } else console.log('\nMinden előfeltétel rendben. A DRY-RUN semmit nem írt át.');
+  } else console.log('\nMinden előfeltétel rendben. '+(TRIAL?'Most kezdődik a tranzakciós próba; a végén ROLLBACK lesz.':APPLY?'Az éles átvezetés most indul.':'A DRY-RUN semmit nem írt át.'));
 }
 
 async function uniqueBarcode(){
@@ -473,6 +476,8 @@ async function apply(d){
   const targetIdByRow=new Map(d.importRows.map(r=>[int(r.row_no),String(r.variant_id)]));
   const changedVariants=new Set();
   const newVariants=new Set();
+  // A készletsorok rendezése előtt egyetlen variánst sem archiválunk.
+  const pendingArchives=new Set();
   const groupByOld=new Map(d.plans.map(p=>[p.oldVariant,p]));
   for(const plan of d.plans){
     for(const group of plan.groups){
@@ -505,10 +510,10 @@ async function apply(d){
         SET color_code=$2,color_name=$3,updated_at=now() WHERE id=$1`,
         [plan.oldVariant,keeper.key,keeper.color]);
     }else{
-      // A rosszul felvett 833-as, most már üres variáns nem aktív termék.
-      // Nem töröljük: helyreállítási nyoma és vonalkódja megmarad.
-      await client.query(`UPDATE aif_product_variants SET status='archived',updated_at=now()
-        WHERE id=$1 AND COALESCE(status,'active')<>'archived'`,[plan.oldVariant]);
+      // Az összes darab másik színvariánsra megy. A forrás archiválását
+      // KIZÁRÓLAG a fizikai készlet és a 833-as mozgások rendezése után végezzük.
+      // Korai archiválás egy DB triggernél nullázhatná a készletet.
+      pendingArchives.add(plan.oldVariant);
     }
     changedVariants.add(plan.oldVariant);
   }
@@ -606,37 +611,93 @@ async function apply(d){
   }
 
   const locationId=String(d.batch.target_location_id);
+  const bookExists=await tableExists('aif_stock_retail_book');
+  const originalStocks=[...d.stocks,...d.candidateStocks];
+  const originalBooks=[...d.books,...d.candidateBooks];
+  let autoAdjustedStock=0;
+  let manualAdjustedStock=0;
+  // A 833-as mozgások variánsának módosítása adatbázis-trigger esetén már
+  // átvezethette a készletet. A V3 itt újra kivonta, emiatt az üresre futó
+  // LIGHT MATRICA S (e9d5302b...) forrásnál 5 darab nem volt levonható.
+  // A V4 csak az ELVÁRT VÉGÁLLAPOTOT állítja be, az eredeti pillanatképhez mérve.
   for(const [id,delta] of deltas){
-    if(!delta.qty)continue;
-    if(delta.qty<0){
-      const existing=await one(`UPDATE aif_stock SET qty=qty+$3,updated_at=now()
-        WHERE location_id=$1 AND variant_id=$2 AND qty >= abs($3)
-        AND COALESCE(reserved_qty,0)=0 RETURNING qty`,[locationId,id,delta.qty]);
-      assert(existing,`Nem vonható le a 833-as készlet ${id} variánsról.`);
-      if(await tableExists('aif_stock_retail_book')){
-        const book=await one(`UPDATE aif_stock_retail_book
-          SET qty=qty+$3,book_value=round((book_value+$4)::numeric,2),
-          seeded=false,updated_at=now()
+    if(!delta.qty && !delta.value)continue;
+    const label=`${id} / ${locationId}`;
+    const oldStock=originalStocks.find(s=>String(s.variant_id)===id && String(s.location_id)===locationId);
+    const seenStock=await one(`SELECT qty,reserved_qty FROM aif_stock
+      WHERE location_id=$1 AND variant_id=$2`,[locationId,id]);
+    const stockRule=reconcileStockQuantity({
+      label:`Készlet ${label}`,baselineQty:oldStock?.qty||0,
+      observedQty:seenStock?.qty||0,reservedQty:seenStock?.reserved_qty||0,
+      deltaQty:delta.qty,
+    });
+    if(stockRule.needsWrite){
+      if(seenStock){
+        const changed=await one(`UPDATE aif_stock
+          SET qty=$3,updated_at=now()
           WHERE location_id=$1 AND variant_id=$2
-          AND qty >= abs($3) AND book_value+$4>=-0.01
-          RETURNING qty,book_value`,[locationId,id,delta.qty,delta.value]);
-        assert(book,`Nem vonható le a 833-as könyvérték ${id} variánsról.`);
+          AND qty=$4 AND COALESCE(reserved_qty,0)=0
+          RETURNING qty`,[locationId,id,stockRule.expected,stockRule.observed]);
+        assert(changed,`Közben megváltozott a készlet: ${label}`);
+      }else if(stockRule.expected!==0){
+        const inserted=await one(`INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
+          VALUES($1,$2,$3,0,now()) ON CONFLICT DO NOTHING RETURNING qty`,
+          [locationId,id,stockRule.expected]);
+        assert(inserted,`Nem hozható létre a célkészlet: ${label}`);
       }
+      manualAdjustedStock++;
     }else{
-      await client.query(`INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
-        VALUES($1,$2,$3,0,now())
-        ON CONFLICT(location_id,variant_id) DO UPDATE SET
-          qty=aif_stock.qty+EXCLUDED.qty,updated_at=now()`,[locationId,id,delta.qty]);
-      if(await tableExists('aif_stock_retail_book')){
-        await client.query(`INSERT INTO aif_stock_retail_book(location_id,variant_id,qty,book_value,seeded,updated_at)
-          VALUES($1,$2,$3,$4,false,now())
-          ON CONFLICT(location_id,variant_id) DO UPDATE SET
-            qty=aif_stock_retail_book.qty+EXCLUDED.qty,
-            book_value=round((aif_stock_retail_book.book_value+EXCLUDED.book_value)::numeric,2),
-            seeded=false,updated_at=now()`,[locationId,id,delta.qty,delta.value]);
+      autoAdjustedStock++;
+    }
+    // Könyvértéknél is abszolút, ellenőrzött végösszeget alkalmazunk.
+    // Meglévő 832-es variánsok eredeti könyvértéke a kiindulási alap;
+    // a 833-as számlasor eladási ára szerint hozzáadott könyvérték külön delta.
+    if(bookExists){
+      const oldBook=originalBooks.find(b=>String(b.variant_id)===id && String(b.location_id)===locationId);
+      const seenBook=await one(`SELECT qty,book_value FROM aif_stock_retail_book
+        WHERE location_id=$1 AND variant_id=$2`,[locationId,id]);
+      const rule=reconcileRetailBook({
+        label:`Retail könyv ${label}`,baselineQty:oldBook?.qty||0,baselineValue:oldBook?.book_value||0,
+        observedQty:seenBook?.qty||0,observedValue:seenBook?.book_value||0,
+        deltaQty:delta.qty,deltaValue:delta.value,
+      });
+      if(rule.needsWrite){
+        if(seenBook){
+          const changed=await one(`UPDATE aif_stock_retail_book SET
+            qty=$3,book_value=$4,seeded=false,updated_at=now()
+            WHERE location_id=$1 AND variant_id=$2
+            AND qty=$5 AND abs(book_value-$6::numeric)<0.01
+            RETURNING qty,book_value`,
+            [locationId,id,rule.expectedQty,rule.expectedValue,rule.seenQty,rule.seenValue]);
+          assert(changed,`Közben megváltozott a retail könyv: ${label}`);
+        }else if(rule.expectedQty!==0 || rule.expectedValue!==0){
+          const inserted=await one(`INSERT INTO aif_stock_retail_book
+            (location_id,variant_id,qty,book_value,seeded,updated_at)
+            VALUES($1,$2,$3,$4,false,now()) ON CONFLICT DO NOTHING RETURNING qty,book_value`,
+            [locationId,id,rule.expectedQty,rule.expectedValue]);
+          assert(inserted,`Nem hozható létre a cél könyvérték: ${label}`);
+        }
       }
     }
+    // Írás vagy trigger után a végállapotnak PONTOSAN egyeznie kell a tervvel.
+    const finalStock=await one(`SELECT qty,reserved_qty FROM aif_stock
+      WHERE location_id=$1 AND variant_id=$2`,[locationId,id]);
+    assert(Math.abs(int(finalStock?.qty)-stockRule.expected)<0.0001 &&
+      int(finalStock?.reserved_qty)===0,
+      `Készlet-végállapot eltér: ${label} (${finalStock?.qty||0}/${stockRule.expected})`);
+    if(bookExists){
+      const finalBook=await one(`SELECT qty,book_value FROM aif_stock_retail_book
+        WHERE location_id=$1 AND variant_id=$2`,[locationId,id]);
+      const expectedBook=originalBooks.find(b=>String(b.variant_id)===id && String(b.location_id)===locationId);
+      const expectedQty=int(expectedBook?.qty)+delta.qty;
+      const expectedValue=money(int(expectedBook?.book_value)+delta.value);
+      assert(Math.abs(int(finalBook?.qty)-expectedQty)<0.0001 &&
+        Math.abs(money(finalBook?.book_value)-expectedValue)<0.01,
+        `Retail könyv-végállapot eltér: ${label}`);
+    }
   }
+  console.log('Készlet-egyeztetés: már rendezett:',autoAdjustedStock,
+    '| biztonságosan beállított:',manualAdjustedStock,'variáns.');
 
   // A stock_table_audit duplikáló, nem fizikai árumozgás, így nem vesz részt
   // a darabok időrendi rekonstruálásában. A valódi 832-es események adatát nem
@@ -668,6 +729,26 @@ async function apply(d){
       assert(Math.abs((ledger.get(loc)||0)-int(q?.qty))<0.001,
         `Készletmozgások és fizikai készlet eltér: ${id} / ${loc} (${ledger.get(loc)||0} / ${q?.qty||0})`);
     }
+  }
+
+  // A teljesen átvezetett forrást CSAK MOST archiváljuk, amikor a valós
+  // mozgások, a készlet és a retail könyv már nulla végállapotban egyeznek.
+  for(const id of pendingArchives){
+    const live=await rows(`SELECT location_id,qty,reserved_qty FROM aif_stock WHERE variant_id=$1`,[id]);
+    assert(live.every(x=>int(x.qty)===0 && int(x.reserved_qty)===0),
+      `Nem archiválható készletes vagy foglalt variáns: ${id}`);
+    if(bookExists){
+      const book=await rows(`SELECT location_id,qty,book_value FROM aif_stock_retail_book WHERE variant_id=$1`,[id]);
+      assert(book.every(x=>int(x.qty)===0 && Math.abs(money(x.book_value))<0.01),
+        `Nem archiválható könyvértékkel rendelkező variáns: ${id}`);
+    }
+    const updated=await one(`UPDATE aif_product_variants SET status='archived',updated_at=now()
+      WHERE id=$1 AND COALESCE(status,'active')<>'archived' RETURNING id`,[id]);
+    assert(updated,`A forrásvariáns archiválása nem sikerült: ${id}`);
+    // Az archiválás nem tüntethet el nem nulla készletet.
+    const check=await rows(`SELECT qty,reserved_qty FROM aif_stock WHERE variant_id=$1`,[id]);
+    assert(check.every(x=>int(x.qty)===0 && int(x.reserved_qty)===0),
+      `Archiválás után készletváltozás: ${id}`);
   }
 
   // Két MONTEVERDI megnevezéshez két modell kell. A 60A krém L ForIT
@@ -805,11 +886,12 @@ async function apply(d){
 
 try {
   assert(process.env.DATABASE_URL,'Hiányzik a Render DATABASE_URL.');
+  assert(!(APPLY && TRIAL),'Egyszerre --trial és --apply nem használható.');
   client=await pool.connect();
-  await client.query(APPLY?'BEGIN':'BEGIN READ ONLY'); tx=true;
+  await client.query(EXECUTE?'BEGIN':'BEGIN READ ONLY'); tx=true;
   await client.query("SET LOCAL statement_timeout='120s'");
   await client.query("SET LOCAL lock_timeout='5s'");
-  if(APPLY){
+  if(EXECUTE){
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[KEY]);
     await client.query(`SELECT id FROM aif_import_batches WHERE id=$1 FOR UPDATE`,[BATCH]);
     // A konkurens eladás, átadás, készletkorrekció nem módosíthatja közben
@@ -839,14 +921,20 @@ try {
   const d=await load();
   if(!silent)report(d);
   if(d.problems.length)throw Error('Az audit biztonsági eltérést talált. Semmi nem változott.');
-  if(APPLY){
+  if(EXECUTE){
     await apply(d);
-    await client.query('COMMIT');tx=false;
-    console.log('SIKER: A javítás atomikusan mentve. Helyreállítási pillanatkép:',KEY);
+    if(TRIAL){
+      await client.query('ROLLBACK');tx=false;
+      console.log('SIKERES TELJES PRÓBA: a végső ellenőrzés átment. MINDEN PRÓBAÍRÁS VISSZAGÖRGETVE.');
+      console.log('A valódi átvezetéshez külön, teljes PostgreSQL-mentés és újabb döntés szükséges.');
+    }else{
+      await client.query('COMMIT');tx=false;
+      console.log('SIKER: A javítás atomikusan mentve. Helyreállítási pillanatkép:',KEY);
+    }
   }else{
     await client.query('ROLLBACK');tx=false;
     console.log('DRY-RUN VÉGE. Az éles adatbázis változatlan.');
-    console.log('Külön jóváhagyás után: node jobs/aif_mayo_833_repair.mjs --apply');
+    console.log('Teljes tranzakciós teszt (ROLLBACK): node jobs/aif_mayo_833_repair.mjs --trial');
   }
 }catch(error){
   if(tx){try{await client.query('ROLLBACK');}catch{} }
