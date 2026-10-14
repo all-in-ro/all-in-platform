@@ -78,6 +78,7 @@ export function readZip(buffer) {
   }
   guard(at === directoryOffset + directorySize, 'A ZIP-könyvtár mérete nem egyezik.');
   const byName = new Map(entries.map(e => [e.name, e]));
+  guard(byName.size === entries.length, 'Ismétlődő belső állománynevek az XLSX-ben.');
   guard(byName.has('xl/workbook.xml') && byName.has('[Content_Types].xml'), 'Nem érvényes Excel XLSX-munkafüzet.');
   return { entries, byName, comment: Buffer.from(buffer.subarray(eocdAt + 22, eocdAt + 22 + commentLen)) };
 }
@@ -128,15 +129,56 @@ function getFirstWorksheetName(archive) {
 }
 
 function extractCellTokens(body) {
-  return [...body.matchAll(/<c\b[^>]*\br="([A-Z]+)([1-9]\d*)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)]
-    .map(match => ({ raw: match[0], col: match[1], row: Number(match[2]), index: match.index ?? 0 }));
+  // Read the opening tag first. A greedy cell regex can consume the following
+  // populated cell when the current cell is self-closing (<c r="C2"/>).
+  const tokens = [];
+  const openings = /<c\b[^>]*>/g;
+  let match;
+  while ((match = openings.exec(body))) {
+    const address = match[0].match(/\br=["']([A-Z]+)([1-9]\d*)["']/);
+    guard(Boolean(address), 'Hiányzó vagy érvénytelen Excel-cellacím.');
+    let end = openings.lastIndex;
+    if (!/\/\s*>$/.test(match[0])) {
+      const close = body.indexOf('</c>', end);
+      guard(close >= end && !/<c\b/.test(body.slice(end, close)), 'Sérült Excel-cella.');
+      end = close + 4;
+    }
+    tokens.push({ raw: body.slice(match.index, end), col: address[1], row: Number(address[2]), index: match.index });
+    openings.lastIndex = end;
+  }
+  return tokens;
+}
+
+function extractRows(xml) {
+  const result = [], seen = new Set();
+  const openings = /<row\b[^>]*>/g;
+  let match;
+  while ((match = openings.exec(xml))) {
+    const address = match[0].match(/\br=["']([1-9]\d*)["']/);
+    guard(Boolean(address), 'Hiányzó vagy érvénytelen Excel-sorszám.');
+    const rowNo = Number(address[1]);
+    guard(!seen.has(rowNo), 'Ismétlődő Excel-sorszám.');
+    seen.add(rowNo);
+    const bodyAt = openings.lastIndex;
+    let end = bodyAt, body = '', closing = '';
+    if (!/\/\s*>$/.test(match[0])) {
+      const close = xml.indexOf('</row>', bodyAt);
+      guard(close >= bodyAt && !/<row\b/.test(xml.slice(bodyAt, close)), 'Sérült Excel-sor.');
+      body = xml.slice(bodyAt, close); closing = '</row>'; end = close + 6;
+    }
+    result.push({ rowNo, index: match.index, end, opening: match[0], closing, body });
+    openings.lastIndex = end;
+  }
+  return result;
 }
 
 function valueForCell(token, strings) {
   if (!token) return '';
-  const type = token.raw.match(/\bt="([^"]+)"/)?.[1] || '';
+  const opening = token.raw.slice(0, token.raw.indexOf('>') + 1);
+  const type = opening.match(/\bt=["']([^"']+)["']/)?.[1] || '';
+  if (/\/\s*>$/.test(opening)) return '';
   const rawValue = token.raw.match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/)?.[1] ?? '';
-  if (type === 's') return strings[Number(rawValue)] || '';
+  if (type === 's') return rawValue.trim() ? (strings[Number(rawValue)] || '') : '';
   if (type === 'inlineStr') return decodedXmlText([...token.raw.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(x => x[1]).join(''));
   return decodedXmlText(rawValue);
 }
@@ -154,19 +196,32 @@ export function inspectForitXlsx(buffer) {
   const sheetPath = getFirstWorksheetName(archive);
   const xml = inflated(archive.byName.get(sheetPath)).toString('utf8');
   const strings = sharedStrings(archive);
-  const rows = [...xml.matchAll(/<row\b[^>]*\br="([1-9]\d*)"[^>]*>([\s\S]*?)<\/row>/g)]
-    .map(match => ({ rowNo: Number(match[1]), tokens: extractCellTokens(match[2]) }));
+  const rows = extractRows(xml).map(row => {
+    const tokens = extractCellTokens(row.body);
+    guard(tokens.every(token => token.row === row.rowNo) && new Set(tokens.map(token => token.col)).size === tokens.length,
+      'Ismétlődő vagy téves Excel-cellacím.');
+    return { rowNo: row.rowNo, tokens };
+  });
   guard(rows.length > 1 && rows.length <= 40001, 'Az XLSX üres vagy túl sok terméksort tartalmaz.');
-  const headers = rows[0].tokens.map(token => ({ col: token.col, header: cleanHeader(valueForCell(token, strings)) }));
-  const findCol = names => headers.find(h => names.includes(h.header))?.col;
-  const barcodeCol = findCol(['codbare', 'coddebare', 'barcode', 'ean', 'vonalkod']);
-  const codeCol = findCol(['cod', 'codprodus', 'productcode']);
-  const nameCol = findCol(['denumire', 'denumireprodus', 'nev', 'productname']);
+  let headerIndex = -1, barcodeCol, codeCol, nameCol;
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const headers = rows[i].tokens.map(token => ({ col: token.col, header: cleanHeader(valueForCell(token, strings)) }));
+    const findCol = names => headers.find(h => names.includes(h.header))?.col;
+    const bc = findCol(['codbare', 'coddebare', 'barcode', 'ean', 'vonalkod']);
+    const cc = findCol(['cod', 'codprodus', 'productcode']);
+    if (bc && cc) {
+      headerIndex = i; barcodeCol = bc; codeCol = cc;
+      nameCol = findCol(['denumire', 'denumireprodus', 'nev', 'productname']);
+      break;
+    }
+  }
   guard(Boolean(barcodeCol && codeCol), 'Nem találom a ForIT „Codbare” és „Cod” oszlopait. A fájl formátumát nem módosítom.');
   guard(barcodeCol !== codeCol, 'A vonalkód és termékkód ugyanazon oszlopban található.');
-  const data = rows.slice(1).map(row => {
+  const data = rows.slice(headerIndex + 1).map(row => {
     const get = col => valueForCell(row.tokens.find(token => token.col === col), strings).trim();
-    return { rowNo: row.rowNo, code: get(codeCol), name: nameCol ? get(nameCol) : '', barcode: get(barcodeCol) };
+    const barcodeToken = row.tokens.find(token => token.col === barcodeCol);
+    return { rowNo: row.rowNo, code: get(codeCol), name: nameCol ? get(nameCol) : '', barcode: get(barcodeCol),
+      barcodeFormula: Boolean(barcodeToken && /<f(?:\s|\/|>)/.test(barcodeToken.raw)) };
   }).filter(row => row.code || row.barcode);
   guard(data.length > 0, 'Nem található termékadat a ForIT-fájlban.');
   return { archive, sheetPath, xml, barcodeCol, data };
@@ -179,7 +234,7 @@ function setBarcodeCell(rowBody, cellCol, rowNo, barcode) {
   if (target) {
     const tag = target.raw.match(/^<c\b[^>]*>/)?.[0] || target.raw.match(/^<c\b[^>]*\/>/)?.[0];
     guard(Boolean(tag), 'Nem olvasható a ForIT vonalkódcellája.');
-    const attrs = tag.replace(/^<c\b/, '').replace(/\/?\s*>$/, '').replace(/\s+t="[^"]*"/g, '');
+    const attrs = tag.replace(/^<c\b/, '').replace(/\/?\s*>$/, '').replace(/\s+t=(?:"[^"]*"|'[^']*')/g, '');
     const updated = `<c${attrs} t="inlineStr">${content}</c>`;
     return rowBody.slice(0, target.index) + updated + rowBody.slice(target.index + target.raw.length);
   }
@@ -194,22 +249,66 @@ export function writeForitXlsx(inspected, assigned) {
   const replacements = assigned instanceof Map ? assigned : new Map(Object.entries(assigned || {}).map(([k, v]) => [Number(k), v]));
   const rowLookup = new Map(inspected.data.map(item => [item.rowNo, item]));
   for (const [rowNo, code] of replacements) {
-    guard(Boolean(rowLookup.get(rowNo)) && !rowLookup.get(rowNo).barcode,
+    guard(Boolean(rowLookup.get(rowNo)) && !rowLookup.get(rowNo).barcode && !rowLookup.get(rowNo).barcodeFormula,
       `A(z) ${rowNo}. sorban már szerepel vonalkód, ezért nem írom felül.`);
     guard(/^[A-Za-z0-9._-]{1,90}$/.test(String(code)),
       `Érvénytelen AllInFashion-vonalkód a(z) ${rowNo}. sorhoz.`);
   }
   let count = 0;
-  const updatedXml = inspected.xml.replace(/(<row\b[^>]*\br="([1-9]\d*)"[^>]*>)([\s\S]*?)(<\/row>)/g,
-    (full, start, rowRaw, body, end) => {
-      const rowNo = Number(rowRaw);
-      const barcode = replacements.get(rowNo);
-      if (!barcode) return full;
-      count++;
-      return start + setBarcodeCell(body, inspected.barcodeCol, rowNo, barcode) + end;
-    });
+  const pieces = [];
+  let position = 0;
+  for (const row of extractRows(inspected.xml)) {
+    if (!replacements.has(row.rowNo)) continue;
+    const body = setBarcodeCell(row.body, inspected.barcodeCol, row.rowNo, replacements.get(row.rowNo));
+    pieces.push(inspected.xml.slice(position, row.index), row.opening, body, row.closing);
+    position = row.end; count++;
+  }
+  pieces.push(inspected.xml.slice(position));
+  const updatedXml = pieces.join('');
   guard(count === replacements.size, 'Nem sikerült minden megfelelő Excel-cellát megtalálni.');
   return packZip(inspected.archive, new Map([[inspected.sheetPath, Buffer.from(updatedXml, 'utf8')]]));
+}
+
+// Re-open the actual output before it can become a downloadable result.
+export function verifyForitXlsx(before, output, assigned) {
+  const after = inspectForitXlsx(output);
+  const replacements = assigned instanceof Map ? assigned : new Map();
+  guard(before.barcodeCol === after.barcodeCol && before.sheetPath === after.sheetPath,
+    'A kész Excel szerkezete eltér a forrástól. Nem adom át letöltésre.');
+  const afterRows = new Map(after.data.map(row => [row.rowNo, row]));
+  guard(before.data.length === after.data.length, 'A kész Excelben megváltozott a terméksorok száma.');
+  for (const row of before.data) {
+    const updated = afterRows.get(row.rowNo);
+    const expected = replacements.has(row.rowNo) ? String(replacements.get(row.rowNo)) : row.barcode;
+    guard(updated && updated.code === row.code && updated.name === row.name && updated.barcode === expected,
+      `A(z) ${row.rowNo}. sor visszaellenőrzése sikertelen. A fájl nem tölthető le.`);
+  }
+  const removeTargets = xml => {
+    const pieces = [];
+    let position = 0;
+    for (const row of extractRows(xml)) {
+      if (!replacements.has(row.rowNo)) continue;
+      let body = row.body;
+      for (const token of extractCellTokens(body).filter(token => token.col === before.barcodeCol).reverse()) {
+        body = body.slice(0, token.index) + body.slice(token.index + token.raw.length);
+      }
+      pieces.push(xml.slice(position, row.index), row.opening, body, row.closing);
+      position = row.end;
+    }
+    pieces.push(xml.slice(position));
+    return pieces.join('');
+  };
+  guard(removeTargets(before.xml) === removeTargets(after.xml),
+    'A Codbare oszlopon kívül más Excel-adat is módosult. A letöltést leállítottam.');
+  guard(before.archive.entries.length === after.archive.entries.length, 'Megváltozott az XLSX belső szerkezete.');
+  for (const old of before.archive.entries) {
+    const current = after.archive.byName.get(old.name);
+    guard(Boolean(current), 'Hiányzó belső XLSX-állomány.');
+    if (old.name !== before.sheetPath) guard(old.compressed.equals(current.compressed),
+      'A Codbare-cellákon kívül más XLSX-tartalom is megváltozott.');
+  }
+  return { verified: true, barcodeColumn: after.barcodeCol, filled: replacements.size,
+    populated: after.data.filter(row => row.barcode).length };
 }
 
 function packZip(archive, replacements) {

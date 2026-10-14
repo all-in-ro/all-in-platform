@@ -1,9 +1,11 @@
 import express from 'express';
-import { inspectForitXlsx, writeForitXlsx } from './legacyExportXlsx.js';
-import { chooseBarcode, collectBarcodeCandidates, parseForitCode } from './legacyExportMatch.js';
+import { inspectForitXlsx, writeForitXlsx, verifyForitXlsx } from './legacyExportXlsx.js';
+import {
+  FORIT_EXPORT_VERSION, chooseBarcode, collectBarcodeCandidates,
+  indexBarcodeCandidates, findBarcodeConflicts,
+} from './legacyExportMatch.js';
 
-// Isolated, read-only ForIT barcode bridge.
-// No product, barcode, inventory, import, or migration tables are ever modified.
+// Only SELECTs inside a read-only transaction. No product/import/inventory writes.
 export default function createAifLegacyExportRouter({ pool, requireAdminOrSecret }) {
   const router = express.Router();
   router.post('/convert', requireAdminOrSecret,
@@ -11,92 +13,98 @@ export default function createAifLegacyExportRouter({ pool, requireAdminOrSecret
     async (req, res) => {
       let db;
       const push = event => {
-        if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(event)}\n`);
+        if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify({ version: FORIT_EXPORT_VERSION, ...event })}\n`);
       };
       try {
-        if (!Buffer.isBuffer(req.body) || !req.body.length) {
-          return res.status(400).json({ error: 'Válassz egy .xlsx ForIT-fájlt.' });
-        }
+        if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Válassz egy .xlsx ForIT-fájlt.' });
         const nameHeader = String(req.get('X-Forit-Filename') || 'ForIT.xlsx').slice(0, 500);
-        let sourceName = 'ForIT.xlsx';
+        let sourceName;
         try { sourceName = decodeURIComponent(nameHeader); } catch { sourceName = nameHeader; }
-        sourceName = sourceName.replace(/[\\/\x00-\x1f:*?"<>|]/g, '_').replace(/\.xlsx$/i, '').slice(0, 110) || 'ForIT';
-        const workbook = inspectForitXlsx(req.body); // validate BEFORE beginning a streamed response
+        sourceName = sourceName.replace(/[\\/\x00-\x1f:*?"<>|]/g, '_').replace(/\.xlsx$/i, '')
+          .replace(/_AIF_BARKODOK(?:_\d+)?$/i, '').slice(0, 100) || 'ForIT';
+        const workbook = inspectForitXlsx(req.body);
         res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store, no-transform');
         res.setHeader('X-Accel-Buffering', 'no');
+        res.setHeader('X-Forit-Export-Version', FORIT_EXPORT_VERSION);
         res.flushHeaders?.();
         push({ type: 'progress', percent: 9, step: 'Excel ellenőrizve', done: 0, total: workbook.data.length });
         db = await pool.connect();
-        await db.query('BEGIN READ ONLY');
+        await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
         await db.query("SET LOCAL statement_timeout='45000ms'");
-        push({ type: 'progress', percent: 16, step: 'Vonalkódok keresése az AllInFashion adatbázisban', done: 0, total: workbook.data.length });
+        push({ type: 'progress', percent: 16, step: 'Variáns-, beszállítói és import-vonalkódok keresése', done: 0, total: workbook.data.length });
         const candidates = await collectBarcodeCandidates(db, workbook.data);
-        await db.query('ROLLBACK');
-        db.release();
-        db = null;
-        push({ type: 'progress', percent: 34, step: 'Termékek párosítása', done: 0, total: workbook.data.length });
-        const grouped = new Map();
-        for (const candidate of candidates) {
-          const key = String(candidate.productCode || '').toLowerCase();
-          if (key) {
-            if (!grouped.has(key)) grouped.set(key, []);
-            grouped.get(key).push(candidate);
-          }
-        }
-        const legacyByCode = new Map();
-        for (const candidate of candidates.filter(c => c.origin === 'legacy')) {
-          for (const value of [candidate.legacyCode, candidate.internalSku]) {
-            const key = String(value || '').toLowerCase();
-            if (!key) continue;
-            if (!legacyByCode.has(key)) legacyByCode.set(key, []);
-            legacyByCode.get(key).push(candidate);
-          }
-        }
-        const assigned = new Map();
-        const problems = [];
-        let existed = 0;
-        let ambiguous = 0;
-        let blank = 0;
+        const candidatesFor = indexBarcodeCandidates(candidates);
+        const matches = new Map(), failed = new Map();
+        let existing = 0;
         for (let i = 0; i < workbook.data.length; i++) {
+          if (res.destroyed) throw Object.assign(new Error('Client disconnected'), { code: 'client_closed' });
           const item = workbook.data[i];
-          if (item.barcode) existed++;
+          if (item.barcode) existing++;
+          else if (item.barcodeFormula) failed.set(item.rowNo, {
+            state: 'missing', reasonCode: 'formula_protected', reason: 'A Codbare-cella képletet tartalmaz. A képletet nem írom felül.',
+          });
           else {
-            const parsed = parseForitCode(item);
-            const pool = [
-              ...(parsed.legacyOnly ? [] : (grouped.get(parsed.supplierCode.toLowerCase()) || [])),
-              ...(legacyByCode.get(parsed.code.toLowerCase()) || []),
-            ];
-            const match = chooseBarcode(item, pool);
-            if (match.state === 'matched') assigned.set(item.rowNo, match.barcode);
-            else {
-              if (match.state === 'ambiguous') ambiguous++;
-              else blank++;
-              problems.push({ rowNo: item.rowNo, code: item.code, name: item.name.slice(0, 140), reason: match.reason });
-            }
+            const match = chooseBarcode(item, candidatesFor(item));
+            if (match.state === 'matched') matches.set(item.rowNo, match);
+            else failed.set(item.rowNo, match);
           }
           if ((i + 1) % 12 === 0 || i + 1 === workbook.data.length) {
             const done = i + 1;
-            push({ type: 'progress', percent: 34 + Math.round(54 * done / workbook.data.length), step: `${done} / ${workbook.data.length} termék ellenőrizve`, done, total: workbook.data.length });
+            push({ type: 'progress', percent: 32 + Math.round(49 * done / workbook.data.length),
+              step: `${done} / ${workbook.data.length} termék ellenőrizve`, done, total: workbook.data.length });
             await new Promise(resolve => setImmediate(resolve));
           }
         }
-        if (!assigned.size && !existed) {
-          push({ type: 'error', message: 'Egyetlen sorhoz sem találtam biztos AllInFashion-vonalkódot. A feltöltött fájlt nem módosítottam.', problems: problems.slice(0, 100) });
+        push({ type: 'progress', percent: 85, step: 'Vonalkód-ütközések ellenőrzése', done: workbook.data.length, total: workbook.data.length });
+        const conflicts = await findBarcodeConflicts(db, matches);
+        for (const [rowNo, problem] of conflicts) { matches.delete(rowNo); failed.set(rowNo, problem); }
+        await db.query('ROLLBACK');
+        db.release();
+        db = null;
+        const assigned = new Map([...matches].map(([rowNo, match]) => [rowNo, match.barcode]));
+        const problems = [], filledRows = [];
+        const sourceCounts = { variant: 0, supplier: 0, import: 0 };
+        let missing = 0, ambiguous = 0;
+        for (const item of workbook.data) {
+          const match = matches.get(item.rowNo), problem = failed.get(item.rowNo);
+          if (match) {
+            sourceCounts[match.barcodeSource]++;
+            filledRows.push({ rowNo: item.rowNo, cell: `${workbook.barcodeCol}${item.rowNo}`,
+              code: item.code, name: item.name, barcode: match.barcode, source: match.barcodeSource });
+          }
+          if (problem) {
+            if (problem.state === 'ambiguous') ambiguous++; else missing++;
+            problems.push({ rowNo: item.rowNo, cell: `${workbook.barcodeCol}${item.rowNo}`,
+              code: item.code, name: item.name, reasonCode: problem.reasonCode, reason: problem.reason });
+          }
+        }
+        if (assigned.size + existing + missing + ambiguous !== workbook.data.length) throw new Error('ForIT row totals mismatch');
+        const summary = { count: workbook.data.length, filled: assigned.size, existing, missing, ambiguous,
+          barcodeColumn: workbook.barcodeCol, sourceCounts, problems: problems.slice(0, 200),
+          filledRows: filledRows.slice(0, 200), detailsLimit: 200 };
+        if (!assigned.size) {
+          // A renamed copy of the input is not a successful conversion.
+          push({ type: 'result', ...summary, changed: false, verified: false, downloadable: false,
+            message: existing === workbook.data.length ? 'Minden Codbare-cella már ki volt töltve. Új fájl nem készült.' :
+              'Nem került új vonalkód a fájlba. A kimaradás okát soronként lent találod; változatlan másolatot nem adok letöltésre.' });
           return res.end();
         }
-        push({ type: 'progress', percent: 94, step: 'Eredeti Excel-formátum megőrzése és kitöltése', done: workbook.data.length, total: workbook.data.length });
-        const result = writeForitXlsx(workbook, assigned);
-        // byte-identical ZIP member contents outside the sole worksheet; no new worksheet/column/format.
-        push({ type: 'result', percent: 100, step: 'Letölthető', fileName: `${sourceName}_AIF_BARKODOK.xlsx`,
-          base64: result.toString('base64'), count: workbook.data.length, filled: assigned.size,
-          existing: existed, missing: blank, ambiguous, problems: problems.slice(0, 200) });
+        push({ type: 'progress', percent: 92, step: 'Codbare-cellák kitöltése az eredeti Excelben', done: workbook.data.length, total: workbook.data.length });
+        const output = writeForitXlsx(workbook, assigned);
+        push({ type: 'progress', percent: 97, step: 'A kész Excel visszaolvasása és ellenőrzése', done: workbook.data.length, total: workbook.data.length });
+        const verified = verifyForitXlsx(workbook, output, assigned);
+        const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+        push({ type: 'result', ...summary, ...verified, changed: true, downloadable: true,
+          fileName: `${sourceName}_AIF_BARKODOK_${stamp}.xlsx`, base64: output.toString('base64'),
+          message: `${assigned.size} új vonalkód valóban bekerült a ${workbook.barcodeCol} (Codbare) oszlopba.` });
         res.end();
       } catch (error) {
         if (db) { try { await db.query('ROLLBACK'); } catch {} }
+        if (error?.code === 'client_closed' || res.destroyed) return;
         const message = error?.statusCode === 422 ? error.message : 'A ForIT-export nem sikerült. A forrásfájlt nem változtattuk meg.';
         console.error('AIF legacy ForIT export:', error);
-        if (!res.headersSent) return res.status(error?.statusCode === 422 ? 422 : 500).json({ error: message });
+        if (!res.headersSent) return res.status(error?.statusCode === 422 ? 422 : 500).json({ error: message, version: FORIT_EXPORT_VERSION });
         push({ type: 'error', message });
         res.end();
       } finally {
