@@ -7,7 +7,7 @@ export type SmsSettings = {
   frequencyHours: number; sendFromHour: number; sendUntilHour: number; lowCredit: number;
   shopNames: Record<string,string>; shopAddresses: Record<string,string>;
   websiteUrl: string; includeWebsite: boolean;
-  unsubscribePhone: string; includeUnsubscribeLink: boolean;
+  unsubscribePhone: string; includeUnsubscribeLink: boolean; testPhone: string;
 };
 export type SmsStatus = {
   ok: boolean; role: 'admin'|'shop'; settings: SmsSettings; configured: boolean;
@@ -44,6 +44,6 @@ export async function smsApi<T>(path:string, body?:unknown, method=body===undefi
 }
 export function smsKey() { return crypto.randomUUID(); }
 export function smsChanged() { window.dispatchEvent(new CustomEvent('aif:sms-updated')); }
-export function smsDate(value?:string) { if(!value)return '–';const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString('hu-HU',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+export function smsDate(value?:string) { if(!value)return '–';const d=new Date(value);if(Number.isNaN(d.getTime()))return value;const p=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));return `${p.day}.${p.month}.${p.year} ${p.hour}:${p.minute}`; }
 export function smsToday(offset=0) {return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Date.now()+offset*86400000));}
 export const SMS_STATUS:Record<string,string>={draft:'Előkészítve',awaiting_approval:'Jóváhagyásra vár',approved:'Jóváhagyva',queued:'Sorban áll',sending:'Küldés alatt',paused:'Szünetel',finished:'Feldolgozva',cancelled:'Leállítva',pending:'Küldésre vár',accepted:'Szolgáltatónak átadva',delivered:'Kézbesítve',undelivered:'Nem kézbesíthető',failed:'Elutasítva',unknown:'Ellenőrzendő',skipped:'Kihagyva',simulated:'Szimulálva',inactive:'Még nem aktív',active:'Aktív',used:'Beváltva',revoked:'Visszavonva'};
