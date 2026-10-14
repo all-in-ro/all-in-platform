@@ -72,6 +72,64 @@ export async function sourcesFor(db,locationId) {
   }
   return [...imports.rows,...transfers].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).slice(0,80);
 }
+// Read-only inspection: the quantities are those RECEIVED on the document,
+// not today's remaining stock. The user must be authorized for that store.
+export async function sourceDetailsFor(db, locationId, type, id) {
+  const uid = txt(id);
+  if (!['import', 'transfer'].includes(type) || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(uid)) {
+    throw fail('Érvénytelen szállítmány.', 'sms_source_invalid', 400);
+  }
+  const source = (await sourcesFor(db, locationId)).find(s => s.type === type && s.id === uid);
+  if (!source) throw fail('A szállítmány nem ehhez az üzlethez tartozik.', 'sms_source_forbidden', 403);
+  const query = type === 'import' ? `
+    SELECT r.row_no AS line_no,
+      COALESCE(NULLIF(r.normalized->>'titleRo',''), m.title_ro, 'Termék') AS title,
+      COALESCE(NULLIF(r.supplier_product_code,''), m.model_code) AS code,
+      COALESCE(NULLIF(r.normalized->>'colorName',''), v.color_name, '') AS color,
+      COALESCE(NULLIF(r.supplier_size,''), v.size, '') AS size,
+      COALESCE(b.name, '') AS brand,
+      COALESCE(sc.name_ro, c.name_ro, '') AS category,
+      r.qty::numeric AS qty
+    FROM aif_import_rows r
+    JOIN aif_product_variants v ON v.id=r.variant_id
+    JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN aif_brands b ON b.id=m.brand_id
+    LEFT JOIN aif_categories c ON c.id=m.category_id
+    LEFT JOIN aif_categories sc ON sc.id=m.subcategory_id
+    WHERE r.batch_id=$1::uuid AND r.status='committed' AND r.qty>0
+    ORDER BY r.row_no ASC, r.id ASC
+  ` : `
+    SELECT row_number() OVER (ORDER BY m.title_ro, v.size, v.color_name)::int AS line_no,
+      COALESCE(m.title_ro,'Termék') AS title,
+      COALESCE(NULLIF(v.attributes->>'legacyProductCode',''),m.model_code) AS code,
+      COALESCE(v.color_name,'') AS color,
+      COALESCE(v.size,'') AS size,
+      COALESCE(b.name,'') AS brand,
+      COALESCE(sc.name_ro,c.name_ro,'') AS category,
+      sum(r.qty)::numeric AS qty
+    FROM aif_shop_transfer_receipts r
+    JOIN aif_product_variants v ON v.id=r.variant_id
+    JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN aif_brands b ON b.id=m.brand_id
+    LEFT JOIN aif_categories c ON c.id=m.category_id
+    LEFT JOIN aif_categories sc ON sc.id=m.subcategory_id
+    WHERE r.document_id=$1::uuid AND r.target_location_id=$2::uuid AND r.qty>0
+    GROUP BY v.id,m.id,b.name,c.name_ro,sc.name_ro
+    ORDER BY m.title_ro, v.size, v.color_name
+  `;
+  const params = type === 'import' ? [uid] : [uid, locationId];
+  const result = await db.query(query, params);
+  const items = result.rows.map(r => ({
+    lineNo: Number(r.line_no), title: txt(r.title), code: txt(r.code),
+    brand: txt(r.brand), color: txt(r.color), size: txt(r.size),
+    category: txt(r.category), qty: Number(r.qty)
+  }));
+  if (items.reduce((sum, r) => sum + r.qty, 0) !== Number(source.qty)) {
+    throw fail('A szállítmány tételeinek összege nem egyezik. Frissítsd a listát.', 'sms_source_mismatch', 409);
+  }
+  return { source, items };
+}
+
 export async function sourceProducts(db,locationId,sources) {
   const keys=unique(sources);
   if(!keys.length||keys.length>12)throw fail('Válassz 1–12 már bevételezett szállítmányt.');

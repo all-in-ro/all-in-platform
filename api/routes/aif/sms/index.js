@@ -2,7 +2,7 @@ import express from 'express';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { txt, fail, cleanSettings, validateBlocks, unique, TOKENS, cleanCouponCopy, upgradeLegacyTemplateBlocks } from './domain.js';
 import { ensureSmsSchema, settingsFrom, audit } from './schema.js';
-import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourceProducts } from './data.js';
+import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourceDetailsFor, sourceProducts } from './data.js';
 import { providerConfig, publicBase, createProvider } from './provider.js';
 import { createCampaignService } from './campaigns.js';
 import { createCouponService } from './coupons.js';
@@ -123,6 +123,7 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   }));
   router.get('/sources',safe(async(req,res)=>{const l=await location(req);res.json({items:await sourcesFor(pool,l.id)});}));
   router.post('/source-products',safe(async(req,res)=>{const l=await location(req);res.json(await sourceProducts(pool,l.id,req.body.sources));}));
+  router.get('/sources/:type/:id/details',safe(async(req,res)=>{const l=await location(req);res.json(await sourceDetailsFor(pool,l.id,req.params.type,req.params.id));}));
   router.get('/templates',safe(async(_req,res)=>{const rows=(await pool.query('SELECT * FROM aif_sms_templates ORDER BY name')).rows;res.json({items:rows.map(t=>({...t,blocks:upgradeLegacyTemplateBlocks(t.blocks,t.language)}))});}));
   router.post('/templates',adminOnly,safe(async(req,res)=>{
     const b=req.body||{},name=txt(b.name);if(name.length<3||name.length>100)throw fail('A sablonnév 3–100 karakterből álljon.');if(!['arrival','promotion'].includes(b.kind))throw fail('Érvénytelen sablontípus.');
@@ -176,7 +177,8 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   router.post('/campaigns/:id/test-sms',adminOnly,safe(async(req,res)=>{res.json(await testSender.send({campaignId:req.params.id,recipientId:req.body?.recipientId,actor:actorFrom(req)}));}));
   // Fonoeki, kampanytol es ugyfelcimzettol fuggetlen SMSLink kapcsolatproba.
   // A telefonszamot csak a DB-ben mentett admin beallitas adhatja.
-  router.post('/manager-connection-test',adminOnly,safe(async(req,res)=>{res.json(await testSender.sendConnectionTest({actor:actorFrom(req)}));}));
+  router.post('/manager-connection-test/preview',adminOnly,safe(async(req,res)=>{res.json(await testSender.previewConnectionTest({templateId:req.body?.templateId,locationCode:req.body?.locationCode}));}));
+  router.post('/manager-connection-test',adminOnly,safe(async(req,res)=>{if(!req.body?.templateId||!req.body?.previewFingerprint)throw fail('Előbb válassz sablont és nézd meg az SMS előnézetét.','sms_test_preview_required',400);res.json(await testSender.sendConnectionTest({actor:actorFrom(req),templateId:req.body?.templateId,locationCode:req.body?.locationCode,previewFingerprint:req.body?.previewFingerprint}));}));
   router.post('/campaigns/:id/:action',safe(async(req,res)=>{res.json(await campaigns.action(req.params.id,req.params.action,req.body,await scope(req),actorFrom(req),admin(req)));}));
   router.get('/audit',adminOnly,safe(async(req,res)=>{
     const id=txt(req.query.campaignId),offset=Math.max(0,Math.floor(Number(req.query.offset)||0));
