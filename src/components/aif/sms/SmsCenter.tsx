@@ -8,6 +8,11 @@ import {prepareSmsTransportPreview} from '../../../lib/aif/smsTransportPreview';
 type Tab='overview'|'arrival'|'promotion'|'history'|'templates'|'settings'|'audit';
 type Template={id:string;name:string;kind:'arrival'|'promotion';language:'hu'|'ro';blocks:SmsBlock[];coupon_copy?:SmsCouponCopy|null;coupon_stackable?:boolean|null;updated_at?:string};
 
+// Csak a ténylegesen módosított beállítások menthetők újra.
+function smsSettingsHaveChanges(draft:SmsSettings,saved:SmsSettings):boolean {
+  return JSON.stringify(draft)!==JSON.stringify(saved);
+}
+
 // A sablonhoz nem tartozik DB-ben uzletkod. Az egyertelmu nevvel mentett
 // uzletsablonoknal a nev alapjan valasztunk, mas esetben a megorzott uzlet az elso.
 function smsTemplateLocation(t:Template,meta:SmsMeta|null):string|null {
@@ -55,6 +60,9 @@ export function SmsLauncher({locationCode,role='shop'}:{locationCode?:string;rol
 }
 function SmsCenter({locationCode,status,statusError,reloadStatus,onClose}:{locationCode?:string;status:SmsStatus|null;statusError:string;reloadStatus:(force?:boolean)=>Promise<void>;onClose:()=>void}){
   const[tab,setTab]=useState<Tab>('overview'),[meta,setMeta]=useState<SmsMeta|null>(null),[error,setError]=useState(''),[detail,setDetail]=useState<SmsCampaignDetail|null>(null),[template,setTemplate]=useState<Template|null>(null);
+  const[settingsSaveNotice,setSettingsSaveNotice]=useState('');
+  const contentRef=useRef<HTMLDivElement|null>(null);
+  useEffect(()=>{if(tab==='overview'&&settingsSaveNotice&&contentRef.current)contentRef.current.scrollTop=0;},[tab,settingsSaveNotice]);
   const[preferredLocation,setPreferredLocation]=useState<string>(locationCode||'');
   useEffect(()=>{if(locationCode)setPreferredLocation(locationCode);},[locationCode]);
   useEffect(()=>{smsApi<SmsMeta>('/meta').then(setMeta).catch(e=>setError(errText(e)));},[]);
@@ -62,13 +70,14 @@ function SmsCenter({locationCode,status,statusError,reloadStatus,onClose}:{locat
   const navigation:Array<{id:Tab;name:string;icon:typeof Activity}>=[{id:'overview',name:'Áttekintés',icon:Activity},{id:'arrival',name:'Új áru · SMS',icon:Package},{id:'promotion',name:'Promóció és kupon',icon:Gift},{id:'history',name:'Küldési napló',icon:History},{id:'templates',name:'Üzenetsablonok',icon:FileText},...(isAdmin?[{id:'settings' as Tab,name:'Vezérlőpult',icon:Settings},{id:'audit' as Tab,name:'Admin auditnapló',icon:ClipboardList}]:[])];
   async function show(id:string){setError('');try{setDetail(await smsApi<SmsCampaignDetail>(`/campaigns/${encodeURIComponent(id)}`));}catch(e){setError(errText(e));}}
   return <SmsModal title="SMS vezérlőközpont" onClose={onClose} extra={<><span className={`sms-pill ${live(status)?'live':'test'}`}>{live(status)?'ÉLES KÜLDÉS':'PRÓBAMÓD'}</span><div className="sms-credit"><small>SMSLink egyenleg</small><strong>{status?.balance?`${n(status.balance.credit)} kredit`:'Nincs kreditadat'}</strong></div><button type="button" aria-label="SMS-egyenleg frissítése" className="sms-button icon" onClick={()=>void reloadStatus(true)}><RefreshCw size={16}/></button></>}>
-    <div className="sms-body"><nav className="sms-nav">{navigation.map(item=><button type="button" key={item.id} className={tab===item.id?'active':''} onClick={()=>{setTab(item.id);setError('');if(item.id!=='arrival'&&item.id!=='promotion')setTemplate(null);}}><item.icon size={18}/>{item.name}</button>)}</nav>
-      <div className="sms-content">{statusError||error?<div className="sms-error" style={{marginBottom:14}}>{statusError||error}</div>:null}
+    <div className="sms-body"><nav className="sms-nav">{navigation.map(item=><button type="button" key={item.id} className={tab===item.id?'active':''} onClick={()=>{setTab(item.id);setError('');setSettingsSaveNotice('');if(item.id!=='arrival'&&item.id!=='promotion')setTemplate(null);}}><item.icon size={18}/>{item.name}</button>)}</nav>
+      <div ref={contentRef} className="sms-content">{statusError||error?<div className="sms-error" style={{marginBottom:14}}>{statusError||error}</div>:null}
+        {tab==='overview'&&settingsSaveNotice?<div className="sms-ok" role="status" style={{marginBottom:14,display:'flex',alignItems:'center',gap:8}}><CheckCircle2 size={17}/>{settingsSaveNotice}</div>:null}
         {!status||!meta?<Empty><Loader2 className="sms-spin" size={22}/> SMS-rendszer betöltése…</Empty>:<>
           {tab==='overview'?<Overview status={status} onTab={setTab}/>:null}
           {tab==='arrival'||tab==='promotion'?<Composer key={`${tab}-${template?.id||'new'}`} kind={tab} status={status} meta={meta} locationCode={preferredLocation||locationCode} onLocationChange={setPreferredLocation} template={template} onPrepared={d=>{setDetail(d);smsChanged();}}/>:null}
           {tab==='history'?<CampaignHistory onShow={id=>void show(id)} isAdmin={Boolean(isAdmin)}/>:null}
-          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} onSaved={()=>{smsChanged();void reloadStatus();}}/>:null}
+          {tab==='settings'&&isAdmin?<SmsSettingsPanel status={status} onSaved={returnToOverview=>{smsChanged();if(returnToOverview){setSettingsSaveNotice('Beállítások sikeresen mentve.');setTab('overview');}}}/>:null}
           {tab==='templates'?<Templates isAdmin={status.role==='admin'} tokens={meta.tokens} onUse={t=>{const loc=smsTemplateLocation(t,meta);if(loc)setPreferredLocation(loc);setTemplate(t);setTab(t.kind);}}/>:null}
           {tab==='audit'&&isAdmin?<AuditPanel/>:null}
         </>}
@@ -299,13 +308,15 @@ function Reconcile({recipient,onSaved}:{recipient:SmsRecipient;onSaved:()=>void}
   async function save(){setBusy(true);setError('');try{await smsApi(`/recipients/${recipient.id}/reconcile`,{result,providerId,note});onSaved();}catch(e){setError(errText(e));}finally{setBusy(false);}}
   return <details className="sms-card soft" style={{marginTop:15}}><summary>Bizonytalan küldés kézi egyeztetése</summary><p className="sms-caption">Csak az SMSLink naplójában végzett ellenőrzés után. Ez nem küld új SMS-t.</p>{error?<div className="sms-error">{error}</div>:null}<div className="sms-section" style={{marginTop:12}}><SmsSelect label="Ellenőrzött eredmény" value={result} onChange={setResult} options={[{value:'accepted',label:'SMSLink átvette'},{value:'delivered',label:'SMSLink szerint kézbesítve'},{value:'failed',label:'Biztosan nem került elküldésre'}]}/><label>SMSLink üzenetazonosító<input value={providerId} onChange={e=>setProviderId(e.target.value)}/></label><label>Ellenőrzés részletei<textarea value={note} onChange={e=>setNote(e.target.value)}/></label><button type="button" className="sms-button" disabled={busy||note.length<12} onClick={()=>void save()}>Ellenőrzött eredmény rögzítése</button></div></details>;
 }
-function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
-  const[s,setS]=useState<SmsSettings>(status.settings),[busy,setBusy]=useState(false),[error,setError]=useState(''),[ok,setOk]=useState('');
+function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:(returnToOverview:boolean)=>void}){
+  const[s,setS]=useState<SmsSettings>(status.settings),[savedSettings,setSavedSettings]=useState<SmsSettings>(status.settings),[busy,setBusy]=useState(false),[error,setError]=useState(''),[ok,setOk]=useState('');
+  const settingsDirty=smsSettingsHaveChanges(s,savedSettings);
+  const saveLock=useRef(false);
   const[testConfirm,setTestConfirm]=useState(false),[testBusy,setTestBusy]=useState(false),[testError,setTestError]=useState(''),[testOk,setTestOk]=useState('');
   const[testTemplates,setTestTemplates]=useState<Template[]>([]),[testTemplateId,setTestTemplateId]=useState(''),[testLocation,setTestLocation]=useState('main_warehouse');
 
   const[testPreview,setTestPreview]=useState<SmsTestPreview|null>(null),[testPreviewError,setTestPreviewError]=useState(''),[testPreviewBusy,setTestPreviewBusy]=useState(false);
-  const testPhoneSaved=Boolean(status.settings.testPhone)&&s.testPhone===status.settings.testPhone;
+  const testPhoneSaved=Boolean(savedSettings.testPhone)&&s.testPhone===savedSettings.testPhone;
   useEffect(()=>{let active=true;smsApi<{items:Template[]}>('/templates').then(r=>{if(active)setTestTemplates(r.items);}).catch(e=>{if(active)setTestPreviewError(errText(e));});return()=>{active=false;};},[]);
   useEffect(()=>{
     let active=true;
@@ -317,7 +328,7 @@ function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
       .catch(e=>{if(active)setTestPreviewError(errText(e));})
       .finally(()=>{if(active)setTestPreviewBusy(false);});
     return()=>{active=false;};
-  },[testTemplateId,testLocation,status.settings.testPhone]);
+  },[testTemplateId,testLocation,savedSettings.testPhone]);
   async function sendConnectionTest(){
     if(testBusy||!testConfirm||!testPhoneSaved||!status.configured||!status.serverLiveEnabled||!testPreview||testPreview.blockedReason)return;
     setTestBusy(true);setTestError('');setTestOk('');
@@ -330,15 +341,25 @@ function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
     }catch(e){setTestError(errText(e));setTestConfirm(false);if((e as {code?:string})?.code==='sms_test_preview_stale')setTestTemplateId('');}
     finally{setTestBusy(false);}
   }
-  const patch=(v:Partial<SmsSettings>)=>{setS(s=>({...s,...v}));setOk('');};
-  async function save(){setBusy(true);setError('');try{const r=await smsApi<{settings:SmsSettings}>('/settings',s,'PATCH');setS(r.settings);setOk('Az SMS-beállítások mentve.');onSaved();}catch(e){setError(errText(e));}finally{setBusy(false);}}
+  const patch=(v:Partial<SmsSettings>)=>{if(busy)return;setS(s=>({...s,...v}));setOk('');setError('');};
+  async function save(returnToOverview=false){
+    if(saveLock.current||!settingsDirty)return;
+    saveLock.current=true;setBusy(true);setError('');setOk('');
+    try{
+      const r=await smsApi<{settings:SmsSettings}>('/settings',s,'PATCH');
+      setS(r.settings);setSavedSettings(r.settings);
+      if(!returnToOverview)setOk('Beállítások mentve.');
+      onSaved(returnToOverview);
+    }catch(e){setError(errText(e));}
+    finally{saveLock.current=false;setBusy(false);}
+  }
   const fields:Array<{key:keyof SmsSettings;label:string;min:number;max:number}>=[{key:'maxRecipients',label:'Címzett / kampány',min:1,max:5000},{key:'maxSegments',label:'Maximum SMS-rész / üzenet',min:1,max:8},{key:'campaignSegmentLimit',label:'SMS-rész / kampány',min:1,max:20000},{key:'dailySegmentLimit',label:'SMS-rész / nap',min:1,max:50000},{key:'frequencyHours',label:'Két SMS között legalább · óra',min:0,max:720},{key:'lowCredit',label:'Alacsony kredit riasztási küszöb',min:0,max:100000},{key:'sendFromHour',label:'Küldés ettől az órától',min:0,max:23},{key:'sendUntilHour',label:'Küldés eddig az óráig',min:1,max:24}];
   return <div className="sms-section"><div><p className="sms-overline">ADMIN · SMS VEZÉRLŐPULT</p><h2>Kapcsolat, keretek, jogosultságok</h2><SmsHint text="Az API-jelszó kizárólag a Render szerverkörnyezetében van. A böngésző és az eladók nem látják."/></div>{error?<div className="sms-error">{error}</div>:null}{ok?<div className="sms-ok">{ok}</div>:null}
     <div className="sms-grid three">{[{title:'SMSLink API',ready:status.configured,hint:'Connection ID + API-jelszó'},{title:'Éles szerverkapcsoló',ready:status.serverLiveEnabled,hint:'AIF_SMS_ALLOW_LIVE'},{title:'Kézbesítési webhook',ready:status.webhookReady,hint:'Biztonsági titok beállítva'}].map(x=><div className="sms-card" key={x.title}><div className="sms-flex"><h3>{x.title}</h3><span className={`sms-pill ${x.ready?'live':'unknown'}`}>{x.ready?'Beállítva':'Hiányzik'}</span></div><SmsHint text={x.hint}/></div>)}</div>
     <div className="sms-card">
       <div className="sms-flex"><h3>Teszt-SMS · Kerekes Zsolt</h3><SmsHint text="A kiválasztott sablont mintaadatokkal küldjük kizárólag a mentett tesztszámra. Semmilyen kliensnek nem küld. Az SMS valódi és kreditet fogyaszt."/></div>
       <label style={{marginTop:13}}>Teszttelefonszám<input type="tel" inputMode="tel" autoComplete="tel" value={s.testPhone||''} placeholder="+40745123456" onChange={e=>{patch({testPhone:e.target.value});setTestConfirm(false);setTestOk('');}}/></label>
-      {!testPhoneSaved?<div className="sms-actions" style={{marginTop:9}}><button type="button" className="sms-button" disabled={busy||!s.testPhone?.trim()} onClick={()=>void save()}>{busy?<Loader2 size={15} className="sms-spin"/>:<Save size={15}/>} Szám mentése</button></div>:<div className="sms-short-note" style={{marginTop:10}}><span className="sms-pill live">Mentett szám</span></div>}
+      {!testPhoneSaved?<div className="sms-actions" style={{marginTop:9}}><button type="button" className="sms-button" disabled={busy||!settingsDirty||!s.testPhone?.trim()} onClick={()=>void save(false)}>{busy?<Loader2 size={15} className="sms-spin"/>:<Save size={15}/>} Szám mentése</button></div>:<div className="sms-short-note" style={{marginTop:10}}><span className="sms-pill live">Mentett szám</span></div>}
       <div className="sms-grid two" style={{marginTop:17}}>
         <SmsSelect label="Küldendő sablon" value={testTemplateId} onChange={value=>{setTestTemplateId(value);setTestConfirm(false);setTestOk('');}} options={[{value:'connection',label:'Kapcsolatpróba · alap'},...testTemplates.map(t=>({value:t.id,label:`${t.name} · ${t.language.toUpperCase()}`}))]} placeholder="Válaszd ki az üzenetet"/>
         <SmsSelect label="Üzlet a mintában" value={testLocation} onChange={value=>{setTestLocation(value);setTestConfirm(false);}} options={[{value:'main_warehouse',label:'Csíkszereda'},{value:'magazin_targu_secuiesc',label:'Kézdivásárhely'}]}/>
@@ -384,7 +405,7 @@ function SmsSettingsPanel({status,onSaved}:{status:SmsStatus;onSaved:()=>void}){
       <SmsHint text="A webáruház címe opcionális. Csak megadva és bekapcsolva kerül az SMS végére, és növelheti a szükséges SMS-részek számát."/>
     </div>
     <details className="sms-card"><summary>Render-környezeti változók és SMSLink-bekötés</summary><p className="sms-caption">AIF_SMSLINK_CONNECTION_ID<br/>AIF_SMSLINK_PASSWORD<br/>AIF_SMS_PUBLIC_BASE_URL = a rendszer HTTPS eredetcíme, útvonal nélkül<br/>AIF_SMS_WEBHOOK_SECRET = véletlen, legalább 32 karakteres titok<br/>AIF_SMS_ALLOW_LIVE = false kezdetben, majd tudatosan true</p><p className="sms-caption">SMSLink DLR-cím: <code>/api/aif/sms/delivery?key=SAJÁT_TITOK</code> az eredetcím után. Kérd az opcionális connection_id és message_count mezőket is. A státusz itt csak a titok meglétét ellenőrzi, a szolgáltatói URL tényleges beállítását nem.</p></details>
-    <div className="sms-flex"><p className="sms-caption">Minden módosítást az admin auditnapló őriz.</p><button type="button" className="sms-button primary" disabled={busy} onClick={()=>void save()}>{busy?<Loader2 className="sms-spin" size={17}/>:<Save size={17}/>} Beállítások mentése</button></div>
+    <div className="sms-flex"><p className="sms-caption">Minden módosítást az admin auditnapló őriz.</p><button type="button" className="sms-button primary" disabled={busy||!settingsDirty} onClick={()=>void save(true)}>{busy?<Loader2 className="sms-spin" size={17}/>:<Save size={17}/>} {busy?'Mentés…':'Beállítások mentése'}</button></div>
   </div>;
 }
 function Templates({onUse,isAdmin,tokens}:{onUse:(t:Template)=>void;isAdmin:boolean;tokens:SmsMeta['tokens']}){
