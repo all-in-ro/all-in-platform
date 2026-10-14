@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   frequencyHours:72, sendFromHour:9, sendUntilHour:20, lowCredit:100,
   // A phone-only SMS is shorter. A personal opt-out link is optional and separately configurable.
   unsubscribePhone:'', includeUnsubscribeLink:false,
+  testPhone:'', // Separate manager-only real test recipient, never a campaign audience member.
   shopNames:{ main_warehouse:'AllInFashion Csikszereda', magazin_targu_secuiesc:'AllInFashion Kezdivasarhely' },
   // No invented street addresses. The administrator enters each real store address.
   shopAddresses:{main_warehouse:'',magazin_targu_secuiesc:''},
@@ -80,6 +81,12 @@ export function cleanSettings(input, current = DEFAULT_SETTINGS) {
     if(raw&&!phone)throw fail('A leiratkozási kapcsolattartónál romániai mobilszám szükséges (például +40745123456).');
     o.unsubscribePhone=phone||'';
   }
+  if('testPhone' in input) {
+    if(input.testPhone!=null&&typeof input.testPhone!=='string')throw fail('A teszt-SMS telefonszáma érvénytelen.');
+    const raw=txt(input.testPhone),phone=raw?phoneNumber(raw):'';
+    if(raw&&!phone)throw fail('A főnöki teszt-SMS-hez érvényes romániai mobilszám kell (például +40745123456).');
+    o.testPhone=phone||'';
+  }
   if('websiteUrl' in input) o.websiteUrl=normalizeWebsite(input.websiteUrl);
   // Blank website is always optional: even a previously enabled toggle must not block saving.
   // Avoid a logically enabled-but-empty state when old settings are submitted.
@@ -115,7 +122,7 @@ export function messageSettingsSnapshot(settings,locationCode) {
     includeWebsite:settings.includeWebsite===true&&Boolean(txt(settings.websiteUrl)),
     // V4 separates the optional webshop URL and the mandatory opt-out contact
     // onto their own physical SMS lines. Never send V3 drafts with old formatting.
-    messageFormatVersion:4
+    messageFormatVersion:5
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -172,6 +179,11 @@ export function couponTerms(rules, language='hu') {
     ? `Personal, o singura utilizare, doar in magazinul indicat. De la ${date}.${minimum} ${rules.stackable?'Cumulabil cu alte reduceri.':'Nu se cumuleaza cu alte reduceri.'}`
     : `Szemelyes, egyszeri, csak a megjelolt uzletben. Kezdete: ${date}.${minimum} ${rules.stackable?'Mas kedvezmennyel osszevonhato.':'Mas kedvezmennyel nem vonhato ossze.'}`;
 }
+export function compactSmsNames(values,language='hu',kind='brands') {
+  const uniqueNames=unique(values);
+  const suffix=kind==='categories'?(language==='ro'?'si alte produse':'es tovabbi termekek'):(language==='ro'?'si alte marci':'es tovabbi markak');
+  return uniqueNames.length>2?`${uniqueNames.slice(0,2).join(', ')} ${suffix}`:uniqueNames.join(', ');
+}
 export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false) {
   const raw=blocks.map(b=>{
     if(b.type==='text') return b.value;
@@ -183,15 +195,15 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   if(showLink&&!/^https:\/\/[^\s]+$/.test(unsubscribeUrl))throw fail('Hiányzik a biztonságos személyes leiratkozási cím.');
   // Phone-only: manual opt-out requests must be recorded promptly in the SMS preferences.
   const optOut=showLink&&contact?`${contact} / ${unsubscribeUrl}`:showLink?unsubscribeUrl:contact;
-  // The SMS body identifies the real shop chosen for this campaign. SMSLink sender ID
-  // is configured separately and may be a numeric sender.
+  // The SMS body identifies the store through its required address token, not
+  // through an awkward automatic store-name prefix. SMSLink sender is separate.
   const storeName=txt(values.storeName);
   if(!storeName)throw fail('Az SMS feladó üzletneve nincs beállítva.','sms_missing_store_name');
   // No website entered means no webshop text, regardless of stale enabled settings.
   const webshop=includeWebsite&&txt(websiteUrl)?normalizeWebsite(websiteUrl):'';
   // Each footer item gets its own physical SMS line, not another space-separated sentence.
   // The required opt-out contact is always the last line, even without a webshop URL.
-  const mainText=`${storeName}: ${raw}${terms?` ${terms}`:''}`.trim();
+  const mainText=`${raw}${terms?` ${terms}`:''}`.trim();
   const lines=[mainText];
   if(webshop)lines.push(`Online: ${webshop}`);
   lines.push(`${language==='ro'?'Dezabonare':'Leiratkozas'}: ${optOut}`);

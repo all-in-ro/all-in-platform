@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch } from './domain.js';
+import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch, compactSmsNames } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { metadata, sourceProducts, audienceFor } from './data.js';
 import { publicBase, providerConfig } from './provider.js';
@@ -37,8 +37,8 @@ export function createCampaignService(pool,provider) {
       const code=coupon?codes[i]:null;
       const values={name:person.name,store:storeLabel(settings,location.code,location.name),
         storeName:messageSettings.storeName||location.name,storeAddress:messageSettings.storeAddress,
-        brands:unique(person.matched.map(p=>p.brand)).join(', ')||meta.brands.filter(b=>filters.brands.includes(b.id)).map(b=>b.name).join(', ')||(language==='ro'?`selectia ${messageSettings.storeName||location.name}`:`${messageSettings.storeName||location.name} valogatas`),
-        categories:unique(person.matched.map(p=>p.category)).join(', ')||(language==='ro'?'produse selectate':'valogatott termekek'),
+        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language)||(language==='ro'?'marcile preferate':'kedvenc markaid'),
+        categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories')||(language==='ro'?'produse selectate':'valogatott termekek'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
       const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true);
       if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget.`,'sms_too_long');

@@ -6,10 +6,11 @@ import { metadata, getCustomer, getPreference, savePreference, sourcesFor, sourc
 import { providerConfig, publicBase, createProvider } from './provider.js';
 import { createCampaignService } from './campaigns.js';
 import { createCouponService } from './coupons.js';
+import { createSmsTestSender } from './testSend.js';
 import { startSmsWorker } from './worker.js';
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSalesSchema,aifResolveShopLocation,actorFrom}) {
-  const router=express.Router(),provider=createProvider(),campaigns=createCampaignService(pool,provider),coupons=createCouponService(pool);
+  const router=express.Router(),provider=createProvider(),campaigns=createCampaignService(pool,provider),coupons=createCouponService(pool),testSender=createSmsTestSender(pool,provider);
   let ready=null;
   const ensure=()=>ready||(ready=ensureAifShopSalesSchema().then(()=>ensureSmsSchema(pool)).catch(e=>{ready=null;throw e;}));
   const safe=fn=>async(req,res)=>{try{await ensure();await fn(req,res);}catch(e){const status=Number(e.statusCode||500);if(status>=500)console.error('AIF SMS route:',e.code||'error',e.message);res.status(status>=400&&status<600?status:500).json({error:status>=500&&!e.code?.startsWith('sms_')?'Az SMS-modul művelete nem sikerült. Ellenőrizd a szervernaplót.':e.message,code:e.code||'sms_error'});}};
@@ -135,6 +136,7 @@ export default function createAifSmsModule({pool,requireAuthed,ensureAifShopSale
   }));
   router.post('/campaigns',safe(async(req,res)=>{res.json(await campaigns.create(req.body,await location(req),actorFrom(req)));}));
   router.get('/campaigns/:id',safe(async(req,res)=>res.json(await campaigns.detail(pool,req.params.id,await scope(req)))));
+  router.post('/campaigns/:id/test-sms',adminOnly,safe(async(req,res)=>{res.json(await testSender.send({campaignId:req.params.id,recipientId:req.body?.recipientId,actor:actorFrom(req)}));}));
   router.post('/campaigns/:id/:action',safe(async(req,res)=>{res.json(await campaigns.action(req.params.id,req.params.action,req.body,await scope(req),actorFrom(req),admin(req)));}));
   router.get('/audit',adminOnly,safe(async(req,res)=>{
     const id=txt(req.query.campaignId),offset=Math.max(0,Math.floor(Number(req.query.offset)||0));
