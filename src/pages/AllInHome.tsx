@@ -46,7 +46,7 @@ type CarRow = {
   parking_months?: number;
 };
 
-const FORIT_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon.jpeg";
+const FORIT_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_2.png";
 
 function ForitExcelIcon({ className }: { className?: string }) {
   return <img src={FORIT_EXCEL_ICON} alt="" className={`${className || ""} rounded-sm object-contain`} loading="lazy" />;
