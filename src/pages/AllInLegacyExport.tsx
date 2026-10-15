@@ -227,7 +227,15 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/12 bg-gradient-to-r from-[#243a4c] via-[#255d60] to-[#278a81] px-5 py-5 sm:px-7">
           <div className="flex min-w-0 items-center gap-4">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#9bf3e8]/45 bg-[#153f44]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
-              <FileSpreadsheet size={28} className="text-[#c3fff1]" />
+              <img
+                src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg"
+                alt=""
+                aria-hidden="true"
+                width={40}
+                height={40}
+                draggable={false}
+                className="block h-10 w-10 rounded-lg object-contain"
+              />
             </div>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.20em] text-[#d3fff5]/55">ALL IN • FORIT HÍD</p>
