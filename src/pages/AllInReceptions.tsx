@@ -777,7 +777,7 @@ function buildFilteredReceptionsReportHtml(
   const totalQty = rows.reduce((sum, row) => sum + Number(row.total_qty || 0), 0);
   const purchaseNetRon = rows.reduce((sum, row) => sum + receptionValueRon(receptionNetInvoiceValue(row), row), 0);
   const purchaseGrossRon = rows.reduce((sum, row) => sum + receptionValueRon(row.invoice_gross, row), 0);
-  const salesGrossRon = rows.reduce((sum, row) => sum + receptionSalesTotalRon(row), 0);
+  const salesGrossRon = rows.reduce((sum, row) => sum + receptionCurrentSalesTotalRon(row), 0);
   const generatedAt = new Date().toLocaleString("ro-RO");
   const periodLabel = filters.from || filters.to
     ? `${filters.from || "…"} – ${filters.to || "…"}`
@@ -806,7 +806,7 @@ function buildFilteredReceptionsReportHtml(
       <td class="center">${pdfEscape(cell(row.currency_code))}</td>
       <td class="money">${pdfEscape(money(receptionNetInvoiceValue(row), row.currency_code))}</td>
       <td class="money">${pdfEscape(money(row.invoice_gross, row.currency_code))}</td>
-      <td class="money sales">${pdfEscape(money(receptionSalesTotalRon(row), "RON"))}</td>
+      <td class="money sales">${pdfEscape(money(receptionCurrentSalesTotalRon(row), "RON"))}</td>
       <td class="qty">${pdfNumber(row.total_qty || 0, 0)}</td>
       <td class="center">${pdfEscape(receptionStatusTextRo(row.status))}</td>
     </tr>`).join("");
@@ -890,7 +890,7 @@ function buildFilteredReceptionsReportHtml(
     <div class="summaryCard"><span>Cantitate totală</span><strong>${pdfNumber(totalQty, 0)} buc.</strong></div>
     <div class="summaryCard"><span>Achiziție netă</span><strong>${pdfNumber(purchaseNetRon)} RON</strong></div>
     <div class="summaryCard"><span>Achiziție brută</span><strong>${pdfNumber(purchaseGrossRon)} RON</strong></div>
-    <div class="summaryCard sales"><span>Valoare vânzare brută</span><strong>${pdfNumber(salesGrossRon)} RON</strong></div>
+    <div class="summaryCard sales"><span>Valoare vânzare actuală</span><strong>${pdfNumber(salesGrossRon)} RON</strong></div>
   </div>
 
   <table>
@@ -904,7 +904,7 @@ function buildFilteredReceptionsReportHtml(
         <th>Monedă</th>
         <th>Valoare netă</th>
         <th>Total factură</th>
-        <th>Valoare vânzare</th>
+        <th>Valoare vânzare actuală</th>
         <th>Buc.</th>
         <th>Stare</th>
       </tr>
@@ -1359,7 +1359,8 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     const qty = n(draft.qty ?? row.qty);
     const price = n(draft.buyPrice ?? row.buy_price ?? draft.buyPriceOriginal);
     const priceRon = price * rate;
-    const sellPriceRon = rowSellGrossPriceRon(row, draft, salesTva, true);
+    // Nyomtatáskor is a felületen használt aktuális, mentett eladási ár érvényes.
+    const sellPriceRon = rowSellGrossPriceRon(row, draft, salesTva);
     const sellValueRon = qty * sellPriceRon;
     const value = qty * price;
     return { row, draft, qty, price, priceRon, sellPriceRon, sellValueRon, value };
@@ -1471,7 +1472,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
       <div class="box"><div class="label">Transport RON</div><div class="value">${pdfNumber(shippingRon)}</div></div>
     </div>
 
-    <div class="note">Repartizare transport: proportional dupa valoarea liniei. TVA achizitie: ${pdfEscape(tvaModeText(item.tva_mode))}. Pret vanzare: ${pdfEscape(salesTvaText)}, moneda ${pdfEscape(salesTva.sellPriceCurrency)}. Document generat din AllInFashion.</div>
+    <div class="note">Repartizare transport: proportional dupa valoarea liniei. TVA achizitie: ${pdfEscape(tvaModeText(item.tva_mode))}. Pret vanzare: ${pdfEscape(salesTvaText)}, moneda ${pdfEscape(salesTva.sellPriceCurrency)}. Prețuri de vânzare actuale; valorile de achiziție rămân cele din recepție. Document generat din AllInFashion.</div>
 
     <table>
       <colgroup>
@@ -1608,8 +1609,9 @@ function checkRowData(
   salesSettings: SalesTvaSettings = DEFAULT_SALES_TVA_SETTINGS,
 ) {
   const qty = n(draft.qty ?? row?.qty ?? row?.normalized?.qty);
-  const enteredSellPrice = rowSellEnteredPriceRon(row, draft);
-  const sellPriceRon = enteredSellPrice > 0 ? rowSellGrossPriceRon(row, draft, salesSettings, true) : null;
+  // Az aktuális ár hiányzó receptiókori ár mellett is nyomtatható.
+  const grossSellPrice = rowSellGrossPriceRon(row, draft, salesSettings);
+  const sellPriceRon = grossSellPrice > 0 ? grossSellPrice : null;
   const lineValueRon = sellPriceRon === null ? null : qty * sellPriceRon;
   const imageUrl = String(
     draft.imageUrl ||
@@ -1872,7 +1874,7 @@ function buildReceptionVerificationHtml(
   <div class="title">
     <div class="eyebrow">Verificare internă marfă</div>
     <h1>NOTA DE RECEPȚIE ȘI VERIFICARE MARFĂ</h1>
-    <div class="subtitle">Cantități și prețuri de vânzare • TVA ${pdfEscape(salesTvaShort(salesTva))}</div>
+    <div class="subtitle">Cantități și prețuri de vânzare actuale • TVA ${pdfEscape(salesTvaShort(salesTva))}</div>
   </div>
 
   <section class="flowSection">
