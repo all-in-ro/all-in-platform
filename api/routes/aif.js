@@ -1456,6 +1456,108 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return Boolean(a && b && a === b);
   }
 
+  // Régi, nyomtatott címkék: a régi (archivált) kód megmarad, de kizárólag
+  // kézzel / bizonyított javításból jóváhagyott kapcsolaton keresztül kereshető.
+  // A normál termékvonalkódot, importot és készletet ez a tábla NEM írja át.
+  let aifBarcodeAliasSchemaPromise = null;
+  function ensureAifBarcodeAliasSchema() {
+    if (!aifBarcodeAliasSchemaPromise) {
+      aifBarcodeAliasSchemaPromise = (async () => {
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_variant_barcode_aliases (
+          barcode text PRIMARY KEY,
+          source_variant_id uuid NULL REFERENCES aif_product_variants(id) ON DELETE SET NULL,
+          target_variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+          reason text NOT NULL DEFAULT 'reviewed_archived_variant',
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_variant_barcode_aliases_normalized_uq
+          ON aif_variant_barcode_aliases (lower(btrim(barcode)))`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_variant_barcode_aliases_target_idx
+          ON aif_variant_barcode_aliases (target_variant_id)`);
+
+        // 2026-10-15 MAYO CHIX 833: tényleges adatbázis-audittal igazolt
+        // LIGHT MATRICA / ALB / S régi címke. Csak akkor rögzítjük az alias-t,
+        // ha MINDEN termékadat és életciklus a jóváhagyott párost igazolja.
+        // A régi variáns archivált és 0 készletű; az új variáns 3 db-ot tart
+        // Csíkszeredában. Egyetlen készletsorhoz sem nyúlunk.
+        await pool.query(`INSERT INTO aif_variant_barcode_aliases (
+            barcode, source_variant_id, target_variant_id, reason
+          )
+          SELECT old_v.barcode, old_v.id, new_v.id, 'mayo_833_verified_alb_s'
+          FROM aif_product_variants old_v
+          JOIN aif_product_models old_m ON old_m.id=old_v.model_id
+          JOIN aif_product_variants new_v ON new_v.id=$2::uuid
+          JOIN aif_product_models new_m ON new_m.id=new_v.model_id
+          WHERE old_v.id=$1::uuid
+            AND upper(btrim(COALESCE(old_v.barcode,'')))='AIF0N8L4U0'
+            AND upper(btrim(COALESCE(new_v.barcode,'')))='AIF0926F5N'
+            AND COALESCE(old_v.status,'active')='archived'
+            AND COALESCE(new_v.status,'active')='active'
+            AND COALESCE(new_m.status,'active')='active'
+            AND old_m.brand_id IS NOT DISTINCT FROM new_m.brand_id
+            AND lower(btrim(COALESCE(old_m.title_ro,'')))=lower(btrim(COALESCE(new_m.title_ro,'')))
+            AND lower(btrim(COALESCE(old_v.color_name,'')))=lower(btrim(COALESCE(new_v.color_name,'')))
+            AND lower(btrim(COALESCE(old_v.size,'')))=lower(btrim(COALESCE(new_v.size,'')))
+            AND lower(btrim(COALESCE(old_m.title_ro,'')))='light matrica'
+            AND lower(btrim(COALESCE(old_v.color_name,'')))='alb'
+            AND upper(btrim(COALESCE(old_v.size,'')))='S'
+            AND NOT EXISTS (
+              SELECT 1 FROM aif_stock old_stock
+              WHERE old_stock.variant_id=old_v.id AND COALESCE(old_stock.qty,0)>0
+            )
+            AND EXISTS (
+              SELECT 1 FROM aif_variant_supplier_codes sc
+              WHERE sc.variant_id=old_v.id AND lower(btrim(COALESCE(sc.supplier_product_code,'')))='116005690-01'
+            )
+            AND EXISTS (
+              SELECT 1 FROM aif_variant_supplier_codes sc
+              WHERE sc.variant_id=new_v.id AND lower(btrim(COALESCE(sc.supplier_product_code,'')))='116005690-01'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM aif_product_variants other
+              WHERE other.id<>old_v.id
+                AND COALESCE(other.status,'active')='active'
+                AND lower(btrim(COALESCE(other.barcode,'')))=lower(btrim(old_v.barcode))
+            )
+          ON CONFLICT (barcode) DO NOTHING`, [
+          'e9d5302b-035e-445a-a241-c00d57998bd0',
+          '289aaad9-ab4e-47c9-8e56-b682c0d32555',
+        ]);
+        return true;
+      })().catch((error) => {
+        aifBarcodeAliasSchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifBarcodeAliasSchemaPromise;
+  }
+
+  // Az eredeti aktív vonalkód MINDIG elsőbbséget élvez a korábbi alias-szal
+  // szemben. Az alias csak teljes (scannerből beolvasott) kódra működik.
+  function aifBarcodeAliasMatchSql(variantAlias, codeParam) {
+    return `EXISTS (
+      SELECT 1
+      FROM aif_variant_barcode_aliases alias_v
+      WHERE alias_v.target_variant_id=${variantAlias}.id
+        AND lower(btrim(alias_v.barcode))=lower(btrim(${codeParam}))
+        AND NOT EXISTS (
+          SELECT 1 FROM aif_product_variants exact_v
+          JOIN aif_product_models exact_m ON exact_m.id=exact_v.model_id
+          WHERE COALESCE(exact_v.status,'active')='active'
+            AND COALESCE(exact_m.status,'active')='active'
+            AND (
+              lower(btrim(COALESCE(exact_v.barcode,'')))=lower(btrim(${codeParam}))
+              OR EXISTS (
+                SELECT 1 FROM aif_variant_supplier_codes exact_sc
+                WHERE exact_sc.variant_id=exact_v.id
+                  AND COALESCE(exact_sc.is_active,true)=true
+                  AND lower(btrim(COALESCE(exact_sc.supplier_barcode,'')))=lower(btrim(${codeParam}))
+              )
+            )
+        )
+    )`;
+  }
+
   function cleanAifUitCode(value) {
     const compact = text(value).toUpperCase().replace(/\s+/g, "");
     if (!compact) return null;
@@ -15210,6 +15312,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!code) return res.status(400).json({ error: "Az azonosító kötelező." });
 
     try {
+      await ensureAifBarcodeAliasSchema();
       const r = await pool.query(
         `WITH barcode_candidates AS (
            SELECT DISTINCT v.id AS variant_id, 0 AS match_rank, 'barcode'::text AS match_type
@@ -15223,6 +15326,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
                OR lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1))
              )
+           UNION ALL
+           SELECT DISTINCT v.id AS variant_id, 1 AS match_rank, 'barcode_alias'::text AS match_type
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE COALESCE(v.status,'active')='active'
+             AND COALESCE(m.status,'active')='active'
+             AND ${aifBarcodeAliasMatchSql('v', '$1')}
          ),
          identifier_candidates AS (
            SELECT DISTINCT
@@ -27810,6 +27920,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifBarcodeAliasSchema();
       const location = await aifResolveInventoryReadLocation(req, pool, req.query.location);
       const openingInventory = await aifActiveOpeningInventorySession(pool, location.id);
       const search = text(req.query.q || req.query.search);
@@ -27828,6 +27939,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const pattern = `$${args.length}`;
         where.push(`(
           COALESCE(v.barcode,'') ILIKE ${pattern}
+          OR ${aifBarcodeAliasMatchSql('v', exact)}
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
@@ -27858,17 +27970,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         orderPrefix = `CASE
           WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
-          WHEN lower(COALESCE(v.internal_sku,''))=lower(${exact}) THEN 1
-          WHEN lower(COALESCE(sc.supplier_product_code,''))=lower(${exact}) THEN 2
-          ELSE 3
+          WHEN ${aifBarcodeAliasMatchSql('v', exact)} THEN 1
+          WHEN lower(COALESCE(v.internal_sku,''))=lower(${exact}) THEN 2
+          WHEN lower(COALESCE(sc.supplier_product_code,''))=lower(${exact}) THEN 3
+          ELSE 4
         END,`;
       }
+      // A bolti scanner automatikus kosárba tétele a visszakapott BARCODE mezőt
+      // hasonlítja a beolvasott szöveghez. Alias találatnál ezért a keresett kódot
+      // jelenítjük meg, de a variánsazonosító és a tényleges kanonikus kód megmarad.
+      const aliasMatchedSql = search ? aifBarcodeAliasMatchSql('v', '$2') : 'false';
       args.push(limit);
       const result = await pool.query(
         `SELECT
            v.id AS variant_id,
            v.internal_sku,
            v.barcode,
+           ${aliasMatchedSql} AS matched_barcode_alias,
            v.size,
            v.color_name,
            v.color_code,
@@ -27908,7 +28026,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let items = result.rows.map((row) => ({
         variantId: String(row.variant_id),
         internalSku: row.internal_sku || null,
-        barcode: row.barcode || null,
+        barcode: row.matched_barcode_alias ? search : (row.barcode || null),
+        canonicalBarcode: row.barcode || null,
+        legacyBarcodeAlias: Boolean(row.matched_barcode_alias),
         productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
         modelCode: row.model_code || null,
         title: row.title || "Ismeretlen termék",
@@ -27925,6 +28045,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         reservedQty: aifNumber(row.reserved_qty),
         availableQty: aifNumber(row.available_qty),
       }));
+
+      // A leltári katalógus merge-je felülírhatja a normál terméklistát;
+      // a beolvasott régi kód jelölését ilyenkor is meg kell őrizni,
+      // különben a kassza exactCatalogMatch() nem teszi kosárba automatikusan.
+      const aliasMatches = new Map(items
+        .filter((item) => item.legacyBarcodeAlias)
+        .map((item) => [String(item.variantId), item]));
 
       if (openingInventory) {
         const [discoveryItems, openingItems] = await Promise.all([
@@ -27952,6 +28079,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             return String(a.title || "").localeCompare(String(b.title || ""), "hu");
           })
           .slice(0, limit);
+      }
+
+      if (aliasMatches.size) {
+        items = items.map((item) => {
+          const match = aliasMatches.get(String(item.variantId));
+          return match ? {
+            ...item,
+            barcode: match.barcode,
+            canonicalBarcode: match.canonicalBarcode,
+            legacyBarcodeAlias: true,
+          } : item;
+        });
       }
 
       // Az üzleti felületeken a konkrét, legutóbbi bevételezés eredeti terméknevét mutatjuk.
@@ -27987,6 +28126,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-operations/stock", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifBarcodeAliasSchema();
       await ensureAifRetailBookSchema(pool);
       const location = await aifResolveInventoryReadLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
@@ -28000,10 +28140,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `COALESCE(m.status,'active')='active'`,
       ];
       if (search) {
-        args.push(`%${search}%`);
+        args.push(search, `%${search}%`);
+        const exact = `$${args.length - 1}`;
         const pattern = `$${args.length}`;
         where.push(`(
           COALESCE(v.barcode,'') ILIKE ${pattern}
+          OR ${aifBarcodeAliasMatchSql('v', exact)}
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
