@@ -28,7 +28,7 @@ const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
 const LOGO_URL =
-  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
+  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_3.png";
 
 type CarLevel = "ok" | "soon" | "expired";
 type GroupKey = "shops" | "warehouse" | "incoming";
