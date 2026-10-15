@@ -32,7 +32,7 @@ export default function createAifLegacyExportRouter({ pool, requireAdminOrSecret
         db = await pool.connect();
         await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
         await db.query("SET LOCAL statement_timeout='45000ms'");
-        push({ type: 'progress', percent: 16, step: 'Variáns-, beszállítói és import-vonalkódok keresése', done: 0, total: workbook.data.length });
+        push({ type: 'progress', percent: 16, step: 'Teljes terméknév, cikkszám, szín, méret és mentett árak beolvasása', done: 0, total: workbook.data.length });
         const candidates = await collectBarcodeCandidates(db, workbook.data);
         const candidatesFor = indexBarcodeCandidates(candidates);
         const matches = new Map(), failed = new Map();
@@ -71,17 +71,25 @@ export default function createAifLegacyExportRouter({ pool, requireAdminOrSecret
           if (match) {
             sourceCounts[match.barcodeSource]++;
             filledRows.push({ rowNo: item.rowNo, cell: `${workbook.barcodeCol}${item.rowNo}`,
-              code: item.code, name: item.name, barcode: match.barcode, source: match.barcodeSource });
+              code: item.code, name: item.name, barcode: match.barcode, source: match.barcodeSource,
+              variantId: match.variantId, matchMethod: match.matchMethod, matchFields: match.matchFields,
+              resolvedAmbiguity: match.resolvedAmbiguity, candidateCount: match.candidateCount,
+              sellPrice: item.sellPrice, buyPrice: item.buyPrice });
           }
           if (problem) {
             if (problem.state === 'ambiguous') ambiguous++; else missing++;
             problems.push({ rowNo: item.rowNo, cell: `${workbook.barcodeCol}${item.rowNo}`,
-              code: item.code, name: item.name, reasonCode: problem.reasonCode, reason: problem.reason });
+              code: item.code, name: item.name, reasonCode: problem.reasonCode, reason: problem.reason,
+              sellPrice: item.sellPrice, buyPrice: item.buyPrice, category: item.category,
+              gender: item.gender, material: item.material, candidates: problem.candidates || [] });
           }
         }
         if (assigned.size + existing + missing + ambiguous !== workbook.data.length) throw new Error('ForIT row totals mismatch');
         const summary = { count: workbook.data.length, filled: assigned.size, existing, missing, ambiguous,
-          barcodeColumn: workbook.barcodeCol, sourceCounts, problems: problems.slice(0, 200),
+          barcodeColumn: workbook.barcodeCol, sourceCounts,
+          resolved: filledRows.filter(row => row.resolvedAmbiguity).length,
+          matchColumns: workbook.matchColumns,
+          problems: problems.slice(0, 200),
           filledRows: filledRows.slice(0, 200), detailsLimit: 200 };
         if (!assigned.size) {
           // A renamed copy of the input is not a successful conversion.

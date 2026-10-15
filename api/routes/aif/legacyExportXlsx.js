@@ -204,6 +204,22 @@ export function inspectForitXlsx(buffer) {
   });
   guard(rows.length > 1 && rows.length <= 40001, 'Az XLSX üres vagy túl sok terméksort tartalmaz.');
   let headerIndex = -1, barcodeCol, codeCol, nameCol;
+  let matchColumns = {};
+  const fieldHeaders = {
+    sku: ['sku', 'internalsku', 'codintern'],
+    sellPrice: ['pretvanz', 'pretvanzare', 'pretvanzareron', 'sellprice', 'sellpriceron', 'eladasiar'],
+    buyPrice: ['pretachiz', 'pretachizitie', 'pretachizitieron', 'buyprice', 'buypriceron', 'vetelar'],
+    quantity: ['cant', 'cantitate', 'qty', 'quantity', 'mennyiseg'],
+    category: ['categorie', 'category', 'producttype', 'rodescr'],
+    gender: ['dept', 'gen', 'gender', 'nem'],
+    material: ['descriere', 'compozitie', 'material', 'composition', 'anyagossszetetel', 'anyagosszetetel'],
+    color: ['culoare', 'color', 'colorname', 'szin', 'szinnev'],
+    size: ['marime', 'size', 'meret'],
+    snCod: ['sncod', 'sn', 'serialcode'],
+    unit: ['um', 'unit'],
+    sellVat: ['tvavanz', 'tvavanzare', 'salesvatrate'],
+    buyVat: ['tvaachiz', 'tvaachizitie', 'purchasevatrate'],
+  };
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const headers = rows[i].tokens.map(token => ({ col: token.col, header: cleanHeader(valueForCell(token, strings)) }));
     const findCol = names => headers.find(h => names.includes(h.header))?.col;
@@ -212,6 +228,11 @@ export function inspectForitXlsx(buffer) {
     if (bc && cc) {
       headerIndex = i; barcodeCol = bc; codeCol = cc;
       nameCol = findCol(['denumire', 'denumireprodus', 'nev', 'productname']);
+      matchColumns = { code: codeCol, name: nameCol, barcode: barcodeCol };
+      for (const [field, aliases] of Object.entries(fieldHeaders)) {
+        const col = findCol(aliases);
+        if (col) matchColumns[field] = col;
+      }
       break;
     }
   }
@@ -220,11 +241,14 @@ export function inspectForitXlsx(buffer) {
   const data = rows.slice(headerIndex + 1).map(row => {
     const get = col => valueForCell(row.tokens.find(token => token.col === col), strings).trim();
     const barcodeToken = row.tokens.find(token => token.col === barcodeCol);
+    const fields = Object.fromEntries(Object.keys(fieldHeaders).map(field =>
+      [field, matchColumns[field] ? get(matchColumns[field]) : '']));
     return { rowNo: row.rowNo, code: get(codeCol), name: nameCol ? get(nameCol) : '', barcode: get(barcodeCol),
+      ...fields,
       barcodeFormula: Boolean(barcodeToken && /<f(?:\s|\/|>)/.test(barcodeToken.raw)) };
   }).filter(row => row.code || row.barcode);
   guard(data.length > 0, 'Nem található termékadat a ForIT-fájlban.');
-  return { archive, sheetPath, xml, barcodeCol, data };
+  return { archive, sheetPath, xml, barcodeCol, matchColumns, data };
 }
 
 function setBarcodeCell(rowBody, cellCol, rowNo, barcode) {
