@@ -23319,6 +23319,168 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  // A napzárás olvasási előnézete és a végleges POST pontosan ugyanazt a
+  // tegnapi zárás- és utolsó-eladó ellenőrzést használja.
+  async function aifShopPreviousUnclosedDate(client, locationId, workDate) {
+        const previousUnclosed = await client.query(
+          `WITH previous_day AS (
+             SELECT ($2::date - interval '1 day')::date AS work_date
+           ),
+           previous_activity AS (
+             SELECT 1
+             FROM previous_day p
+             WHERE EXISTS (
+               SELECT 1
+               FROM aif_shop_sales s
+               WHERE s.location_id=$1
+                 AND s.status='completed'
+                 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_customer_payments cp
+               WHERE cp.location_id=$1
+                 AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_exchange_settlements es
+               JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+               WHERE es.location_id=$1
+                 AND (es.created_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_cash_movements m
+               WHERE m.location_id=$1
+                 AND (
+                   (m.status='confirmed' AND m.effective_at IS NOT NULL
+                    AND (m.effective_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
+                   OR
+                   (m.status='pending'
+                    AND (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
+                 )
+             )
+           )
+           SELECT p.work_date::text AS work_date
+           FROM previous_day p
+           WHERE EXISTS (SELECT 1 FROM previous_activity)
+             AND NOT EXISTS (
+               SELECT 1
+               FROM aif_shop_day_closures c
+               WHERE c.location_id=$1
+                 AND c.work_date=p.work_date
+             )
+           LIMIT 1`,
+          [locationId, workDate]
+        );
+
+    return previousUnclosed.rowCount
+      ? String(previousUnclosed.rows[0].work_date).slice(0,10)
+      : null;
+  }
+
+  async function aifShopDayCloseLastActor(client, locationId, fromAt, cutoff) {
+      const latestActivity = await client.query(
+        `SELECT actor
+         FROM (
+           SELECT btrim(s.actor) AS actor, s.sold_at AS happened_at
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at >= $2::timestamptz
+             AND s.sold_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
+           FROM aif_shop_customer_payments cp
+           WHERE cp.location_id=$1
+             AND cp.paid_at >= $2::timestamptz
+             AND cp.paid_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+
+           UNION ALL
+
+           SELECT btrim(es.actor) AS actor, es.created_at AS happened_at
+           FROM aif_shop_exchange_settlements es
+           JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+           WHERE es.location_id=$1
+             AND es.created_at >= $2::timestamptz
+             AND es.created_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(es.actor,'')),'') IS NOT NULL
+         ) activity
+         ORDER BY happened_at DESC
+         LIMIT 1`,
+        [locationId, fromAt, cutoff]
+      );
+
+    return text(latestActivity.rows[0]?.actor);
+  }
+
+  // Olvasási előnézet: nem nyit tranzakciót és nem ír semmit.
+  // A végleges POST minden feltételt tranzakcióban ismét ellenőriz.
+  async function aifShopDayClosePreview(client, {
+    locationId, workDate, today, actor, isAdmin, bounds, cutoff,
+    dayClosure, handovers = [], cashBalance,
+  }) {
+    let reasonCode = null;
+    let reason = null;
+    let previousWorkDate = null;
+    let activeActor = null;
+
+    if (workDate > today) {
+      reasonCode = 'shop_day_close_future_date';
+      reason = 'Jövőbeli üzleti nap nem zárható le.';
+    }
+    if (!reasonCode && workDate === today) {
+      previousWorkDate = await aifShopPreviousUnclosedDate(client, locationId, workDate);
+      if (previousWorkDate) {
+        reasonCode = 'previous_shop_day_unclosed';
+        reason = `Az előző üzleti nap (${previousWorkDate}) még nincs lezárva. Előbb azt a napot kell lezárni.`;
+      }
+    }
+    if (!reasonCode && dayClosure) {
+      reasonCode = 'shop_day_already_closed';
+      reason = `A(z) ${workDate} napi kassza már le van zárva.`;
+    }
+    if (!reasonCode) {
+      const pending = handovers.find((item) => item.status === 'pending');
+      if (pending) {
+        reasonCode = 'shift_handover_location_pending';
+        reason = `${pending.from_actor} → ${pending.to_actor} műszakátadás még folyamatban van.`;
+      }
+    }
+    if (!reasonCode && !isAdmin) {
+      const accepted = await client.query(
+        `SELECT to_actor FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND work_date=$2::date AND status='accepted'
+         ORDER BY accepted_at DESC NULLS LAST, created_at DESC LIMIT 1`,
+        [locationId, workDate]
+      );
+      activeActor = text(accepted.rows[0]?.to_actor);
+      if (!activeActor) {
+        activeActor = await aifShopDayCloseLastActor(client, locationId, bounds.start, cutoff);
+      }
+      if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
+        reasonCode = 'shop_day_close_wrong_employee';
+        reason = `A(z) ${workDate} napi utolsó aktív eladó: ${activeActor}. A napi kasszát neki kell lezárnia.`;
+      }
+    }
+
+    return {
+      canClose: !reasonCode,
+      reasonCode, reason, previousWorkDate,
+      actor, activeActor, workDate,
+      expectedCash: aifRoundMoney(cashBalance?.availableCash),
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
   function aifEmptyShiftPayments() {
     return {
       cash: { method: "cash", label: "Készpénz", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
@@ -28906,6 +29068,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         aifShopCashBalanceAt(pool, { locationId: location.id, at: until }),
         aifShopCashBalanceAt(pool, { locationId: location.id, at: bounds.start }),
       ]);
+      let dayClosePreview = null;
+      try {
+        dayClosePreview = await aifShopDayClosePreview(pool, {
+          locationId: location.id,
+          workDate: date,
+          today,
+          actor: actorFrom(req),
+          isAdmin: aifIsAdminSession(req),
+          bounds,
+          cutoff: until,
+          dayClosure,
+          handovers: handoverRows,
+          cashBalance,
+        });
+      } catch (previewError) {
+        // A diagnosztikai SELECT hibája a napi összesítést nem teheti elérhetetlenné.
+        console.error('AIF day-close preview warning', previewError);
+      }
       const employeeSnapshotsWithOpening = employeeSnapshots.map((employee) => {
         const acceptedIncoming = handoverRows
           .filter((row) => row.status === "accepted" && aifEmployeeKey(row.to_actor) === aifEmployeeKey(employee.name))
@@ -29046,6 +29226,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         handovers: handoverResponses,
         handoverPreview,
         dayClosure: dayClosure ? aifDayClosureResponse(dayClosure) : null,
+        dayClosePreview,
         cashBalance,
       });
     } catch (error) {
@@ -29785,7 +29966,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
 
       const actor = actorFrom(req);
-      const isAdmin = normCode(req.session?.role) === "admin";
+      const isAdmin = aifIsAdminSession(req);
       const dayLabel = workDate === today ? "mai" : `${workDate} napi`;
 
       /*
@@ -29795,64 +29976,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         Pont ezt a véletlen műveletet akadályozza meg, ami 2026-08-13-án történt.
       */
       if (workDate === today) {
-        const previousUnclosed = await client.query(
-          `WITH previous_day AS (
-             SELECT ($2::date - interval '1 day')::date AS work_date
-           ),
-           previous_activity AS (
-             SELECT 1
-             FROM previous_day p
-             WHERE EXISTS (
-               SELECT 1
-               FROM aif_shop_sales s
-               WHERE s.location_id=$1
-                 AND s.status='completed'
-                 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
-
-               UNION ALL
-
-               SELECT 1
-               FROM aif_shop_customer_payments cp
-               WHERE cp.location_id=$1
-                 AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
-
-               UNION ALL
-
-               SELECT 1
-               FROM aif_shop_exchange_settlements es
-               JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
-               WHERE es.location_id=$1
-                 AND (es.created_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
-
-               UNION ALL
-
-               SELECT 1
-               FROM aif_shop_cash_movements m
-               WHERE m.location_id=$1
-                 AND (
-                   (m.status='confirmed' AND m.effective_at IS NOT NULL
-                    AND (m.effective_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
-                   OR
-                   (m.status='pending'
-                    AND (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
-                 )
-             )
-           )
-           SELECT p.work_date
-           FROM previous_day p
-           WHERE EXISTS (SELECT 1 FROM previous_activity)
-             AND NOT EXISTS (
-               SELECT 1
-               FROM aif_shop_day_closures c
-               WHERE c.location_id=$1
-                 AND c.work_date=p.work_date
-             )
-           LIMIT 1`,
-          [location.id, workDate]
-        );
-
-        if (previousUnclosed.rowCount) {
-          const previousDate = String(previousUnclosed.rows[0].work_date).slice(0, 10);
+        const previousDate = await aifShopPreviousUnclosedDate(client, location.id, workDate);
+        if (previousDate) {
           const error = new Error(
             `Az előző üzleti nap (${previousDate}) még nincs lezárva. A mai kassza addig nem zárható le. Előbb válts a ${previousDate} napra és zárd le azt.`
           );
@@ -29911,40 +30036,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [location.id, workDate]
       );
 
-      const latestActivity = await client.query(
-        `SELECT actor
-         FROM (
-           SELECT btrim(s.actor) AS actor, s.sold_at AS happened_at
-           FROM aif_shop_sales s
-           WHERE s.location_id=$1
-             AND s.status='completed'
-             AND s.sold_at >= $2::timestamptz
-             AND s.sold_at < $3::timestamptz
-             AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
-
-           UNION ALL
-
-           SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
-           FROM aif_shop_customer_payments cp
-           WHERE cp.location_id=$1
-             AND cp.paid_at >= $2::timestamptz
-             AND cp.paid_at < $3::timestamptz
-             AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
-
-           UNION ALL
-
-           SELECT btrim(es.actor) AS actor, es.created_at AS happened_at
-           FROM aif_shop_exchange_settlements es
-           JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
-           WHERE es.location_id=$1
-             AND es.created_at >= $2::timestamptz
-             AND es.created_at < $3::timestamptz
-             AND NULLIF(btrim(COALESCE(es.actor,'')),'') IS NOT NULL
-         ) activity
-         ORDER BY happened_at DESC
-         LIMIT 1`,
-        [location.id, bounds.start, cutoff]
-      );
+      const latestActivityActor = await aifShopDayCloseLastActor(client, location.id, bounds.start, cutoff);
 
       if (!isAdmin) {
         if (latestAccepted.rowCount) {
@@ -29956,7 +30048,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             throw error;
           }
         } else {
-          const activeActor = text(latestActivity.rows[0]?.actor);
+          const activeActor = latestActivityActor;
           if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
             const error = new Error(`A(z) ${workDate} nap utolsó üzleti művelete ${activeActor} nevéhez tartozik. A napi kasszát neki kell lezárnia.`);
             error.statusCode = 409;
