@@ -80,6 +80,18 @@ import {
 
 export type AllInShopOperationMode = "search" | "stock" | "summary";
 
+type AifDayClosePreview = {
+  canClose: boolean;
+  reasonCode?: string | null;
+  reason?: string | null;
+  actor?: string | null;
+  activeActor?: string | null;
+  workDate: string;
+  expectedCash: number;
+  previousWorkDate?: string | null;
+  checkedAt?: string | null;
+};
+
 type Props = {
   open: boolean;
   mode: AllInShopOperationMode;
@@ -444,6 +456,25 @@ function AllInLocationPicker({
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// A kasszában a román/magyar tagolás is érthető, pl. 10 141,90 / 10.141,90.
+// A nem egyértelmű, hibás bevitelt nem változtatjuk csendben másik összegre.
+function parseDayCloseCash(value: string): number | null {
+  const raw = String(value ?? "").replace(/[\s\u00a0\u202f]/g, "");
+  if (!raw) return null;
+  let normalized = raw;
+  if (/^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)) {
+    normalized = raw.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(raw)) {
+    normalized = raw.replace(/,/g, "");
+  } else if (/^\d+(?:[.,]\d{1,2})?$/.test(raw)) {
+    normalized = raw.replace(",", ".");
+  } else {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed * 100) / 100 : null;
 }
 
 function formatMoney(value: unknown) {
@@ -1492,6 +1523,9 @@ export default function AllInShopOperations({
   const [dayCloseNote, setDayCloseNote] = useState("");
   const [dayCloseSaving, setDayCloseSaving] = useState(false);
   const [dayCloseTodayConfirmed, setDayCloseTodayConfirmed] = useState(false);
+  const [dayCloseChecking, setDayCloseChecking] = useState(false);
+  const [dayCloseCheckFailed, setDayCloseCheckFailed] = useState(false);
+  const [dayCloseError, setDayCloseError] = useState("");
   const [cashMoveOpen, setCashMoveOpen] = useState(false);
   const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
   const [cashMoveAmount, setCashMoveAmount] = useState("");
@@ -1692,9 +1726,16 @@ export default function AllInShopOperations({
       return right - left;
     });
   }, [cashData?.closures, cashData?.movements, shiftData?.handovers, summaryDate]);
-  const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
-  const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
-    ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
+  const dayClosePreview = (shiftData as (AifShopShiftDayOverview & {
+    dayClosePreview?: AifDayClosePreview | null;
+  }) | null)?.dayClosePreview || null;
+  const usableDayClosePreview = dayClosePreview?.workDate === summaryDate ? dayClosePreview : null;
+  const dayCloseExpectedCash = usableDayClosePreview
+    ? numberValue(usableDayClosePreview.expectedCash)
+    : currentCashBalance;
+  const dayCloseCountedValue = parseDayCloseCash(dayCloseCounted);
+  const dayCloseDifference = dayCloseCountedValue !== null
+    ? Math.round((dayCloseCountedValue - dayCloseExpectedCash + Number.EPSILON) * 100) / 100
     : null;
 
   const filteredSearchItems = useMemo(
@@ -2124,12 +2165,17 @@ export default function AllInShopOperations({
   }
 
   async function closeShopDay() {
-    const counted = Number(String(dayCloseCounted || "").replace(",", "."));
-    if (!Number.isFinite(counted) || counted < 0) {
-      setError("Add meg a megszámolt záró készpénzt.");
+    const counted = parseDayCloseCash(dayCloseCounted);
+    if (counted === null) {
+      setDayCloseError("Add meg a megszámolt záró készpénzt, például 10141,90 formában.");
+      return;
+    }
+    if (dayCloseChecking || dayCloseCheckFailed || usableDayClosePreview?.canClose === false) {
+      setDayCloseError(usableDayClosePreview?.reason || "Előbb ellenőrizd újra a napzárási feltételeket.");
       return;
     }
     setDayCloseSaving(true);
+    setDayCloseError("");
     setError("");
     try {
       const response = await apiAifCloseShopDay({
@@ -2145,9 +2191,12 @@ export default function AllInShopOperations({
       setDayCloseCounted("");
       setDayCloseNote("");
       setDayCloseTodayConfirmed(false);
+      setDayCloseError("");
       await refreshSummaryPage(summaryDate);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A napi kassza lezárása nem sikerült.");
+      // A háttérablak hibasávja takarásban van: a visszautasítást
+      // KÖZVETLENÜL a nyitva maradó napzáró ablakban jelenítjük meg.
+      setDayCloseError(caught instanceof Error ? caught.message : "A napi kassza lezárása nem sikerült.");
     } finally {
       setDayCloseSaving(false);
     }
@@ -2272,12 +2321,42 @@ export default function AllInShopOperations({
     }
   }
 
+  async function refreshDayCloseCheck() {
+    setDayCloseChecking(true);
+    setDayCloseCheckFailed(false);
+    setDayCloseError("");
+    try {
+      // Mindkét érték ugyanazon a frissítésen keresztül érkezik,
+      // a szerver az aktív dolgozót és az elvárt kasszát is külön ellenőrzi.
+      const [shift, cash] = await Promise.all([
+        apiAifShopShiftDayOverview({ location: locationCode, date: summaryDate }),
+        apiAifShopCashOverview({
+          location: locationCode,
+          limit: 160,
+          month: cashHistoryMonth,
+          handoverAfterDate: cashHandoverAfterDate || undefined,
+        }),
+      ]);
+      setShiftData(shift);
+      setCashData(cash);
+    } catch (caught) {
+      setDayCloseCheckFailed(true);
+      setDayCloseError(
+        `A napzárás előzetes ellenőrzése nem sikerült. ${caught instanceof Error ? caught.message : "Próbáld újra a Frissítés gombbal."}`,
+      );
+    } finally {
+      setDayCloseChecking(false);
+    }
+  }
+
   function openDayClose() {
     setError("");
+    setDayCloseError("");
     setDayCloseCounted(currentCashBalance.toFixed(2).replace(".", ","));
     setDayCloseNote("");
     setDayCloseTodayConfirmed(false);
     setDayCloseOpen(true);
+    void refreshDayCloseCheck();
   }
 
   function selectCashMovementType(
@@ -4164,8 +4243,8 @@ export default function AllInShopOperations({
 
         {dayCloseOpen ? createPortal(
           <div className="fixed inset-0 z-[435] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5">
-            <section className="w-full max-w-[760px] overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
-              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+            <section role="dialog" aria-modal="true" aria-label="Napi kassza lezárása" className="flex max-h-[94dvh] w-full max-w-[760px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
+              <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
                 <div className="flex items-center gap-3">
                   <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/24"><LockKeyhole size={23} /></span>
                   <div>
@@ -4178,13 +4257,62 @@ export default function AllInShopOperations({
                 <button type="button" disabled={dayCloseSaving} onClick={() => setDayCloseOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-45"><X size={18} /></button>
               </header>
 
-              <div className="space-y-4 p-5">
+              <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-2 text-[11px] text-white/62">
+                    {dayCloseChecking
+                      ? <Loader2 size={15} className="animate-spin" />
+                      : dayCloseCheckFailed || !usableDayClosePreview || !usableDayClosePreview.canClose
+                        ? <TriangleAlert size={15} />
+                        : <CheckCircle2 size={15} />}
+                    {dayCloseChecking ? "Napzárási jogosultság és kassza ellenőrzése…" : "Szerveroldali előzetes ellenőrzés"}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={dayCloseChecking || dayCloseSaving}
+                    onClick={() => void refreshDayCloseCheck()}
+                    className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 px-3 text-[11px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/34 disabled:opacity-45"
+                  >
+                    <RefreshCw size={14} className={dayCloseChecking ? "animate-spin" : ""} /> Újraellenőrzés
+                  </button>
+                </div>
+
+                {!dayCloseChecking && usableDayClosePreview?.canClose === false ? (
+                  <div role="alert" className="flex items-start gap-3 rounded-2xl border border-rose-200/45 bg-rose-500/18 px-4 py-3 text-sm text-rose-50">
+                    <TriangleAlert size={20} className="mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-medium">A szerver jelenleg nem engedi lezárni ezt a napot.</p>
+                      <p className="mt-1 leading-relaxed">{usableDayClosePreview.reason || "A napzárás egyik feltétele nem teljesül."}</p>
+                      {usableDayClosePreview.activeActor ? <p className="mt-1 text-xs text-rose-100/85">Utolsó illetékes eladó: {usableDayClosePreview.activeActor}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {dayCloseError ? (
+                  <div role="alert" className="flex items-start gap-3 rounded-2xl border border-red-200/55 bg-[#98222d] px-4 py-3 text-sm text-white">
+                    <TriangleAlert size={20} className="mt-0.5 shrink-0" />
+                    <p className="min-w-0 whitespace-pre-wrap break-words leading-relaxed">{dayCloseError}</p>
+                  </div>
+                ) : null}
+
+                {!dayCloseChecking && !dayCloseCheckFailed && !dayCloseError && usableDayClosePreview?.canClose === true ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-[#9be9e5]/26 bg-[#2a8d8b]/12 px-3 py-2 text-[11px] text-[#d7fffd]">
+                    <CheckCircle2 size={15} /> Jogosultság rendben. A végleges zárásnál a szerver újra ellenőrzi a készpénzt.
+                  </div>
+                ) : null}
+
+                {!dayCloseChecking && !dayCloseCheckFailed && !usableDayClosePreview ? (
+                  <p className="rounded-xl border border-amber-200/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-50">
+                    Az előzetes jogosultsági eredmény nem érhető el. A végleges zárást a szerver továbbra is ellenőrzi, és a pontos hiba itt fog megjelenni.
+                  </p>
+                ) : null}
+
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-[22px] border border-[#9be9e5]/30 bg-[#24585d] p-4">
                     <p className="text-[10px] uppercase tracking-[0.12em] text-[#d7fffd]/62">
                       {formatDate(summaryDate)} • rendszer szerinti záró kassza
                     </p>
-                    <p className="mt-2 text-4xl tracking-tight">{formatMoney(currentCashBalance)}</p>
+                    <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCloseExpectedCash)}</p>
                     <p className="mt-2 text-xs text-white/50">
                       {summaryIsToday
                         ? "Az aktuális pillanatig számolt kassza."
@@ -4195,7 +4323,7 @@ export default function AllInShopOperations({
                     <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megszámolt készpénz</span>
                     <input
                       value={dayCloseCounted}
-                      onChange={(event) => setDayCloseCounted(event.target.value)}
+                      onChange={(event) => { setDayCloseCounted(event.target.value); setDayCloseError(""); }}
                       inputMode="decimal"
                       autoFocus
                       className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]"
@@ -4209,7 +4337,7 @@ export default function AllInShopOperations({
                           : "border-rose-200/30 bg-rose-500/12 text-rose-50"
                     }`}>
                       {dayCloseDifference === null
-                        ? "Add meg a megszámolt összeget."
+                        ? "Add meg a megszámolt összeget, például 10141,90 formában."
                         : Math.abs(dayCloseDifference) < 0.01
                           ? "✓ Egyezik • eltérés 0,00 RON"
                           : `Eltérés: ${formatMoney(dayCloseDifference)}`}
@@ -4258,12 +4386,13 @@ export default function AllInShopOperations({
                 ) : null}
               </div>
 
-              <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <footer className="flex shrink-0 justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
                 <button type="button" disabled={dayCloseSaving} onClick={() => setDayCloseOpen(false)} className="h-11 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm disabled:opacity-45">Mégse</button>
                 <button
                   type="button"
                   disabled={
-                    dayCloseSaving ||
+                    dayCloseSaving || dayCloseChecking || dayCloseCheckFailed ||
+                    usableDayClosePreview?.canClose === false ||
                     dayCloseDifference === null ||
                     Math.abs(dayCloseDifference) >= 0.01 ||
                     (summaryIsToday && !dayCloseTodayConfirmed)
