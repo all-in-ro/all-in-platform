@@ -6,15 +6,23 @@ import {
   UploadCloud, X,
 } from 'lucide-react';
 
-const EXPORT_VERSION = '20261015.2';
-type Problem = { rowNo: number; cell?: string; code: string; name: string; reason: string; reasonCode?: string };
-type FilledRow = { rowNo: number; cell: string; code: string; name: string; barcode: string; source: string };
+const EXPORT_VERSION = '20261015.3';
+type CandidateComparison = { variantId: string; title: string; productCode: string; color: string; size: string;
+  sellPrice: number | null; buyPrice: number | null; category?: string; gender?: string; material?: string;
+  snCodes: string[]; sourceSellPrices: number[]; sourceBuyPrices: number[]; exactName: boolean; exactCode: boolean;
+  comparisons?: { kind: string; source: string; equal: string[]; different: string[]; unknown: string[] }[] };
+type Problem = { rowNo: number; cell?: string; code: string; name: string; reason: string; reasonCode?: string;
+  sellPrice?: string; buyPrice?: string; category?: string; gender?: string; material?: string; candidates?: CandidateComparison[] };
+type FilledRow = { rowNo: number; cell: string; code: string; name: string; barcode: string; source: string;
+  variantId?: string; matchMethod?: string; matchFields?: string[]; resolvedAmbiguity?: boolean;
+  candidateCount?: number; sellPrice?: string; buyPrice?: string };
 type Result = {
   fileName: string;
   url: string | null;
   verified: boolean;
   message: string;
   barcodeColumn: string;
+  resolved: number;
   sourceCounts: { variant: number; supplier: number; import: number };
   filledRows: FilledRow[];
   count: number;
@@ -25,6 +33,12 @@ type Result = {
   problems: Problem[];
 };
 type Progress = { percent: number; step: string; done: number; total: number };
+
+function formatPrice(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'nincs adat';
+  const amount = Number(String(value).replace(',', '.'));
+  return Number.isFinite(amount) ? amount.toLocaleString('hu-HU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(value);
+}
 
 function downloadName(value: string) {
   return String(value || 'ForIT_AIF_BARKODOK.xlsx').replace(/[\\/]/g, '_');
@@ -157,6 +171,7 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
           setResult({ fileName: url ? downloadName(message.fileName) : '', url,
             count, filled, existing, missing, ambiguous, verified: message.verified === true,
             message: String(message.message || ''), barcodeColumn: String(message.barcodeColumn || 'Codbare'),
+            resolved: Number(message.resolved || 0),
             sourceCounts: { variant: Number(message.sourceCounts?.variant || 0), supplier: Number(message.sourceCounts?.supplier || 0), import: Number(message.sourceCounts?.import || 0) },
             problems: Array.isArray(message.problems) ? message.problems : [],
             filledRows: Array.isArray(message.filledRows) ? message.filledRows : [],
@@ -254,8 +269,8 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
             <div className="flex flex-col gap-3">
               <div className="rounded-[22px] border border-[#9fefe3]/20 bg-[#263448] p-5">
                 <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#8ddace]/20 bg-[#2a8d8b]/20 text-[#9ce8dd]"><FolderSearch size={20}/></div>
-                <h3 className="text-sm font-medium text-white">Pontos egyezés</h3>
-                <p className="mt-2 text-xs leading-[1.8] text-white/60">Termékkód, szín és méret alapján. Kétértelmű találatnál a cella üresen marad.</p>
+                <h3 className="text-sm font-medium text-white">Teljes sor alapján keres</h3>
+                <p className="mt-2 text-xs leading-[1.8] text-white/60">Az A oszlop teljes neve, cikkszám, szín, méret és S/N alapján; több találatnál az eladási és vételár, terméktípus, nem és összetétel is segít azonosítani.</p>
               </div>
               <div className="rounded-[22px] border border-[#9fefe3]/20 bg-[#263448] p-5">
                 <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#8ddace]/20 bg-[#2a8d8b]/20 text-[#9ce8dd]"><ShieldCheck size={20}/></div>
@@ -286,14 +301,19 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
               </div>
               {result.filled > 0 ? <div className="border-t border-white/10 px-4 py-3 text-[11px] leading-relaxed text-white/75">
                 Cél: <strong className="text-white">{result.barcodeColumn} · Codbare</strong> · Variánsnál mentett: {result.sourceCounts.variant} · Beszállítónál mentett: {result.sourceCounts.supplier} · Importban mentett: {result.sourceCounts.import}
+                {result.resolved > 0 ? <p className="mt-1 text-[#bcffe7]">Több lehetséges variánsból a teljes sor alapján azonosítva: <strong>{result.resolved} sor</strong>.</p> : null}
               </div> : null}
               {result.filledRows.length ? <div className="border-t border-white/10 p-4">
                 <div className="mb-3 flex items-center justify-between gap-2"><h4 className="text-sm text-[#bcffe7]">Ezek már a kész Excelben vannak</h4>{result.filledRows.length > 4 ? <button type="button" className="text-xs text-white/75 underline underline-offset-4" onClick={() => setFilledOpen(v => !v)}>{filledOpen ? 'Kevesebb sor' : `Kitöltött sorok (${result.filledRows.length})`}</button> : null}</div>
                 <div className="space-y-2">
                   {(filledOpen ? result.filledRows : result.filledRows.slice(0, 4)).map(item => <div key={item.rowNo} className="grid grid-cols-[3rem_1fr] gap-x-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5 text-xs sm:grid-cols-[3rem_1fr_auto]">
                     <span className="font-mono text-white/60">{item.cell}</span>
-                    <span className="min-w-0 break-words text-white/85">{item.name.split('--')[1] || item.name || item.code}</span>
+                    <span className="min-w-0 break-words text-white/85" title={item.name}>
+                      {item.name.split('--')[1] || item.name || item.code}
+                      <span className="mt-1 block text-[11px] text-white/65">{item.name.split('--')[2] || ''}{item.sellPrice ? ` · ${formatPrice(item.sellPrice)} RON` : ''}</span>
+                    </span>
                     <strong className="col-start-2 mt-1 break-all font-mono text-sm tracking-wide text-[#baffdf] sm:col-start-auto sm:mt-0">{item.barcode}</strong>
+                    {item.matchFields?.length ? <p className="col-span-full mt-1 text-[10px] leading-relaxed text-[#baf7e2]/75">Egyezés: {item.matchFields.join(' · ')}</p> : null}
                   </div>)}
                 </div>
                 {result.filled > result.filledRows.length ? <p className="mt-2 text-[11px] text-white/60">A lista az első {result.filledRows.length} kitöltött sort mutatja; az Excel mind a {result.filled} beírt vonalkódot tartalmazza.</p> : null}
@@ -302,7 +322,29 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
                 <div className="border-t border-white/10 p-4">
                   <button type="button" className="flex w-full items-center justify-between gap-2 text-left text-sm text-[#ffdfa7]" onClick={() => setProblemsOpen(v => !v)}><span><CircleAlert size={15} className="mr-2 inline"/>{skipped} kimaradt sor, pontos okkal</span><span>{problemsOpen ? 'Elrejtés' : 'Részletek'}</span></button>
                   {problemsOpen ? <div className="mt-3 space-y-2">
-                    {result.problems.map(problem => <div key={problem.rowNo} className="rounded-xl border border-[#f4c780]/20 bg-black/10 px-3 py-3 text-xs"><span className="text-white">{problem.cell || `${problem.rowNo}. sor`} · {problem.name.split('--')[1] || problem.name || problem.code}</span><p className="mt-1 break-all text-[11px] text-white/55">{problem.code}</p><p className="mt-2 leading-relaxed text-[#ffdbad]">{problem.reason}</p></div>)}
+                    {result.problems.map(problem => <div key={problem.rowNo} className="rounded-xl border border-[#f4c780]/20 bg-black/10 px-3 py-3 text-xs">
+                      <span className="text-white">{problem.cell || `${problem.rowNo}. sor`} · {problem.name.split('--')[1] || problem.name || problem.code}</span>
+                      <p className="mt-1 break-all text-[11px] text-white/65">A: {problem.name}</p>
+                      <p className="mt-1 break-all text-[11px] text-white/55">D: {problem.code}</p>
+                      <p className="mt-1 text-[11px] text-white/70">Excel eladási ár: {formatPrice(problem.sellPrice)} RON · Vételár: {formatPrice(problem.buyPrice)} RON</p>
+                      <p className="mt-2 leading-relaxed text-[#ffdbad]">{problem.reason}</p>
+                      {problem.candidates?.length ? <details className="mt-3 rounded-lg border border-white/15 bg-[#233346]/60 p-3">
+                        <summary className="cursor-pointer text-[#d6fff1]">Jelöltek és az egyező / eltérő adatok ({problem.candidates.length})</summary>
+                        <div className="mt-3 space-y-3">{problem.candidates.map(candidate => <div key={candidate.variantId} className="rounded-lg border border-white/10 bg-black/10 p-3">
+                          <p className="break-words text-white">{candidate.title} · {candidate.color} · {candidate.size}</p>
+                          <p className="mt-1 break-all font-mono text-[10px] text-white/50">{candidate.variantId}</p>
+                          <p className="mt-1 text-white/80">Aktuális eladási ár: {formatPrice(candidate.sellPrice)} RON · Vételár: {formatPrice(candidate.buyPrice)} RON</p>
+                          <p className="mt-1 text-[11px] text-white/65">Importsorok eladási árai: {candidate.sourceSellPrices?.map(formatPrice).join(' / ') || 'nincs adat'} · Vételárai: {candidate.sourceBuyPrices?.map(formatPrice).join(' / ') || 'nincs adat'}</p>
+                          <p className="mt-1 break-words text-[11px] text-white/65">S/N: {candidate.snCodes?.join(' / ') || 'nincs adat'} · Típus: {candidate.category || 'nincs adat'}</p>
+                          {(candidate.exactName || candidate.exactCode) ? <p className="mt-1 text-[#bcffe7]">{[candidate.exactName ? 'Teljes A oszlop egyezik' : '', candidate.exactCode ? 'Teljes D / SKU egyezik' : ''].filter(Boolean).join(' · ')}</p> : null}
+                          {candidate.comparisons?.map((comparison, index) => <p key={index} className="mt-2 text-[10px] leading-relaxed text-white/75">
+                            {comparison.kind === 'source' ? 'Összetartozó importsor' : 'Aktuális termékadat'}: {comparison.equal.length ? `egyezik: ${comparison.equal.join(', ')}` : 'nincs további igazolt egyezés'}.
+                            {comparison.different.length ? <span className="text-[#ffceab]"> Eltér: {comparison.different.join(', ')}.</span> : null}
+                            {comparison.unknown.length ? <span className="text-white/45"> Nincs összehasonlítható adat: {comparison.unknown.join(', ')}.</span> : null}
+                          </p>)}
+                        </div>)}</div>
+                      </details> : null}
+                    </div>)}
                     {skipped > result.problems.length ? <p className="text-[11px] text-white/60">Az első {result.problems.length} kimaradt sor részletei láthatók.</p> : null}
                   </div> : null}
                 </div>
@@ -311,7 +353,7 @@ export default function AllInLegacyExport({ onClose }: { onClose: () => void }) 
           ) : null}
         </div>
         <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-white/12 bg-[#263346] px-5 py-3 text-xs text-white/43 sm:px-7">
-          <span><FileCheck2 size={13} className="mr-1.5 inline"/>Csak olvasó művelet · ForIT v2 <span className="ml-1 font-mono text-white/50">{EXPORT_VERSION}</span></span>
+          <span><FileCheck2 size={13} className="mr-1.5 inline"/>Csak olvasó művelet · ForIT v3 <span className="ml-1 font-mono text-white/50">{EXPORT_VERSION}</span></span>
           <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-white/15 bg-white/[0.06] px-4 py-2 text-xs text-white/80 transition hover:bg-white/10 disabled:opacity-40">Bezárás</button>
         </footer>
       </section>
