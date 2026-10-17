@@ -3652,8 +3652,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          OR EXISTS (SELECT 1 FROM aif_variant_supplier_codes sc
            WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
              AND lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1)))
-      ORDER BY v.id LIMIT 4`, [value, targets]);
-    if (found.rows.length >= 4) {
+      ORDER BY v.id LIMIT 51`, [value, targets]);
+    if (found.rows.length >= 51) {
       throw aifReceiptIdentityError('A vonalkódnak több lehetséges tulajdonosa van. Kézi egyeztetés szükséges.', 'receipt_barcode_ambiguous', value);
     }
     // Korábban jóváhagyott összevonás archivált, üres forrása nem egy újabb termék.
@@ -3665,6 +3665,452 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           text(target.status)!=='archived' && text(target.model_status)!=='archived'))
     ));
   }
+
+  // AIF_RECEPTION_STOCK_MERGE_20261017_V4
+  // Egyetlen fizikai termék, több történeti variáns: a jelenlegi készletet
+  // helyenként átvezetjük, a régi mozgások és bizonylat-pillanatképek megmaradnak.
+  function aifReceiptMergeIds(target) {
+    return [...new Set([target?.id, ...(target?.receiptMergeMembers || []).map(v => v.id)]
+      .filter(Boolean).map(String))].sort();
+  }
+
+  function aifReceiptMergeChoiceKey(rowId, sourceId) {
+    return `receipt-merge:${String(rowId)}:${String(sourceId)}`;
+  }
+
+  function aifReceiptMergeSameBrand(a, b) {
+    return Boolean(a?.brand_id && b?.brand_id && String(a.brand_id)===String(b.brand_id));
+  }
+
+  function aifReceiptMergeSameProduct(a, b) {
+    if (!aifReceiptMergeSameBrand(a,b) || !sameAifVariantSize(a.size,b.size) ||
+        !aifReceiptSameColor(a,{ colorName:b.color_name, colorCode:b.color_code })) return false;
+    if (String(a.model_id)===String(b.model_id)) return true;
+    // A modellnév önmagában nem bizonyít azonosságot. A beszállító teljes
+    // termékkódja vagy az egzakt történeti modellazonosító is szükséges.
+    const ac = (a.receipt_supplier_keys || []).map(String);
+    const bc = new Set((b.receipt_supplier_keys || []).map(String));
+    if (ac.some(key => bc.has(key))) return true;
+    const ab=text(a.barcode).toLowerCase(),bb=text(b.barcode).toLowerCase();
+    // A névalapú __ alt-modell két külön dizájnt is jelenthet. A puszta
+    // kódtörzs / legacy jelző nem jogosít fel ezek automatikus összevonására.
+    return Boolean(ab && bb && ab===bb);
+  }
+
+  async function aifReceiptExpandIdentityTarget(client, target, { normalized, supplierId, supplierCode }) {
+    if (!target) return null;
+    const n = normalized || {};
+    const modelCode = aifReceiptCanonicalModelCode(n,supplierCode);
+    const productCode = text(n.supplierProductCode || n.modelCode);
+    const result = await client.query(`/* aif_merge_candidates */ SELECT
+        v.id,v.model_id,v.internal_sku,v.barcode,v.size,v.color_code,v.color_name,
+        v.sell_price,v.buy_price,v.status,v.attributes,v.created_at,
+        m.model_code,m.title_ro AS model_title_ro,m.shopify_title,m.status AS model_status,m.brand_id,
+        br.code AS brand_code,br.name AS brand_name,
+        COALESCE((SELECT jsonb_agg(DISTINCT (sc.supplier_id::text || ':' || lower(btrim(sc.supplier_product_code))))
+          FROM aif_variant_supplier_codes sc WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+            AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL),'[]'::jsonb) AS receipt_supplier_keys
+      FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
+      LEFT JOIN aif_brands br ON br.id=m.brand_id
+      WHERE m.brand_id=$1 AND (
+        v.id::text=$2 OR m.id::text=$3 OR m.model_code=$4
+        OR (split_part(m.model_code,'__',1)=$4 AND
+          (v.attributes ? 'legacyProductCode' OR v.attributes ? 'legacyModelCode'
+           OR lower(btrim(COALESCE(m.title_ro,'')))=lower(btrim($7))))
+        OR EXISTS (SELECT 1 FROM aif_variant_supplier_codes sc
+          WHERE sc.variant_id=v.id AND sc.supplier_id::text=$5 AND COALESCE(sc.is_active,true)=true
+            AND NULLIF(btrim($6),'') IS NOT NULL
+            AND lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($6)))
+      ) AND NULLIF(v.attributes->>'mergedIntoVariantId','') IS NULL
+      ORDER BY v.created_at,v.id LIMIT 501`,
+      [target.brand_id,String(target.id),String(target.model_id),modelCode,text(supplierId),productCode,text(n.titleRo)]);
+    if (result.rows.length>500) throw aifReceiptIdentityError('Túl sok összevonási jelölt. Kézi termékazonosítás szükséges.','receipt_identity_ambiguous',n.barcode);
+    const anchor = result.rows.find(v => String(v.id)===String(target.id));
+    if (!anchor) throw aifReceiptIdentityError('A termékazonosítás időközben megváltozott. Frissítsd a receptiót.','receipt_identity_stale',n.barcode);
+    const physicalCandidates=result.rows.filter(v=>aifReceiptMergeSameBrand(anchor,v) &&
+      sameAifVariantSize(anchor.size,v.size) && aifReceiptSameColor(anchor,{colorName:v.color_name,colorCode:v.color_code}));
+    if(physicalCandidates.some(v=>String(v.id)!==String(anchor.id) && !aifReceiptMergeSameProduct(anchor,v))) {
+      throw aifReceiptIdentityError('Azonos méretű és színű régi készlet is található, de a teljes termékazonosító-kapcsolat nem bizonyított. Nem hagyunk külön készletet és nem vonjuk össze találomra.','receipt_identity_ambiguous',n.barcode);
+    }
+    const members = result.rows.filter(v => String(v.id)===String(anchor.id) || aifReceiptMergeSameProduct(anchor,v));
+    // Minden párt ellenőrzünk: egy laza köztes kapcsolat nem moshat össze két modellt.
+    for (const a of members) for (const b of members) {
+      if (String(a.id)!==String(b.id) && !aifReceiptMergeSameProduct(a,b)) {
+        throw aifReceiptIdentityError('A régi variánsok azonossága nem egyértelmű minden rekord között.','receipt_identity_ambiguous',n.barcode);
+      }
+    }
+    const ids = members.map(v => String(v.id));
+    const mapTable = await client.query(`SELECT to_regclass('aif_shopify_variant_map') AS map_table`);
+    const mapped = mapTable.rows[0]?.map_table ? (await client.query(`/* aif_merge_shopify_maps */
+      SELECT variant_id FROM aif_shopify_variant_map WHERE variant_id=ANY($1::uuid[])
+        AND shopify_variant_id IS NOT NULL`,[ids])).rows : [];
+    if (mapped.length>1) throw aifReceiptIdentityError(
+      'Az azonos termék több külön élő Shopify-variánshoz van kötve. Előbb a webáruházi kapcsolatokat kell egyeztetni, nehogy dupla online készlet maradjon.',
+      'receipt_merge_shopify_conflict',n.barcode);
+    const mappedId = mapped[0] ? String(mapped[0].variant_id) : '';
+    // A túlélő belső ID determinisztikus; az új bárkód ettől függetlenül rákerül.
+    const sorted = [...members].sort((a,b) => {
+      const rank = v => [String(v.id)===mappedId ? 0 : 1,
+        text(v.status)==='archived' ? 1 : 0, String(v.model_code)===modelCode ? 0 : 1];
+      const ar=rank(a),br=rank(b);
+      for (let i=0;i<ar.length;i++) if(ar[i]!==br[i]) return ar[i]-br[i];
+      return (new Date(a.created_at || 0).getTime()-new Date(b.created_at || 0).getTime()) || String(a.id).localeCompare(String(b.id));
+    });
+    const survivor=sorted[0];
+    if (text(survivor.status)==='archived' || text(survivor.model_status)==='archived') {
+      throw aifReceiptIdentityError('Csak archivált termék található. A termékazonosságot előbb ellenőrizni kell.','receipt_archived_barcode',n.barcode);
+    }
+    return { ...survivor, receiptMatch:target.receiptMatch,
+      receiptMergeMembers:members, receiptMergeSources:members.filter(v=>String(v.id)!==String(survivor.id)) };
+  }
+
+  async function ensureAifReceiptMergeSchema(client) {
+    // Az indítás nem von össze termékeket. Csak a receptió író tranzakciója
+    // hozza létre a szükséges naplót és a már összevont ID-k védelmét.
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_variant_identity_merges (
+      source_variant_id uuid PRIMARY KEY REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+      target_variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+      reception_id text NULL, import_batch_id text NULL, import_row_id text NULL,
+      actor text NOT NULL, source_snapshot jsonb NOT NULL, target_snapshot jsonb NOT NULL,
+      stock_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb,
+      reference_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (source_variant_id<>target_variant_id)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_variant_identity_merges_target_idx
+      ON aif_variant_identity_merges(target_variant_id)`);
+    await client.query(`CREATE OR REPLACE FUNCTION aif_receipt_merged_stock_guard() RETURNS trigger
+      LANGUAGE plpgsql AS $guard$
+      DECLARE target_id uuid;
+      BEGIN
+        IF COALESCE(NEW.qty,0)<>0 OR COALESCE(NEW.reserved_qty,0)<>0 THEN
+          PERFORM 1 FROM aif_product_variants WHERE id=NEW.variant_id FOR KEY SHARE;
+          SELECT target_variant_id INTO target_id FROM aif_variant_identity_merges WHERE source_variant_id=NEW.variant_id;
+          IF target_id IS NOT NULL THEN
+            RAISE EXCEPTION 'A termék készlete már össze lett vezetve (aktuális variáns: %). Frissítsd a felületet és válaszd újra a terméket.',target_id
+              USING ERRCODE='23514';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END $guard$`);
+    await client.query(`CREATE OR REPLACE FUNCTION aif_receipt_merged_variant_guard() RETURNS trigger
+      LANGUAGE plpgsql AS $guard$
+      BEGIN
+        IF (NEW.status IS DISTINCT FROM 'archived' OR NULLIF(btrim(NEW.barcode),'') IS NOT NULL)
+          AND EXISTS(SELECT 1 FROM aif_variant_identity_merges WHERE source_variant_id=NEW.id) THEN
+          RAISE EXCEPTION 'Ez a termék már össze lett vezetve. A régi rekord nem aktiválható újra; az aktuális terméket használd.' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+      END $guard$`);
+    await client.query(`DO $guard$ BEGIN
+      IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='aif_stock'::regclass AND tgname='aif_receipt_merged_stock_guard') THEN
+        CREATE TRIGGER aif_receipt_merged_stock_guard BEFORE INSERT OR UPDATE ON aif_stock
+          FOR EACH ROW EXECUTE FUNCTION aif_receipt_merged_stock_guard();
+      END IF;
+      IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='aif_product_variants'::regclass AND tgname='aif_receipt_merged_variant_guard') THEN
+        CREATE TRIGGER aif_receipt_merged_variant_guard BEFORE UPDATE ON aif_product_variants
+          FOR EACH ROW EXECUTE FUNCTION aif_receipt_merged_variant_guard();
+      END IF;
+    END $guard$`);
+  }
+
+  async function aifReceiptMergeGuardDependencies(client, ids, sourceIds) {
+    const tables = (await client.query(`/* aif_merge_tables */ SELECT c.table_name,c.column_name,c.data_type
+      FROM information_schema.columns c JOIN information_schema.tables t
+        ON t.table_schema=c.table_schema AND t.table_name=c.table_name
+      WHERE c.table_schema=current_schema() AND t.table_type='BASE TABLE'
+        AND left(c.table_name,4)='aif_' ORDER BY c.table_name,c.ordinal_position`)).rows;
+    const has=(table,col='variant_id')=>tables.some(r=>r.table_name===table && r.column_name===col);
+    for (const [lines,parent,key] of [
+      ['aif_inventory_count_lines','aif_inventory_counts','count_id'],
+      ['aif_opening_inventory_lines','aif_opening_inventory_sessions','session_id'],
+    ]) if(has(lines) && has(parent,'status')) {
+      const active=await client.query(`/* aif_merge_active_inventory */ SELECT 1 FROM ${lines} ln
+        JOIN ${parent} p ON p.id=ln.${key} WHERE ln.variant_id=ANY($1::uuid[])
+          AND p.status IN ('draft','counting','review') LIMIT 1`,[ids]);
+      if(active.rowCount) throw aifReceiptIdentityError('Az összevonandó termék nyitott leltárban szerepel. Előbb zárd le vagy rendezd azt a leltárt.','receipt_merge_open_inventory');
+    }
+    if (has('aif_stock_retail_transfer_buffer')) {
+      const pending=await client.query(`/* aif_merge_transfer_buffer */ SELECT 1 FROM aif_stock_retail_transfer_buffer
+        WHERE variant_id=ANY($1::uuid[]) AND (qty<>0 OR book_value<>0) LIMIT 1`,[ids]);
+      if(pending.rowCount) throw aifReceiptIdentityError('A termékhez folyamatban lévő készletátadás tartozik. Előbb fejezd be az átadást.','receipt_merge_pending_transfer');
+    }
+    if(has('aif_shopify_product_export_items') && has('aif_shopify_product_export_items','item_status')) {
+      const pending=await client.query(`/* aif_merge_pending_export */ SELECT 1 FROM aif_shopify_product_export_items
+        WHERE variant_id=ANY($1::uuid[]) AND item_status IN ('pending','queued','processing','exported_pending') LIMIT 1`,[sourceIds]);
+      if(pending.rowCount) throw aifReceiptIdentityError('Az egyik régi rekord Shopify-exportja folyamatban van. Előbb fejezd be vagy rendezd az exportot.','receipt_merge_pending_shopify');
+    }
+    return { tables, has };
+  }
+
+  async function aifReceiptMergeReferences(client, sourceId, targetId, schema) {
+    const {tables,has}=schema;
+    const snapshots={};
+    // Csak az élő termékre mutató technikai kapcsolat változik. A mennyiség,
+    // bizonylati név, eladási ár, kedvezmény és egyéb pillanatkép érintetlen.
+    const rewired = new Set([
+      'aif_shop_sale_lines','aif_shop_exchange_lines','aif_shop_exchanges',
+      'aif_shop_reservation_lines','aif_shop_return_lines','aif_shop_returns',
+      'aif_purchase_order_lines','aif_import_rows','aif_legacy_migration_rows',
+      'aif_stock_transfer_document_lines',
+    ]);
+    const historical=new Set([
+      'aif_stock','aif_stock_movements','aif_stock_retail_book','aif_stock_retail_transfer_buffer',
+      'aif_variant_identity_merges','aif_variant_barcode_aliases','aif_variant_supplier_codes',
+      'aif_user_selected_variants','aif_price_change_document_lines','aif_consumption_document_lines',
+      'aif_inventory_count_lines','aif_opening_inventory_lines',
+      'aif_shopify_variant_map','aif_shopify_sync_outbox','aif_shopify_image_outbox',
+      'aif_shopify_product_export_items',
+    ]);
+    const cols=tables.filter(r=>['variant_id','source_variant_id','replacement_variant_id','target_variant_id'].includes(r.column_name));
+    for(const col of cols) {
+      const table=col.table_name, column=col.column_name;
+      if(historical.has(table)) continue;
+      if(!/^[a-z_][a-z0-9_]*$/.test(table) || !['uuid','text','character varying'].includes(col.data_type)) {
+        throw aifReceiptIdentityError(`Nem támogatott termékkapcsolat: ${table}.${column}.`,'receipt_merge_dependency');
+      }
+      const found=await client.query(`/* aif_merge_reference_read */ SELECT to_jsonb(r) AS snapshot
+        FROM ${table} r WHERE r.${column}::text=$1 FOR UPDATE`,[sourceId]);
+      if(!found.rowCount) continue;
+      if(!rewired.has(table)) throw aifReceiptIdentityError(
+        `Az összevonandó régi terméket a(z) ${table} modul is használja. Ennek kapcsolatát külön kell egyeztetni.`, 'receipt_merge_dependency');
+      snapshots[`${table}.${column}`]=found.rows.map(r=>r.snapshot);
+      await client.query(`/* aif_merge_reference_update */ UPDATE ${table}
+        SET ${column}=$2${col.data_type==='uuid'?'::uuid':''} WHERE ${column}::text=$1`,[sourceId,targetId]);
+    }
+    if(has('aif_variant_supplier_codes')) {
+      const sourceRows=await client.query(`/* aif_merge_supplier_read */ SELECT * FROM aif_variant_supplier_codes
+        WHERE variant_id=$1 FOR UPDATE`,[sourceId]);
+      snapshots.aif_variant_supplier_codes=sourceRows.rows;
+      for(const row of sourceRows.rows) {
+        const duplicate=await client.query(`/* aif_merge_supplier_duplicate */ SELECT id FROM aif_variant_supplier_codes
+          WHERE variant_id=$1 AND supplier_id=$2
+            AND COALESCE(supplier_product_code,'')=COALESCE($3,'')
+            AND COALESCE(supplier_variant_code,'')=COALESCE($4,'')
+            AND COALESCE(supplier_color_code,'')=COALESCE($5,'')
+            AND COALESCE(supplier_size,'')=COALESCE($6,'') LIMIT 1`,
+          [targetId,row.supplier_id,row.supplier_product_code,row.supplier_variant_code,row.supplier_color_code,row.supplier_size]);
+        if(duplicate.rowCount) await client.query(`/* aif_merge_supplier_remove_duplicate */ DELETE FROM aif_variant_supplier_codes WHERE id=$1`,[row.id]);
+        else await client.query(`/* aif_merge_supplier_rewire */ UPDATE aif_variant_supplier_codes SET variant_id=$2 WHERE id=$1`,[row.id,targetId]);
+      }
+    }
+    if(has('aif_user_selected_variants')) {
+      const selected=await client.query(`/* aif_merge_selection_read */ SELECT * FROM aif_user_selected_variants WHERE variant_id=$1 FOR UPDATE`,[sourceId]);
+      snapshots.aif_user_selected_variants=selected.rows;
+      for(const row of selected.rows) {
+        const duplicate=await client.query(`/* aif_merge_selection_duplicate */ SELECT 1 FROM aif_user_selected_variants
+          WHERE owner_key=$1 AND variant_id=$2`,[row.owner_key,targetId]);
+        if(duplicate.rowCount) await client.query(`/* aif_merge_selection_remove_duplicate */ DELETE FROM aif_user_selected_variants WHERE owner_key=$1 AND variant_id=$2`,[row.owner_key,sourceId]);
+        else await client.query(`/* aif_merge_selection_rewire */ UPDATE aif_user_selected_variants SET variant_id=$3
+          WHERE owner_key=$1 AND variant_id=$2`,[row.owner_key,sourceId,targetId]);
+      }
+    }
+    return snapshots;
+  }
+
+  function aifReceiptMergePrices(target, normalized, priceChoices, rowId) {
+    const incoming=aifPriceNumber(normalized.sellPrice);
+    const decisionInput={...normalized};
+    applyIncomingPriceDecision({normalized:decisionInput,variantId:target.id,previousSellPrice:target.sell_price});
+    const effective=aifPriceNumber(decisionInput.sellPrice);
+    const sourceDecisions=[];
+    for(const source of target.receiptMergeSources || []) {
+      const sourcePrice=aifPriceNumber(source.sell_price);
+      const targetPrice=aifPriceNumber(target.sell_price);
+      const differentBaseline=sourcePrice!==null && (targetPrice===null || aifPriceChanged(sourcePrice,targetPrice));
+      let choiceInput={...normalized,aifPriceDecision:null,aifPriceDecisionRequired:true};
+      if(differentBaseline) {
+        const choice=priceChoices?.[aifReceiptMergeChoiceKey(rowId,source.id)];
+        // Eltérő régi ár esetén akkor is explicit választás kell, ha az egyik
+        // régi rekord ára éppen megegyezik az érkező árral.
+        if(!choice || !['keep_existing','use_incoming'].includes(choice.choice) ||
+          String(choice.variantId)!==String(source.id) || aifPriceNumber(choice.oldPrice)!==sourcePrice ||
+          aifPriceNumber(choice.incomingPrice)!==incoming) {
+          throw aifReceiptIdentityError('Az összevonandó régi készletek ára eltér. Frissítsd az ár-egyeztetést, és minden megjelenő régi készletnél válassz.','price_review_stale',normalized.barcode);
+        }
+        choiceInput.aifPriceDecision=choice;
+        applyIncomingPriceDecision({normalized:choiceInput,variantId:source.id,previousSellPrice:sourcePrice});
+        const chosen=choice.choice==='keep_existing'?sourcePrice:incoming;
+        if(chosen!==effective) throw aifReceiptIdentityError(
+          'Ugyanaz az összevont termék nem maradhat két külön eladási áron. A régi készleteknél olyan árdöntéseket válassz, amelyek ugyanazt a végső árat adják.',
+          'price_review_stale',normalized.barcode);
+      }
+      sourceDecisions.push({source,oldPrice:sourcePrice,newPrice:effective});
+    }
+    return {normalized:decisionInput,incoming,effective,sourceDecisions};
+  }
+
+  async function mergeAifReceiptIdentityStock(client,{target,normalized,supplierId,supplierCode,priceChoices,rowId,priceChangeContext}) {
+    if(!(target?.receiptMergeSources || []).length) return target;
+    const ids=aifReceiptMergeIds(target);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+      [`aif_receipt_merge:${ids.join(':')}`]);
+    // A modellezés és az átnevezés is ezeket a sorokat zárja: egységes sorrend.
+    await client.query(`/* aif_merge_lock_models */ SELECT id FROM aif_product_models
+      WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`,[[...new Set(target.receiptMergeMembers.map(v=>String(v.model_id)))].sort()]);
+    await client.query(`/* aif_merge_lock_variants */ SELECT id FROM aif_product_variants
+      WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`,[ids]);
+    const fresh=await findAifReceiptIdentityTarget(client,{normalized,supplierId,supplierCode});
+    if(!fresh || String(fresh.id)!==String(target.id) || aifReceiptMergeIds(fresh).join(',')!==ids.join(',')) {
+      throw aifReceiptIdentityError('Az összevonandó termékek közben megváltoztak. Frissítsd az egyeztetést.','price_review_stale',normalized.barcode);
+    }
+    target=fresh;
+    const sourceIds=target.receiptMergeSources.map(v=>String(v.id));
+    const schema=await aifReceiptMergeGuardDependencies(client,ids,sourceIds);
+    const prices=aifReceiptMergePrices(target,normalized,priceChoices,rowId);
+    const stockResult=await client.query(`/* aif_merge_lock_stock */ SELECT location_id,variant_id,qty,reserved_qty
+      FROM aif_stock WHERE variant_id=ANY($1::uuid[]) ORDER BY location_id,variant_id FOR UPDATE`,[ids]);
+    const stocks=stockResult.rows;
+    for(const st of stocks) {
+      if(!Number.isSafeInteger(Number(st.qty)) || !Number.isSafeInteger(Number(st.reserved_qty || 0)) ||
+         Number(st.qty)<0 || Number(st.reserved_qty || 0)<0 || Number(st.reserved_qty || 0)>Number(st.qty)) {
+        throw aifReceiptIdentityError('Negatív vagy hibás foglalású készlet nem vonható össze. Előbb a készleteltérést kell rendezni.','receipt_merge_stock_invalid',normalized.barcode);
+      }
+    }
+    await ensureAifRetailBookSchema(client);
+    for(const st of stocks) {
+      const member=target.receiptMergeMembers.find(v=>String(v.id)===String(st.variant_id));
+      const price=aifPriceNumber(member?.sell_price);
+      const book=await client.query(`/* aif_merge_book_read */ SELECT qty,book_value FROM aif_stock_retail_book
+        WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,[st.location_id,st.variant_id]);
+      if(!book.rowCount) {
+        if(Number(st.qty)>0 && price===null) throw aifReceiptIdentityError('A régi készlet könyv szerinti értéke hiányzik. Az összevonás nem becsülheti meg.','receipt_merge_book_missing');
+        await client.query(`/* aif_merge_book_seed */ INSERT INTO aif_stock_retail_book(location_id,variant_id,qty,book_value,seeded)
+          VALUES($1,$2,$3,$4,true)`,[st.location_id,st.variant_id,Number(st.qty),Math.round(Number(st.qty)*(price || 0)*100)/100]);
+      } else if(Number(book.rows[0].qty)!==Number(st.qty) || !Number.isFinite(Number(book.rows[0].book_value)) ||
+          Number(book.rows[0].book_value)<0 || (Number(st.qty)===0 && Number(book.rows[0].book_value)!==0)) {
+        throw aifReceiptIdentityError('A régi készlet darabszáma és könyv szerinti értéknyilvántartása eltér. Előbb egyeztetés szükséges.','receipt_merge_book_mismatch');
+      }
+    }
+    // Minden korábbi árkülönbségről a saját, összevonás ELŐTTI mennyiséggel
+    // készül bizonylat. Az upsertVariant nem dokumentálhatja még egyszer a teljes összeget.
+    for(const {source,oldPrice,newPrice} of [
+      {source:target,oldPrice:aifPriceNumber(target.sell_price),newPrice:prices.effective},...prices.sourceDecisions,
+    ]) if(oldPrice!==null && newPrice!==null && aifPriceChanged(oldPrice,newPrice)) {
+      await recordAifPriceChangeDocumentLine(client,{
+        ...priceChangeContext,variantId:source.id,oldSellPrice:oldPrice,newSellPrice:newPrice,
+        sourceImportRowId:String(source.id)===String(target.id)?rowId:null,
+        rawLine:{identityMerge:true,importRowId:String(rowId),targetVariantId:String(target.id)},
+      });
+    }
+    const mergeResults=[];
+    for(const source of target.receiptMergeSources) {
+      const sourceId=String(source.id),targetId=String(target.id);
+      const sourceStocks=stocks.filter(st=>String(st.variant_id)===sourceId);
+      const supplierCodes=schema.has('aif_variant_supplier_codes') ? (await client.query(`/* aif_merge_supplier_barcodes */
+        SELECT supplier_barcode FROM aif_variant_supplier_codes WHERE variant_id=$1`,[sourceId])).rows : [];
+      const codes=[...new Set([source.barcode,source.internal_sku,...supplierCodes.map(x=>x.supplier_barcode),
+        ...(Array.isArray(source.attributes?.receptionPreviousBarcodes)?source.attributes.receptionPreviousBarcodes:[])]
+        .map(text).filter(Boolean))];
+      for(const code of codes) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_receipt_barcode:${code.toLowerCase()}`]);
+        const owners=await readAifReceiptBarcodeOwners(client,code);
+        if(owners.some(v=>!ids.includes(String(v.id)))) throw aifReceiptIdentityError(
+          `A régi ${code} kód harmadik termékhez is tartozik. Az összevonás nem biztonságos.`,'receipt_barcode_ambiguous',code);
+      }
+      const references=await aifReceiptMergeReferences(client,sourceId,targetId,schema);
+      await client.query(`/* aif_merge_audit_insert */ INSERT INTO aif_variant_identity_merges
+        (source_variant_id,target_variant_id,reception_id,import_batch_id,import_row_id,actor,source_snapshot,target_snapshot,stock_snapshot,reference_snapshot)
+        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb)`,
+        [sourceId,targetId,text(priceChangeContext.receptionId)||null,text(priceChangeContext.importBatchId)||null,
+          String(rowId),text(priceChangeContext.actor)||'system',JSON.stringify(source),JSON.stringify(target),JSON.stringify(stocks),JSON.stringify(references)]);
+      for(const st of sourceStocks) {
+        const q=Number(st.qty),r=Number(st.reserved_qty || 0);
+        if(q===0 && r===0) continue;
+        await client.query(`/* aif_merge_target_stock_ensure */ INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
+          VALUES($1,$2,0,0,now()) ON CONFLICT(location_id,variant_id) DO NOTHING`,[st.location_id,targetId]);
+        const before=(await client.query(`/* aif_merge_target_stock_read */ SELECT qty,reserved_qty FROM aif_stock
+          WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,[st.location_id,targetId])).rows[0];
+        const sourceBook=(await client.query(`/* aif_merge_book_read */ SELECT qty,book_value FROM aif_stock_retail_book
+          WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,[st.location_id,sourceId])).rows[0];
+        const targetBook=(await client.query(`/* aif_merge_book_read */ SELECT qty,book_value FROM aif_stock_retail_book
+          WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,[st.location_id,targetId])).rows[0] || {qty:0,book_value:0};
+        const beforeQ=Number(before.qty),beforeR=Number(before.reserved_qty || 0);
+        const beforeValue=Number(targetBook.book_value),movedValue=Number(sourceBook.book_value);
+        if(Number(targetBook.qty)!==beforeQ) throw aifReceiptIdentityError('Az összevonás célkészlete közben megváltozott.','receipt_merge_book_mismatch');
+        const afterQ=beforeQ+q,afterR=beforeR+r,afterValue=Math.round((beforeValue+movedValue)*100)/100;
+        if(!Number.isSafeInteger(afterQ) || afterR>afterQ) throw aifReceiptIdentityError('Az összevont mennyiség érvénytelen.','receipt_merge_stock_invalid');
+        await client.query(`/* aif_merge_stock_zero */ UPDATE aif_stock SET qty=0,reserved_qty=0,updated_at=now()
+          WHERE location_id=$1 AND variant_id=$2`,[st.location_id,sourceId]);
+        await client.query(`/* aif_merge_stock_total */ UPDATE aif_stock SET qty=$3,reserved_qty=$4,updated_at=now()
+          WHERE location_id=$1 AND variant_id=$2`,[st.location_id,targetId,afterQ,afterR]);
+        await client.query(`/* aif_merge_book_zero */ UPDATE aif_stock_retail_book SET qty=0,book_value=0,updated_at=now()
+          WHERE location_id=$1 AND variant_id=$2`,[st.location_id,sourceId]);
+        await client.query(`/* aif_merge_book_total */ INSERT INTO aif_stock_retail_book(location_id,variant_id,qty,book_value,seeded,updated_at)
+          VALUES($1,$2,$3,$4,false,now()) ON CONFLICT(location_id,variant_id) DO UPDATE
+          SET qty=EXCLUDED.qty,book_value=EXCLUDED.book_value,seeded=false,updated_at=now()`,[st.location_id,targetId,afterQ,afterValue]);
+        const operation=`merge:${createHash('sha256').update(`${rowId}:${sourceId}:${st.location_id}`).digest('hex').slice(0,28)}`;
+        for(const direction of ['out','in']) {
+          const out=direction==='out';
+          const logged=await insertStockMovementSafe(client,{
+            movementType:'manual_adjustment',sourceType:'manual_stock_edit',sourceId:operation,
+            locationId:st.location_id,variantId:out?sourceId:targetId,qtyDelta:out?-q:q,
+            qtyBefore:out?q:beforeQ,qtyAfter:out?0:afterQ,actor:priceChangeContext.actor,
+            raw:{reason:'receipt_identity_merge',direction,sourceVariantId:sourceId,targetVariantId:targetId,
+              importBatchId:priceChangeContext.importBatchId,importRowId:String(rowId),
+              reservedQtyBefore:out?r:beforeR,reservedQtyAfter:out?0:afterR},
+            receiptMergeBookSnapshot:{retailBookQtyBefore:out?q:beforeQ,retailBookQtyAfter:out?0:afterQ,
+              retailBookValueBefore:out?movedValue:beforeValue,retailBookValueAfter:out?0:afterValue,
+              retailBookMovementValue:movedValue,retailBookUnitValue:q?movedValue/q:0,retailBookMethod:'identity_merge'},
+          });
+          if(!logged) throw aifReceiptIdentityError('Az összevonás készletmozgásának naplózása nem sikerült. Semmit nem vezetünk át napló nélkül.','receipt_merge_audit_failed');
+        }
+        const check=(await client.query(`/* aif_merge_verify_stock */ SELECT sum(qty)::numeric AS qty,sum(reserved_qty)::numeric AS reserved
+          FROM aif_stock WHERE location_id=$1 AND variant_id=ANY($2::uuid[])`,[st.location_id,[sourceId,targetId]])).rows[0];
+        const bookCheck=(await client.query(`/* aif_merge_verify_book */ SELECT sum(book_value)::numeric AS value
+          FROM aif_stock_retail_book WHERE location_id=$1 AND variant_id=ANY($2::uuid[])`,[st.location_id,[sourceId,targetId]])).rows[0];
+        if(Number(check.qty)!==afterQ || Number(check.reserved)!==afterR || Math.abs(Number(bookCheck.value)-afterValue)>0.001) {
+          throw aifReceiptIdentityError('Az összevonás utóellenőrzése eltérést talált. A művelet visszaáll.','receipt_merge_verification_failed');
+        }
+      }
+      // A meglévő aliasok is közvetlenül az élő variánsra mutatnak.
+      await client.query(`/* aif_merge_prior_audit_retarget */ UPDATE aif_variant_identity_merges SET target_variant_id=$2 WHERE target_variant_id=$1`,[sourceId,targetId]);
+      await client.query(`/* aif_merge_alias_retarget */ UPDATE aif_variant_barcode_aliases SET target_variant_id=$2 WHERE target_variant_id=$1`,[sourceId,targetId]);
+      for(const code of codes) {
+        await client.query(`/* aif_merge_alias_insert */ INSERT INTO aif_variant_barcode_aliases(barcode,source_variant_id,target_variant_id,reason)
+          VALUES($1,$2,$3,'receipt_verified_identity_merge') ON CONFLICT DO NOTHING`,[code,sourceId,targetId]);
+        const saved=await client.query(`/* aif_merge_alias_verify */ SELECT target_variant_id FROM aif_variant_barcode_aliases WHERE lower(btrim(barcode))=lower(btrim($1))`,[code]);
+        if(saved.rows.length!==1 || String(saved.rows[0].target_variant_id)!==targetId) throw aifReceiptIdentityError('A régi kód átirányítása ütközik.','receipt_barcode_alias_conflict',code);
+      }
+      const names=[source.model_title_ro,source.shopify_title,...(Array.isArray(source.attributes?.receptionPreviousNames)?source.attributes.receptionPreviousNames:[])].map(text).filter(Boolean);
+      await client.query(`/* aif_merge_target_history */ UPDATE aif_product_variants v SET attributes=COALESCE(attributes,'{}'::jsonb) || jsonb_build_object(
+        'receptionPreviousBarcodes',COALESCE((SELECT jsonb_agg(DISTINCT e.value) FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(v.attributes->'receptionPreviousBarcodes')='array' THEN v.attributes->'receptionPreviousBarcodes' ELSE '[]'::jsonb END || $2::jsonb) e(value)),'[]'::jsonb),
+        'receptionPreviousNames',COALESCE((SELECT jsonb_agg(DISTINCT e.value) FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(v.attributes->'receptionPreviousNames')='array' THEN v.attributes->'receptionPreviousNames' ELSE '[]'::jsonb END || $3::jsonb) e(value)),'[]'::jsonb)
+        ),updated_at=now() WHERE id=$1`,[targetId,JSON.stringify(codes),JSON.stringify(names)]);
+      await client.query(`/* aif_merge_source_archive */ UPDATE aif_product_variants SET status='archived',barcode=NULL,
+        attributes=COALESCE(attributes,'{}'::jsonb) || jsonb_build_object('mergedIntoVariantId',$2::text,'mergedByReceptionRow',$3::text),updated_at=now()
+        WHERE id=$1`,[sourceId,targetId,String(rowId)]);
+      mergeResults.push({sourceVariantId:sourceId,targetVariantId:targetId,
+        qty:sourceStocks.reduce((sum,st)=>sum+Number(st.qty),0)});
+    }
+    Object.assign(normalized,prices.normalized);
+    normalized.aifReceiptStockMerges=mergeResults;
+    priceChangeContext.receiptMergePriceHandled=true;
+    return {...target,receiptMergeMembers:[target],receiptMergeSources:[]};
+  }
+  async function aifReceiptReleaseMergedModelKeys(client,targetModelId,survivorId) {
+    // Ha a régi Shopify-kapcsolat miatt nem a kanonikus rekord maradt meg,
+    // annak archivált másolatát külön történeti modell alá tesszük. Így a
+    // model_id/szín/méret UNIQUE kulcs is felszabadul, méretátírás nélkül.
+    const retired=await client.query(`/* aif_merge_retired_model_keys */ SELECT v.id,v.model_id
+      FROM aif_product_variants v WHERE model_id=$1 AND status='archived'
+        AND attributes->>'mergedIntoVariantId'=$2 ORDER BY v.id FOR UPDATE`,[targetModelId,String(survivorId)]);
+    for(const row of retired.rows) {
+      const archived=await client.query(`/* aif_merge_archive_model */ INSERT INTO aif_product_models(
+          brand_id,category_id,subcategory_id,model_code,title_ro,title_hu,description_ro,
+          gender,product_type,season,material,shopify_title,status)
+        SELECT m.brand_id,m.category_id,m.subcategory_id,$2,m.title_ro,m.title_hu,m.description_ro,
+          m.gender,m.product_type,m.season,m.material,m.shopify_title,'archived'
+        FROM aif_product_models m WHERE m.id=$1
+        ON CONFLICT(model_code) DO UPDATE SET status='archived' RETURNING id`,
+        [targetModelId,`aif_merged:${row.id}`]);
+      if(archived.rowCount!==1) throw aifReceiptIdentityError('A történeti modellkulcs felszabadítása nem sikerült.','receipt_merge_model_key');
+      await client.query(`/* aif_merge_rehome_archived */ UPDATE aif_product_variants SET model_id=$2,updated_at=now() WHERE id=$1`,[row.id,archived.rows[0].id]);
+    }
+  }
+  // AIF_RECEPTION_STOCK_MERGE_V4_END
 
   async function findAifReceiptIdentityTarget(client, { normalized, supplierId = null, supplierCode = '' }) {
     const n = normalized || {};
@@ -3678,7 +4124,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       : [owner.brand_code, owner.brand_name].some(value => brandKeys.has(normCode(value)));
     const owners = barcode ? await readAifReceiptBarcodeOwners(client, barcode) : [];
     if (owners.length > 1) {
-      throw aifReceiptIdentityError('A vonalkód több külön variánshoz kapcsolódik. Nem vonunk össze készletet találomra.', 'receipt_barcode_ambiguous', barcode);
+      if (owners.some(owner=>!sameBrand(owner) || !sameAifVariantSize(owner.size,size) || !aifReceiptSameColor(owner,n))) {
+        throw aifReceiptIdentityError('Ugyanaz a vonalkód eltérő márkához, színhez vagy mérethez kapcsolódik. Az összevonás nem biztonságos.','receipt_barcode_ambiguous',barcode);
+      }
+      const anchor=owners.find(owner=>text(owner.status)!=='archived' && text(owner.model_status)!=='archived');
+      if (!anchor) throw aifReceiptIdentityError('A vonalkódnak csak archivált tulajdonosai vannak. Kézi egyeztetés szükséges.','receipt_archived_barcode',barcode);
+      const expanded=await aifReceiptExpandIdentityTarget(client,{...anchor,receiptMatch:'verified_duplicate_barcode'}, {normalized:n,supplierId,supplierCode});
+      if(owners.some(owner=>!aifReceiptMergeIds(expanded).includes(String(owner.id)))) {
+        throw aifReceiptIdentityError('A vonalkód tulajdonosainak modellazonossága nem bizonyított.','receipt_barcode_ambiguous',barcode);
+      }
+      return expanded;
     }
     if (owners.length === 1) {
       const owner = owners[0];
@@ -3711,7 +4166,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             });
         }
       }
-      return { ...owner, receiptMatch: 'barcode_or_alias' };
+      return aifReceiptExpandIdentityTarget(client,{ ...owner, receiptMatch: 'barcode_or_alias' },{normalized:n,supplierId,supplierCode});
     }
 
     const modelCode = aifReceiptCanonicalModelCode(n, supplierCode);
@@ -3738,10 +4193,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const matches = possible.rows.filter(owner => sameBrand(owner) &&
       sameAifVariantSize(owner.size, size) && aifReceiptSameColor(owner, n));
-    if (matches.length > 1) {
-      throw aifReceiptIdentityError('Az azonos márka, modell, szín és méret több meglévő variánshoz tartozik. Kézi egyeztetés szükséges.', 'receipt_identity_ambiguous', barcode);
+    if (!matches.length) return null;
+    const expanded=await aifReceiptExpandIdentityTarget(client,{...matches[0],receiptMatch:'model_color_size'},{normalized:n,supplierId,supplierCode});
+    if(matches.some(owner=>!aifReceiptMergeIds(expanded).includes(String(owner.id)))) {
+      throw aifReceiptIdentityError('A lehetséges régi variánsok közül nem mindegyik azonossága bizonyított.','receipt_identity_ambiguous',barcode);
     }
-    return matches.length ? { ...matches[0], receiptMatch: 'model_color_size' } : null;
+    return expanded;
   }
 
   async function rememberAifReceiptModelNames(client, modelId, incomingTitle) {
@@ -4168,7 +4625,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (priceChangeContext?.sourceType==='incoming_reception') {
         await rememberAifReceiptBarcode(client, id, previousPriceRow.rows[0]?.barcode, barcode);
       }
-      if (priceChangeContext && normalized.sellPrice !== null && normalized.sellPrice !== undefined && aifPriceChanged(previousSellPrice, normalized.sellPrice)) {
+      if (priceChangeContext && !priceChangeContext.receiptMergePriceHandled && normalized.sellPrice !== null && normalized.sellPrice !== undefined && aifPriceChanged(previousSellPrice, normalized.sellPrice)) {
         await recordAifPriceChangeDocumentLine(client, {
           ...priceChangeContext,
           variantId: id,
@@ -4561,7 +5018,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [locationId, variantId, after]
     );
 
-    await insertStockMovementSafe(client, {
+    const logged = await insertStockMovementSafe(client, {
       movementType: "incoming",
       sourceType: "import_batch",
       sourcePrefix: "import_batch",
@@ -4580,6 +5037,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         reason: "import_batch_commit",
       },
     });
+    if (!logged) throw new Error('A bevételezés készletmozgását nem sikerült naplózni. A sor nem került készletre.');
   }
 
   function periodWhere(req, startIndex = 1) {
@@ -9326,6 +9784,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
 
     if (String(targetModelId) !== String(oldModelId)) {
+      await aifReceiptReleaseMergedModelKeys(client,targetModelId,owner.id);
       const collision = await findLegacyCanonicalVariantCollision(client, {
         targetModelId,
         owner,
@@ -9395,7 +9854,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     await rememberAifReceiptBarcode(client, owner.id, priceLock.rows[0]?.barcode, normalized?.barcode);
     // A belső variánsazonosító és a készlet helye megmarad. Az érkező kód az aktuális,
     // a korábbi címkék alias-ként tovább használhatók.
-    if (priceChangeContext && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(previousLegacySellPrice, normalized.sellPrice)) {
+    if (priceChangeContext && !priceChangeContext.receiptMergePriceHandled && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(previousLegacySellPrice, normalized.sellPrice)) {
       await recordAifPriceChangeDocumentLine(client, {
         ...priceChangeContext,
         variantId: owner.id,
@@ -9493,6 +9952,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     await ensureSnCodSchema(client);
     await ensureAifReceiptBarcodeAliasSchema(client);
+    await ensureAifReceiptMergeSchema(client);
     const batchRes = await client.query(
       `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
               r.invoice_number AS reception_invoice_number,
@@ -9566,10 +10026,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const normalized = { ...(row.normalized || {}) };
         if (normalized.attributes && typeof normalized.attributes==='object' && !Array.isArray(normalized.attributes)) {
           normalized.attributes = { ...normalized.attributes };
-          for (const key of ['receptionCurrentTitle','receptionCurrentBarcode','receptionIdentitySource','receptionPreviousNames','receptionPreviousBarcodes']) {
+          for (const key of ['receptionCurrentTitle','receptionCurrentBarcode','receptionIdentitySource','receptionPreviousNames','receptionPreviousBarcodes','mergedIntoVariantId','mergedByReceptionRow']) {
             delete normalized.attributes[key];
           }
         }
+        delete normalized.aifReceiptStockMerges;
         const rowSnCod = emptyToNull(row.sn_cod);
         if (rowSnCod && !emptyToNull(normalized.snCod ?? normalized.sn_cod)) {
           normalized.snCod = rowSnCod;
@@ -9653,8 +10114,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         delete normalized.variant_status;
         delete normalized.status;
 
-        const receiptTarget = await findAifReceiptIdentityTarget(client, {
+        let receiptTarget = await findAifReceiptIdentityTarget(client, {
           normalized, supplierId: batch.supplier_id, supplierCode: batch.supplier_code,
+        });
+        receiptTarget = await mergeAifReceiptIdentityStock(client, {
+          target:receiptTarget,normalized,supplierId:batch.supplier_id,supplierCode:batch.supplier_code,
+          priceChoices,rowId:row.id,priceChangeContext,
         });
         const receiptTargetOnCurrentModel = receiptTarget &&
           (receiptTarget.model_code===aifReceiptCanonicalModelCode(normalized,batch.supplier_code) ||
@@ -9789,6 +10254,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           titleRo: normalized.titleRo || null,
           colorName: normalized.colorName || null,
           size: normalized.size || null,
+          stockMerges: normalized.aifReceiptStockMerges || [],
         });
 
         await client.query(`RELEASE SAVEPOINT ${savepointName}`);
@@ -9943,17 +10409,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         identificationWarnings.push({ rowId: String(row.id), rowNo: row.row_no, code: error.code, error: error.message });
         continue; // Az azonossági hibát a véglegesítő változatlanul blokkolja.
       }
-      const candidates = target ? await client.query(`SELECT v.id, v.size, v.color_name, v.sell_price,
+      const candidates = target ? await client.query(`/* aif_merge_price_preview_total */ SELECT v.id, v.size, v.color_name, v.sell_price,
           m.title_ro, br.name AS brand_name,
-          COALESCE((SELECT sum(st.qty) FROM aif_stock st WHERE st.variant_id=v.id),0) AS existing_qty,
-          COALESCE((SELECT jsonb_agg(jsonb_build_object('location',l.name,'qty',st.qty) ORDER BY l.name)
-            FROM aif_stock st JOIN aif_locations l ON l.id=st.location_id
-            WHERE st.variant_id=v.id AND st.qty>0),'[]'::jsonb) AS stock_locations
+          COALESCE((SELECT sum(st.qty) FROM aif_stock st WHERE st.variant_id=ANY($2::uuid[])),0) AS existing_qty,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('location',x.location,'qty',x.qty) ORDER BY x.location)
+            FROM (SELECT l.name AS location,sum(st.qty) AS qty FROM aif_stock st JOIN aif_locations l ON l.id=st.location_id
+              WHERE st.variant_id=ANY($2::uuid[]) AND st.qty>0 GROUP BY l.id,l.name) x),'[]'::jsonb) AS stock_locations
         FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
-        LEFT JOIN aif_brands br ON br.id=m.brand_id WHERE v.id=$1`, [target.id]) : { rows: [] };
+        LEFT JOIN aif_brands br ON br.id=m.brand_id WHERE v.id=$1`, [target.id,aifReceiptMergeIds(target)]) : { rows: [] };
       const existing = candidates.rows[0];
       if (!existing) continue;
       const previousPrice = aifPriceNumber(existing.sell_price);
+      for(const source of target.receiptMergeSources || []) {
+        const oldPrice=aifPriceNumber(source.sell_price);
+        if(oldPrice===null || (previousPrice!==null && !aifPriceChanged(oldPrice,previousPrice))) continue;
+        const key=`merge:${source.id}|${incomingPrice.toFixed(2)}`;
+        const virtualRowId=aifReceiptMergeChoiceKey(row.id,source.id);
+        const prior=groups.get(key);
+        if(prior) prior.rowIds.push(virtualRowId);
+        else {
+          const stock=await client.query(`/* aif_merge_price_preview_source */ SELECT
+            COALESCE(sum(st.qty),0) AS qty,
+            COALESCE(jsonb_agg(jsonb_build_object('location',l.name,'qty',st.qty) ORDER BY l.name)
+              FILTER(WHERE st.qty>0),'[]'::jsonb) AS locations
+            FROM aif_stock st JOIN aif_locations l ON l.id=st.location_id WHERE st.variant_id=$1`,[source.id]);
+          groups.set(key,{
+            variantId:String(source.id),rowIds:[virtualRowId],incomingRowCount:0,incomingQty:0,
+            currentQty:Number(stock.rows[0]?.qty || 0),stockLocations:stock.rows[0]?.locations || [],
+            oldPrice,incomingPrice,
+            productTitle:`${text(normalized.titleRo || existing.title_ro)} (régi készlet összevonása)`,
+            previousProductTitle:text(source.model_title_ro),
+            productCode:text(source.barcode || source.internal_sku || baseModelCode),
+            brandName:source.brand_name || null,colorName:source.color_name || null,size:source.size,
+            identityMerge:true,mergeTargetVariantId:String(target.id),
+          });
+        }
+      }
       const variantPrices = allPricesByVariant.get(String(existing.id)) || new Set();
       variantPrices.add(incomingPrice.toFixed(2));
       allPricesByVariant.set(String(existing.id),variantPrices);
@@ -10733,10 +11224,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     raw = {},
     fallbackSourceType = "manual_stock_edit",
     sourceId = null,
+    receiptMergeBookSnapshot = null,
   }) {
     const insertOnce = async (safeSourceType, safeSourcePrefix, explicitSourceId = sourceId) => {
       const effectiveSourceId = explicitSourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId);
-      const retailBook = await applyAifRetailBookMovement(client, {
+      if (receiptMergeBookSnapshot && (raw?.reason!=='receipt_identity_merge' ||
+          receiptMergeBookSnapshot.retailBookQtyBefore!==Number(qtyBefore) ||
+          receiptMergeBookSnapshot.retailBookQtyAfter!==Number(qtyAfter))) {
+        throw new Error('Érvénytelen összevonási készletérték-napló.');
+      }
+      const retailBook = receiptMergeBookSnapshot || await applyAifRetailBookMovement(client, {
         sourceType: safeSourceType,
         sourceId: effectiveSourceId,
         locationId,
