@@ -1540,10 +1540,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       FROM aif_variant_barcode_aliases alias_v
       WHERE alias_v.target_variant_id=${variantAlias}.id
         AND lower(btrim(alias_v.barcode))=lower(btrim(${codeParam}))
+        AND lower(btrim(COALESCE(${variantAlias}.barcode,'')))<>lower(btrim(${codeParam}))
         AND NOT EXISTS (
           SELECT 1 FROM aif_product_variants exact_v
           JOIN aif_product_models exact_m ON exact_m.id=exact_v.model_id
-          WHERE COALESCE(exact_v.status,'active')='active'
+          WHERE exact_v.id<>${variantAlias}.id
+            AND COALESCE(exact_v.status,'active')='active'
             AND COALESCE(exact_m.status,'active')='active'
             AND (
               lower(btrim(COALESCE(exact_v.barcode,'')))=lower(btrim(${codeParam}))
@@ -3583,7 +3585,229 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return ["draft", "active", "inactive", "archived"].includes(raw) ? raw : fallback;
   }
 
-  async function upsertModel(client, { supplierCode, normalized, createStatus = "active", updateStatus = "active", preserveExistingClassification = false }) {
+  // AIF_RECEPTION_CURRENT_IDENTITY_20261017_V3
+  // Az új receptió adatai az aktuális megnevezések és vonalkód forrásai.
+  // Az azonosságot külön ellenőrizzük; az árjóváhagyás ettől független marad.
+  function aifReceiptCanonicalModelCode(normalized, supplierCode = '') {
+    const n = { ...(normalized || {}) };
+    applyProductCodeSplit(n);
+    const brandKey = normCode(n.brandCode || n.brandName || supplierCode || 'aif');
+    const base = n.modelCode || n.supplierProductCode || n.titleRo;
+    return base ? `${brandKey}:${normCode(base)}` : '';
+  }
+
+  function aifReceiptSameColor(owner, normalized) {
+    const oldName = normCode(owner?.color_name);
+    const newName = normCode(normalized?.colorName);
+    const oldCode = normCode(owner?.color_code);
+    const newCode = normCode(normalized?.colorCode || normalized?.supplierColorCode);
+    if (oldName && newName && oldName !== newName) return false;
+    if (oldCode && newCode && oldCode !== newCode) return false;
+    return Boolean((oldName && newName && oldName === newName) ||
+      (oldCode && newCode && oldCode === newCode));
+  }
+
+  function aifReceiptIdentityError(message, code, barcode = null) {
+    return Object.assign(new Error(message), { statusCode: 409, code, barcode });
+  }
+
+  async function ensureAifReceiptBarcodeAliasSchema(client) {
+    // A receptió tranzakciójában fut, nem másik pool-kapcsolaton.
+    // Nincs készletjavítás vagy adatokat átíró általános migráció.
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_variant_barcode_aliases (
+      barcode text PRIMARY KEY,
+      source_variant_id uuid NULL REFERENCES aif_product_variants(id) ON DELETE SET NULL,
+      target_variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+      reason text NOT NULL DEFAULT 'reviewed_archived_variant',
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_variant_barcode_aliases_normalized_uq
+      ON aif_variant_barcode_aliases (lower(btrim(barcode)))`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_variant_barcode_aliases_target_idx
+      ON aif_variant_barcode_aliases (target_variant_id)`);
+  }
+
+  async function readAifReceiptBarcodeOwners(client, barcode) {
+    const value = text(barcode);
+    if (!value) return [];
+    const schema = await client.query(`SELECT to_regclass('aif_variant_barcode_aliases') AS alias_table`);
+    const aliases = schema.rows[0]?.alias_table
+      ? (await client.query(`SELECT barcode, source_variant_id, target_variant_id
+          FROM aif_variant_barcode_aliases
+          WHERE lower(btrim(barcode))=lower(btrim($1))`, [value])).rows
+      : [];
+    const targets = [...new Set(aliases.map(row => String(row.target_variant_id)))];
+    const found = await client.query(`SELECT
+        v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
+        v.sell_price, v.buy_price, v.status, v.attributes,
+        m.model_code, m.title_ro AS model_title_ro, m.shopify_title, m.status AS model_status, m.brand_id,
+        b.code AS brand_code, b.name AS brand_name,
+        EXISTS (SELECT 1 FROM aif_stock st WHERE st.variant_id=v.id
+          AND (COALESCE(st.qty,0)<>0 OR COALESCE(st.reserved_qty,0)<>0)) AS has_stock
+      FROM aif_product_variants v
+      JOIN aif_product_models m ON m.id=v.model_id
+      LEFT JOIN aif_brands b ON b.id=m.brand_id
+      WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+         OR v.id=ANY($2::uuid[])
+         OR EXISTS (SELECT 1 FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+             AND lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1)))
+      ORDER BY v.id LIMIT 4`, [value, targets]);
+    if (found.rows.length >= 4) {
+      throw aifReceiptIdentityError('A vonalkódnak több lehetséges tulajdonosa van. Kézi egyeztetés szükséges.', 'receipt_barcode_ambiguous', value);
+    }
+    // Korábban jóváhagyott összevonás archivált, üres forrása nem egy újabb termék.
+    return found.rows.filter(owner => !(
+      text(owner.status)==='archived' && !owner.has_stock &&
+      aliases.some(alias => String(alias.source_variant_id)===String(owner.id) &&
+        String(alias.target_variant_id)!==String(owner.id) &&
+        found.rows.some(target => String(target.id)===String(alias.target_variant_id) &&
+          text(target.status)!=='archived' && text(target.model_status)!=='archived'))
+    ));
+  }
+
+  async function findAifReceiptIdentityTarget(client, { normalized, supplierId = null, supplierCode = '' }) {
+    const n = normalized || {};
+    const barcode = text(n.barcode || n.supplierBarcode);
+    const size = text(n.size || n.supplierSize);
+    const brandId = text(n.brandId || n.brand_id);
+    const brandKeys = new Set([n.brandCode, n.brandName].map(normCode).filter(Boolean));
+    if (!size || (!brandId && !brandKeys.size)) return null;
+    const sameBrand = owner => brandId
+      ? String(owner.brand_id || '')===brandId
+      : [owner.brand_code, owner.brand_name].some(value => brandKeys.has(normCode(value)));
+    const owners = barcode ? await readAifReceiptBarcodeOwners(client, barcode) : [];
+    if (owners.length > 1) {
+      throw aifReceiptIdentityError('A vonalkód több külön variánshoz kapcsolódik. Nem vonunk össze készletet találomra.', 'receipt_barcode_ambiguous', barcode);
+    }
+    if (owners.length === 1) {
+      const owner = owners[0];
+      if (text(owner.status)==='archived' || text(owner.model_status)==='archived') {
+        throw aifReceiptIdentityError('A vonalkód archivált termékhez tartozik, jóváhagyott átirányítás nélkül. Kézi egyeztetés szükséges.', 'receipt_archived_barcode', barcode);
+      }
+      if (!sameBrand(owner) || !sameAifVariantSize(owner.size, size)) {
+        throw aifReceiptIdentityError(
+          `A vonalkód márkája vagy mérete eltér. Meglévő: ${owner.brand_name || '-'} / ${owner.size || '-'}; érkező: ${n.brandName || n.brandCode || '-'} / ${size}.`,
+          'barcode_conflict', barcode);
+      }
+      const oldName = normCode(owner.color_name);
+      const newName = normCode(n.colorName);
+      const oldCode = normCode(owner.color_code);
+      const newCode = normCode(n.colorCode || n.supplierColorCode);
+      const differentColor = oldName && newName ? oldName!==newName :
+        Boolean(oldCode && newCode && oldCode!==newCode);
+      if (differentColor) {
+        const choice = normCode(n.barcodeColorResolution || n.barcode_color_resolution);
+        const choiceId = text(n.barcodeColorResolutionVariantId || n.barcode_color_resolution_variant_id);
+        const choiceBarcode = text(n.barcodeColorResolutionBarcode || n.barcode_color_resolution_barcode);
+        if (!['keep_existing','use_incoming'].includes(choice) || choiceId!==String(owner.id) ||
+            (choiceBarcode && choiceBarcode.toLowerCase()!==barcode.toLowerCase())) {
+          throw Object.assign(aifReceiptIdentityError(
+            `A vonalkód színe eltér. Meglévő: ${owner.color_name || owner.color_code || '-'}; érkező: ${n.colorName || n.colorCode || '-'}. A színről külön dönteni kell.`,
+            'barcode_color_choice_required', barcode), {
+              conflictVariantId: String(owner.id), existingColorCode: owner.color_code,
+              existingColorName: owner.color_name, incomingColorCode: n.colorCode || n.supplierColorCode,
+              incomingColorName: n.colorName, size,
+            });
+        }
+      }
+      return { ...owner, receiptMatch: 'barcode_or_alias' };
+    }
+
+    const modelCode = aifReceiptCanonicalModelCode(n, supplierCode);
+    const productCode = text(n.supplierProductCode || n.modelCode);
+    if (!modelCode || (!text(n.modelCode) && !productCode)) return null;
+    const possible = await client.query(`SELECT DISTINCT
+        v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
+        v.sell_price, v.buy_price, v.status, v.attributes,
+        m.model_code, m.title_ro AS model_title_ro, m.shopify_title, m.status AS model_status, m.brand_id,
+        b.code AS brand_code, b.name AS brand_name
+      FROM aif_product_variants v
+      JOIN aif_product_models m ON m.id=v.model_id
+      LEFT JOIN aif_brands b ON b.id=m.brand_id
+      WHERE COALESCE(v.status,'active')<>'archived' AND COALESCE(m.status,'active')<>'archived'
+        AND (m.model_code=$1 OR EXISTS (
+          SELECT 1 FROM aif_variant_supplier_codes sc
+          WHERE sc.variant_id=v.id AND sc.supplier_id::text=$2
+            AND COALESCE(sc.is_active,true)=true
+            AND lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($3))
+        ))
+      ORDER BY v.id LIMIT 501`, [modelCode, text(supplierId), productCode]);
+    if (possible.rows.length > 500) {
+      throw aifReceiptIdentityError('Túl sok lehetséges variáns. Pontos termékazonosítás szükséges.', 'receipt_identity_ambiguous', barcode);
+    }
+    const matches = possible.rows.filter(owner => sameBrand(owner) &&
+      sameAifVariantSize(owner.size, size) && aifReceiptSameColor(owner, n));
+    if (matches.length > 1) {
+      throw aifReceiptIdentityError('Az azonos márka, modell, szín és méret több meglévő variánshoz tartozik. Kézi egyeztetés szükséges.', 'receipt_identity_ambiguous', barcode);
+    }
+    return matches.length ? { ...matches[0], receiptMatch: 'model_color_size' } : null;
+  }
+
+  async function rememberAifReceiptModelNames(client, modelId, incomingTitle) {
+    const title = text(incomingTitle);
+    if (!title) return;
+    const current = await client.query(`SELECT id, title_ro, shopify_title
+      FROM aif_product_models WHERE id=$1 FOR UPDATE`, [modelId]);
+    const model = current.rows[0];
+    if (!model) throw aifReceiptIdentityError('A termékmodell időközben megszűnt.', 'receipt_identity_stale');
+    const oldNames = [...new Set([model.title_ro, model.shopify_title].map(text)
+      .filter(value => value && value!==title))];
+    // A modell összes méretéhez megmaradnak a korábbi kereshető nevek.
+    await client.query(`UPDATE aif_product_variants v
+      SET attributes=COALESCE(v.attributes,'{}'::jsonb) || jsonb_build_object(
+        'receptionCurrentTitle', $2::text,
+        'receptionPreviousNames', COALESCE((
+          SELECT jsonb_agg(DISTINCT item.value)
+          FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(v.attributes->'receptionPreviousNames')='array'
+              THEN v.attributes->'receptionPreviousNames' ELSE '[]'::jsonb END || $3::jsonb
+          ) AS item(value)
+        ),'[]'::jsonb)
+      )
+      WHERE v.model_id=$1`, [modelId, title, JSON.stringify(oldNames)]);
+  }
+
+  async function rememberAifReceiptBarcode(client, variantId, oldBarcode, incomingBarcode) {
+    const before = text(oldBarcode);
+    const after = text(incomingBarcode);
+    if (!after || before.toLowerCase()===after.toLowerCase()) return;
+    for (const code of [...new Set([before,after].filter(Boolean).map(value => value.toLowerCase()))].sort()) {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_receipt_barcode:${code}`]);
+      const owners = await readAifReceiptBarcodeOwners(client, code);
+      if (owners.some(owner => String(owner.id)!==String(variantId))) {
+        throw aifReceiptIdentityError(`A(z) ${code} vonalkód másik termékhez is kapcsolódik. A kódcsere nem biztonságos.`, 'receipt_barcode_ambiguous', code);
+      }
+    }
+    if (!before) return;
+    // Régi címke -> UGYANAZ a variáns. A mennyiséget ez nem változtatja meg.
+    await client.query(`INSERT INTO aif_variant_barcode_aliases
+        (barcode,source_variant_id,target_variant_id,reason)
+      VALUES ($1,$2,$2,'receipt_barcode_replaced')
+      ON CONFLICT DO NOTHING`, [before, variantId]);
+    const saved = await client.query(`SELECT target_variant_id FROM aif_variant_barcode_aliases
+      WHERE lower(btrim(barcode))=lower(btrim($1))`, [before]);
+    if (saved.rows.length!==1 || String(saved.rows[0].target_variant_id)!==String(variantId)) {
+      throw aifReceiptIdentityError('A régi bárkód átirányítása nem ellenőrizhető. A receptió nem módosította a terméket.', 'receipt_barcode_alias_conflict', before);
+    }
+    await client.query(`UPDATE aif_product_variants v
+      SET attributes=COALESCE(v.attributes,'{}'::jsonb) || jsonb_build_object(
+        'receptionPreviousBarcodes', COALESCE((
+          SELECT jsonb_agg(DISTINCT item.value)
+          FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(v.attributes->'receptionPreviousBarcodes')='array'
+              THEN v.attributes->'receptionPreviousBarcodes' ELSE '[]'::jsonb END || $2::jsonb
+          ) AS item(value)
+        ),'[]'::jsonb)
+      ) WHERE v.id=$1`, [variantId, JSON.stringify([before])]);
+  }
+
+  function aifReceiptHistorySearchSql(variantAlias, pattern) {
+    return `(COALESCE(${variantAlias}.attributes->'receptionPreviousNames','[]'::jsonb)::text ILIKE ${pattern}
+      OR COALESCE(${variantAlias}.attributes->'receptionPreviousBarcodes','[]'::jsonb)::text ILIKE ${pattern})`;
+  }
+
+  async function upsertModel(client, { supplierCode, normalized, createStatus = "active", updateStatus = "active", preserveExistingClassification = false, receiptTarget = null, receiptNames = false }) {
     const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
@@ -3592,25 +3816,78 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
     let modelCode = `${brandKey}:${normCode(baseModelCode)}`;
+    let receiptModel = null;
+    if (receiptTarget) {
+      const verified = await client.query(`SELECT m.id, m.model_code, m.title_ro, m.brand_id
+        FROM aif_product_models m JOIN aif_product_variants v ON v.model_id=m.id
+        WHERE m.id=$1 AND v.id=$2 FOR UPDATE OF m`, [receiptTarget.model_id, receiptTarget.id]);
+      if (verified.rowCount!==1 || !brandId || String(verified.rows[0].brand_id)!==String(brandId)) {
+        throw aifReceiptIdentityError('A receptió termékazonosítása időközben megváltozott. Frissítsd az egyeztetést.', 'receipt_identity_stale');
+      }
+      receiptModel = verified.rows[0];
+      modelCode = receiptModel.model_code;
+    }
     // Külön megnevezésű termékek nem írhatják felül egymás modellszintű nevét.
     // Például MONTEVERDI NAGY CSILI és MONTEVERDI DOMBOR HIMZES ugyanazzal a
     // 112430-as számtörzzsel érkezhet. A második cím stabil, névalapú alt-kódot kap.
-    const baseModel = await client.query(
+    const baseModel = receiptModel ? { rowCount: 1, rows: [receiptModel] } : await client.query(
       `SELECT id,title_ro FROM aif_product_models WHERE model_code=$1 LIMIT 1`, [modelCode]
     );
-    if (baseModel.rowCount && safeNormalized.titleRo && baseModel.rows[0].title_ro &&
+    // AIF_RECEPTION_BARCODE_MODEL_20261017_112113_V2
+    // A beszállítói megnevezés változhat, a bizonyított termékazonosság nem.
+    // A névütközés alól csak a teljes terméktörzsben EGYEDI vonalkód adhat
+    // kivételt, ugyanazon márka + kanonikus modell + szín + fizikai méret mellett.
+    // Az ár itt nem azonossági feltétel és nem is módosul: az upsertVariant
+    // változatlan applyIncomingPriceDecision ellenőrzése után dől el.
+    let existingBarcodeIdentityVerified = Boolean(receiptModel);
+    if (!receiptModel && baseModel.rowCount && safeNormalized.titleRo && baseModel.rows[0].title_ro &&
         normCode(baseModel.rows[0].title_ro) !== normCode(safeNormalized.titleRo)) {
-      const altCode = `${modelCode}__${normCode(safeNormalized.titleRo).slice(0,90)}`;
-      const alternative = await client.query(
-        `SELECT id,title_ro FROM aif_product_models WHERE model_code=$1 LIMIT 1`, [altCode]
-      );
-      if (alternative.rowCount && normCode(alternative.rows[0].title_ro) !== normCode(safeNormalized.titleRo)) {
-        const error = new Error("Az azonos modellkódhoz különböző terméknevek tartoznak. Kézi modellazonosítás szükséges.");
-        error.statusCode = 409;
-        error.code = "model_title_collision";
-        throw error;
+      const incomingBarcode = emptyToNull(safeNormalized.barcode);
+      const incomingSize = text(safeNormalized.size || safeNormalized.supplierSize);
+      if (incomingBarcode && brandId && incomingSize) {
+        // Nincs model_id szűrés: másik modell alatti második kódtulajdonos
+        // esetén sem szabad tévesen egyedinek tekinteni a vonalkódot.
+        const owners = await client.query(
+          `SELECT v.id, v.model_id, v.size, v.color_code, v.color_name, v.status,
+                  m.brand_id, m.status AS model_status
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+           LIMIT 2`,
+          [incomingBarcode]
+        );
+        if (owners.rowCount === 1) {
+          const owner = owners.rows[0];
+          const oldCode = normCode(owner.color_code || '');
+          const newCode = normCode(safeNormalized.colorCode || safeNormalized.supplierColorCode || '');
+          const oldName = normCode(owner.color_name || '');
+          const newName = normCode(safeNormalized.colorName || '');
+          const colorConsistent =
+            (!oldCode || !newCode || oldCode === newCode) &&
+            (!oldName || !newName || oldName === newName) &&
+            Boolean((oldCode && newCode) || (oldName && newName));
+          existingBarcodeIdentityVerified =
+            String(owner.model_id) === String(baseModel.rows[0].id) &&
+            String(owner.brand_id || '') === String(brandId) &&
+            text(owner.status).toLowerCase() !== 'archived' &&
+            text(owner.model_status).toLowerCase() !== 'archived' &&
+            sameAifVariantSize(owner.size, incomingSize) && colorConsistent;
+        }
       }
-      modelCode = altCode;
+      if (!existingBarcodeIdentityVerified) {
+        // Bizonyított vonalkódos azonosság nélkül a korábbi névvédelem marad.
+        const altCode = `${modelCode}__${normCode(safeNormalized.titleRo).slice(0,90)}`;
+        const alternative = await client.query(
+          `SELECT id,title_ro FROM aif_product_models WHERE model_code=$1 LIMIT 1`, [altCode]
+        );
+        if (alternative.rowCount && normCode(alternative.rows[0].title_ro) !== normCode(safeNormalized.titleRo)) {
+          const error = new Error("Az azonos modellkódhoz különböző terméknevek tartoznak. Kézi modellazonosítás szükséges.");
+          error.statusCode = 409;
+          error.code = "model_title_collision";
+          throw error;
+        }
+        modelCode = altCode;
+      }
     }
     const modelCreateStatus = cleanModelLifecycleStatus(safeNormalized.modelStatus || safeNormalized.model_status || createStatus, "active");
     const modelUpdateStatus = updateStatus === null || updateStatus === undefined
@@ -3624,12 +3901,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     if (existing.rowCount) {
       const id = existing.rows[0].id;
+      if (receiptNames) await rememberAifReceiptModelNames(client, id, safeNormalized.titleRo);
       await client.query(
         `UPDATE aif_product_models SET
            brand_id = COALESCE($2, brand_id),
            category_id = CASE WHEN $14::boolean THEN COALESCE(category_id, $3) ELSE COALESCE($3, category_id) END,
            subcategory_id = CASE WHEN $14::boolean THEN COALESCE(subcategory_id, $13) ELSE COALESCE($13, subcategory_id) END,
-           title_ro = $4,
+           title_ro = COALESCE(NULLIF(btrim($4),''), title_ro),
            title_hu = COALESCE($5, title_hu),
            description_ro = COALESCE($6, description_ro),
            gender = CASE
@@ -3642,7 +3920,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            product_type = COALESCE($8, product_type),
            season = CASE WHEN $15::boolean THEN $9 ELSE season END,
            material = COALESCE($10, material),
-           shopify_title = COALESCE($11, shopify_title),
+           shopify_title = COALESCE(NULLIF(btrim($11),''), shopify_title),
            status = CASE
              WHEN status='archived' THEN COALESCE($12::text, 'draft')
              WHEN $12::text IS NULL THEN status
@@ -3759,7 +4037,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
-  async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active", priceChangeContext = null }) {
+  async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active", priceChangeContext = null, receiptVariantId = null }) {
     const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
     const colorName = text(normalized.colorName || "");
     const size = text(normalized.size);
@@ -3792,13 +4070,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const candidate = emptyToNull(candidateBarcode);
       if (!candidate) return null;
       const result = await client.query(
-        `SELECT id, model_id, barcode, color_code, color_name, size, status, created_at
-         FROM aif_product_variants
-         WHERE lower(btrim(COALESCE(barcode,'')))=lower(btrim($1))
-           AND ($2::text='' OR id::text<>$2)
-         ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
-                  created_at ASC,
-                  id::text ASC
+        `SELECT v.id, v.model_id, v.barcode, v.color_code, v.color_name, v.size, v.status, v.created_at,
+                m.model_code AS existing_model_code
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+           AND ($2::text='' OR v.id::text<>$2)
+         ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
+                  v.created_at ASC,
+                  v.id::text ASC
          LIMIT 1`,
         [candidate, excludeVariantId ? String(excludeVariantId) : ""]
       );
@@ -3858,8 +4138,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const throwBarcodeConflict = (owner) => {
       const ownerSize = text(owner?.size || "-");
       const ownerColor = text(owner?.color_code || owner?.color_name || "-");
+      const sameModel = String(owner?.model_id || '') === String(modelId);
+      const sameSize = sameAifVariantSize(owner?.size, size);
+      const reason = !sameModel && !sameSize ? 'modell- és méreteltérés'
+        : !sameSize ? 'méreteltérés' : !sameModel ? 'modellazonosítási eltérés' : 'több kódtulajdonos';
       const error = new Error(
-        `A(z) ${barcode} vonalkód valóban másik variánshoz tartozik: más modell vagy más méret. Meglévő: méret ${ownerSize}, szín ${ownerColor}; érkező: méret ${size || "-"}, szín ${colorCode || colorName || "-"}.`
+        `A(z) ${barcode} vonalkód nem egyeztethető automatikusan (${reason}). ` +
+        `Meglévő modell: ${text(owner?.existing_model_code || owner?.model_id || '-')}, méret: ${ownerSize}, szín: ${ownerColor}; ` +
+        `érkező modellkód: ${text(normalized.modelCode || normalized.supplierProductCode || modelId)}, méret: ${size || '-'}, szín: ${colorCode || colorName || '-'}. ` +
+        `A két variánst nem vonjuk össze, új vonalkódos másolatot nem hozunk létre.`
       );
       error.statusCode = 409;
       error.code = "barcode_conflict";
@@ -3873,11 +4160,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (barcodeConflict) throwBarcodeConflict(barcodeConflict);
 
       const previousPriceRow = await client.query(
-        `SELECT sell_price FROM aif_product_variants WHERE id=$1 FOR UPDATE`,
+        `SELECT sell_price, barcode FROM aif_product_variants WHERE id=$1 FOR UPDATE`,
         [id]
       );
       const previousSellPrice = previousPriceRow.rows[0]?.sell_price;
       applyIncomingPriceDecision({ normalized, variantId: id, previousSellPrice });
+      if (priceChangeContext?.sourceType==='incoming_reception') {
+        await rememberAifReceiptBarcode(client, id, previousPriceRow.rows[0]?.barcode, barcode);
+      }
       if (priceChangeContext && normalized.sellPrice !== null && normalized.sellPrice !== undefined && aifPriceChanged(previousSellPrice, normalized.sellPrice)) {
         await recordAifPriceChangeDocumentLine(client, {
           ...priceChangeContext,
@@ -4039,6 +4329,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return updateVariantById(barcodeOwner.id, { preserveExistingColor: false });
     };
 
+    if (receiptVariantId) {
+      const receiptOwner = await client.query(`SELECT v.id, v.model_id, v.barcode, v.size,
+          v.color_code, v.color_name, v.status, m.model_code AS existing_model_code
+        FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
+        WHERE v.id=$1 FOR UPDATE OF v`, [receiptVariantId]);
+      if (receiptOwner.rowCount!==1 || text(receiptOwner.rows[0].status)==='archived') {
+        throw aifReceiptIdentityError('A receptióhoz egyeztetett variáns időközben megváltozott.', 'receipt_identity_stale', barcode);
+      }
+      return resolveMatchingBarcodeOwner(receiptOwner.rows[0]);
+    }
+
     // A valódi, egyedi vonalkód a legerősebb variánsazonosító. Azonos modell + méret
     // esetén ugyanazt a fizikai variánst használjuk, de eltérő színnél a felhasználó dönt.
     if (barcode) {
@@ -4162,7 +4463,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     // A supplierVariantCode gyakran hiányzik vagy formátumot vált, ezért nem engedjük,
     // hogy emiatt ugyanaz a fizikai variáns több kapcsolatsorban és később több termékben éljen.
     const existing = await client.query(
-      `SELECT id
+      `SELECT id, variant_id
        FROM aif_variant_supplier_codes
        WHERE supplier_id=$1
          AND (
@@ -4189,6 +4490,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
 
     if (existing.rowCount) {
+      if (String(existing.rows[0].variant_id)!==String(variantId)) {
+        throw aifReceiptIdentityError('A beszállítói kód már másik variánshoz tartozik. A kapcsolatot nem írjuk át automatikusan.', 'supplier_variant_target_conflict', normalized.barcode);
+      }
       await client.query(
         `UPDATE aif_variant_supplier_codes SET
            variant_id=$2,
@@ -8845,7 +9149,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   //
   // Preserved identity/history:
   // - internal_sku is NOT changed
-  // - barcode is NOT changed
+  // - a régi barcode alias-ként megmarad; az érkező kód az elsődleges
   // - color/size identity is NOT rewritten
   // - old supplier/product-code rows are NOT overwritten
   // - old model information is appended to variant.attributes.legacyModelHistory
@@ -9005,6 +9309,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       createStatus: "active",
       updateStatus: "active",
       preserveExistingClassification: true,
+      receiptNames: true,
     });
 
     const targetModelRes = await client.query(
@@ -9067,6 +9372,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const attributesToMerge = {
       ...incomingAttributes,
+      receptionCurrentTitle: text(normalized?.titleRo) || oldModelTitle,
+      receptionPreviousNames: [...new Set([
+        ...(Array.isArray(existingAttributes.receptionPreviousNames) ? existingAttributes.receptionPreviousNames : []),
+        oldModelTitle, owner?.shopify_title,
+      ].map(text).filter(Boolean))],
       ...(legacyModelHistory.length ? { legacyModelHistory } : {}),
       ...(oldModelCode && !existingAttributes.legacyModelCode ? { legacyModelCode: oldModelCode } : {}),
       ...(oldModelTitle && !existingAttributes.legacyModelTitle ? { legacyModelTitle: oldModelTitle } : {}),
@@ -9077,13 +9387,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     // Az ár kiválasztása a régi, eltérő modellazonosítójú vonalkódos
     // variánsnál is kötelező; a két importút nem viselkedhet eltérően.
     const priceLock = await client.query(
-      `SELECT sell_price FROM aif_product_variants WHERE id=$1 FOR UPDATE`, [owner.id]
+      `SELECT sell_price, barcode FROM aif_product_variants WHERE id=$1 FOR UPDATE`, [owner.id]
     );
     const previousLegacySellPrice = priceLock.rows[0]?.sell_price;
     applyIncomingPriceDecision({ normalized, variantId: owner.id, previousSellPrice: previousLegacySellPrice });
 
-    // Refresh commercial/current receipt data and normalize the model relation.
-    // internal_sku / barcode / color / size stay untouched.
+    await rememberAifReceiptBarcode(client, owner.id, priceLock.rows[0]?.barcode, normalized?.barcode);
+    // A belső variánsazonosító és a készlet helye megmarad. Az érkező kód az aktuális,
+    // a korábbi címkék alias-ként tovább használhatók.
     if (priceChangeContext && normalized?.sellPrice !== null && normalized?.sellPrice !== undefined && aifPriceChanged(previousLegacySellPrice, normalized.sellPrice)) {
       await recordAifPriceChangeDocumentLine(client, {
         ...priceChangeContext,
@@ -9091,7 +9402,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         oldSellPrice: previousLegacySellPrice,
         newSellPrice: normalized.sellPrice,
         productTitle: normalized?.titleRo || owner?.model_title_ro || null,
-        barcode: owner?.barcode || normalized?.barcode || null,
+        barcode: normalized?.barcode || owner?.barcode || null,
         colorName: owner?.color_name || normalized?.colorName || null,
         size: owner?.size || normalized?.size || null,
       });
@@ -9099,6 +9410,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     await client.query(
       `UPDATE aif_product_variants SET
          model_id=$2,
+         barcode=COALESCE(NULLIF($10,''),barcode),
          sn_cod=COALESCE($3, sn_cod),
          buy_price=COALESCE($4, buy_price),
          sell_price=COALESCE($5, sell_price),
@@ -9119,6 +9431,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         normalized?.weightGrams ?? null,
         normalized?.imageUrl ?? null,
         JSON.stringify(attributesToMerge),
+        text(normalized?.barcode),
       ]
     );
 
@@ -9179,6 +9492,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       throw e;
     }
     await ensureSnCodSchema(client);
+    await ensureAifReceiptBarcodeAliasSchema(client);
     const batchRes = await client.query(
       `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
               r.invoice_number AS reception_invoice_number,
@@ -9250,6 +9564,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(`SAVEPOINT ${savepointName}`);
 
         const normalized = { ...(row.normalized || {}) };
+        if (normalized.attributes && typeof normalized.attributes==='object' && !Array.isArray(normalized.attributes)) {
+          normalized.attributes = { ...normalized.attributes };
+          for (const key of ['receptionCurrentTitle','receptionCurrentBarcode','receptionIdentitySource','receptionPreviousNames','receptionPreviousBarcodes']) {
+            delete normalized.attributes[key];
+          }
+        }
         const rowSnCod = emptyToNull(row.sn_cod);
         if (rowSnCod && !emptyToNull(normalized.snCod ?? normalized.sn_cod)) {
           normalized.snCod = rowSnCod;
@@ -9333,10 +9653,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         delete normalized.variant_status;
         delete normalized.status;
 
-        const legacyBarcodeTarget = await findLegacyBarcodeStockTarget(client, {
-          normalized,
-          supplierCode: batch.supplier_code,
+        const receiptTarget = await findAifReceiptIdentityTarget(client, {
+          normalized, supplierId: batch.supplier_id, supplierCode: batch.supplier_code,
         });
+        const receiptTargetOnCurrentModel = receiptTarget &&
+          (receiptTarget.model_code===aifReceiptCanonicalModelCode(normalized,batch.supplier_code) ||
+           receiptTarget.model_code?.startsWith(`${aifReceiptCanonicalModelCode(normalized,batch.supplier_code)}__`));
+        const legacyBarcodeTarget = receiptTarget
+          ? (receiptTargetOnCurrentModel ? null : receiptTarget)
+          : await findLegacyBarcodeStockTarget(client, { normalized, supplierCode: batch.supplier_code });
 
         let variantId;
         if (legacyBarcodeTarget) {
@@ -9374,8 +9699,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             createStatus: "active",
             updateStatus: "active",
             preserveExistingClassification: true,
+            receiptTarget: receiptTargetOnCurrentModel ? receiptTarget : null,
+            receiptNames: true,
           });
-          const previousSupplierVariant = await findExactExistingSupplierVariant(client, {
+          const previousSupplierVariant = receiptTarget || await findExactExistingSupplierVariant(client, {
             supplierId: batch.supplier_id, normalized, newModelId: modelId,
           });
           variantId = await upsertVariant(client, {
@@ -9384,6 +9711,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             createStatus: "active",
             updateStatus: "active",
             priceChangeContext,
+            receiptVariantId: previousSupplierVariant?.id || null,
           });
           if (previousSupplierVariant && String(variantId)!==String(previousSupplierVariant.id)) {
             const err = new Error('A régebbi beszállítói termékazonosítás és a variáns nem ugyanazt a terméket találta.');
@@ -9391,6 +9719,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           }
           await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         }
+
+        await client.query(`UPDATE aif_product_variants
+          SET attributes=COALESCE(attributes,'{}'::jsonb) || jsonb_build_object(
+            'receptionCurrentTitle', $2::text,
+            'receptionCurrentBarcode', COALESCE(NULLIF($3,''),barcode),
+            'receptionIdentitySource', $4::text
+          ) WHERE id=$1`, [variantId, text(normalized.titleRo), text(normalized.barcode), String(row.id)]);
 
         await addStock(client, {
           locationId: batch.target_location_id,
@@ -9425,6 +9760,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(
           `UPDATE aif_import_rows
            SET status='committed',
+               error_messages='{}'::text[],
                variant_id=$2,
                purchase_order_id=$3,
                purchase_order_line_id=$4,
@@ -9587,50 +9923,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const groups = new Map();
     const allPricesByVariant = new Map();
     let selectedQty = 0;
+    const identificationWarnings = [];
     for (const row of found.rows) {
-      const normalized = row.normalized && typeof row.normalized === 'object' ? row.normalized : {};
+      const normalized = row.normalized && typeof row.normalized === 'object' ? { ...row.normalized } : {};
+      applyProductCodeSplit(normalized);
       const qty = Math.max(0, Math.floor(Number(row.qty ?? normalized.qty ?? 0)));
       selectedQty += qty;
       const incomingPrice = aifPriceNumber(row.sell_price_ron ?? normalized.sellPriceRon ?? normalized.sellPrice);
       if (incomingPrice === null || incomingPrice <= 0) continue;
-      const barcode = text(normalized.barcode || normalized.supplierBarcode || '');
       const size = text(normalized.size || row.supplier_size);
-      const colorCode = normCode(normalized.colorCode || normalized.supplierColorCode || row.supplier_color_code);
-      const colorName = normCode(normalized.colorName || '');
-      const incomingBrand = normCode(normalized.brandCode || normalized.brandName || row.supplier_code || '');
-      const baseModelCode = normalized.modelCode || normalized.supplierProductCode || row.supplier_product_code || normalized.titleRo;
-      const modelCode = `${incomingBrand}:${normCode(baseModelCode)}`;
-      if (!size || !baseModelCode) continue;
-      const candidates = await client.query(
-        `SELECT v.id, v.size, v.barcode, v.color_code, v.color_name, v.sell_price,
-                m.model_code, m.title_ro, br.code AS brand_code, br.name AS brand_name,
-                COALESCE(stock.qty,0)::int AS existing_qty,
-                COALESCE(stock_locations.items,'[]'::jsonb) AS stock_locations
-         FROM aif_product_variants v
-         JOIN aif_product_models m ON m.id=v.model_id
-         LEFT JOIN aif_brands br ON br.id=m.brand_id
-         LEFT JOIN LATERAL (
-           SELECT sum(s.qty)::int AS qty FROM aif_stock s WHERE s.variant_id=v.id
-         ) stock ON true
-         LEFT JOIN LATERAL (
-           SELECT jsonb_agg(jsonb_build_object('location',l.name,'qty',s.qty) ORDER BY l.name) AS items
-           FROM aif_stock s JOIN aif_locations l ON l.id=s.location_id
-           WHERE s.variant_id=v.id AND s.qty>0
-         ) stock_locations ON true
-         WHERE (NULLIF($1,'') IS NOT NULL AND lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1)))
-            OR m.model_code=$2
-         ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END, v.created_at ASC
-         LIMIT 120`,
-        [barcode, modelCode]
-      );
-      const sameBrand = (v) => !incomingBrand || [v.brand_code,v.brand_name].some((name) => normCode(name)===incomingBrand);
-      const sameSize = (v) => sameAifVariantSize(v.size,size);
-      const matchingColor = (v) => colorCode
-        ? normCode(v.color_code)===colorCode || (!normCode(v.color_code) && colorName && normCode(v.color_name)===colorName)
-        : normCode(v.color_name)===colorName;
-      const direct = candidates.rows.filter((v) => barcode && text(v.barcode).toLowerCase()===barcode.toLowerCase() && sameBrand(v) && sameSize(v));
-      const modelCandidates = candidates.rows.filter((v) => v.model_code===modelCode && sameSize(v) && matchingColor(v));
-      const existing = direct.length===1 ? direct[0] : (direct.length===0 && modelCandidates.length===1 ? modelCandidates[0] : null);
+      const baseModelCode = normalized.modelCode || normalized.supplierProductCode || row.supplier_product_code;
+      let target = null;
+      try {
+        target = await findAifReceiptIdentityTarget(client, {
+          normalized, supplierId: row.supplier_id, supplierCode: row.supplier_code,
+        });
+      } catch (error) {
+        if (Number(error?.statusCode)!==409) throw error;
+        identificationWarnings.push({ rowId: String(row.id), rowNo: row.row_no, code: error.code, error: error.message });
+        continue; // Az azonossági hibát a véglegesítő változatlanul blokkolja.
+      }
+      const candidates = target ? await client.query(`SELECT v.id, v.size, v.color_name, v.sell_price,
+          m.title_ro, br.name AS brand_name,
+          COALESCE((SELECT sum(st.qty) FROM aif_stock st WHERE st.variant_id=v.id),0) AS existing_qty,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('location',l.name,'qty',st.qty) ORDER BY l.name)
+            FROM aif_stock st JOIN aif_locations l ON l.id=st.location_id
+            WHERE st.variant_id=v.id AND st.qty>0),'[]'::jsonb) AS stock_locations
+        FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
+        LEFT JOIN aif_brands br ON br.id=m.brand_id WHERE v.id=$1`, [target.id]) : { rows: [] };
+      const existing = candidates.rows[0];
       if (!existing) continue;
       const previousPrice = aifPriceNumber(existing.sell_price);
       const variantPrices = allPricesByVariant.get(String(existing.id)) || new Set();
@@ -9649,7 +9970,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           currentQty:Math.max(0,Number(existing.existing_qty||0)),
           stockLocations:existing.stock_locations||[],
           oldPrice:previousPrice,incomingPrice,
-          productTitle:text(existing.title_ro||normalized.titleRo||''),
+          productTitle:text(normalized.titleRo||existing.title_ro||''),
+          previousProductTitle:text(existing.title_ro||''),
           productCode:text(row.supplier_product_code||normalized.supplierProductCode||baseModelCode),
           brandName:existing.brand_name||null,colorName:existing.color_name||normalized.colorName||null,
           size:existing.size||size,
@@ -9676,7 +9998,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
       seenPrices.set(item.variantId,item.incomingPrice);
     }
-    return { ok:true,items:Array.from(groups.values()), selectedRowCount:found.rowCount,selectedQty };
+    return { ok:true,items:Array.from(groups.values()), selectedRowCount:found.rowCount,selectedQty, identificationWarnings };
   }
 
   router.post('/receptions/:id/price-review',requireAuthed,async(req,res)=>{
@@ -16162,6 +16484,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         OR COALESCE(lid.normalized->>'titleRo', lid.normalized->>'productName', lid.raw->>'ARTICOL', '') ILIKE ${p}
         OR COALESCE(m.title_hu,'') ILIKE ${p}
         OR COALESCE(m.shopify_title,'') ILIKE ${p}
+          OR ${aifReceiptHistorySearchSql('v', p)}
         OR COALESCE(v.internal_sku,'') ILIKE ${p}
         OR COALESCE(v.attributes->>'legacyProductCode','') ILIKE ${p}
         OR COALESCE(v.attributes->>'legacyOriginalProductCode','') ILIKE ${p}
@@ -16513,6 +16836,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return `(
       m.title_ro ILIKE ${p}
       OR COALESCE(m.shopify_title,'') ILIKE ${p}
+          OR ${aifReceiptHistorySearchSql('v', p)}
       OR COALESCE(b.name,'') ILIKE ${p}
       OR COALESCE(c.name_ro,'') ILIKE ${p}
       OR COALESCE(v.color_name,'') ILIKE ${p}
@@ -27811,6 +28135,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
         OR COALESCE(m.title_ro,'') ILIKE ${pattern}
         OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+          OR ${aifReceiptHistorySearchSql('v', pattern)}
         OR COALESCE(m.model_code,'') ILIKE ${pattern}
         OR COALESCE(m.gender,'') ILIKE ${pattern}
         OR COALESCE(b.name,'') ILIKE ${pattern}
@@ -28076,6 +28401,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const title = aifImportedOriginalProductTitle(row.normalized || {}, row.raw || {});
       if (title) titles.set(variantId, title);
     }
+    const current = await client.query(`SELECT id::text AS variant_id,
+        attributes->>'receptionCurrentTitle' AS title
+      FROM aif_product_variants WHERE id::text=ANY($1::text[])
+        AND NULLIF(btrim(attributes->>'receptionCurrentTitle'),'') IS NOT NULL`, [ids]);
+    for (const row of current.rows) titles.set(String(row.variant_id), text(row.title));
     return titles;
   }
 
@@ -28105,6 +28435,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+          OR ${aifReceiptHistorySearchSql('v', pattern)}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
           OR COALESCE(m.gender,'') ILIKE ${pattern}
           OR COALESCE(b.name,'') ILIKE ${pattern}
@@ -28311,6 +28642,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+          OR ${aifReceiptHistorySearchSql('v', pattern)}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
           OR COALESCE(m.gender,'') ILIKE ${pattern}
           OR COALESCE(b.name,'') ILIKE ${pattern}
