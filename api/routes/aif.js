@@ -1532,32 +1532,84 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return aifBarcodeAliasSchemaPromise;
   }
 
-  // Az eredeti aktív vonalkód MINDIG elsőbbséget élvez a korábbi alias-szal
-  // szemben. Az alias csak teljes (scannerből beolvasott) kódra működik.
-  function aifBarcodeAliasMatchSql(variantAlias, codeParam) {
-    return `EXISTS (
-      SELECT 1
-      FROM aif_variant_barcode_aliases alias_v
-      WHERE alias_v.target_variant_id=${variantAlias}.id
-        AND lower(btrim(alias_v.barcode))=lower(btrim(${codeParam}))
-        AND lower(btrim(COALESCE(${variantAlias}.barcode,'')))<>lower(btrim(${codeParam}))
-        AND NOT EXISTS (
-          SELECT 1 FROM aif_product_variants exact_v
-          JOIN aif_product_models exact_m ON exact_m.id=exact_v.model_id
-          WHERE exact_v.id<>${variantAlias}.id
-            AND COALESCE(exact_v.status,'active')='active'
-            AND COALESCE(exact_m.status,'active')='active'
-            AND (
-              lower(btrim(COALESCE(exact_v.barcode,'')))=lower(btrim(${codeParam}))
-              OR EXISTS (
-                SELECT 1 FROM aif_variant_supplier_codes exact_sc
-                WHERE exact_sc.variant_id=exact_v.id
-                  AND COALESCE(exact_sc.is_active,true)=true
-                  AND lower(btrim(COALESCE(exact_sc.supplier_barcode,'')))=lower(btrim(${codeParam}))
-              )
-            )
-        )
-    )`;
+  // AIF_FAST_BARCODE_ALIAS_CATALOG_20261019_V5
+  // Az eredeti, aktiv vonalkod mindig erosebb egy regi cimke aliasanal.
+  // A regi EXISTS / NOT EXISTS lancot az SQL optimalizalo a termeklista MINDEN
+  // jeloltjere es tobbszor is lefuttatta: ez 9, egyenkent 70+ perces SELECT-et
+  // okozott. Az alias itt egyetlen, indexelt kodkereses, a prioritasellenorzes
+  // csak tenyleges alias-talalat eseten tortenik meg, legfeljebb egyszer/kérés.
+  async function aifResolveActiveBarcodeAliasVariantId(client, inputCode) {
+    const code = text(inputCode);
+    if (!code) return null;
+    const alias = await client.query(
+      `SELECT target_variant_id
+       FROM aif_variant_barcode_aliases
+       WHERE lower(btrim(barcode))=lower(btrim($1)) LIMIT 2`,
+      [code]
+    );
+    if (alias.rows.length !== 1) return null;
+    const targetId = String(alias.rows[0].target_variant_id);
+    const target = await client.query(
+      `SELECT v.id, v.barcode
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       WHERE v.id=$1::uuid AND COALESCE(v.status,'active')='active'
+         AND COALESCE(m.status,'active')='active' LIMIT 1`,
+      [targetId]
+    );
+    if (target.rowCount !== 1 ||
+        text(target.rows[0].barcode).toLowerCase() === code.toLowerCase()) return null;
+
+    // Külön, lapos lekérdezések: egy másik AKTIV variáns sajat kodja,
+    // illetve aktiv beszallitoi barkodja is elsobbseget elvez. A nagy OR-os
+    // korrelalt anti-join ujra bevezetese tilos.
+    const exactVariant = await client.query(
+      `SELECT 1 FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       WHERE v.id<>$2::uuid AND COALESCE(v.status,'active')='active'
+         AND COALESCE(m.status,'active')='active'
+         AND lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+       LIMIT 1`,
+      [code, targetId]
+    );
+    if (exactVariant.rowCount) return null;
+    const exactSupplier = await client.query(
+      `SELECT 1 FROM aif_variant_supplier_codes sc
+       JOIN aif_product_variants v ON v.id=sc.variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       WHERE sc.variant_id<>$2::uuid AND COALESCE(sc.is_active,true)=true
+         AND COALESCE(v.status,'active')='active'
+         AND COALESCE(m.status,'active')='active'
+         AND lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1))
+       LIMIT 1`,
+      [code, targetId]
+    );
+    return exactSupplier.rowCount ? null : targetId;
+  }
+
+  // A bolti keresok nem tarthatnak orakig adatbazis-kapcsolatot akkor sem,
+  // ha egy kesobbi SQL valtozas lassu lenne. A LIMIT szerveroldali es csak
+  // a SELECT sajat, read-only tranzakciojara vonatkozik.
+  async function aifBoundedCatalogSelect(dbPool, sql, values, timeoutMillis = 8000) {
+    const db = await dbPool.connect();
+    let transactionStarted = false;
+    try {
+      await db.query('BEGIN READ ONLY');
+      transactionStarted = true;
+      const duration = Math.max(1000, Math.min(15000, Math.floor(timeoutMillis)));
+      await db.query(`SET LOCAL statement_timeout='${duration}ms'`);
+      const result = await db.query(sql, values);
+      await db.query('COMMIT');
+      transactionStarted = false;
+      return result;
+    } catch (error) {
+      if (transactionStarted) {
+        try { await db.query('ROLLBACK'); } catch (_) {}
+      }
+      throw error;
+    } finally {
+      db.release();
+    }
   }
 
   function cleanAifUitCode(value) {
@@ -16132,7 +16184,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     try {
       await ensureAifBarcodeAliasSchema();
-      const r = await pool.query(
+      const aliasTargetId = await aifResolveActiveBarcodeAliasVariantId(pool, code);
+      const r = await aifBoundedCatalogSelect(pool,
         `WITH barcode_candidates AS (
            SELECT DISTINCT v.id AS variant_id, 0 AS match_rank, 'barcode'::text AS match_type
            FROM aif_product_variants v
@@ -16151,7 +16204,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            JOIN aif_product_models m ON m.id=v.model_id
            WHERE COALESCE(v.status,'active')='active'
              AND COALESCE(m.status,'active')='active'
-             AND ${aifBarcodeAliasMatchSql('v', '$1')}
+             AND v.id=$2::uuid
          ),
          identifier_candidates AS (
            SELECT DISTINCT
@@ -16266,7 +16319,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ) st ON true
          ORDER BY p.match_rank ASC, b.name ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC
          LIMIT 20`,
-        [code]
+        [code, aliasTargetId]
       );
 
       return res.json({
@@ -16278,6 +16331,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     } catch (e) {
       console.error("AIF exact inventory lookup failed", e);
+      if (e?.code === '57014') return res.status(503).json({
+        error: 'A pontos termékkeresés túl sokáig tartott. Próbáld újra, vagy jelezd az adminisztrátornak.',
+        code: 'catalog_query_timeout',
+      });
       return res.status(500).json({ error: "A termék pontos azonosítása nem sikerült.", code: e?.code || null });
     }
   });
@@ -28922,13 +28979,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `COALESCE(m.status,'active')='active'`,
       ];
       let orderPrefix = "";
+      let aliasMatchedSql = 'false';
       if (search) {
-        args.push(search, `%${search}%`);
-        const exact = `$${args.length - 1}`;
-        const pattern = `$${args.length}`;
+        // Egy darab indexelt alias-feloldas, mielott a katalogus SQL futna.
+        const aliasTargetId = await aifResolveActiveBarcodeAliasVariantId(pool, search);
+        args.push(search, `%${search}%`, aliasTargetId);
+        const exact = '$2';
+        const pattern = '$3';
+        aliasMatchedSql = 'v.id=$4::uuid';
         where.push(`(
           COALESCE(v.barcode,'') ILIKE ${pattern}
-          OR ${aifBarcodeAliasMatchSql('v', exact)}
+          OR ${aliasMatchedSql}
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
@@ -28960,7 +29021,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         orderPrefix = `CASE
           WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
-          WHEN ${aifBarcodeAliasMatchSql('v', exact)} THEN 1
+          WHEN ${aliasMatchedSql} THEN 1
           WHEN lower(COALESCE(v.internal_sku,''))=lower(${exact}) THEN 2
           WHEN lower(COALESCE(sc.supplier_product_code,''))=lower(${exact}) THEN 3
           ELSE 4
@@ -28969,9 +29030,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // A bolti scanner automatikus kosárba tétele a visszakapott BARCODE mezőt
       // hasonlítja a beolvasott szöveghez. Alias találatnál ezért a keresett kódot
       // jelenítjük meg, de a variánsazonosító és a tényleges kanonikus kód megmarad.
-      const aliasMatchedSql = search ? aifBarcodeAliasMatchSql('v', '$2') : 'false';
       args.push(limit);
-      const result = await pool.query(
+      const result = await aifBoundedCatalogSelect(pool,
         `SELECT
            v.id AS variant_id,
            v.internal_sku,
@@ -29103,6 +29163,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     } catch (error) {
       console.error("AIF shop sale catalog failed", error);
+      if (error?.code === '57014') return res.status(503).json({
+        error: 'A bolti termékkeresés időkorlátba ütközött. Keresd pontosabb kóddal, vagy frissítsd a felületet.',
+        code: 'catalog_query_timeout',
+      });
       const status = Number(error?.statusCode || 500);
       res.status(status >= 400 && status < 600 ? status : 500).json({
         error: error?.message || "Az üzleti terméklista nem tölthető be.",
@@ -29130,12 +29194,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `COALESCE(m.status,'active')='active'`,
       ];
       if (search) {
-        args.push(search, `%${search}%`);
-        const exact = `$${args.length - 1}`;
-        const pattern = `$${args.length}`;
+        const aliasTargetId = await aifResolveActiveBarcodeAliasVariantId(pool, search);
+        args.push(search, `%${search}%`, aliasTargetId);
+        const pattern = '$3';
         where.push(`(
           COALESCE(v.barcode,'') ILIKE ${pattern}
-          OR ${aifBarcodeAliasMatchSql('v', exact)}
+          OR v.id=$4::uuid
           OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
@@ -29185,7 +29249,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND COALESCE(m.status,'active')='active'`,
           [location.id]
         ),
-        pool.query(
+        aifBoundedCatalogSelect(pool,
           `SELECT
              v.id AS variant_id,
              v.internal_sku,
@@ -29270,6 +29334,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     } catch (error) {
       console.error("AIF shop stock overview failed", error);
+      if (error?.code === '57014') return res.status(503).json({
+        error: 'Az üzleti készletkeresés időkorlátba ütközött. Frissítsd a felületet, vagy pontosítsd a keresést.',
+        code: 'catalog_query_timeout',
+      });
       const status = Number(error?.statusCode || 500);
       res.status(status >= 400 && status < 600 ? status : 500).json({
         error: error?.message || "Az üzleti készlet nem tölthető be.",
