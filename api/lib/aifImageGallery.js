@@ -46,3 +46,24 @@ export function aifValidatedGallery(value) {
   }
   return aifImageGallery(value, '', { includeLegacy: false });
 }
+
+
+// AIF_SHARED_COLOR_GALLERY_20261019_V7
+// Csak BIZONYITHATOAN ugyanaz a modell + szin + termekkod oszthat kepet.
+// A hianyzo szinNEV nem jelenti azt, hogy ket varians biztosan azonos szinu.
+export function aifGalleryIdentityPart(value) {
+  return String(value ?? '').trim().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function aifGalleryFamilyKey(row = {}) {
+  const modelId = aifGalleryIdentityPart(row.model_id ?? row.modelId);
+  const colorName = aifGalleryIdentityPart(row.color_name ?? row.colorName);
+  const colorCode = aifGalleryIdentityPart(row.color_code ?? row.colorCode);
+  const supplierCode = aifGalleryIdentityPart(
+    row.supplier_product_code ?? row.supplierProductCode ?? row.product_code ?? row.productCode
+  );
+  // Vegyes/hibas szinkodokkal vagy ismeretlen szinben NINCS automatikus masolas.
+  if (!modelId || !colorName) return '';
+  return JSON.stringify([modelId, colorCode, colorName, supplierCode]);
+}
