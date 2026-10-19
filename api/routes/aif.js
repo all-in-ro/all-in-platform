@@ -9,7 +9,7 @@ import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
 import createAifLegacyExportRouter from "./aif/legacyExport.js";
 import { createHash } from "node:crypto";
-import { aifImageGallery, aifImageUrl, aifValidatedGallery } from "../lib/aifImageGallery.js";
+import { aifImageGallery, aifImageUrl, aifValidatedGallery, aifGalleryFamilyKey } from "../lib/aifImageGallery.js";
 import { ensureAifShopifyImageSchema, enqueueAifShopifyImagesForVariant } from "../lib/aifShopifyImages.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -4892,7 +4892,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           variantCreateStatus,
         ]
       );
-      return inserted.rows[0].id;
+      const insertedId = inserted.rows[0].id;
+      await aifInheritMissingGallery(client, insertedId, normalized.supplierProductCode);
+      return insertedId;
     } catch (error) {
       if (error?.code !== "23505") throw error;
 
@@ -14230,12 +14232,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const modelId = await upsertModel(client, { supplierCode: supplier?.code || row.normalized.brandCode || "manual", normalized: row.normalized });
       const variantId = await upsertVariant(client, { modelId, normalized: row.normalized });
       if (manualGallery.length) {
-        await client.query(
-          `UPDATE aif_product_variants
-           SET images=$2::jsonb, image_url=$3, updated_at=now()
-           WHERE id=$1`,
-          [variantId, JSON.stringify(manualGallery), manualGallery[0]]
-        );
+        // Uj, kezzel felvitt termek mas fotoja NE cserelje le csendben
+        // a mar ismert, azonos modell/szin mereteinek galeriait.
+        const manualFamily = await aifGalleryFamily(client, variantId, {
+          lock: true, supplierProductCode: row.normalized.supplierProductCode,
+        });
+        const incomingKey = JSON.stringify(manualGallery);
+        const existingOtherGalleries = new Map();
+        for (const sibling of manualFamily?.siblings || []) {
+          if (sibling.id === String(variantId)) continue;
+          const previous = aifImageGallery(sibling.images, sibling.image_url);
+          if (previous.length) existingOtherGalleries.set(JSON.stringify(previous), sibling.id);
+        }
+        if (existingOtherGalleries.size && !existingOtherGalleries.has(incomingKey)) {
+          throw aifGalleryConflictError(manualFamily);
+        }
+        // Az INSERT kezdetben csak az elso image_url-t tarolta. Az ujonnan
+        // megadott TELJES galeriat elobb ugyanebben a tranzakcioban rogzitjuk.
+        await client.query(`UPDATE aif_product_variants
+          SET images=$2::jsonb,image_url=$3,updated_at=now()
+          WHERE id=$1::uuid`, [variantId, JSON.stringify(manualGallery), manualGallery[0]]);
+        const photoResult = await aifSaveSharedGallery(client, variantId, manualGallery, {
+          supplierProductCode: row.normalized.supplierProductCode,
+        });
+        if (photoResult.previous.length) {
+          const imageQueue = await client.query("SELECT to_regclass('public.aif_shopify_image_outbox') AS tbl");
+          if (imageQueue.rows[0]?.tbl) {
+            await client.query('SAVEPOINT aif_manual_gallery_queue');
+            try {
+              await aifQueueGalleryChanges(client, photoResult.previous);
+              await client.query('RELEASE SAVEPOINT aif_manual_gallery_queue');
+            } catch (error) {
+              await client.query('ROLLBACK TO SAVEPOINT aif_manual_gallery_queue');
+              await client.query('RELEASE SAVEPOINT aif_manual_gallery_queue');
+              console.error('AIF manual image queue deferred', error?.message);
+            }
+          }
+        }
+      } else {
+        await aifInheritMissingGallery(client, variantId, row.normalized.supplierProductCode);
       }
 
 
@@ -14294,6 +14329,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           error: "A termék mentése egy már létező egyedi kóddal ütközött.",
           code: "unique_conflict",
         });
+      }
+      if (e?.statusCode === 409 && e?.code === 'aif_shared_gallery_conflict') {
+        return res.status(409).json({ error: e.message, code: e.code,
+          conflictingVariants: e.conflictingVariants || [] });
       }
       console.error("AIF manual product add failed", e);
       res.status(500).json({ error: e?.message || "Az új termék mentése nem sikerült.", code: e?.code || null });
@@ -14996,20 +15035,199 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  // AIF_SHARED_COLOR_GALLERY_20261019_V7
+  // Egy modell/szin/termekkod kepei az adatbazisban, NEM a bongeszo eppen
+  // betoltott (esetenkent 50/600 soros) listajaban kozosulnak.
+  // Osszes valtozas egyetlen DB tranzakcio. Elt ero letezo galeriat NEM ir felul.
+  async function aifGalleryModelLock(client, modelId) {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)',
+      [`aif_shared_gallery_model:${String(modelId)}`]);
+  }
+
+  async function aifGalleryOwnerModel(client, variantId) {
+    if (!isUuidText(variantId)) return null;
+    const r = await client.query(
+      `SELECT id::text AS id,model_id::text AS model_id
+       FROM aif_product_variants WHERE id=$1::uuid LIMIT 1`,
+      [String(variantId)]
+    );
+    return r.rows[0] || null;
+  }
+
+  async function aifGalleryFamily(client, variantId, { lock = false, supplierProductCode = null } = {}) {
+    const identity = await aifGalleryOwnerModel(client, variantId);
+    if (!identity) return null;
+    if (lock) await aifGalleryModelLock(client, identity.model_id);
+    const r = await client.query(`
+      SELECT v.id::text AS id, v.model_id::text AS model_id,
+             v.color_code,v.color_name,v.size,v.status,v.image_url,v.images,
+             sc.supplier_product_code
+      FROM aif_product_variants v
+      LEFT JOIN LATERAL (
+        SELECT s.supplier_product_code
+        FROM aif_variant_supplier_codes s
+        WHERE s.variant_id=v.id AND COALESCE(s.is_active,true)=true
+        ORDER BY s.updated_at DESC NULLS LAST,s.created_at DESC NULLS LAST
+        LIMIT 1
+      ) sc ON true
+      WHERE v.model_id=$1::uuid
+      ORDER BY v.id
+      ${lock ? 'FOR UPDATE OF v' : ''}
+    `, [identity.model_id]);
+    const owner = r.rows.find(row => row.id === identity.id);
+    if (!owner) return null;
+    // Beszallitoi import soran az uj varians sc-kapcsolata csak KESOBB keszul el.
+    // Az eredeti termekkodot addig csak ennel a frissen letrehozott rekordnal
+    // hasznaljuk az azonositashoz; mas varians erteket nem talaljuk ki.
+    const effectiveOwner = {
+      ...owner,
+      supplier_product_code: owner.supplier_product_code || supplierProductCode,
+    };
+    const familyKey = aifGalleryFamilyKey(effectiveOwner);
+    // Kulonbozo szinek, hianyzo szinnevek es eltero beszallitoi termekkodok
+    // semmilyen korulmenyek kozott nem kapjak meg egymas kepeit.
+    // A frissen letrehozott, meg sc nelkuli valtozat is a sajat csoportjahoz
+    // tartozzon, ne essen ki a sajat beveteli szinkronjabol.
+    const siblings = familyKey && owner.status !== 'archived'
+      ? r.rows.map(row => row.id === owner.id ? effectiveOwner : row)
+        .filter(row => row.status !== 'archived' && aifGalleryFamilyKey(row) === familyKey)
+      : [effectiveOwner];
+    const sources = new Map();
+    for (const row of siblings) {
+      const gallery = aifImageGallery(row.images, row.image_url);
+      if (!gallery.length) continue;
+      const key = JSON.stringify(gallery);
+      if (!sources.has(key)) sources.set(key, { gallery, variants: [] });
+      sources.get(key).variants.push({ id: row.id, size: row.size });
+    }
+    return { owner: effectiveOwner, siblings, sources, familyKey };
+  }
+
+  function aifGalleryConflictError(family) {
+    const details = Array.from(family.sources.values()).flatMap(source => source.variants);
+    const error = new Error(
+      'Azonos modellhez es szinhez kulonbozo, mar elmentett kepgaleriak tartoznak. ' +
+      'Egyiket sem irtam felul. Elobb egyenkent egyeztetni kell a kepeket.'
+    );
+    error.statusCode = 409;
+    error.code = 'aif_shared_gallery_conflict';
+    error.conflictingVariants = details.slice(0, 30);
+    return error;
+  }
+
+  function aifGalleryFamilyPresentation(family) {
+    const own = aifImageGallery(family.owner.images, family.owner.image_url);
+    const ambiguous = family.sources.size > 1;
+    const inherited = !own.length && !ambiguous && family.sources.size === 1;
+    return {
+      images: inherited ? Array.from(family.sources.values())[0].gallery : own,
+      inherited,
+      conflict: ambiguous,
+      siblingCount: family.siblings.length,
+    };
+  }
+
+  async function aifSaveSharedGallery(client, variantId, images, { supplierProductCode = null } = {}) {
+    const family = await aifGalleryFamily(client, variantId, { lock: true, supplierProductCode });
+    if (!family) {
+      const error = new Error('A termekvarians nem talalhato vagy archivalt.');
+      error.statusCode = 404;
+      error.code = 'gallery_variant_not_found';
+      throw error;
+    }
+    if (family.sources.size > 1) throw aifGalleryConflictError(family);
+    const desired = aifValidatedGallery(images);
+    const previous = [];
+    for (const row of family.siblings) {
+      const prior = aifImageGallery(row.images, row.image_url);
+      if (JSON.stringify(prior) === JSON.stringify(desired) &&
+          aifImageUrl(row.image_url) === (desired[0] || '')) continue;
+      previous.push({ variantId: row.id, images: prior });
+    }
+    if (previous.length) {
+      const updated = await client.query(`
+        UPDATE aif_product_variants
+        SET images=$2::jsonb,image_url=$3,updated_at=now()
+        WHERE id=ANY($1::uuid[]) RETURNING id`,
+        [previous.map(row => row.variantId), JSON.stringify(desired), desired[0] || null]
+      );
+      if (updated.rowCount !== previous.length) {
+        const error = new Error('Kepgaleria egysegesites kozben egy varians megvaltozott.');
+        error.code = 'gallery_group_write_mismatch';
+        throw error;
+      }
+    }
+    return { images: desired, changed: previous.length > 0, previous,
+      variantIds: family.siblings.map(row => row.id), siblingCount: family.siblings.length };
+  }
+
+  // Uj bevetelnel es manualis uj termeknel is kitoltjuk az ugyanazon
+  // modell/szin/termekkod meg hianyzo kepeit. Meglevo galeriat NEM irunk felul,
+  // elt ero forraskepeknel nem talalgatunk es nem blokkoljuk a bevetelt.
+  async function aifInheritMissingGallery(client, variantId, supplierProductCode = null) {
+    const family = await aifGalleryFamily(client, variantId, { lock: true, supplierProductCode });
+    if (!family || family.sources.size !== 1) return false;
+    const source = Array.from(family.sources.values())[0].gallery;
+    const missing = family.siblings.filter(row => {
+      return !aifImageGallery(row.images, row.image_url).length
+        && (!row.images || (Array.isArray(row.images) && row.images.length === 0))
+        && !aifImageUrl(row.image_url);
+    });
+    if (!missing.length) return false;
+    const changed = await client.query(`
+      UPDATE aif_product_variants
+      SET images=$2::jsonb,image_url=$3,updated_at=now()
+      WHERE id=ANY($1::uuid[])
+        AND (images IS NULL OR images='[]'::jsonb)
+        AND NULLIF(btrim(COALESCE(image_url,'')),'') IS NULL
+      RETURNING id`, [missing.map(row => row.id), JSON.stringify(source), source[0] || null]);
+    if (changed.rowCount !== missing.length) {
+      const error = new Error('A keporokles kozben egy meret adata megvaltozott.');
+      error.code = 'gallery_inheritance_stale';
+      throw error;
+    }
+    // A Shopify-hoz mar kapcsolt regi, most megtoltott meretek kepfrissiteset
+    // szandekosan csak varolistara tesszuk, kozvetlen Shopify-modositas nelkul.
+    const queue = await client.query("SELECT to_regclass('public.aif_shopify_image_outbox') AS tbl");
+    if (queue.rows[0]?.tbl) {
+      await client.query('SAVEPOINT aif_incoming_gallery_queue');
+      try {
+        await aifQueueGalleryChanges(client,
+          missing.map(row => ({ variantId: row.id, images: [] })));
+        await client.query('RELEASE SAVEPOINT aif_incoming_gallery_queue');
+      } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT aif_incoming_gallery_queue');
+        await client.query('RELEASE SAVEPOINT aif_incoming_gallery_queue');
+        console.error('AIF incoming shared gallery Shopify image queue deferred', error?.message);
+      }
+    }
+    return missing.some(row => row.id === String(variantId));
+  }
+
+  async function aifQueueGalleryChanges(client, previous) {
+    let queued = 0;
+    for (const row of previous) {
+      const result = await enqueueAifShopifyImagesForVariant(client, row.variantId, row.images);
+      queued += Number(result.queued || 0);
+    }
+    return queued;
+  }
+
   // ISOLATED & VERIFIED MULTI-IMAGE GALLERY API.
   // Raktári termék/ár/készlet/barcode soha nem módosul ezen az útvonalon.
   // A korábbi általános PATCH marad változatlan a régebbi felületek számára.
   router.get("/variants/:id/gallery", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     try {
-      const result = await pool.query(
-        `SELECT id, image_url, images FROM aif_product_variants WHERE id::text=$1 LIMIT 1`, [id]
-      );
-      if (!result.rowCount) return res.status(404).json({ error: "A termékváltozat nem található." });
-      const row = result.rows[0];
-      const images = aifImageGallery(row.images, row.image_url);
+      const family = await aifGalleryFamily(pool, id);
+      if (!family) return res.status(404).json({ error: "A termékváltozat nem található." });
+      const view = aifGalleryFamilyPresentation(family);
+      const images = view.images;
       res.setHeader("Cache-Control", "no-store");
-      return res.json({ ok: true, variantId: String(row.id), images, imageUrl: images[0] || null, imageCount: images.length });
+      return res.json({ ok: true, variantId: family.owner.id, images,
+        imageUrl: images[0] || null, imageCount: images.length,
+        inherited: view.inherited, galleryConflict: view.conflict,
+        siblingCount: view.siblingCount });
     } catch (error) {
       console.error("AIF isolated gallery read failed", { variantId: id, code: error?.code, error: error?.message });
       return res.status(500).json({ error: "A képgaléria nem olvasható vissza.", code: error?.code || null });
@@ -15019,101 +15237,69 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.put("/variants/:id/gallery", requireAdminOrSecret, async (req, res) => {
     const id = text(req.params.id);
     let images;
-    try {
-      images = aifValidatedGallery(req.body?.images);
-    } catch (error) {
-      return res.status(400).json({ error: error?.message || "Hibás képgaléria.", code: "invalid_image_gallery" });
+    try { images = aifValidatedGallery(req.body?.images); }
+    catch (error) {
+      return res.status(400).json({ error: error?.message || 'Hibas kepgaleria.', code: 'invalid_image_gallery' });
     }
     let client;
-    let previous = [];
-    let resultGallery = [];
-    let changed = false;
-    let persistedId = id;
-    let queueCommitted = false;
-    let queueNotNeeded = false;
+    let saved;
+    let queueState = 'not_needed';
+    let deferred = [];
     try {
       client = await pool.connect();
-      await client.query("BEGIN");
-      await client.query("SET LOCAL lock_timeout = '5s'");
-      await client.query("SET LOCAL statement_timeout = '20s'");
-      const current = await client.query(
-        `SELECT id, image_url, images FROM aif_product_variants WHERE id::text=$1 FOR UPDATE`, [id]
-      );
-      if (!current.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "A termékváltozat nem található." });
-      }
-      const row = current.rows[0];
-      persistedId = String(row.id);
-      previous = aifImageGallery(row.images, row.image_url);
-      changed = JSON.stringify(previous) !== JSON.stringify(images)
-        || aifImageUrl(row.image_url) !== (images[0] || "");
-      if (changed) {
-        const saved = await client.query(
-          `UPDATE aif_product_variants
-           SET images=$2::jsonb, image_url=$3, updated_at=now()
-           WHERE id=$1::uuid RETURNING images,image_url`,
-          [persistedId, JSON.stringify(images), images[0] || null]
-        );
-        resultGallery = aifImageGallery(saved.rows[0]?.images, saved.rows[0]?.image_url);
-      } else resultGallery = previous;
-      if (JSON.stringify(resultGallery) !== JSON.stringify(images)) {
-        throw Object.assign(new Error("A képgaléria adatbázisba írt listája nem egyezik a kérttel."), { code: "image_gallery_verification_failed" });
-      }
-      // Ha a Shopify-képszinkron tábla már létezik, ugyanebben a tranzakcióban
-      // tesszük várólistára. SAVEPOINT: várólista-hiba SOHA nem vonhatja vissza a képeket.
-      if (changed) {
-        const schema = await client.query(`SELECT to_regclass('public.aif_shopify_image_outbox') AS gallery_queue`);
+      await client.query('BEGIN');
+      await client.query("SET LOCAL lock_timeout='5s'");
+      await client.query("SET LOCAL statement_timeout='20s'");
+      saved = await aifSaveSharedGallery(client, id, images);
+      if (saved.previous.length) {
+        const schema = await client.query("SELECT to_regclass('public.aif_shopify_image_outbox') AS gallery_queue");
         if (schema.rows[0]?.gallery_queue) {
-          await client.query("SAVEPOINT aif_gallery_enqueue_savepoint");
+          await client.query('SAVEPOINT aif_shared_gallery_queue');
           try {
-            const enqueued = await enqueueAifShopifyImagesForVariant(client, persistedId, previous);
-            queueCommitted = Number(enqueued.queued || 0) > 0;
-            queueNotNeeded = Number(enqueued.queued || 0) === 0;
-            await client.query("RELEASE SAVEPOINT aif_gallery_enqueue_savepoint");
+            const count = await aifQueueGalleryChanges(client, saved.previous);
+            queueState = count ? 'queued' : 'not_needed';
+            await client.query('RELEASE SAVEPOINT aif_shared_gallery_queue');
           } catch (error) {
-            await client.query("ROLLBACK TO SAVEPOINT aif_gallery_enqueue_savepoint");
-            await client.query("RELEASE SAVEPOINT aif_gallery_enqueue_savepoint");
-            console.error("AIF gallery image queue deferred", { variantId: persistedId, error: error?.message, code: error?.code });
+            await client.query('ROLLBACK TO SAVEPOINT aif_shared_gallery_queue');
+            await client.query('RELEASE SAVEPOINT aif_shared_gallery_queue');
+            deferred = saved.previous;
+            console.error('AIF shared gallery Shopify queue deferred', error);
           }
-        }
+        } else deferred = saved.previous;
       }
-      await client.query("COMMIT");
+      await client.query('COMMIT');
     } catch (error) {
-      if (client) await client.query("ROLLBACK").catch(() => {});
-      console.error("AIF isolated gallery save failed", { variantId: id, code: error?.code, error: error?.message });
-      return res.status(500).json({ error: error?.message || "A képgaléria nem menthető.", code: error?.code || null });
-    } finally {
-      client?.release();
-    }
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      if (error?.statusCode === 404 || error?.statusCode === 409) {
+        return res.status(error.statusCode).json({ error: error.message, code: error.code,
+          conflictingVariants: error.conflictingVariants || [] });
+      }
+      console.error('AIF shared gallery save failed', { variantId: id, code: error?.code, message: error?.message });
+      return res.status(500).json({ error: 'A közös képgaléria nem menthető.', code: error?.code || null });
+    } finally { client?.release(); }
 
-    // FONTOS: Shopify DDL / API-queue hiba nem vonhatja vissza a már elmentett képeket.
-    // Gyors megkísérlés; hosszú adatbázis-várakozás esetén a háttérben fejeződik be.
-    let shopifySync = changed ? (queueCommitted ? "queued" : queueNotNeeded ? "not_needed" : "processing") : "not_needed";
     let syncWarning = null;
-    if (changed && !queueCommitted && !queueNotNeeded) {
-      const queued = Promise.resolve().then(async () => {
+    if (deferred.length) {
+      const enqueue = Promise.resolve().then(async () => {
         await ensureAifShopifyImageSchema(pool);
-        return enqueueAifShopifyImagesForVariant(pool, persistedId, previous);
-      }).then((value) => ({ status: value?.queued > 0 ? "queued" : "not_needed" })).catch((error) => {
-        console.error("AIF gallery saved but image sync enqueue failed", { variantId: persistedId, error: error?.message, code: error?.code });
-        return { status: "error", warning: "A Shopify-képszinkron várólistáját nem sikerült frissíteni." };
+        const count = await aifQueueGalleryChanges(pool, deferred);
+        return count ? 'queued' : 'not_needed';
       });
-      let timer;
-      const result = await Promise.race([
-        queued,
-        new Promise((resolve) => { timer = setTimeout(() => resolve({ status: "processing" }), 1800); timer.unref?.(); }),
+      const check = await Promise.race([
+        enqueue.then(state => ({ state })).catch(error => ({ state:'error', error })),
+        new Promise(resolve => setTimeout(() => resolve({ state:'processing' }), 1600))
       ]);
-      if (timer) clearTimeout(timer);
-      shopifySync = result.status;
-      syncWarning = result.warning || null;
+      queueState = check.state;
+      if (check.error) {
+        syncWarning = 'A kepek mentve, de a Shopify-szinkron sorbaallitasa nem sikerult.';
+        console.error('AIF shared gallery deferred queue failed', check.error);
+      }
     }
-    res.setHeader("Cache-Control", "no-store");
-    return res.json({
-      ok: true, variantId: persistedId, images: resultGallery,
-      imageUrl: resultGallery[0] || null, imageCount: resultGallery.length,
-      changed, shopifySync, syncWarning,
-    });
+    res.setHeader('Cache-Control','no-store');
+    return res.json({ ok:true, variantId:id, images:saved.images,
+      imageUrl:saved.images[0] || null, imageCount:saved.images.length,
+      changed:saved.changed, updatedVariantIds:saved.previous.map(row => row.variantId),
+      siblingCount:saved.siblingCount, shopifySync:queueState, syncWarning });
   });
 
   router.put("/variants/:id/barcode", requireAdminOrSecret, handleVariantBarcodeAssignment);
@@ -15208,8 +15394,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       const primarySupplierCode = supplierCodes.rows.find((row) => row.is_active !== false) || supplierCodes.rows[0] || null;
+      const galleryFamily = await aifGalleryFamily(pool, variantId);
+      const effectiveGallery = galleryFamily ? aifGalleryFamilyPresentation(galleryFamily) : null;
       const item = {
         ...variant.rows[0],
+        ...(effectiveGallery && !effectiveGallery.conflict ? {
+          images: effectiveGallery.images,
+          image_url: effectiveGallery.images[0] || null,
+        } : {}),
+        gallery_inherited: Boolean(effectiveGallery?.inherited),
+        gallery_conflict: Boolean(effectiveGallery?.conflict),
         supplier_product_code: primarySupplierCode?.supplier_product_code || null,
         supplierProductCode: primarySupplierCode?.supplier_product_code || null,
         product_code: primarySupplierCode?.supplier_product_code || null,
@@ -15263,6 +15457,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
+      if (galleryProvided || primaryProvided) {
+        const galleryPreflight = await client.query(`
+          SELECT model_id::text FROM aif_product_variants
+          WHERE id::text=$1 OR internal_sku=$1 OR barcode=$1 LIMIT 1`, [id]);
+        if (galleryPreflight.rowCount) await aifGalleryModelLock(client, galleryPreflight.rows[0].model_id);
+      }
       const current = await client.query(
         `SELECT v.id, v.model_id, v.barcode, v.buy_price, v.sell_price, v.compare_at_price,
                 v.status AS variant_status, v.size, v.image_url, v.images,
@@ -15396,20 +15596,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // A régi image_url mező továbbra is mindig a kijelölt fő kép.
       // A régebbi, csak imageUrl-t küldő kliensnél a többi kép megmarad.
       let galleryChanged = false;
+      let sharedGalleryRequested = null;
+      let sharedGalleryPrevious = [];
       if (galleryProvided || primaryProvided) {
         const previousGallery = aifImageGallery(current.rows[0].images, current.rows[0].image_url);
         let nextGallery = requestedGallery;
         if (!galleryProvided) {
           const primary = aifImageUrl(body.imageUrl ?? body.image_url);
           nextGallery = primary
-            ? [primary, ...previousGallery.filter((url) => url !== primary && url !== aifImageUrl(current.rows[0].image_url))]
+            ? [primary, ...previousGallery.filter(url => url !== primary && url !== aifImageUrl(current.rows[0].image_url))]
             : previousGallery.slice(1);
         }
-        galleryChanged = JSON.stringify(previousGallery) !== JSON.stringify(nextGallery);
-        if (galleryChanged || aifImageUrl(current.rows[0].image_url) !== (nextGallery[0] || '')) {
-          addVariant('image_url', nextGallery[0] || null);
-          addVariant('images', JSON.stringify(nextGallery));
+        galleryChanged = JSON.stringify(previousGallery) !== JSON.stringify(nextGallery)
+          || aifImageUrl(current.rows[0].image_url) !== (nextGallery[0] || '');
+        // Regebbi, csak reszletes PATCH-et hasznalo kliensek veletlen ures
+        // keplistaja nem torolheti az egesz modell/szin galeriait.
+        // Szandekos teljes torlesre a kulon, csak kepeket mento PUT vegpont jo.
+        if (galleryChanged && !nextGallery.length && previousGallery.length &&
+            body.confirmSharedGalleryClear !== true) {
+          const error = new Error('A kozos kepek torleset csak a kepszerkesztoben lehet jovahagyni.');
+          error.statusCode = 409;
+          error.code = 'shared_gallery_clear_confirmation_required';
+          throw error;
         }
+        if (galleryChanged) sharedGalleryRequested = nextGallery;
       }
       if (body.status !== undefined) {
         const status = text(body.status);
@@ -15698,13 +15908,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       if (galleryChanged) {
-        await enqueueAifShopifyImagesForVariant(
-          client, variantId,
-          aifImageGallery(current.rows[0].images, current.rows[0].image_url)
-        );
+        const galleryResult = await aifSaveSharedGallery(client, variantId, sharedGalleryRequested);
+        sharedGalleryPrevious = galleryResult.previous;
+        if (sharedGalleryPrevious.length) await aifQueueGalleryChanges(client, sharedGalleryPrevious);
       }
       await client.query("COMMIT");
-      res.json({ ok: true });
+      res.json({ ok: true, updatedGalleryVariantIds: sharedGalleryPrevious.map(row => row.variantId) });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       if (e && e.code === "23505") {
@@ -15717,6 +15926,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           error: "A termék mentése egy már létező egyedi kóddal ütközött.",
           code: "unique_conflict",
         });
+      }
+      if (e?.statusCode === 409 &&
+          ['aif_shared_gallery_conflict','shared_gallery_clear_confirmation_required'].includes(e?.code)) {
+        return res.status(409).json({ error:e.message, code:e.code,
+          conflictingVariants:e.conflictingVariants || [] });
       }
       console.error("AIF update variant failed", e);
       res.status(500).json({ error: "failed to update variant" });
