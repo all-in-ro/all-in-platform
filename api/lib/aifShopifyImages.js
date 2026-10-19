@@ -34,6 +34,82 @@ export async function ensureAifShopifyImageSchema(client) {
       )`);
       await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_image_links_media_idx
         ON aif_shopify_image_links (shopify_product_id,media_id)`);
+      // AIF_SHOPIFY_IMAGE_V8: a kozvetlen SQL/import es az uj Shopify-pairing
+      // is tartos kep-queue-t kap. Nem erinti a keszlet-queue-t.
+      await client.query(`CREATE OR REPLACE FUNCTION aif_gallery_image_changed_enqueue_v8()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO aif_shopify_image_outbox
+            (shopify_product_id,status,generation,attempts,bootstrap_urls,
+             job_id,last_error,locked_at,next_attempt_at,updated_at)
+          SELECT DISTINCT svm.shopify_product_id,'pending',gen_random_uuid(),0,
+            CASE WHEN OLD.images IS NOT NULL AND jsonb_typeof(OLD.images)='array'
+              AND jsonb_array_length(OLD.images)>0 THEN OLD.images
+              WHEN NULLIF(btrim(COALESCE(OLD.image_url,'')),'') IS NOT NULL
+                THEN jsonb_build_array(OLD.image_url)
+              ELSE '[]'::jsonb END,
+            NULL,NULL,NULL,now()+interval '12 seconds',now()
+          FROM aif_shopify_variant_map svm
+          WHERE svm.variant_id=NEW.id
+            AND NULLIF(btrim(svm.shopify_product_id),'') IS NOT NULL
+          ON CONFLICT (shopify_product_id) DO UPDATE SET
+            status='pending',generation=gen_random_uuid(),attempts=0,
+            bootstrap_urls=CASE
+              WHEN aif_shopify_image_outbox.status <> 'done'
+                AND jsonb_array_length(aif_shopify_image_outbox.bootstrap_urls)>0
+              THEN aif_shopify_image_outbox.bootstrap_urls
+              ELSE EXCLUDED.bootstrap_urls END,
+            job_id=NULL,last_error=NULL,locked_at=NULL,
+            next_attempt_at=now()+interval '12 seconds',updated_at=now();
+          RETURN NEW;
+        END $$`);
+      await client.query(`DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger
+          WHERE tgname='aif_gallery_image_changed_enqueue_v8'
+            AND tgrelid='aif_product_variants'::regclass) THEN
+          CREATE TRIGGER aif_gallery_image_changed_enqueue_v8
+          AFTER UPDATE OF image_url,images ON aif_product_variants
+          FOR EACH ROW WHEN (OLD.image_url IS DISTINCT FROM NEW.image_url
+            OR OLD.images IS DISTINCT FROM NEW.images)
+          EXECUTE FUNCTION aif_gallery_image_changed_enqueue_v8();
+        END IF;
+      END $$`);
+      await client.query(`CREATE OR REPLACE FUNCTION aif_gallery_mapping_changed_enqueue_v8()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF TG_OP='UPDATE' THEN
+            IF OLD.shopify_product_id IS NOT DISTINCT FROM NEW.shopify_product_id
+              THEN RETURN NEW; END IF;
+          END IF;
+          IF NULLIF(btrim(COALESCE(NEW.shopify_product_id,'')),'') IS NULL
+            THEN RETURN NEW; END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM aif_product_variants v
+            WHERE v.id=NEW.variant_id
+              AND (NULLIF(btrim(COALESCE(v.image_url,'')),'') IS NOT NULL
+                OR (CASE WHEN jsonb_typeof(v.images)='array'
+                     THEN jsonb_array_length(v.images)>0 ELSE false END))
+          ) THEN RETURN NEW; END IF;
+          INSERT INTO aif_shopify_image_outbox
+            (shopify_product_id,status,generation,attempts,bootstrap_urls,
+             job_id,last_error,locked_at,next_attempt_at,updated_at)
+          VALUES (NEW.shopify_product_id,'pending',gen_random_uuid(),0,
+            '[]'::jsonb,NULL,NULL,NULL,now()+interval '90 seconds',now())
+          ON CONFLICT (shopify_product_id) DO UPDATE SET
+            status='pending',generation=gen_random_uuid(),attempts=0,
+            job_id=NULL,last_error=NULL,locked_at=NULL,
+            next_attempt_at=now()+interval '90 seconds',updated_at=now();
+          RETURN NEW;
+        END $$`);
+      await client.query(`DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger
+          WHERE tgname='aif_gallery_mapping_changed_enqueue_v8'
+            AND tgrelid='aif_shopify_variant_map'::regclass) THEN
+          CREATE TRIGGER aif_gallery_mapping_changed_enqueue_v8
+          AFTER INSERT OR UPDATE OF shopify_product_id ON aif_shopify_variant_map
+          FOR EACH ROW EXECUTE FUNCTION aif_gallery_mapping_changed_enqueue_v8();
+        END IF;
+      END $$`);
     })().catch((error) => { schemaPromise = null; throw error; });
   }
   return schemaPromise;
@@ -59,6 +135,38 @@ export async function enqueueAifShopifyImagesForVariant(client, variantId, previ
       last_error=NULL,locked_at=NULL,next_attempt_at=now(),updated_at=now()
     RETURNING shopify_product_id`, [variantId, JSON.stringify(aifImageGallery(previousGallery))]);
   return { queued: result.rowCount };
+}
+
+// Egyszeri, idempotens visszapótlás: a régi párosítások képszinkronja
+// korábban nem kapott queue-sort. Nem küld Shopify-módosítást, csak sorba tesz.
+export async function enqueueAifShopifyImageBacklog(client, { dryRun = false } = {}) {
+  await ensureAifShopifyImageSchema(client);
+  const candidatesSql = `SELECT DISTINCT svm.shopify_product_id
+    FROM aif_shopify_variant_map svm
+    JOIN aif_product_variants v ON v.id=svm.variant_id
+    JOIN aif_product_models m ON m.id=v.model_id
+    WHERE NULLIF(btrim(svm.shopify_product_id),'') IS NOT NULL
+      AND COALESCE(v.status,'active')<>'archived'
+      AND COALESCE(m.status,'active')<>'archived'
+      AND (NULLIF(btrim(v.image_url),'') IS NOT NULL
+        OR (CASE WHEN jsonb_typeof(v.images)='array'
+            THEN jsonb_array_length(v.images)>0 ELSE false END))
+      AND NOT EXISTS (SELECT 1 FROM aif_shopify_image_outbox o
+        WHERE o.shopify_product_id=svm.shopify_product_id)`;
+  if (dryRun) {
+    const result=await client.query(`SELECT count(*)::int AS count FROM (${candidatesSql}) p`);
+    return {dryRun:true,possible:Number(result.rows[0]?.count||0),queued:0};
+  }
+  const result=await client.query(`INSERT INTO aif_shopify_image_outbox
+    (shopify_product_id,status,generation,attempts,bootstrap_urls,
+     job_id,last_error,locked_at,next_attempt_at,updated_at)
+    SELECT p.shopify_product_id,'pending',gen_random_uuid(),0,
+      '[]'::jsonb,NULL,NULL,NULL,now(),now()
+    FROM (${candidatesSql}) p
+    WHERE true
+    ON CONFLICT (shopify_product_id) DO NOTHING
+    RETURNING shopify_product_id`);
+  return {dryRun:false,queued:result.rowCount};
 }
 
 function text(value) { return String(value ?? '').trim(); }
@@ -121,6 +229,63 @@ async function readLinks(client,productId) {
   return new Map(r.rows.map((row)=>[text(row.source_url),row]));
 }
 
+function aifAltKey(value) {
+  return text(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+
+// A regi CSV-export csak akkor jo bizonyitek a mar Shopify-on levo fo kephez,
+// ha tenylegesen le lett toltve, es ugyanezt az URL-t ma is kerjuk.
+async function readOriginalExportImage(client,productId,desiredUrls) {
+  const result=await client.query(`SELECT ei.product_row, ei.snapshot
+    FROM aif_shopify_product_export_items ei
+    JOIN aif_shopify_product_exports ex ON ex.id=ei.export_id
+    JOIN aif_shopify_variant_map svm ON svm.variant_id=ei.variant_id
+    WHERE svm.shopify_product_id=$1
+      AND ex.downloaded_at IS NOT NULL
+      AND ei.product_row IS NOT NULL
+    ORDER BY ex.created_at ASC,ei.created_at ASC,ei.variant_id
+    LIMIT 120`,[productId]);
+  for(const {product_row:row,snapshot} of result.rows){
+    const url=text(row?.['Product image URL']);
+    if(!url || !desiredUrls.includes(url)) continue;
+    return {
+      url,
+      alt:aifAltKey(row?.['Image alt text']),
+      title:aifAltKey(row?.Title || snapshot?.title),
+    };
+  }
+  return null;
+}
+
+async function adoptUnmarkedLegacyPhoto(client,productId,desired,remote,links,bootstrapUrls){
+  const knownIds=new Set([...links.values()].map(x=>text(x.media_id)));
+  const legacy=(remote.nodes||[]).filter(n=>n.mediaContentType==='IMAGE'
+    && !/AIFIMG:[a-f0-9]{20}/i.test(text(n.alt)) && !knownIds.has(text(n.id)));
+  if(!legacy.length) return {adopted:0,unverified:0};
+  // Több ismeretlen fotót nem párosítunk pozíció alapján, mert ettől
+  // különböző színek, kézzel feltöltött fotók tévesen összekapcsolódhatnak.
+  if(legacy.length!==1 || remote.nodes.filter(n=>n.mediaContentType==='IMAGE').length!==1){
+    return {adopted:0,unverified:legacy.length};
+  }
+  const historic=await readOriginalExportImage(client,productId,desired.urls);
+  const bootstrap=aifImageGallery(bootstrapUrls);
+  const candidate=historic?.url || (bootstrap.length===1 && desired.urls.includes(bootstrap[0]) ? bootstrap[0] : '');
+  if(!candidate) return {adopted:0,unverified:1};
+  const remoteAlt=aifAltKey(legacy[0].alt);
+  // A tenyleges korabbi CSV alt szoveg egyezzen. Ha megvaltozott a foto,
+  // a Shopify legacy kepet nem tekintjuk bizonyitottnak.
+  if(historic?.alt && remoteAlt!==historic.alt) return {adopted:0,unverified:1};
+  if(!historic?.alt && (!remoteAlt || !aifAltKey(remote.title) ||
+      !remoteAlt.includes(aifAltKey(remote.title)))) return {adopted:0,unverified:1};
+  const colors=new Set(desired.variants.map(v=>aifAltKey(v.color_name)).filter(Boolean));
+  // Többszínű Shopify terméknél a régi egyetlen foto színe nem bizonyított.
+  if(colors.size>1) return {adopted:0,unverified:1};
+  await upsertLink(client,productId,candidate,text(legacy[0].id),false);
+  links.set(candidate,{source_url:candidate,media_id:text(legacy[0].id),managed:false});
+  return {adopted:1,unverified:0};
+}
+
 async function updateVariantImages(productId, variants, links, remoteIds) {
   const mapped=[];const used=new Set();
   for (const row of variants) {
@@ -169,27 +334,14 @@ async function syncProductImages(client, row) {
     if(found){ await upsertLink(client,productId,url,found,true);links.set(url,{source_url:url,media_id:found,managed:true}); }
   }
 
-  // Az első szinkron előtt a Shopify-on már meglévő képekhez a mentés ELŐTTI
-  // galériát párosítjuk. Ha közben új fő képet választottak, nem szabad azt
-  // a régi Shopify fotóhoz rendelni (különben hibás kép lesz a fő kép).
-  if(!links.size && remote.nodes.length) {
-    const previous=aifImageGallery(row.bootstrap_urls);
-    let legacy=remote.nodes.filter((m)=>m.mediaContentType==='IMAGE' && !text(m.alt).includes('AIFIMG:'));
-    // Többszínű Shopify-terméknél a galéria első képe gyakran MÁSIK színű.
-    // Ilyenkor csak kifejezett, egyértelmű alt/szín egyezés mellett párosítunk.
-    const colors=new Set(desired.variants.map((v)=>text(v.color_name).toLocaleLowerCase('ro')).filter(Boolean));
-    if(colors.size>1) {
-      const sourceRow=desired.variants.find((v)=>previous.some((url)=>v.gallery.includes(url)));
-      const color=text(sourceRow?.color_name).toLocaleLowerCase('ro');
-      const matches=color ? legacy.filter((m)=>text(m.alt).toLocaleLowerCase('ro').includes(color)) : [];
-      legacy=matches.length===previous.length ? matches : [];
-    }
-    for(let i=0;i<Math.min(previous.length,legacy.length);i++) {
-      const url=previous[i],node=legacy[i];
-      if(links.has(url)) continue;
-      await upsertLink(client,productId,url,text(node.id),false);
-      links.set(url,{source_url:url,media_id:text(node.id),managed:false});
-    }
+  // V8: a régi Shopify képeket csak bizonyított eredeti CSV URL és ALT
+  // alapján párosítjuk. A bizonytalan legacy képek mellett TILOS új képet
+  // feltölteni, mert 274 regi parositasnal kep-duplazast okozhatna.
+  const bootstrap=await adoptUnmarkedLegacyPhoto(
+    client,productId,desired,remote,links,row.bootstrap_urls);
+  if(bootstrap.unverified>0) {
+    throw Object.assign(new Error(`Ellenorizetlen regi Shopify foto: ${bootstrap.unverified} db. Automatikus duplazast leallitottam.`),
+      {code:'shopify_image_legacy_unverified'});
   }
 
   const missing=desired.urls.filter((url)=>!links.has(url));
@@ -225,7 +377,13 @@ async function syncProductImages(client, row) {
   }
 
   const current=await readLinks(client,productId);
-  const discarded=[...current.entries()].filter(([url,entry])=>!desired.urls.includes(url) && entry.managed && remoteIds.has(text(entry.media_id)));
+  // Torles csak akkor, ha a Shopify-on is megvan a pontos AIFIMG URL-jeloles.
+  // Mas alt-nak / ID-nek megfelelo, kezzel kezelt fotot nem torlunk.
+  const remoteById=new Map(remote.nodes.map(n=>[text(n.id),n]));
+  const discarded=[...current.entries()].filter(([url,entry])=>
+    !desired.urls.includes(url) && entry.managed &&
+    remoteIds.has(text(entry.media_id)) &&
+    text(remoteById.get(text(entry.media_id))?.alt).includes(marker(url)));
   if(discarded.length) {
     // Kizárólag a saját API-nkkal felvitt médiát töröljük, manuális Shopify fotót nem.
     const removeIds=[...new Set(discarded.map(([,entry])=>text(entry.media_id)))];

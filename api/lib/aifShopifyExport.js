@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { aifImageGallery } from "./aifImageGallery.js";
+import { ensureAifShopifyImageSchema, enqueueAifShopifyImagesForVariant } from './aifShopifyImages.js';
 import {
   enqueueAifShopifyVariant,
   ensureAifShopifyTables,
@@ -1370,20 +1371,31 @@ async function prepareExport(client, options = {}) {
     });
   }
 
-  const productImageByGroup = new Map();
+  // AIF_SHOPIFY_IMAGE_V8: a kepnelkuli meret csak ugyanazon szinen belul
+  // orokolhet fotot, es csak akkor, ha egyetlen kepcsalad ismert.
+  // A model_colors export mas szineinek fotoja nem lehet masik varians kepe.
+  const imageByModelColor = new Map();
   for (const row of normalizedRows) {
     const image = imageFromRow(row);
     const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
-    if (image && !productImageByGroup.has(groupKey)) productImageByGroup.set(groupKey, image);
+    const colorKey = normalizeKey(row.color_name || row.color_code || row.supplier_color_code);
+    if (!colorKey || !image) continue;
+    const key = `${groupKey}::${colorKey}`;
+    const existing=imageByModelColor.get(key) || new Set();
+    existing.add(image);
+    imageByModelColor.set(key, existing);
   }
   const exportRows = normalizedRows.map((row) => {
     const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
+    const colorKey = normalizeKey(row.color_name || row.color_code || row.supplier_color_code);
+    const candidates=colorKey ? imageByModelColor.get(`${groupKey}::${colorKey}`) : null;
+    const fallback=candidates?.size===1 ? [...candidates][0] : '';
     return {
       ...row,
       grouping_mode: groupingMode,
       product_group_key: groupKey,
       product_group_code: productGroupCode(row, groupingMode),
-      image_url: imageFromRow(row) || productImageByGroup.get(groupKey) || "",
+      image_url: imageFromRow(row) || fallback || "",
     };
   });
 
@@ -4490,6 +4502,20 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
          WHERE export_id=$1 AND variant_id=$2`,
         [exportRow.id, item.variant_id]
       );
+      // AIF_SHOPIFY_IMAGE_V8: a sikeresen osszekapcsolt uj export is
+      // megkapja a teljes aktualis kepgaleria szinkronjat.
+      // Csak a kep-queue, keszlet/termekadat-modositas nelkul.
+      try {
+        await ensureAifShopifyImageSchema(client);
+        await enqueueAifShopifyImagesForVariant(
+          client, item.variant_id,
+          aifImageGallery(item.snapshot?.galleryImages, item.snapshot?.imageUrl)
+        );
+      } catch (imageError) {
+        console.error('AIF Shopify gallery queue deferred after mapping',
+          {variantId:item.variant_id, error:imageError?.message||String(imageError)});
+        // A DB-trigger / beagyazott worker kesobb ujraprobalja.
+      }
       if (!metadataOnly && options.enqueueStock !== false) {
         await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }

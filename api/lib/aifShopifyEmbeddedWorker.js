@@ -5,7 +5,7 @@ import {
   syncAifShopifyNewnessVisibility,
 } from "./aifShopify.js";
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
-import { processAifShopifyImageOutboxBatch } from "./aifShopifyImages.js";
+import { processAifShopifyImageOutboxBatch, enqueueAifShopifyImageBacklog } from "./aifShopifyImages.js";
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
@@ -36,6 +36,32 @@ async function tick(state) {
   state.running = true;
 
   try {
+    // AIF_SHOPIFY_IMAGE_V8: a regi 274+ Shopify termeknel meg nem volt
+    // kep-queue; egyszeri indulasi idempotens potlas, kulon valtozatlan
+    // kepszinkron queue. Sikertelen DB lekerdezes utan kovetkezo tick probalja.
+    if (!state.imageBacklogSeeded) {
+      try {
+        const seeded=await enqueueAifShopifyImageBacklog(state.pool);
+        state.imageBacklogSeeded=true;
+        console.log('AIF Shopify V8 image catchup',JSON.stringify(seeded));
+      } catch(error) {
+        console.error('AIF Shopify V8 image catchup failed',error?.message||String(error));
+      }
+    }
+
+    // A termékképek külön tartós soron követik a galéria-módosításokat.
+    // Nem érintik a készlethez használt Shopify outboxot.
+    let images = { processed: 0, errors: 0, waiting: 0 };
+    try {
+      images = await processAifShopifyImageOutboxBatch(state.pool, { limit: 3 });
+      if (images.processed || images.errors) {
+        console.log("AIF Shopify image sync batch", JSON.stringify({ instanceId: state.instanceId, ...images }));
+      }
+    } catch (error) {
+      console.error("AIF Shopify image sync batch error", error?.message || String(error));
+    }
+
+
     const inbound = await processAifShopifyInboundBatch(state.pool, {
       limit: state.limit,
     });
@@ -83,17 +109,6 @@ async function tick(state) {
       return;
     }
 
-    // A termékképek külön tartós soron követik a galéria-módosításokat.
-    // Nem érintik a készlethez használt Shopify outboxot.
-    let images = { processed: 0, errors: 0, waiting: 0 };
-    try {
-      images = await processAifShopifyImageOutboxBatch(state.pool, { limit: 3 });
-      if (images.processed || images.errors) {
-        console.log("AIF Shopify image sync batch", JSON.stringify({ instanceId: state.instanceId, ...images }));
-      }
-    } catch (error) {
-      console.error("AIF Shopify image sync batch error", error?.message || String(error));
-    }
 
     let newness = null;
 
@@ -251,6 +266,7 @@ export function startAifShopifyEmbeddedWorker(pool, options = {}) {
     ),
 
     lastNewnessSyncAt: 0,
+    imageBacklogSeeded: false,
   };
 
   globalThis[GLOBAL_STATE_KEY] = state;
