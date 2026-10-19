@@ -7356,9 +7356,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0] || null;
   }
 
+  // AIF_STANDARD_SIZE_SOURCE_GUARD_20261019_V6
+  // Az általános ruhaméretek (pl. XL) jelentése nem változhat pusztán a márka
+  // alapján. A márkaméret-tábla jelenleg nincs terméktípusra szűkítve, ezért
+  // egy hibás Under Armour XL -> zokni M 46-50.5 fordítás minden ruhára ráégne.
+  const AIF_STANDARD_APPAREL_SIZES = new Set([
+    'XXXS', 'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL',
+  ]);
+  function aifStandardApparelSize(value) {
+    const code = text(value).toUpperCase().replace(/\s+/g, '');
+    return AIF_STANDARD_APPAREL_SIZES.has(code) ? code : null;
+  }
+  function aifIsSockProduct(normalized = {}) {
+    // Csak pozitív termékkategória vagy terméknév alapján engedünk zokniméretet.
+    // Egy általános 'ruházat' nem elég bizonyíték a márkafordításhoz.
+    const terms = [normalized.titleRo, normalized.title_ro, normalized.title,
+      normalized.productType, normalized.product_type, normalized.subcategoryName,
+      normalized.subcategory_name, normalized.subcategoryCode, normalized.subcategory_code,
+      normalized.categoryName, normalized.category_name, normalized.categoryCode];
+    const key = normCode(terms.filter(Boolean).join(' '));
+    return /(?:^|_)(?:sosete|soseta|soseti|sock|socks|zokni|zoknik|ciorap|ciorapi|chaussette|chaussettes)(?:_|$)/.test(key);
+  }
+
   async function normalizeSizeValue(client, value) {
     const raw = emptyToNull(value);
     if (!raw) return null;
+    // Akkor is az XL marad XL, ha egy mérettörzsben valaki XL alias-t adott
+    // egy zoknimérethez. Itt sem kerülhet felülírásra a fizikai ruhaméret.
+    const standardSize = aifStandardApparelSize(raw);
+    if (standardSize) return standardSize;
     try {
       await ensureAifSizeTables(client);
       const rawKey = normCode(raw);
@@ -7383,6 +7409,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!normalized || typeof normalized !== "object") return false;
     const sizeCode = emptyToNull(normalized.supplierSize || normalized.supplier_size || normalized.size);
     if (!sizeCode) return false;
+    // A forrás számlán XL, M, L stb. szerepel: ezek fizikailag ruhaméretek.
+    // Az előkészített receptió normalized.size mezőjében már ott lehet a hibás
+    // M 46-50.5; az eredeti supplierSize-ról ezt is visszaállítjuk még commit
+    // ELŐTT. Egy félreállított márkaméret sem írhatja felül a termékazonosságot.
+    const standardSize = aifStandardApparelSize(sizeCode);
+    if (standardSize && !aifIsSockProduct(normalized)) {
+      normalized.supplierSize = normalized.supplierSize || sizeCode;
+      normalized.size = standardSize;
+      normalized.sizeTypeCode = normCode(standardSize);
+      delete normalized.brandSizeCodeId;
+      return true;
+    }
     const brandId = await findBrandIdForNormalized(client, normalized);
     if (!brandId) return false;
     try {
@@ -13216,8 +13254,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const brandColor = brand && rawColorCode ? context.brandColorByKey.get(`${brand.id}:${normCode(rawColorCode)}`) : null;
     const genericColor = !brandColor ? context.colorByKey.get(normCode(rawColorName || rawColorCode || '')) : null;
     const rawSize = legacyResolvedStoredSize(row, payload);
-    const brandSize = brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
-    const genericSize = !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
+    // ForIT gyorsimport ugyanazt a védelmet kapja. Történeti ruhaméretet sem
+    // fordítunk át általános márkaméret-táblából, amely zoknit is tartalmazhat.
+    const standardSize = aifStandardApparelSize(rawSize);
+    const protectedSize = !aifIsSockProduct({ titleRo:row.title, productType:row.subcategory_name }) ? standardSize : null;
+    const brandSize = !protectedSize && brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
+    const genericSize = !protectedSize && !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
     const category = context.categoryByKey.get(normCode(row.subcategory_name || '')) || null;
     const normalizedSupplierName = normalizeLegacySupplierCandidate(row.legacy_supplier) || resolveLegacySupplierName(
       payload.legacySupplierHistoric,
@@ -13259,7 +13301,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       colorCode: rawColorCode,
       colorName: brandColor?.name_ro || genericColor?.name_ro || rawColorName,
       colorHex: brandColor?.hex || genericColor?.hex || null,
-      size: brandSize?.size_name || genericSize?.name || rawSize,
+      size: protectedSize || brandSize?.size_name || genericSize?.name || rawSize,
       barcode: emptyToNull(row.legacy_barcode),
       snCod: emptyToNull(payload.snCod || row.model_code),
       buyPrice: row.buy_price === null || row.buy_price === undefined ? null : Number(row.buy_price),
