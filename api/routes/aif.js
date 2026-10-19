@@ -26212,12 +26212,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  // AIF_SHOP_CUSTOMERS_PAGED_ABC_20261019
+  // A korabbi eladas/tartozas sorrend es LIMIT 100 elrejtette a lista veget.
+  // Eloszor a nev szerint rendezetten lapozunk, es CSAK a lapon levo
+  // kliensek eladasait osszesitjuk. A szamozas, keresesi szuro es darabszam
+  // ugyanazon uzlet aktiv kliensallomanyara vonatkozik.
   router.get("/shop-customers", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
-      const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 60)));
+      const limit = Math.min(5000, Math.max(1, Number.parseInt(String(req.query.limit ?? 60), 10) || 60));
+      const offset = Math.min(1000000, Math.max(0, Number.parseInt(String(req.query.offset ?? 0), 10) || 0));
       const args = [location.id];
       const where = ["c.is_active=true", "c.location_id=$1"];
       if (search) {
@@ -26234,42 +26240,66 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(c.postal_code,'') ILIKE ${searchParam}
         )`);
       }
-      args.push(limit);
-      const limitParam = `$${args.length}`;
+      const filteredWhere = where.join(" AND ");
+      // Teljes talalatszam NEM a megjelenitett lap hossza.
+      const totalResult = await pool.query(
+        `SELECT count(*)::int AS total FROM aif_shop_customers c WHERE ${filteredWhere}`,
+        args
+      );
+      const total = Number(totalResult.rows[0]?.total || 0);
+      const pageArgs = [...args, limit, offset];
+      const limitParam = `$${pageArgs.length - 1}`;
+      const offsetParam = `$${pageArgs.length}`;
+      // Ekezetfuggetlen, stabil nevsort. Masolt klientelefonok es duplazott
+      // nevek mellett az id masodlagos kulcs miatt nincs elcsuszo lapozas.
+      const abcSort = "lower(translate(btrim(c.full_name), 'ÁÉÍÓÖŐÚÜŰĂÂÎȘŞȚŢáéíóöőúüűăâîșşțţ', 'AEIOOOUUUAAISSTTaeiooouuuaaisstt'))";
       const result = await pool.query(
-        `SELECT
+        `WITH selected_customers AS (
+           SELECT c.* FROM aif_shop_customers c
+           WHERE ${filteredWhere}
+           ORDER BY ${abcSort} ASC, lower(btrim(c.full_name)) ASC, c.id ASC
+           LIMIT ${limitParam} OFFSET ${offsetParam}
+         )
+         SELECT
            c.*,
            l.code AS location_code,
            l.name AS location_name,
-           COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
-           count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
-           count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
-           COALESCE(sum(s.total) FILTER (
-             WHERE s.status='completed'
-               AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest')) = EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))
-           ),0)::numeric AS year_purchase_total,
-           COALESCE(sum(s.total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_purchase_total,
-           COALESCE(sum(s.paid_total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_paid_total,
-           max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
-         FROM aif_shop_customers c
+           COALESCE(s.open_balance,0)::numeric AS open_balance,
+           COALESCE(s.open_sales,0)::int AS open_sales,
+           COALESCE(s.sale_count,0)::int AS sale_count,
+           COALESCE(s.year_purchase_total,0)::numeric AS year_purchase_total,
+           COALESCE(s.lifetime_purchase_total,0)::numeric AS lifetime_purchase_total,
+           COALESCE(s.lifetime_paid_total,0)::numeric AS lifetime_paid_total,
+           s.last_sale_at
+         FROM selected_customers c
          JOIN aif_locations l ON l.id=c.location_id
-         LEFT JOIN aif_shop_sales s
-           ON s.customer_id=c.id
-          AND s.location_id=c.location_id
-         WHERE ${where.join(" AND ")}
-         GROUP BY c.id, l.id, l.code, l.name
-         ORDER BY
-           CASE WHEN COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0) > 0 THEN 0 ELSE 1 END,
-           max(s.sold_at) DESC NULLS LAST,
-           lower(c.full_name) ASC
-         LIMIT ${limitParam}`,
-        args
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(sum(ss.balance_due) FILTER (WHERE ss.status='completed' AND ss.balance_due > 0),0) AS open_balance,
+             count(ss.id) FILTER (WHERE ss.status='completed' AND ss.balance_due > 0) AS open_sales,
+             count(ss.id) FILTER (WHERE ss.status='completed') AS sale_count,
+             COALESCE(sum(ss.total) FILTER (
+               WHERE ss.status='completed'
+                 AND EXTRACT(YEAR FROM (ss.sold_at AT TIME ZONE 'Europe/Bucharest')) = EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))
+             ),0) AS year_purchase_total,
+             COALESCE(sum(ss.total) FILTER (WHERE ss.status='completed'),0) AS lifetime_purchase_total,
+             COALESCE(sum(ss.paid_total) FILTER (WHERE ss.status='completed'),0) AS lifetime_paid_total,
+             max(ss.sold_at) FILTER (WHERE ss.status='completed') AS last_sale_at
+           FROM aif_shop_sales ss
+           WHERE ss.customer_id=c.id AND ss.location_id=c.location_id
+         ) s ON true
+         ORDER BY ${abcSort} ASC, lower(btrim(c.full_name)) ASC, c.id ASC`,
+        pageArgs
       );
       res.json({
         ok: true,
         location: { id: String(location.id), code: location.code, name: location.name },
         items: result.rows.map(aifShopCustomerResponse),
         count: result.rowCount,
+        total,
+        limit,
+        offset,
+        hasMore: offset + result.rowCount < total,
       });
     } catch (error) {
       console.error("AIF shop customers list failed", error);
