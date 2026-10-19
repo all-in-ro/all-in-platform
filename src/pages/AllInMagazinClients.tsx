@@ -37,7 +37,6 @@ import {
   apiAifGetShopCustomer,
   apiAifListRomaniaCounties,
   apiAifListRomaniaLocalities,
-  apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
   apiAifReturnShopCustomerCreditLine,
   apiAifSetShopCustomerSaleLineDiscount,
@@ -107,6 +106,57 @@ type ProductImagePreview = {
   top: number;
   size: number;
 };
+
+// AIF_SHOP_CUSTOMERS_PAGED_ABC_20261019
+// Oldalankent kerunk klienseket, az API tobbi muvelete valtozatlan marad.
+// Ugyanazt a session cookie-t hasznalja, mint a lib/aif/api fetcheloje.
+const CUSTOMER_PAGE_SIZE = 100;
+
+type CustomerPageResponse = {
+  items: AifShopCustomer[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+async function fetchCustomerPage(options: {
+  location: string;
+  search: string;
+  page: number;
+}): Promise<CustomerPageResponse> {
+  const q = new URLSearchParams({
+    location: options.location,
+    limit: String(CUSTOMER_PAGE_SIZE),
+    offset: String((options.page - 1) * CUSTOMER_PAGE_SIZE),
+  });
+  if (options.search.trim()) q.set("q", options.search.trim());
+  const response = await fetch(`/api/aif/shop-customers?${q.toString()}`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = body && typeof body === "object" && "error" in body
+      ? String((body as { error?: unknown }).error || "A klienslista nem tölthető be.")
+      : `Klienslista hiba: HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  const payload = body as Partial<CustomerPageResponse> | null;
+  if (!payload || !Array.isArray(payload.items) ||
+      !Number.isFinite(payload.total) || !Number.isFinite(payload.offset)) {
+    throw new Error("A klienslista lapozási adatai hiányoznak. Ellenőrizd, hogy az új backend is telepítve van-e.");
+  }
+  return {
+    items: payload.items,
+    count: Number(payload.count ?? payload.items.length),
+    total: Number(payload.total),
+    limit: Number(payload.limit ?? CUSTOMER_PAGE_SIZE),
+    offset: Number(payload.offset),
+    hasMore: Boolean(payload.hasMore),
+  };
+}
 
 const EMPTY_DRAFT: CustomerDraft = {
   fullName: "",
@@ -237,6 +287,11 @@ export default function AllInMagazinClients({
   const [mode, setMode] = useState<ClientMode>(initialMode);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<AifShopCustomer[]>([]);
+  const [customerPage, setCustomerPage] = useState(1);
+  const [customerTotal, setCustomerTotal] = useState<number | null>(null);
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const customerLoadSequence = useRef(0);
+  const customerListScrollRef = useRef<HTMLDivElement | null>(null);
   const [selected, setSelected] = useState<AifShopCustomer | null>(null);
   const [detail, setDetail] = useState<AifShopCustomerDetail | null>(null);
   const [detailYear, setDetailYear] = useState(currentYear);
@@ -283,6 +338,9 @@ export default function AllInMagazinClients({
     [locationCodeProp, locationName],
   );
   const defaultCountyCode = useMemo(() => preferredCountyCode(locationName), [locationName]);
+  const customerPageCount = Math.max(1, Math.ceil((customerTotal ?? 0) / CUSTOMER_PAGE_SIZE));
+  const customerFrom = items.length ? (customerPage - 1) * CUSTOMER_PAGE_SIZE + 1 : 0;
+  const customerTo = (customerPage - 1) * CUSTOMER_PAGE_SIZE + items.length;
   const smsProfiles = useSmsProfiles(open ? items.map(item => item.id) : [], locationCode);
   const yearOptions = useMemo(
     () => Array.from({ length: Math.max(1, currentYear - 2025 + 1) }, (_, index) => currentYear - index),
@@ -502,10 +560,13 @@ export default function AllInMagazinClients({
       void loadLocalities(defaultCountyCode);
     } else {
       setQuery("");
-      void loadCustomers("");
+      setCustomerPage(1);
+      setCustomerTotal(null);
+      setAppliedSearch("");
+      void loadCustomers("", 1);
       window.setTimeout(() => searchInputRef.current?.focus(), 0);
     }
-  }, [currentYear, defaultCountyCode, initialMode, open]);
+  }, [currentYear, defaultCountyCode, initialMode, locationCode, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -584,20 +645,29 @@ export default function AllInMagazinClients({
     }));
   }, [paymentAmountEdited, paymentOpen, selectedPaymentTotal]);
 
-  async function loadCustomers(value = query) {
+  async function loadCustomers(value = query, requestedPage = 1) {
+    const sequence = ++customerLoadSequence.current;
+    const page = Math.max(1, Math.floor(requestedPage));
+    const search = value.trim();
+    if (mode === "search" && page !== customerPage && customerListScrollRef.current) {
+      customerListScrollRef.current.scrollTop = 0;
+    }
     setLoading(true);
     setError("");
     try {
-      const response = await apiAifListShopCustomers({
-        location: locationCode,
-        search: value.trim(),
-        limit: 100,
-      });
-      setItems(response.items || []);
+      const response = await fetchCustomerPage({ location: locationCode, search, page });
+      if (sequence !== customerLoadSequence.current) return;
+      setItems(response.items);
+      setCustomerTotal(response.total);
+      setCustomerPage(page);
+      setAppliedSearch(search);
     } catch (caught) {
+      if (sequence !== customerLoadSequence.current) return;
+      setItems([]);
+      setCustomerTotal(null);
       setError(caught instanceof Error ? caught.message : "A klienslista nem tölthető be.");
     } finally {
-      setLoading(false);
+      if (sequence === customerLoadSequence.current) setLoading(false);
     }
   }
 
@@ -650,6 +720,7 @@ export default function AllInMagazinClients({
     setYearPickerOpen(false);
     paymentRequestKeyRef.current = "";
     returnRequestKeyRef.current = "";
+    if (mode !== "search") void loadCustomers(appliedSearch, customerPage);
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }
 
@@ -1226,7 +1297,7 @@ export default function AllInMagazinClients({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5" onScroll={hideProductImagePreview}>
+        <div ref={customerListScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5" onScroll={hideProductImagePreview}>
           {mode === "search" ? (
             <>
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -1253,20 +1324,42 @@ export default function AllInMagazinClients({
                 </button>
               </div>
 
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <span className="text-xs text-white/48">{items.length} kliens</span>
-                {query ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuery("");
-                      void loadCustomers("");
-                    }}
-                    className="h-9 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs text-white/70 hover:bg-white/[0.09]"
-                  >
-                    Szűrés törlése
-                  </button>
-                ) : null}
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/60">
+                  <span className="tabular-nums text-[#d7fffd]">
+                    {customerTotal === null
+                      ? (error ? "Betöltési hiba" : loading ? "Kliensek betöltése…" : "Klienslista")
+                      : `${customerTotal.toLocaleString("hu-HU")} ${appliedSearch ? "találat" : "kliens összesen"}`}
+                  </span>
+                  {customerTotal !== null && customerTotal > 0 ? (
+                    <span className="tabular-nums">{customerFrom}–{customerTo}. megjelenítve</span>
+                  ) : null}
+                  <span className="text-[#9be9e5]">ABC sorrend, név szerint</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {customerTotal !== null && customerPageCount > 1 ? (
+                    <div className="flex items-center gap-1.5">
+                      <button type="button" disabled={loading || customerPage <= 1}
+                        onClick={() => void loadCustomers(appliedSearch, customerPage - 1)}
+                        className="h-9 rounded-lg border border-white/14 bg-white/[0.05] px-2.5 text-xs text-white disabled:opacity-35 hover:bg-white/[0.10]"
+                      >Előző</button>
+                      <span className="px-1 text-xs tabular-nums text-white/70">{customerPage}. / {customerPageCount}. oldal</span>
+                      <button type="button" disabled={loading || customerPage >= customerPageCount}
+                        onClick={() => void loadCustomers(appliedSearch, customerPage + 1)}
+                        className="h-9 rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 text-xs text-[#d7fffd] disabled:opacity-35 hover:bg-[#2a8d8b]/28"
+                      >Következő</button>
+                    </div>
+                  ) : null}
+                  {query || appliedSearch ? (
+                    <button type="button"
+                      onClick={() => {
+                        setQuery("");
+                        void loadCustomers("", 1);
+                      }}
+                      className="h-9 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs text-white/70 hover:bg-white/[0.09]"
+                    >Szűrés törlése</button>
+                  ) : null}
+                </div>
               </div>
 
               {loading ? (
@@ -1274,8 +1367,9 @@ export default function AllInMagazinClients({
                   <Loader2 className="animate-spin" /> Kliensek betöltése…
                 </div>
               ) : items.length ? (
+                <>
                 <div className="mt-3 grid gap-2 lg:grid-cols-2">
-                  {items.map((item) => (
+                  {items.map((item, index) => (
                     <button
                       key={item.id}
                       type="button"
@@ -1288,7 +1382,10 @@ export default function AllInMagazinClients({
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-3">
-                            <p className="truncate text-base text-white">{item.fullName}</p>
+                            <div className="flex min-w-0 items-baseline gap-2">
+                              <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-[#9be9e5]/82">{customerFrom + index}.</span>
+                              <p className="min-w-0 truncate text-base text-white" title={item.fullName}>{item.fullName}</p>
+                            </div>
                             <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/60">
                               {numberValue(item.saleCount)} vásárlás
                             </span>
@@ -1317,6 +1414,27 @@ export default function AllInMagazinClients({
                       </div>
                     </button>
                   ))}
+                </div>
+                {customerTotal !== null && customerPageCount > 1 ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#293548] px-3 py-3">
+                    <span className="text-xs tabular-nums text-white/55">{customerFrom}–{customerTo} / {customerTotal} kliens</span>
+                    <div className="flex items-center gap-2">
+                      <button type="button" disabled={loading || customerPage <= 1}
+                        onClick={() => void loadCustomers(appliedSearch, customerPage - 1)}
+                        className="h-10 rounded-lg border border-white/15 px-4 text-xs text-white disabled:opacity-30"
+                      >Előző 100</button>
+                      <span className="text-xs tabular-nums text-[#d7fffd]">{customerPage} / {customerPageCount}</span>
+                      <button type="button" disabled={loading || customerPage >= customerPageCount}
+                        onClick={() => void loadCustomers(appliedSearch, customerPage + 1)}
+                        className="h-10 rounded-lg border border-[#9be9e5]/38 bg-[#2a8d8b] px-4 text-xs text-white disabled:opacity-30"
+                      >Következő 100</button>
+                    </div>
+                  </div>
+                ) : null}
+                </>
+              ) : error ? (
+                <div className="mt-3 flex min-h-[220px] items-center justify-center rounded-[22px] border border-rose-300/15 bg-rose-500/6 px-5 text-center text-sm text-white/62">
+                  Nem sikerült betölteni a listát. Próbáld újra a Keresés gombbal.
                 </div>
               ) : (
                 <div className="mt-3 flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-black/5 px-5 text-center">
