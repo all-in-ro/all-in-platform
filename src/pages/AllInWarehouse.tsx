@@ -50,7 +50,6 @@ import {
   type AifPriceChangeDocumentDetail,
 } from "../lib/aif/api";
 
-
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
 const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
@@ -434,7 +433,22 @@ function warehouseShopifyConnectionHasError(item: Partial<InventoryItem> | Recor
   return WAREHOUSE_SHOPIFY_ERROR_STATES.has(syncState) || WAREHOUSE_SHOPIFY_ERROR_STATES.has(outboxState);
 }
 
+// AIF_SHOPIFY_IMAGE_V8: egy regi "nincs kep" CSV ellenorzes attol meg
+// torteneti marad, hogy az AllIn-ben idokozben potoltuk a kepeket.
+// Nem allitjuk, hogy mar Shopify-on van, csak azt: ujra exportalhato.
+function warehouseShopifyOldImageErrorResolved(item: Partial<InventoryItem> | Record<string, any>) {
+  if (warehouseHasLiveShopifyMapping(item)) return false;
+  if (warehouseShopifyStateKey((item as any).shopify_export_item_status) !== "invalid") return false;
+  const hasImage = /^https:\/\//i.test(String((item as any).image_url || "").trim()) ||
+    (Array.isArray((item as any).images) && (item as any).images.some((url: unknown) => /^https:\/\//i.test(String(url || "").trim())));
+  if (!hasImage) return false;
+  const errors = warehouseShopifyMessageList((item as any).shopify_export_errors);
+  return errors.length > 0 && errors.every((error) =>
+    /hi[aá]nyzik a nyilv[aá]nos k[eé]p URL|a k[eé]p URL-nek nyilv[aá]nos HTTPS/i.test(error));
+}
+
 function warehouseShopifyExportHasError(item: Partial<InventoryItem> | Record<string, any>) {
+  if (warehouseShopifyOldImageErrorResolved(item)) return false;
   const itemState = warehouseShopifyStateKey((item as any).shopify_export_item_status);
   const exportErrors = warehouseShopifyMessageList((item as any).shopify_export_errors);
   return WAREHOUSE_SHOPIFY_ERROR_STATES.has(itemState) || (exportErrors.length > 0 && itemState !== "mapped");
@@ -465,8 +479,9 @@ function WarehouseShopifyStatusIcon({
   const mapped = warehouseHasLiveShopifyMapping(item);
   const pending = isShopifyExportPending(item);
   const hasConnectionError = warehouseShopifyConnectionHasError(item);
+  const oldImageErrorResolved = warehouseShopifyOldImageErrorResolved(item);
   const hasExportError = warehouseShopifyExportHasError(item);
-  const visible = mapped || pending || hasConnectionError || hasExportError;
+  const visible = mapped || pending || hasConnectionError || hasExportError || oldImageErrorResolved;
   const open = visible && (hovered || pinned);
 
   const connectionErrors = Array.from(new Set([
@@ -484,7 +499,7 @@ function WarehouseShopifyStatusIcon({
     { label: "Termékállapot", value: warehouseShopifyStatusLabel(item.shopify_product_status) },
     { label: "Szinkron", value: warehouseShopifyStatusLabel(item.shopify_sync_status) },
     { label: "Feldolgozás", value: warehouseShopifyStatusLabel(item.shopify_outbox_status) },
-    { label: "Export", value: warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
+    { label: "Export", value: oldImageErrorResolved ? "Régi export: képhiány pótolva" : warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
     { label: "Exportálva", value: warehouseShopifyDateTime(item.shopify_exported_at) },
     { label: "Export ellenőrizve", value: warehouseShopifyDateTime(item.shopify_export_reconciled_at) },
     { label: "Kapcsolva", value: mapped ? warehouseShopifyDateTime(item.shopify_mapped_at || item.shopify_connected_at) : "-" },
@@ -574,10 +589,10 @@ function WarehouseShopifyStatusIcon({
 
   const buttonSize = size === "xs" ? "h-6 w-6" : size === "md" ? "h-9 w-9" : "h-8 w-8";
   const brandSize = size === "xs" ? "xs" : size === "md" ? "md" : "sm";
-  const badgeText = hasConnectionError ? "Hiba" : hasExportError ? "Exporthiba" : pending ? "Folyamatban" : "Kapcsolva";
+  const badgeText = hasConnectionError ? "Hiba" : hasExportError ? "Exporthiba" : oldImageErrorResolved ? "Újra exportálható" : pending ? "Folyamatban" : "Kapcsolva";
   const badgeClass = hasConnectionError
     ? "border-rose-200/55 bg-rose-100 text-rose-700"
-    : hasExportError || pending
+    : hasExportError || pending || oldImageErrorResolved
       ? "border-amber-200/55 bg-amber-100 text-amber-800"
       : "border-emerald-200/55 bg-emerald-100 text-emerald-700";
 
@@ -603,7 +618,7 @@ function WarehouseShopifyStatusIcon({
       >
         <ShopifyBrandMark size={brandSize} fill />
         {hasConnectionError ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-500" /> : null}
-        {!hasConnectionError && (hasExportError || pending) ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-400" /> : null}
+        {!hasConnectionError && (hasExportError || pending || oldImageErrorResolved) ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-400" /> : null}
       </button>
 
       {open && typeof document !== "undefined" ? createPortal(
@@ -641,6 +656,11 @@ function WarehouseShopifyStatusIcon({
                   <div className="break-words">{primaryExportError}</div>
                   <div className="mt-1.5 border-t border-amber-200/70 pt-1.5 text-[10px] text-amber-700">Ez az export vagy párosítás eredménye, nem megszakadt élő mapping. A Shopify központ ezért mutathat 0 hibás kapcsolatot.</div>
                 </div>
+              ) : oldImageErrorResolved ? (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                  <CheckCircle2 size={14} className="mr-1.5 inline" /> Az export korábbi képhiánya az AllIn rendszerben megszűnt.
+                  <div className="mt-1 text-[10px] leading-relaxed">Ez továbbra is egy régi, sikertelen export. A termék nem lett automatikusan Shopify-ra feltöltve. A friss adatokkal új export szükséges.</div>
+                </div>
               ) : pending ? (
                 <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                   <Clock3 size={14} className="mr-1.5 inline" /> A Shopify export vagy párosítás még feldolgozás alatt van.
@@ -669,7 +689,7 @@ function WarehouseShopifyStatusIcon({
                 </div>
               ) : null}
 
-              {exportErrors.length > 1 ? (
+              {exportErrors.length > 1 && !oldImageErrorResolved ? (
                 <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
                   <div className="mb-1.5 flex items-center gap-1.5 text-amber-800"><AlertTriangle size={14} /> További exporthibák</div>
                   <div className="space-y-1.5">
