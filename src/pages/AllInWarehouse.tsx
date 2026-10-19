@@ -50,6 +50,7 @@ import {
   type AifPriceChangeDocumentDetail,
 } from "../lib/aif/api";
 
+
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
 const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
