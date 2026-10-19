@@ -6688,6 +6688,10 @@ type WarehouseSavedGalleryResult = {
   images: string[];
   imageUrl: string | null;
   imageCount: number;
+  updatedVariantIds?: string[];
+  siblingCount?: number;
+  galleryConflict?: boolean;
+  inherited?: boolean;
   changed?: boolean;
   shopifySync?: "queued" | "processing" | "error" | "not_needed";
   syncWarning?: string | null;
@@ -15230,8 +15234,11 @@ export default function AllInWarehouse() {
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
-        imageUrl: edit.images[0] || null,
-        images: edit.images,
+        // A galeria mar a kulon PUT-ben tranzakcionalisan mentodik.
+        // Valtozatlan, esetleg elavult kep-listat nem kuldunk ujra a PATCH-ben.
+        ...(JSON.stringify(warehousePhotoUrls(edit.images, edit.imageUrl)) !== JSON.stringify(warehousePhotoUrls(editBaseline.images, editBaseline.imageUrl))
+          ? { imageUrl: edit.images[0] || null, images: edit.images }
+          : {}),
         status: edit.variantStatus,
       };
       await apiVariantUpdate(detail.item.id, variantUpdatePayload);
@@ -15258,10 +15265,8 @@ export default function AllInWarehouse() {
       ).values());
       const siblingPatch: Record<string, unknown> = {};
       const galleryChangedForSiblings = JSON.stringify(edit.images) !== JSON.stringify(editBaseline.images);
-      if (galleryChangedForSiblings) {
-        siblingPatch.images = edit.images;
-        siblingPatch.imageUrl = edit.images[0] || null;
-      }
+      // A galeria propagalasa CSAK a backendben tortenhet, nem 50/600 betoltott sor alapjan.
+      // A leiras korabbi, kulon mukodese valtozatlan.
       if (String(edit.descriptionRo || '').trim()) siblingPatch.descriptionRo = edit.descriptionRo;
 
       let inheritedSiblingCount = 0;
@@ -15575,25 +15580,10 @@ export default function AllInWarehouse() {
       }
       warehouseClearPendingGallery(id);
       setGalleryRecovery([]);
-      const source: InventoryItem = {
-        ...(detail?.item || {}),
-        variant_id: id,
-        model_id: firstWarehouseText(detail?.item?.model_id, detail?.item?.modelId) || null,
-        color_code: edit.colorCode || detail?.item?.color_code || null,
-        color_name: edit.colorName || detail?.item?.color_name || null,
-        size: edit.size || detail?.item?.size || null,
-        supplier_product_code: edit.supplierProductCode || detail?.item?.supplier_product_code || null,
-      } as InventoryItem;
-      const gallerySiblingCandidates = [...items, ...catalogSearchItems, ...inactiveProductsItems, ...inventoryDisplayItems];
-      const siblings = gallerySiblingCandidates.filter((item) => warehouseSameColorSizeSibling(source, item));
-      const uniqueSiblings = [...new Set(siblings.map((item) => String(item.variant_id || "").trim()).filter(Boolean))];
-      const results = await Promise.allSettled(uniqueSiblings.map((siblingId) => apiPersistWarehousePhotos(siblingId, next)));
-      const savedSiblingIds = uniqueSiblings.filter((_, index) => {
-        const result = results[index];
-        return result.status === "fulfilled" && JSON.stringify(warehousePhotoUrls(result.value.images)) === JSON.stringify(next);
-      });
-      const failedSiblings = uniqueSiblings.filter((siblingId) => !savedSiblingIds.includes(siblingId));
-      const affected = new Set([id, ...savedSiblingIds]);
+      // A szerver egy tranzakcioban kezeli az OSSZES azonos modell/szin
+      // valtozatot. A bongeszo lista-hianyos, ezert nem inditunk N kulon PUT-ot.
+      const affected = new Set([id, ...(stored.updatedVariantIds || []).map(String)]);
+      const sharedSizeCount = Math.max(1, Number(stored.siblingCount || affected.size));
       const patchItem = (item: InventoryItem): InventoryItem =>
         affected.has(String(item.variant_id || ""))
           ? { ...item, images: [...next], image_url: next[0] || null }
@@ -15607,9 +15597,10 @@ export default function AllInWarehouse() {
         if (String(current?.item?.id || "") !== id) return current;
         return { ...current, item: { ...current.item, images: [...next], image_url: next[0] || null } };
       });
-      const cache = detailCacheRef.current.get(id);
-      if (cache?.data) {
-        detailCacheRef.current.set(id, {
+      for (const cachedId of affected) {
+        const cache = detailCacheRef.current.get(cachedId);
+        if (!cache?.data) continue;
+        detailCacheRef.current.set(cachedId, {
           ...cache,
           loadedAt: Date.now(),
           data: { ...cache.data, item: { ...cache.data.item, images: [...next], image_url: next[0] || null } },
@@ -15622,11 +15613,7 @@ export default function AllInWarehouse() {
           : stored.shopifySync === "queued"
             ? " Shopify-képszinkron várólistára téve."
             : "";
-      if (failedSiblings.length) {
-        setGalleryNotice(`MENTVE és visszaolvasva: ${next.length} kép. ${failedSiblings.length} másik méretnél a mentés sikertelen, ezt külön ellenőrizni kell.${syncInfo}`);
-      } else {
-        setGalleryNotice(`MENTVE és visszaellenőrizve: ${next.length} kép${savedSiblingIds.length ? `, további ${savedSiblingIds.length} méretnél is` : ""}.${syncInfo}`);
-      }
+      setGalleryNotice(`MENTVE és visszaellenőrizve: ${next.length} kép, összesen ${sharedSizeCount} azonos modellű és színű mérethez.${syncInfo}`);
       return true;
     } catch (error: any) {
       // A feltöltött R2 URL-ek a formban maradnak, így a szokásos Mentés gombbal
@@ -19944,6 +19931,10 @@ export default function AllInWarehouse() {
                     </div>
                   )}
                   <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} statusText={galleryNotice} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
+                  <p className="px-1 text-[10px] leading-relaxed text-white/58">
+                    A galéria a bizonyíthatóan azonos modellű, színű és termékkódú méretekhez közösen mentődik.
+                    Eltérő, már meglévő képsorokat a rendszer nem ír felül automatikusan.
+                  </p>
                   <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
                       <div className="text-[9px] uppercase tracking-[0.14em] text-[#bfe9e6]/72">Aktuális termékkód</div>
