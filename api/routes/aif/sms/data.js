@@ -132,17 +132,24 @@ export async function sourceDetailsFor(db, locationId, type, id) {
 
 export async function sourceProducts(db,locationId,sources) {
   const keys=unique(sources);
-  if(!keys.length||keys.length>12)throw fail('Válassz 1–12 már bevételezett szállítmányt.');
+  if(!keys.length||keys.length>50)throw fail('Válassz 1–50 már bevételezett szállítmányt.','sms_sources_limit',400);
   const available=await sourcesFor(db,locationId);
   if(keys.some(key=>!available.some(s=>`${s.type}:${s.id}`===key)))throw fail('A kiválasztott bevételezés nem ehhez az üzlethez tartozik, vagy már nem elérhető.','sms_source',403);
-  const ids=[];
-  for(const key of keys){
-    const [type,id]=key.split(':');
-    const {rows}=type==='import'
-      ?await db.query(`SELECT DISTINCT variant_id::text AS id FROM aif_import_rows WHERE batch_id::text=$1 AND status='committed' AND qty>0`,[id])
-      :await db.query(`SELECT DISTINCT variant_id::text AS id FROM aif_shop_transfer_receipts WHERE document_id::text=$1 AND target_location_id=$2`,[id,locationId]);
-    ids.push(...rows.map(r=>r.id));
-  }
+  // Batch reads avoid up to 50 separate PostgreSQL round trips.
+  // All identifiers are checked against sourcesFor() above before being queried.
+  const importIds=keys.filter(key=>key.startsWith('import:')).map(key=>key.slice(7));
+  const transferIds=keys.filter(key=>key.startsWith('transfer:')).map(key=>key.slice(9));
+  const [importRows,transferRows]=await Promise.all([
+    importIds.length
+      ?db.query(`SELECT DISTINCT variant_id::text AS id FROM aif_import_rows
+          WHERE batch_id::text=ANY($1::text[]) AND status='committed' AND qty>0 AND variant_id IS NOT NULL`,[importIds])
+      :Promise.resolve({rows:[]}),
+    transferIds.length
+      ?db.query(`SELECT DISTINCT variant_id::text AS id FROM aif_shop_transfer_receipts
+          WHERE document_id::text=ANY($1::text[]) AND target_location_id=$2 AND variant_id IS NOT NULL`,[transferIds,locationId])
+      :Promise.resolve({rows:[]})
+  ]);
+  const ids=unique([...importRows.rows,...transferRows.rows].map(r=>r.id));
   const products=(await db.query(`SELECT v.id::text AS id,m.title_ro AS title,m.brand_id::text,m.category_id::text,m.subcategory_id::text,m.gender,
     b.name AS brand,COALESCE(NULLIF(sub.name_hu,''),sub.name_ro,c.name_hu,c.name_ro) AS category,v.size,v.color_name,s.qty,v.barcode
     FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
