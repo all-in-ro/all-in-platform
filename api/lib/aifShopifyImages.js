@@ -293,6 +293,39 @@ function aifLegacyDuplicatesCoveredByManaged(desired,remote,links) {
   return true;
 }
 
+// AIF_SHOPIFY_LEGACY_EXTRA_ALREADY_SYNCED_V10
+// A regi, jeloles nelkuli Shopify-fotokat MEGORIZZUK. Ha az osszes jelenleg
+// igenyelt AllInFashion-kep mar bizonyitottan fent van, es a sajat
+// managed=true kepkapcsolata is a jelolt READY mediat mutatja, a regi extra
+// kepek NEM blokkolhatjak a sorrendezest / variansok fokepeinek frissiteset.
+// Semmilyen regi Shopify-media nem torlodik; a bizonytalan regi fotok
+// tovabbra is teljesen erintetlenek maradnak.
+function aifLegacyExtrasAlreadyCovered(desired,remote,links) {
+  const urls=desired?.urls || [];
+  const nodes=remote?.nodes || [];
+  if(!urls.length || !nodes.length) return false;
+  const knownIds=new Set([...links.values()].map(link=>text(link.media_id)));
+  const oldExtras=nodes.filter(node=>
+    node?.mediaContentType==='IMAGE' &&
+    !/AIFIMG:[a-f0-9]{20}/i.test(text(node.alt)) &&
+    !knownIds.has(text(node.id)));
+  if(!oldExtras.length) return false;
+  const byId=new Map(nodes.map(node=>[text(node.id),node]));
+  const assignedIds=new Set();
+  for(const url of urls) {
+    const link=links.get(url);
+    if(!link || link.managed!==true) return false;
+    const mediaId=text(link.media_id);
+    const media=byId.get(mediaId);
+    if(!mediaId || assignedIds.has(mediaId) ||
+       media?.mediaContentType!=='IMAGE' ||
+       text(media.status)!=='READY' ||
+       !text(media.alt).includes(marker(url))) return false;
+    assignedIds.add(mediaId);
+  }
+  return true;
+}
+
 async function adoptUnmarkedLegacyPhoto(client,productId,desired,remote,links,bootstrapUrls){
   const knownIds=new Set([...links.values()].map(x=>text(x.media_id)));
   const legacy=(remote.nodes||[]).filter(n=>n.mediaContentType==='IMAGE'
@@ -372,7 +405,11 @@ async function syncProductImages(client, row) {
   // V8: a régi Shopify képeket csak bizonyított eredeti CSV URL és ALT
   // alapján párosítjuk. A bizonytalan legacy képek mellett TILOS új képet
   // feltölteni, mert 274 regi parositasnal kep-duplazast okozhatna.
-  const covered=aifLegacyDuplicatesCoveredByManaged(desired,remote,links);
+  // A V9 a bizonyitott duplikalt regi kepet is kezeli.
+  // A V10 az olyan regi extra fotokat is megorzi, amelyek mellett
+  // az OSSZES jelenleg igenyelt kep mar bizonyitottan felkerult.
+  const covered=aifLegacyDuplicatesCoveredByManaged(desired,remote,links) ||
+    aifLegacyExtrasAlreadyCovered(desired,remote,links);
   const bootstrap=covered
     ? {adopted:0,unverified:0}
     : await adoptUnmarkedLegacyPhoto(client,productId,desired,remote,links,row.bootstrap_urls);
