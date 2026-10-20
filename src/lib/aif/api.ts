@@ -4328,12 +4328,17 @@ export type AifShopIncomingHistoryItem = {
   receivedAt?: string | null;
   receivedBy?: string | null;
   qty: number;
-  lineValue: number;
+  lineValue: number | null;
   currencyCode: string;
   stockApplied: boolean;
   document: {
     id: string;
     documentNumber: string;
+    documentDate?: string | null;
+    receptionId?: string | null;
+    receptionAvizNumber?: string | null;
+    receptionInvoiceNumber?: string | null;
+    receptionDate?: string | null;
     sourceName: string;
     targetName: string;
     createdAt?: string | null;
@@ -4355,6 +4360,49 @@ export type AifShopIncomingHistoryItem = {
   };
 };
 
+/** Egy Aviz egy márkájához tartozó, valóban átvett sorok összesítése.
+ *  A documentTotalValue a TELJES Aviz értéke, a lineValue kizárólag az itt
+ *  szűrt és átvett tételeké. A kettő nem adható össze. */
+export type AifShopIncomingReportGroup = {
+  documentId: string;
+  documentNumber: string;
+  documentDate?: string | null;
+  documentCreatedAt?: string | null;
+  documentTotalValue: number;
+  documentCurrencyCode: string;
+  sourceName: string;
+  targetName: string;
+  receptionId?: string | null;
+  receptionAvizNumber?: string | null;
+  receptionInvoiceNumber?: string | null;
+  receptionDate?: string | null;
+  brandName: string;
+  currencyCode: string;
+  lineCount: number;
+  qty: number;
+  lineValue: number;
+  unpricedLines: number;
+  firstReceivedAt?: string | null;
+  lastReceivedAt?: string | null;
+};
+
+export type AifShopIncomingReportResponse = {
+  ok: true;
+  location: { id: string; code: string; name: string };
+  from: string;
+  to: string;
+  groups: AifShopIncomingReportGroup[];
+  count: number;
+};
+
+export function apiAifShopIncomingReport(options: { location: string; from: string; to: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("from", options.from);
+  q.set("to", options.to);
+  return fetchAifJSON<AifShopIncomingReportResponse>(`/shop-incoming/history/report?${q.toString()}`);
+}
+
 export function apiAifShopIncoming(options: { location: string }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
@@ -4366,14 +4414,27 @@ export function apiAifShopIncoming(options: { location: string }) {
   }>(`/shop-incoming?${q.toString()}`);
 }
 
-export function apiAifShopIncomingHistory(options: { location: string; month?: string }) {
+export function apiAifShopIncomingHistory(options: {
+  location: string;
+  month?: string;
+  from?: string;
+  to?: string;
+  documentId?: string;
+  brand?: string;
+}) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   if (options.month) q.set("month", options.month);
+  if (options.from) q.set("from", options.from);
+  if (options.to) q.set("to", options.to);
+  if (options.documentId) q.set("documentId", options.documentId);
+  if (options.brand) q.set("brand", options.brand);
   return fetchAifJSON<{
     ok: true;
     location: { id: string; code: string; name: string };
     month?: string | null;
+    from?: string | null;
+    to?: string | null;
     items: AifShopIncomingHistoryItem[];
     count: number;
   }>(`/shop-incoming/history?${q.toString()}`);
