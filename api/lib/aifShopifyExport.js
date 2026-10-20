@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { aifImageGallery } from "./aifImageGallery.js";
-import { ensureAifShopifyImageSchema, enqueueAifShopifyImagesForVariant } from './aifShopifyImages.js';
 import {
   enqueueAifShopifyVariant,
   ensureAifShopifyTables,
@@ -119,6 +118,33 @@ function normalizeKey(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+/*
+ * AIF_SHOPIFY_EXPORT_SAFE_TITLE_V11
+ * A kézzel megadott Shopify cím marad elsődleges, kivéve ha URL / slug.
+ * Ilyenkor csak valódi, ellenőrizhető román terméknév a tartalék.
+ * A forrásadatokat nem írjuk át a név feloldása közben.
+ */
+function aifShopifyHumanExportTitle(value) {
+  const candidate = text(value)
+    .replace(/\s+/g, " ")
+    .replace(/\s+[-|•]\s*allinfashion(?:\.ro)?(?:\/\S*)?\s*$/i, "")
+    .trim();
+  if (!candidate || candidate.length > 255) return "";
+  if (/(?:https?:\/\/|www\.|allinfashion\.ro|\/(?:produse|products)\/)/i.test(candidate)) return "";
+  if (/^[a-z0-9]+(?:-[a-z0-9]+){3,}$/i.test(candidate)) return "";
+  return candidate;
+}
+
+function aifShopifyResolvedExportTitle(row) {
+  const preferred = aifShopifyHumanExportTitle(row?.shopify_title);
+  const fallback = aifShopifyHumanExportTitle(row?.title_ro);
+  return {
+    title: preferred || fallback || "",
+    rejectedShopifyTitle: Boolean(text(row?.shopify_title) && !preferred),
+    usedRomanianFallback: Boolean(!preferred && fallback && text(row?.shopify_title)),
+  };
 }
 
 function slug(value) {
@@ -1091,11 +1117,12 @@ function validationForRow(row) {
   const errors = [];
   const warnings = [];
   const sku = variantSku(row);
-  const title = text(row.shopify_title || row.title_ro);
+  const title = aifShopifyHumanExportTitle(row.shopify_title);
   const image = imageFromRow(row);
   const sellPrice = decimal(row.sell_price);
 
-  if (!title) errors.push("Hiányzik a román terméknév / Shopify cím.");
+  if (!title) errors.push("Hiányzik vagy webcímszerű/URL-részlet a Shopify-terméknév. Javítsd a román nevet vagy a Shopify címet.");
+  if (row.shopify_title_fallback_used) warnings.push("A hibás Shopify cím helyett az érvényes román terméknév került az exportba.");
   if (!sku) errors.push("Hiányzik a vonalkód, amely a Shopify SKU alapja.");
   if (!text(row.size)) errors.push("Hiányzik a méret.");
   if (row.color_required !== false && !text(row.color_name)) {
@@ -1360,7 +1387,15 @@ async function prepareExport(client, options = {}) {
   // A Shopify felé csak ember által olvasható színnév mehet.
   // A normalizáló a live színnév, supplier színnév és brand-color mapping alapján
   // dolgozik; teljesen szín nélküli product-code csoportnál csak Méret opciót használ.
-  const normalizedRows = normalizeExportRowsForOptions(rows, groupingMode);
+  const safeTitleRows = rows.map((row) => {
+    const selected = aifShopifyResolvedExportTitle(row);
+    return {
+      ...row,
+      shopify_title: selected.title,
+      shopify_title_fallback_used: selected.usedRomanianFallback,
+    };
+  });
+  const normalizedRows = normalizeExportRowsForOptions(safeTitleRows, groupingMode);
   const status = await getAifShopifyStatus(client);
   const location = status?.locations?.csikszereda || null;
   const locationName = text(location?.name);
@@ -1371,31 +1406,20 @@ async function prepareExport(client, options = {}) {
     });
   }
 
-  // AIF_SHOPIFY_IMAGE_V8: a kepnelkuli meret csak ugyanazon szinen belul
-  // orokolhet fotot, es csak akkor, ha egyetlen kepcsalad ismert.
-  // A model_colors export mas szineinek fotoja nem lehet masik varians kepe.
-  const imageByModelColor = new Map();
+  const productImageByGroup = new Map();
   for (const row of normalizedRows) {
     const image = imageFromRow(row);
     const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
-    const colorKey = normalizeKey(row.color_name || row.color_code || row.supplier_color_code);
-    if (!colorKey || !image) continue;
-    const key = `${groupKey}::${colorKey}`;
-    const existing=imageByModelColor.get(key) || new Set();
-    existing.add(image);
-    imageByModelColor.set(key, existing);
+    if (image && !productImageByGroup.has(groupKey)) productImageByGroup.set(groupKey, image);
   }
   const exportRows = normalizedRows.map((row) => {
     const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
-    const colorKey = normalizeKey(row.color_name || row.color_code || row.supplier_color_code);
-    const candidates=colorKey ? imageByModelColor.get(`${groupKey}::${colorKey}`) : null;
-    const fallback=candidates?.size===1 ? [...candidates][0] : '';
     return {
       ...row,
       grouping_mode: groupingMode,
       product_group_key: groupKey,
       product_group_code: productGroupCode(row, groupingMode),
-      image_url: imageFromRow(row) || fallback || "",
+      image_url: imageFromRow(row) || productImageByGroup.get(groupKey) || "",
     };
   });
 
@@ -1894,6 +1918,17 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   // kijavítjuk letöltéskor.
   const exportableItems = items.rows
     .filter((row) => ["exported_pending", "mapped", "error"].includes(String(row.item_status)) && row.product_row);
+  // Régen elmentett exportoknál a snapshotban is maradhatott hibás URL-cím.
+  // A javított élő modellneveket egyszer, tömbösítve olvassuk.
+  const modelIds = unique(exportableItems.map((r) => text(r.model_id)).filter(Boolean));
+  const modelTitleRows = modelIds.length
+    ? (await client.query(
+      `SELECT id::text AS id, shopify_title, title_ro
+       FROM aif_product_models WHERE id::text=ANY($1::text[])`,
+      [modelIds],
+    )).rows
+    : [];
+  const liveTitleByModel = new Map(modelTitleRows.map((r) => [r.id, aifShopifyResolvedExportTitle(r).title]));
   const grouped = new Map();
   for (const item of exportableItems) {
     const productRow = { ...(item.product_row || {}) };
@@ -1912,9 +1947,29 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
       const [titleRow] = group.splice(titleIndex, 1);
       group.unshift(titleRow);
     }
-    if (group.length && !text(group[0].productRow["Title"])) {
-      const fallbackTitle = text(group[0].item?.snapshot?.title);
-      if (fallbackTitle) group[0].productRow["Title"] = fallbackTitle;
+    if (group.length) {
+      const first = group[0].productRow;
+      // Kizárólag nyilvánvalóan hibás / hiányzó régi címet javítunk.
+      let safeTitle = aifShopifyHumanExportTitle(first["Title"]);
+      if (!safeTitle) {
+        const fallbacks = unique(group.map(({ item }) =>
+          liveTitleByModel.get(text(item.model_id)) || ""
+        ).filter(Boolean));
+        if (fallbacks.length !== 1) {
+          throw Object.assign(
+            new Error(`A régi Shopify export (${text(exportRow.id)}) hibás címet tartalmaz, és nincs egyértelmű élő terméknév; készíts új exportot.`),
+            { code: "shopify_saved_export_title_unresolved" },
+          );
+        }
+        safeTitle = fallbacks[0];
+      }
+      first["Title"] = safeTitle;
+      if (text(first["SEO title"]) && !aifShopifyHumanExportTitle(first["SEO title"])) {
+        first["SEO title"] = safeTitle.slice(0, 70);
+      }
+      if (text(first["Image alt text"]) && !aifShopifyHumanExportTitle(first["Image alt text"])) {
+        first["Image alt text"] = safeTitle.slice(0, 125);
+      }
     }
     const pictureUrls=[];
     const seenUrls=new Set();
@@ -4502,20 +4557,6 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
          WHERE export_id=$1 AND variant_id=$2`,
         [exportRow.id, item.variant_id]
       );
-      // AIF_SHOPIFY_IMAGE_V8: a sikeresen osszekapcsolt uj export is
-      // megkapja a teljes aktualis kepgaleria szinkronjat.
-      // Csak a kep-queue, keszlet/termekadat-modositas nelkul.
-      try {
-        await ensureAifShopifyImageSchema(client);
-        await enqueueAifShopifyImagesForVariant(
-          client, item.variant_id,
-          aifImageGallery(item.snapshot?.galleryImages, item.snapshot?.imageUrl)
-        );
-      } catch (imageError) {
-        console.error('AIF Shopify gallery queue deferred after mapping',
-          {variantId:item.variant_id, error:imageError?.message||String(imageError)});
-        // A DB-trigger / beagyazott worker kesobb ujraprobalja.
-      }
       if (!metadataOnly && options.enqueueStock !== false) {
         await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }
