@@ -42,16 +42,19 @@ export async function ensureAifShopifyImageSchema(client) {
           INSERT INTO aif_shopify_image_outbox
             (shopify_product_id,status,generation,attempts,bootstrap_urls,
              job_id,last_error,locked_at,next_attempt_at,updated_at)
-          SELECT DISTINCT svm.shopify_product_id,'pending',gen_random_uuid(),0,
+          SELECT svm.shopify_product_id,'pending',gen_random_uuid(),0,
             CASE WHEN OLD.images IS NOT NULL AND jsonb_typeof(OLD.images)='array'
               AND jsonb_array_length(OLD.images)>0 THEN OLD.images
               WHEN NULLIF(btrim(COALESCE(OLD.image_url,'')),'') IS NOT NULL
                 THEN jsonb_build_array(OLD.image_url)
               ELSE '[]'::jsonb END,
-            NULL,NULL,NULL,now()+interval '12 seconds',now()
-          FROM aif_shopify_variant_map svm
-          WHERE svm.variant_id=NEW.id
-            AND NULLIF(btrim(svm.shopify_product_id),'') IS NOT NULL
+            NULL::text,NULL::text,NULL::timestamptz,now()+interval '12 seconds',now()
+          FROM (
+            SELECT DISTINCT shopify_product_id
+            FROM aif_shopify_variant_map
+            WHERE variant_id=NEW.id
+              AND NULLIF(btrim(shopify_product_id),'') IS NOT NULL
+          ) svm
           ON CONFLICT (shopify_product_id) DO UPDATE SET
             status='pending',generation=gen_random_uuid(),attempts=0,
             bootstrap_urls=CASE
@@ -94,7 +97,7 @@ export async function ensureAifShopifyImageSchema(client) {
             (shopify_product_id,status,generation,attempts,bootstrap_urls,
              job_id,last_error,locked_at,next_attempt_at,updated_at)
           VALUES (NEW.shopify_product_id,'pending',gen_random_uuid(),0,
-            '[]'::jsonb,NULL,NULL,NULL,now()+interval '90 seconds',now())
+            '[]'::jsonb,NULL::text,NULL::text,NULL::timestamptz,now()+interval '90 seconds',now())
           ON CONFLICT (shopify_product_id) DO UPDATE SET
             status='pending',generation=gen_random_uuid(),attempts=0,
             job_id=NULL,last_error=NULL,locked_at=NULL,
@@ -121,9 +124,13 @@ export async function enqueueAifShopifyImagesForVariant(client, variantId, previ
     INSERT INTO aif_shopify_image_outbox (
       shopify_product_id,status,generation,attempts,bootstrap_urls,job_id,last_error,locked_at,next_attempt_at,updated_at
     )
-    SELECT DISTINCT shopify_product_id,'pending',gen_random_uuid(),0,$2::jsonb,NULL,NULL,NULL,now(),now()
-    FROM aif_shopify_variant_map
-    WHERE variant_id=$1::uuid AND NULLIF(btrim(shopify_product_id),'') IS NOT NULL
+    SELECT svm.shopify_product_id,'pending',gen_random_uuid(),0,$2::jsonb,
+      NULL::text,NULL::text,NULL::timestamptz,now(),now()
+    FROM (
+      SELECT DISTINCT shopify_product_id
+      FROM aif_shopify_variant_map
+      WHERE variant_id=$1::uuid AND NULLIF(btrim(shopify_product_id),'') IS NOT NULL
+    ) svm
     ON CONFLICT (shopify_product_id) DO UPDATE SET
       status='pending',generation=gen_random_uuid(),attempts=0,job_id=NULL,
       bootstrap_urls=CASE
@@ -161,7 +168,7 @@ export async function enqueueAifShopifyImageBacklog(client, { dryRun = false } =
     (shopify_product_id,status,generation,attempts,bootstrap_urls,
      job_id,last_error,locked_at,next_attempt_at,updated_at)
     SELECT p.shopify_product_id,'pending',gen_random_uuid(),0,
-      '[]'::jsonb,NULL,NULL,NULL,now(),now()
+      '[]'::jsonb,NULL::text,NULL::text,NULL::timestamptz,now(),now()
     FROM (${candidatesSql}) p
     WHERE true
     ON CONFLICT (shopify_product_id) DO NOTHING
