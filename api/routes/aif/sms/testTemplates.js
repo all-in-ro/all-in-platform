@@ -75,7 +75,7 @@ export async function managerTemplatePreview(db, settings, templateId, locationC
   const encodingMode = txt(options.encodingMode || 'auto');
   if (!STORES.has(code)) throw fail('Érvénytelen üzlet.', 'sms_test_store', 400);
   if (!MODES.has(encodingMode)) throw fail('Érvénytelen SMS-próbaformátum.', 'sms_test_encoding', 400);
-  let sourceMessage, templateName, sampleBrandId = '', sampleCategoryId = '', sampleSource='';
+  let sourceMessage, templateName, sampleBrandId = '', sampleCategoryId = '', sampleSource='', kind='connection';
   if (id === 'connection') {
     sourceMessage = DIAGNOSTIC;
     templateName = 'Kapcsolatpróba';
@@ -83,6 +83,7 @@ export async function managerTemplatePreview(db, settings, templateId, locationC
     if (!UUID.test(id)) throw fail('Válassz mentett üzenetsablont.', 'sms_test_template', 400);
     const record = (await db.query('SELECT id,name,kind,language,blocks FROM aif_sms_templates WHERE id=$1 LIMIT 1', [id])).rows[0];
     if (!record) throw fail('A sablon már nem található.', 'sms_test_template_missing', 404);
+    kind=record.kind;
     sampleBrandId = txt(options.sampleBrandId);
     let brandName = '';
     if (sampleBrandId) {
@@ -118,7 +119,7 @@ export async function managerTemplatePreview(db, settings, templateId, locationC
     id, code, sampleBrandId, sampleCategoryId, encodingMode, phone, sender: txt(settings.sender), message: parts.message
   })).digest('hex');
   return {
-    templateId: id, templateName, locationCode: code, phone,
+    templateId: id, templateName, kind, locationCode: code, phone,
     sampleBrandId, sampleCategoryId, encodingMode, message: parts.message,
     segments: parts.segments, encoding: parts.encoding, fingerprint, sampleSource,
     modifiedForGsm7: original.message !== parts.message

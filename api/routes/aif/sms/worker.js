@@ -1,4 +1,4 @@
-import { phoneNumber, withinSendHours, segmentInfo, messageSettingsMatch } from './domain.js';
+import { phoneNumber, withinSendHours, segmentInfo, messageSettingsMatch, ARRIVAL_ONE_PART_POLICY, isArrivalOnePart } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { providerConfig } from './provider.js';
 const workers=new WeakMap();
@@ -53,7 +53,17 @@ export function startSmsWorker(pool,{ensure,provider}) {
       const coupon=(await db.query(`SELECT id,rules FROM aif_sms_coupons WHERE recipient_id=$1`,[r.id])).rows[0];
       if(coupon){const today=(await db.query(`SELECT ((now() AT TIME ZONE 'Europe/Bucharest')::date)::text AS date`)).rows[0].date;if(coupon.rules.validUntil<today)reason='A kupon lejárt a küldés előtt';}
       if(reason){await db.query(`UPDATE aif_sms_recipients SET status='skipped',reason=$2,updated_at=now() WHERE id=$1 AND status='pending'`,[r.id,reason]);await audit(db,{campaignId:c.id,customerId:r.customer_id,locationId:c.location_id,actor:'sms-worker',event:'recipient_skipped',payload:{recipientId:r.id,reason}});return;}
-      if(segmentInfo(r.message).segments>s.maxSegments){await pause('Az üzenet meghaladja az új SMS-hosszkorlátot.');return;}
+      let parts;
+      try{parts=segmentInfo(r.message);}catch(e){await pause('Az SMS kodolasa vagy karakterkeszlete ervenytelen.');return;}
+      if(parts.segments>s.maxSegments||parts.segments!==Number(r.segments)){
+        await pause('Az üzenet hossza nem egyezik a jóváhagyott SMS-szel.');return;
+      }
+      if(c.kind==='arrival'&&c.mode==='live'&&(
+        c.definition?.onePartPolicy!==ARRIVAL_ONE_PART_POLICY ||
+        !isArrivalOnePart(r.message,r.segments)
+      )){
+        await pause('Egyrészes SMS-védelem: ez a kampány régi vagy több részből álló üzenetet tartalmaz. Készíts új kampányt.');return;
+      }
       if(c.mode==='live'){
         const spent=(await db.query(`SELECT COALESCE(sum(r.segments),0)::int AS n FROM aif_sms_recipients r JOIN aif_sms_campaigns c ON c.id=r.campaign_id
           WHERE c.mode='live' AND r.status IN('sending','accepted','delivered','undelivered','unknown') AND (r.send_started_at AT TIME ZONE 'Europe/Bucharest')::date=(now() AT TIME ZONE 'Europe/Bucharest')::date`)).rows[0].n;

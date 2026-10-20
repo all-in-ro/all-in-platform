@@ -122,7 +122,7 @@ export function messageSettingsSnapshot(settings,locationCode) {
     includeWebsite:settings.includeWebsite===true&&Boolean(txt(settings.websiteUrl)),
     // V4 separates the optional webshop URL and the mandatory opt-out contact
     // onto their own physical SMS lines. Never send V3 drafts with old formatting.
-    messageFormatVersion:6
+    messageFormatVersion:7
   };
 }
 export function messageSettingsMatch(definition,settings,locationCode) {
@@ -296,7 +296,7 @@ export function compactSmsNames(values,language='hu',kind='brands') {
   const uniqueNames=unique(values);
   // Soha nem teszunk hozza kitalalt marketingmondatot (pl. 'es tovabbi markak').
   // A dinamiku(s) mezoben kizarolag valodi, illeszkedo markanevek szerepelnek.
-  return uniqueNames.slice(0,2).join(', ');
+  return uniqueNames.slice(0,2).join(', ') + (kind==='brands'&&uniqueNames.length>2?'...':'');
 }
 export function renderMessage(blocks, values, unsubscribeUrl, language='hu', terms='', unsubscribePhone='', includeUnsubscribeLink=false, websiteUrl='', includeWebsite=false, unicodeEnabled=false) {
   const raw=blocks.map(b=>{
@@ -323,6 +323,76 @@ export function renderMessage(blocks, values, unsubscribeUrl, language='hu', ter
   lines.push(`${language==='ro'?'Dezabonare':'Leiratkozás'}: ${optOut}`);
   return smsLinkTransportText(lines.join('\n'),unicodeEnabled);
 }
+// V13: One paid segment for every new-arrival recipient. The SMS text is built
+// on the SERVER from actual recipient matches, and only then costed as GSM-7/UCS-2.
+// We keep the complete shop address, configured webshop and opt-out footer.
+// Never cut arbitrary characters: a safe full message or a clear failure.
+export const ARRIVAL_ONE_PART_POLICY = 'arrival_one_part_v13';
+export function isArrivalOnePart(message, expectedSegments=1) {
+  const part=segmentInfo(message);
+  return Number(expectedSegments)===1 && part.segments===1 &&
+    part.units<=(part.encoding==='GSM-7'?150:65);
+}
+
+function arrivalBrandText(brands,count) {
+  const names=unique(brands);
+  if(!names.length)return '';
+  return names.slice(0,count).join(', ') + (names.length>count?'...':'');
+}
+
+export function renderOnePartArrival({
+  blocks,values,brandNames=[],language='hu',unsubscribeUrl,
+  unsubscribePhone,includeUnsubscribeLink=false,
+  websiteUrl='',includeWebsite=false,unicodeEnabled=false
+}) {
+  const names=unique(brandNames);
+  const footer=[unsubscribeUrl,language,'',unsubscribePhone,includeUnsubscribeLink,websiteUrl,includeWebsite];
+  const tryRender=(draft,vars,unicode)=>{
+    try {
+      return renderMessage(draft,vars,...footer,unicode);
+    } catch(e) {
+      // If the template requests a brand/category the source lacks, the
+      // generic arrival notice remains truthful and keeps the same targeting.
+      if(e?.code==='sms_missing_value')return null;
+      throw e;
+    }
+  };
+  const candidates=[
+    {strategy:'original',blocks,values,unicode:unicodeEnabled},
+    ...(unicodeEnabled?[{strategy:'original_gsm7',blocks,values,unicode:false}]:[])
+  ];
+  const short=(brandCount)=>[
+    {type:'text',value:language==='ro'?'Produse noi: ':'Uj aru: '},
+    {type:'token',value:'brands'},
+    {type:'text',value:language==='ro'?'. Te asteptam: ':'. Varunk: '},
+    {type:'token',value:'store'}
+  ];
+  // Multi-brand clients: show up to 2 real brand names, then "..." only when
+  // another real matching brand exists. Never invent brand names.
+  if(names.length){
+    for(const count of [2,1]) {
+      if(count===1&&names.length===1)continue;
+      candidates.push({strategy:count===2?'two_brands':'one_brand',
+        blocks:short(count),values:{...values,brands:arrivalBrandText(names,count)},unicode:false});
+    }
+  }
+  candidates.push({strategy:'generic',
+    blocks:[
+      {type:'text',value:language==='ro'?'Au sosit produse noi! Te asteptam: ':'Uj aru erkezett! Varunk: '},
+      {type:'token',value:'store'}
+    ],values,unicode:false});
+
+  for(const candidate of candidates){
+    const rendered=tryRender(candidate.blocks,candidate.values,candidate.unicode);
+    if(rendered&&isArrivalOnePart(rendered.message,rendered.segments)){
+      return {...rendered,strategy:candidate.strategy,
+        shortened:candidate.strategy!=='original'};
+    }
+  }
+  throw fail('Az újáru-SMS az üzlet teljes címével, a bekapcsolt webshopcímmel és a leiratkozással sem fér bele 1 részbe. Rövidítsd az üzletcímet, vagy kapcsold ki az opcionális webshopcímet, majd készíts új előnézetet.',
+    'sms_arrival_one_part',409);
+}
+
 export function profileMatchesProduct(pref, product) {
   const g=genderKey(product.gender);
   if(!g||!pref.genders?.includes(g)) return false;

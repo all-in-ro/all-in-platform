@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch, compactSmsNames, cleanCouponCopy, segmentInfo } from './domain.js';
+import { txt, unique, fail, validateBlocks, cleanCouponRules, renderMessage, genderKey, withinSendHours, couponTerms, storeLabel, messageSettingsSnapshot, messageSettingsMatch, compactSmsNames, cleanCouponCopy, segmentInfo, renderOnePartArrival, ARRIVAL_ONE_PART_POLICY, isArrivalOnePart } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { metadata, sourceProducts, audienceFor } from './data.js';
 import { publicBase, providerConfig } from './provider.js';
@@ -41,20 +41,35 @@ export function createCampaignService(pool,provider) {
     const base=publicBase(),recipients=[];
     const messageSettings=messageSettingsSnapshot(settings,location.code);
     const codes=coupon?await allocateUniqueCouponCodes(db,audience.eligible.length):[];
+    const arrivalShortening={total:0,byStrategy:{}};
     for(const [i,person] of audience.eligible.entries()){
       const code=coupon?codes[i]:null;
+      const matchingBrands=unique(person.matched.map(p=>p.brand));
+      const fallbackBrands=unique(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name));
+      const brandNames=matchingBrands.length?matchingBrands:fallbackBrands;
       const values={name:person.name,store:storeLabel(settings,location.code,location.name),
         storeName:messageSettings.storeName||location.name,storeAddress:messageSettings.storeAddress,
-        brands:compactSmsNames(person.matched.map(p=>p.brand),language)||compactSmsNames(meta.brands.filter(b=>(!filters.brands.length||filters.brands.includes(b.id))&&!person.pref.allBrands&&person.pref.brands?.includes(b.id)).map(b=>b.name),language),
+        brands:compactSmsNames(brandNames,language),
         categories:compactSmsNames(person.matched.map(p=>p.category),language,'categories'),
         coupon:code,discount:coupon?`${coupon.value}${coupon.type==='percent'?'%':' RON'}`:'',expiry:coupon?.validUntil?.split('-').reverse().join('.')||''};
-      const rendered=renderMessage(blocks,values,`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language,couponCopy):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true,providerConfig().unicodeEnabled);
+      const messageArgs=[`${base}/api/aif/sms/u/${person.token}`,language,coupon?couponTerms(coupon,language,couponCopy):'',settings.unsubscribePhone,settings.includeUnsubscribeLink===true,settings.websiteUrl,settings.includeWebsite===true,providerConfig().unicodeEnabled];
+      const rendered=kind==='arrival'
+        ?renderOnePartArrival({blocks,values,brandNames,language,
+            unsubscribeUrl:messageArgs[0],unsubscribePhone:settings.unsubscribePhone,
+            includeUnsubscribeLink:settings.includeUnsubscribeLink===true,
+            websiteUrl:settings.websiteUrl,includeWebsite:settings.includeWebsite===true,
+            unicodeEnabled:providerConfig().unicodeEnabled})
+        :renderMessage(blocks,values,...messageArgs);
       if(rendered.segments>settings.maxSegments)throw fail(`${person.name}: az üzenet ${rendered.segments} SMS-részből állna. A korlát ${settings.maxSegments}. Rövidítsd a szöveget, vagy a Vezérlőpultban ellenőrizd a megengedett SMS-részeket.`,'sms_too_long');
-      recipients.push({...person,id:randomUUID(),couponCode:code,...rendered});
+      if(kind==='arrival'){
+        if(!isArrivalOnePart(rendered.message,rendered.segments))throw fail('A címzett SMS-e nem fér bele 1 fizetős részbe.','sms_arrival_one_part',409);
+        if(rendered.shortened){arrivalShortening.total++;arrivalShortening.byStrategy[rendered.strategy]=(arrivalShortening.byStrategy[rendered.strategy]||0)+1;}
+      }
+      recipients.push({...person,id:randomUUID(),couponCode:code,message:rendered.message,segments:rendered.segments,units:rendered.units,encoding:rendered.encoding,converted:rendered.converted});
     }
     const segments=recipients.reduce((n,r)=>n+r.segments,0);
     if(segments>settings.campaignSegmentLimit)throw fail('Az összes SMS-rész meghaladja a kampánykeretet.');
-    return {definition:{...definition,excluded:audience.excluded,unknownGender:loaded.unknownGender,sender:settings.sender,unsubscribePhone:settings.unsubscribePhone||'',messageSettings},recipients,segments,sources:loaded.sources};
+    return {definition:{...definition,onePartPolicy:kind==='arrival'?ARRIVAL_ONE_PART_POLICY:null,arrivalShortening:kind==='arrival'?arrivalShortening:null,excluded:audience.excluded,unknownGender:loaded.unknownGender,sender:settings.sender,unsubscribePhone:settings.unsubscribePhone||'',messageSettings},recipients,segments,sources:loaded.sources};
   }
   return {
     detail,
@@ -105,6 +120,13 @@ export function createCampaignService(pool,provider) {
             await db.query('COMMIT');return detail(pool,id,scope);
           }
           if(Number(input.confirmCount)!==c.recipient_count)throw fail('A címzettszám visszaigazolása nem egyezik az előnézettel.');
+          if(c.kind==='arrival'&&c.mode==='live'){
+            if(c.definition?.onePartPolicy!==ARRIVAL_ONE_PART_POLICY)throw fail('Ez a kampány a korábbi SMS-formátummal készült. Az egyrészes küldéshez készíts új kampányt.', 'sms_arrival_reprepare',409);
+            const remaining=(await db.query("SELECT message,segments FROM aif_sms_recipients WHERE campaign_id=$1 AND status='pending'",[c.id])).rows;
+            if(remaining.some(r=>!isArrivalOnePart(r.message,r.segments))){
+              throw fail('A kampányban többrészes vagy túl hosszú SMS maradt. Rövidítsd az üzenetet, és készíts új címzettlistát.', 'sms_arrival_one_part',409);
+            }
+          }
           if(c.mode==='live'){
             if(!s.unsubscribePhone||c.definition?.unsubscribePhone!==s.unsubscribePhone)throw fail('A leiratkozási szám hiányzik vagy megváltozott. Készíts új kampányt az aktuális beállítással.','sms_unsubscribe_contact',409);
             if(!messageSettingsMatch(c.definition,s,c.location_code))throw fail('Az SMS fejléce, az üzlet neve/címe, a webáruház címe vagy a leiratkozási mód megváltozott. Készíts új kampányt.','sms_message_settings_changed',409);

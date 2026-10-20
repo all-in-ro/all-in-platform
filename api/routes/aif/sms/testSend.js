@@ -1,4 +1,4 @@
-import { fail, phoneNumber, segmentInfo, withinSendHours, messageSettingsMatch } from './domain.js';
+import { fail, phoneNumber, segmentInfo, withinSendHours, messageSettingsMatch, isArrivalOnePart, ARRIVAL_ONE_PART_POLICY } from './domain.js';
 import { settingsFrom, audit } from './schema.js';
 import { providerConfig } from './provider.js';
 import { managerTemplatePreview } from './testTemplates.js';
@@ -22,7 +22,9 @@ export function createSmsTestSender(pool, provider) {
       const conf=providerConfig();
       const blockedReason=plan.encoding==='UCS-2'&&!conf.unicodeEnabled
         ? 'Az ékezetes SMS-ekhez előbb engedélyezni kell az SMSLink Unicode-küldést.'
-        :plan.segments>settings.maxSegments?'A sablon meghaladja a maximális SMS-részszámot.':null;
+        :plan.kind==='arrival'&&!isArrivalOnePart(plan.message,plan.segments)
+          ? 'Az újáru-sablon tesztje 2 vagy több fizetős SMS-rész lenne. Előbb rövidítsd a sablont.'
+          :plan.segments>settings.maxSegments?'A sablon meghaladja a maximális SMS-részszámot.':null;
       return {...plan,blockedReason};
     },
     /**
@@ -50,6 +52,8 @@ export function createSmsTestSender(pool, provider) {
         throw fail('A kapcsolatpróba hosszellenőrzése hibás.', 'sms_test_message_invalid', 500);
       if(parts.segments>settings.maxSegments)
         throw fail('A maximális SMS-hossz beállítása nem engedi a tesztüzenetet.','sms_test_segments',409);
+      if(plan?.kind==='arrival'&&!isArrivalOnePart(message,parts.segments))
+        throw fail('Az újáru-sablon tesztje több mint 1 SMS-rész lenne. Rövidítsd előbb a sablont.','sms_arrival_one_part',409);
 
       const db=await pool.connect();
       try {
@@ -116,6 +120,10 @@ export function createSmsTestSender(pool, provider) {
         if(parts.encoding==='UCS-2'&&!conf.unicodeEnabled)throw fail('Ékezetes SMS. Az SMSLink Unicode-támogatása még nincs igazolva; nem indítunk fizetős tesztküldést.','sms_unicode_not_confirmed',409);
         if(parts.segments>settings.maxSegments||parts.segments!==Number(row.segments))
           throw fail('A kész SMS hossza időközben nem egyezik a beállításokkal.','sms_test_message_changed',409);
+        if(row.definition?.kind==='arrival'&&(
+          row.definition?.onePartPolicy!==ARRIVAL_ONE_PART_POLICY ||
+          !isArrivalOnePart(row.message,row.segments)
+        ))throw fail('Régi vagy több részes újáru-SMS nem küldhető tesztként. Készíts új egyrészes kampányt.','sms_arrival_one_part',409);
         const counts=(await db.query(`SELECT
             count(*) FILTER(WHERE (created_at AT TIME ZONE 'Europe/Bucharest')::date=(now() AT TIME ZONE 'Europe/Bucharest')::date)::int AS today,
             count(*) FILTER(WHERE created_at>now()-interval '90 seconds')::int AS recent
