@@ -88,6 +88,7 @@ type AifDayClosePreview = {
   activeActor?: string | null;
   workDate: string;
   expectedCash: number;
+  lockedCash?: number;
   previousWorkDate?: string | null;
   checkedAt?: string | null;
 };
@@ -1578,21 +1579,34 @@ export default function AllInShopOperations({
   const handoverPreview = shiftData?.handoverPreview || null;
   const handoverShiftPreview = handoverPreview?.shift || currentEmployeeDay;
   const handoverExpectedCash = handoverPreview?.expectedCash ?? shiftPayment(shiftData?.totals, "cash").amount;
-  const currentCashBalance = numberValue(
+  // A könyvelt kassza a főnök által MÉG NEM igazolt összeget is tartalmazza.
+  // A napi záráshoz és a következő átadáshoz kizárólag a szabad, fizikai pénz kell.
+  const currentBookCash = numberValue(
     summaryIsToday
       ? (cashData?.balance.availableCash ?? shiftData?.cashBalance?.availableCash ?? handoverExpectedCash)
       : (shiftData?.cashBalance?.availableCash ?? 0),
   );
+  const currentLockedCash = numberValue(
+    summaryIsToday
+      ? (cashData?.balance.pendingOut ?? shiftData?.cashBalance?.pendingOut ?? 0)
+      : (shiftData?.cashBalance?.pendingOut ?? 0),
+  );
+  const currentCashBalance = Math.round((currentBookCash - currentLockedCash) * 100) / 100;
   const currentDayClosure = summaryIsToday
     ? (shiftData?.dayClosure || cashData?.todayClosure || null)
     : (shiftData?.dayClosure || null);
   const pendingBossHandovers = cashData?.pendingManagerHandovers || [];
-  const pendingBossHandoverTotal = pendingBossHandovers.reduce(
-    (sum, item) => sum + numberValue(item.amount),
-    0,
-  );
-  const availableCashForNewHandover = Math.max(0, currentCashBalance - pendingBossHandoverTotal);
+  // Már levontuk a zárolt részt a fizikai kasszából: tilos kétszer levonni.
+  const availableCashForNewHandover = Math.max(0, currentCashBalance);
   const cashHandoverPlan = cashData?.handoverPlan || null;
+  const cashHandoverConfirmedTo = cashHandoverPlan?.lastConfirmedTo || cashHandoverPlan?.lastExplicitTo || null;
+  const cashHandoverPendingPeriods = pendingBossHandovers.map((item) => {
+    const fallback = localDateKey(item.requestedAt);
+    return {
+      from: item.handoverFromDate || item.handoverToDate || fallback,
+      to: item.handoverToDate || item.handoverFromDate || fallback,
+    };
+  });
   const cashHandoverDays = useMemo(() => {
     const serverDays = cashHandoverPlan?.days || [];
     if (cashHandoverAfterDate) return serverDays;
@@ -2289,7 +2303,7 @@ export default function AllInShopOperations({
       });
       setHandoverNotice(
         response.item.type === "manager_handover"
-          ? `${formatMoney(response.item.amount)} készpénzátadás rögzítve (${response.item.handoverFromDate || "–"} → ${response.item.handoverToDate || "–"}). Átvételre vár.`
+          ? `${formatMoney(response.item.amount)} zárolva (${response.item.handoverFromDate || "–"} → ${response.item.handoverToDate || "–"}). Főnöki átvételre vár; a napzárás ettől független.`
           : `${formatMoney(response.item.amount)} bankbefizetés rögzítve (${response.item.reference || "referencia nélkül"}).`,
       );
       setCashMoveOpen(false);
@@ -2389,7 +2403,7 @@ export default function AllInShopOperations({
       if (availableCashForNewHandover <= 0) {
         setError(
           pendingBossHandovers.length
-            ? "A kassza még szabadon átadható része 0 RON. A teljes fennmaradó összeg már átvételre vár."
+            ? "Nincs további szabad készpénz. A korábban kijelölt pénz zárolva van, átvételre vár."
             : "Nincs átadható készpénz a kasszában.",
         );
         return;
@@ -2978,7 +2992,7 @@ export default function AllInShopOperations({
                       </p>
                     </div>
                     <div className="border-l border-white/40 pl-4 sm:pl-5">
-                      <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Rendszer szerint az üzletben</p>
+                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Szabad készpénz az üzletben</p>
                       <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
                     </div>
                   </div>
@@ -3020,7 +3034,7 @@ export default function AllInShopOperations({
                             <div>
                               <p className="text-sm text-orange-50">
                                 {pendingBossHandovers.length > 1 ? `${index + 1}. ` : ""}
-                                Készpénzátadás átvételre vár: {formatMoney(pendingHandover.amount)}
+                                Zárolva • főnöki átvételre vár: {formatMoney(pendingHandover.amount)}
                               </p>
                               <p className="mt-1 text-xs text-white/48">
                                 {pendingHandover.requestedBy} rögzítette • {formatTime(pendingHandover.requestedAt)}
@@ -3051,12 +3065,12 @@ export default function AllInShopOperations({
                     <div className="rounded-[22px] border border-[#9be9e5]/22 bg-[#263345] p-4">
                       <div className="grid gap-2 sm:grid-cols-3">
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
-                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Jelenlegi kassza</p>
+                           <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Szabad kassza</p>
                           <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
-                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Átvételre vár</p>
-                          <p className="mt-1 text-lg text-orange-50">{formatMoney(cashData?.balance.pendingOut || 0)}</p>
+                           <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Zárolva • átvételre vár</p>
+                           <p className="mt-1 text-lg text-orange-50">{formatMoney(currentLockedCash)}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
                           <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Utolsó zárás</p>
@@ -3072,7 +3086,7 @@ export default function AllInShopOperations({
                             disabled={availableCashForNewHandover <= 0 || cashLoading}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            <WalletCards size={17} /> Készpénz átadása
+                             <WalletCards size={17} /> Pénzátadás zárolása
                           </button>
                           <button
                             type="button"
@@ -3162,9 +3176,9 @@ export default function AllInShopOperations({
                                     : "text-white/45"
                               }`}>
                                 {latestCashMovement.status === "confirmed"
-                                  ? "Visszaigazolva"
+                                  ? "Átvéve"
                                   : latestCashMovement.status === "pending"
-                                    ? "Visszaigazolásra vár"
+                                    ? "Zárolva • átvételre vár"
                                     : latestCashMovement.status}
                               </p>
                             </div>
@@ -4032,9 +4046,9 @@ export default function AllInShopOperations({
                                     : "border-white/12 bg-black/10 text-white/50"
                               }`}>
                                 {movement.status === "confirmed"
-                                  ? "Visszaigazolva"
+                                  ? "Átvéve"
                                   : movement.status === "pending"
-                                    ? "Átvételre vár"
+                                    ? "Zárolva • átvételre vár"
                                     : movement.status === "cancelled"
                                       ? "Visszavonva"
                                       : movement.status}
@@ -4192,7 +4206,7 @@ export default function AllInShopOperations({
                                       ? "border-[#ffe66b]/45 bg-[#fed700]/12 text-[#fff4a5]"
                                       : "border-white/12 bg-white/[0.04] text-white/55"
                                 }`}>
-                                  {confirmed ? "Átvéve" : pending ? "Átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
+                                  {confirmed ? "Átvéve" : pending ? "Zárolva • átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
                                 </span>
                                 <span className="text-[10px] text-white/42">
                                   {(movement.handoverFromDate || movement.handoverToDate)
@@ -4315,9 +4329,12 @@ export default function AllInShopOperations({
                     <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCloseExpectedCash)}</p>
                     <p className="mt-2 text-xs text-white/50">
                       {summaryIsToday
-                        ? "Az aktuális pillanatig számolt kassza."
-                        : "A kiválasztott üzleti nap végéig számolt kassza. A mai mozgások nem kerülnek bele."}
+                        ? "A ténylegesen megszámolható készpénz, a zárolt átadások nélkül."
+                        : "Az adott nap végén szabadon lévő készpénz, a zárolt átadások nélkül."}
                     </p>
+                    {numberValue(usableDayClosePreview?.lockedCash) > 0.005 ? (
+                      <p className="mt-2 text-[11px] text-amber-100">Külön zárolva, átvételre vár: {formatMoney(usableDayClosePreview?.lockedCash)}</p>
+                    ) : null}
                   </div>
                   <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
                     <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megszámolt készpénz</span>
@@ -4421,7 +4438,7 @@ export default function AllInShopOperations({
                   }`}><CircleDollarSign size={23} /></span>
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Készpénz útja</p>
-                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz átadása" : "Bankba befizetés"}</h3>
+                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz zárolása átadásra" : "Bankba befizetés"}</h3>
                     <p className="mt-1 text-xs text-white/52">{locationName} • jelenlegi kassza {formatMoney(currentCashBalance)}</p>
                   </div>
                 </div>
@@ -4439,7 +4456,7 @@ export default function AllInShopOperations({
                         : "border-white/12 bg-[#374357] text-white hover:border-[#ffe66b]/45"
                     }`}
                   >
-                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Készpénz átadása</p>
+                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Átadásra zárolás</p>
                     <p className={`mt-1 text-[11px] ${cashMoveType === "manager_handover" ? "text-[#243044]/70" : "text-white/48"}`}>Válaszd ki, melyik üzleti napig adod át az összegyűlt készpénzt.</p>
                   </button>
                   <button
@@ -4468,7 +4485,7 @@ export default function AllInShopOperations({
                             </h4>
                           </div>
                           <span className="rounded-xl border border-red-300/45 bg-red-600/18 px-3 py-2 text-[11px] text-red-50">
-                            Utolsó átvett nap: {cashHandoverAfterDate ? formatDate(cashHandoverAfterDate) : "nincs"}
+                            Utolsó igazolt átvétel: {cashHandoverConfirmedTo ? formatDate(cashHandoverConfirmedTo) : "nincs"}
                           </span>
                         </div>
 
@@ -4498,13 +4515,19 @@ export default function AllInShopOperations({
                             className="min-h-[72px] rounded-2xl border border-white/12 bg-white/[0.04] px-4 text-left text-[11px] text-white/58 transition hover:border-red-300/35 hover:bg-red-500/[0.06]"
                           >
                             <span className="block text-[9px] uppercase tracking-[0.1em] text-white/36">Csak javításhoz</span>
-                            <span className="mt-1 block">Utolsó átvett nap módosítása</span>
+                            <span className="mt-1 block">Átadási kezdőnap módosítása</span>
                           </button>
                         </div>
 
+                        {cashHandoverAfterDate && cashHandoverAfterDate !== cashHandoverConfirmedTo ? (
+                          <p className="mt-2 text-[11px] text-orange-100/80">Új átadás kezdőpontja: {formatDate(cashHandoverAfterDate)} után. Ez önmagában nem igazolt átvétel.</p>
+                        ) : null}
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px]">
                           <span className="inline-flex items-center gap-1.5 text-red-100/72">
-                            <span className="h-3 w-3 rounded-full border border-red-300 bg-red-600" /> már átadott nap
+                            <span className="h-3 w-3 rounded-full border border-red-300 bg-red-600" /> főnök által átvéve
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-orange-100/78">
+                            <span className="h-3 w-3 rounded-full border border-orange-300 bg-orange-500/40" /> zárolva / átvételre vár
                           </span>
                           <span className="inline-flex items-center gap-1.5 text-[#fff2a5]/78">
                             <span className="h-3 w-3 rounded-full border-2 border-[#fed700]" /> még átadható nap
@@ -4553,7 +4576,7 @@ export default function AllInShopOperations({
                     <div className="flex items-start gap-3 rounded-2xl border border-[#ffe66b]/26 bg-[#fed700]/[0.07] px-4 py-3">
                       <TriangleAlert className="mt-0.5 shrink-0 text-[#ffe66b]" size={18} />
                       <p className="text-xs leading-relaxed text-white/68">
-                        A rendszer számolja az összeget a kiválasztott napig. Kézzel nem írható át. A kassza csak akkor csökken, amikor az Admin ténylegesen visszaigazolja az átvételt.
+                        A rendszer számolja az összeget a kiválasztott napig, kézzel nem írható át. A rögzítéskor az összeg azonnal zárolt lesz, a szabad kasszából kikerül, és a nap ettől még lezárható. Véglegesen átvettnek csak a főnök visszaigazolása után számít.
                       </p>
                     </div>
                   </div>
@@ -4602,7 +4625,7 @@ export default function AllInShopOperations({
                   }`}
                 >
                   {cashMoveSaving ? <Loader2 size={17} className="animate-spin" /> : cashMoveType === "manager_handover" ? <WalletCards size={17} /> : <Landmark size={17} />}
-                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Készpénzátadás rögzítése" : "Bankbefizetés rögzítése"}
+                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Zárolás rögzítése" : "Bankbefizetés rögzítése"}
                 </button>
               </footer>
             </section>
@@ -4627,12 +4650,12 @@ export default function AllInShopOperations({
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.15em] text-white/42">Készpénzátadás dátuma</p>
                     <h3 className="mt-1 text-xl text-white">
-                      {cashCalendarMode === "anchor" ? "Utolsó átvett nap javítása" : "Meddig adod át a készpénzt?"}
+                      {cashCalendarMode === "anchor" ? "Átadási kezdőnap javítása" : "Meddig adod át a készpénzt?"}
                     </h3>
                     <p className="mt-1 text-xs text-white/48">
                       {cashCalendarMode === "anchor"
                         ? "Ezt csak akkor módosítsd, ha a régi átadási előzmény hibás."
-                        : "Piros: már átadva • sárga karika: még átadható"}
+                        : "Piros: átvéve • narancs: zárolva • sárga: átadható"}
                     </p>
                   </div>
                 </div>
@@ -4683,9 +4706,14 @@ export default function AllInShopOperations({
                     const dayData = cashHandoverDayMap.get(cell.iso) || null;
                     const beforeActivity = Boolean(earliest && cell.iso < earliest);
                     const future = cell.iso > todayIso();
-                    const handedOver = Boolean(anchor && cell.iso <= anchor && !beforeActivity);
-                    const pending = dayData?.status === "pending";
-                    const available = Boolean(dayData && !pending && cell.iso > anchor && !future);
+                    // A kezdőnap lehet az utolsó FÜGGŐ időszak vége is.
+                    // Ettől a nap még nem "átvéve": piros csak confirmed alapján.
+                    const handedOver = Boolean(cashHandoverConfirmedTo && cell.iso <= cashHandoverConfirmedTo && !beforeActivity);
+                    const pending = !handedOver && (
+                      cashHandoverPendingPeriods.some((period) => period.from && period.to && period.from <= cell.iso && cell.iso <= period.to)
+                      || dayData?.status === "pending"
+                    );
+                    const available = Boolean(dayData && !handedOver && !pending && cell.iso > anchor && !future);
                     const selected = cell.iso === cashHandoverToDate;
                     const anchorSelected = cashCalendarMode === "anchor" && cell.iso === anchor;
                     const disabled = cashCalendarMode === "anchor"
@@ -4700,11 +4728,11 @@ export default function AllInShopOperations({
                         onClick={() => void chooseCashCalendarDate(cell.iso)}
                         title={
                           handedOver
-                            ? `${formatDate(cell.iso)} • már átadva`
+                            ? `${formatDate(cell.iso)} • főnök által átvéve`
                             : available
                               ? `${formatDate(cell.iso)} • ${formatMoney(dayData?.amount || 0)}`
                               : pending
-                                ? `${formatDate(cell.iso)} • átvételre vár`
+                                ? `${formatDate(cell.iso)} • zárolva, átvételre vár`
                                 : formatDate(cell.iso)
                         }
                         className={`relative flex h-[62px] flex-col items-center justify-center rounded-2xl border text-sm transition ${
@@ -4712,25 +4740,25 @@ export default function AllInShopOperations({
                             ? "border-transparent bg-transparent text-white/20"
                             : selected
                               ? "border-[#fff0a0] bg-[#fed700] text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.20)]"
-                              : anchorSelected
-                                ? "border-red-200 bg-red-600 text-white ring-2 ring-red-200/50"
-                                : handedOver
-                                  ? "border-red-400/70 bg-red-600/78 text-white"
-                                  : pending
-                                    ? "border-orange-300/45 bg-orange-500/16 text-orange-50"
+                              : handedOver
+                                ? "border-red-400/70 bg-red-600/78 text-white"
+                                : pending
+                                  ? `border-orange-300/45 bg-orange-500/16 text-orange-50 ${anchorSelected ? "ring-2 ring-[#fed700]/50" : ""}`
+                                  : anchorSelected
+                                    ? "border-[#fed700] bg-[#695826] text-white ring-2 ring-[#fed700]/50"
                                     : available
                                       ? "border-2 border-[#fed700] bg-[#293548] text-white hover:bg-[#3a4557] hover:shadow-[0_7px_18px_rgba(254,215,0,0.12)]"
                                       : "border-white/6 bg-white/[0.02] text-white/24"
                         } ${disabled ? "cursor-default" : "active:scale-[0.97]"}`}
                       >
                         <span className="text-base tabular-nums">{cell.day}</span>
-                        {cell.inMonth && handedOver ? <span className="mt-0.5 text-[8px] uppercase tracking-[0.04em] text-red-50/85">átadva</span> : null}
+                        {cell.inMonth && handedOver ? <span className="mt-0.5 text-[8px] uppercase tracking-[0.04em] text-red-50/85">átvéve</span> : null}
                         {cell.inMonth && available ? (
                           <span className={`mt-0.5 max-w-full truncate px-1 text-[8px] ${selected ? "text-[#243044]/65" : "text-[#fff3a3]/72"}`}>
                             {formatMoney(dayData?.amount || 0)}
                           </span>
                         ) : null}
-                        {cell.inMonth && pending ? <span className="mt-0.5 text-[8px] text-orange-100/75">vár</span> : null}
+                        {cell.inMonth && pending ? <span className="mt-0.5 text-[8px] text-orange-100/85">zárolva</span> : null}
                       </button>
                     );
                   })}
@@ -4738,8 +4766,8 @@ export default function AllInShopOperations({
 
                 <div className="mt-4 grid gap-2 sm:grid-cols-3">
                   <div className="rounded-xl border border-red-300/24 bg-red-600/10 px-3 py-2">
-                    <p className="text-[9px] uppercase tracking-[0.1em] text-red-100/60">Már átadva</p>
-                    <p className="mt-1 text-sm text-white">{cashHandoverAfterDate ? `eddig: ${formatDate(cashHandoverAfterDate)}` : "nincs adat"}</p>
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-red-100/60">Főnök által átvéve</p>
+                    <p className="mt-1 text-sm text-white">{cashHandoverConfirmedTo ? `eddig: ${formatDate(cashHandoverConfirmedTo)}` : "még nincs igazolt átvétel"}</p>
                   </div>
                   <div className="rounded-xl border border-[#fed700]/28 bg-[#fed700]/[0.07] px-3 py-2">
                     <p className="text-[9px] uppercase tracking-[0.1em] text-[#fff2a5]/60">Kijelölve</p>
