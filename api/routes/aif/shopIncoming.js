@@ -17,6 +17,8 @@ export default function createAifShopIncomingRouter({
     if (!schemaPromise) {
       schemaPromise = (async () => {
         await ensureAifShopSalesSchema();
+        // Régebbi adatbázisokban a receptióhoz rendelt Aviz szám még hiányozhat.
+        await pool.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS aviz_number text NULL`);
         await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_transfer_receipts (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,54 +144,204 @@ export default function createAifShopIncomingRouter({
     }
   });
 
-  router.get("/history", requireAuthed, async (req, res) => {
+  // A dátumokat az üzlet helyi időzónájában szűrjük. Az átvétel napját
+  // használjuk, nem az Aviz kiállítási vagy utólag módosított dátumát.
+  function validDate(value) {
+    const input = text(value);
+    const match = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day, 12));
+    return year >= 2000 && year <= 2100 && date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? input : null;
+  }
+
+  function historicalWhere(locationId, query, { requireRange = false } = {}) {
+    const params = [String(locationId)];
+    const where = [
+      `r.target_location_id=$1::uuid`,
+      `d.document_type='internal_transfer'`,
+      `NOT EXISTS (
+        SELECT 1 FROM aif_stock_transfer_document_deletions del
+        WHERE del.transfer_id=d.transfer_id
+      )`,
+    ];
+    const suppliedFrom = text(query.from);
+    const suppliedTo = text(query.to);
+    const month = text(query.month);
+    let from = null;
+    let to = null;
+
+    if (suppliedFrom || suppliedTo || requireRange) {
+      from = validDate(suppliedFrom);
+      to = validDate(suppliedTo);
+      if (!from || !to || from > to) {
+        throw Object.assign(new Error('Érvénytelen dátumintervallum. Add meg a kezdő- és záródátumot.'), { statusCode: 400 });
+      }
+      params.push(from);
+      where.push(`r.received_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Europe/Bucharest')`);
+      params.push(to);
+      where.push(`r.received_at < (($${params.length}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Europe/Bucharest')`);
+    } else if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      params.push(`${month}-01`);
+      where.push(`r.received_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Europe/Bucharest')`);
+      where.push(`r.received_at < (($${params.length}::date + INTERVAL '1 month')::timestamp AT TIME ZONE 'Europe/Bucharest')`);
+    }
+    return { params, where, from, to };
+  }
+
+  const historicalBrandSql = `COALESCE(NULLIF(btrim(dl.brand_name),''),NULLIF(btrim(br.name),''),'Márka nélkül')`;
+  // A bizonylaton rögzített eladási árat használjuk; aktuális termékárat NEM.
+  const historicalValueSql = `CASE
+    WHEN dl.line_total IS NOT NULL AND dl.qty > 0 THEN round(dl.line_total::numeric * r.qty::numeric / dl.qty::numeric,2)
+    WHEN dl.unit_price IS NOT NULL THEN round(dl.unit_price::numeric * r.qty::numeric,2)
+    ELSE NULL END`;
+  const historicalCurrencySql = `COALESCE(NULLIF(dl.currency_code,''),NULLIF(d.currency_code,''),'RON')`;
+
+  // Bizonylat + márka szerinti szerveroldali összesítés. Egy nagy időszak
+  // sem tölt le több tízezer terméksort pusztán a szűrőlista miatt.
+  router.get('/history/report', requireAuthed, async (req, res) => {
     try {
       await ensureSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
-      const month = text(req.query.month);
-      const args = [location.id];
-      let monthWhere = "";
-      if (/^\d{4}-\d{2}$/.test(month)) {
-        args.push(`${month}-01`);
-        monthWhere = ` AND r.received_at >= $2::date AND r.received_at < ($2::date + interval '1 month')`;
-      }
+      const { params, where, from, to } = historicalWhere(location.id, req.query, { requireRange: true });
       const result = await pool.query(
-        `SELECT r.id,r.received_at,r.actor,r.qty,r.stock_applied,
-                d.id AS document_id,d.document_number,d.from_location_summary,d.to_location_summary,d.created_at AS document_created_at,d.raw AS document_raw,
+        `SELECT d.id AS document_id,d.document_number,d.document_date,
+                d.from_location_summary,d.to_location_summary,d.created_at AS document_created_at,
                 d.total_value AS document_total_value,d.currency_code AS document_currency_code,
-                dl.id AS line_id,dl.variant_id,dl.line_no,dl.product_title,dl.product_code,dl.barcode,dl.brand_name,dl.color_name,dl.size,dl.image_url,
-                COALESCE(dl.line_total, CASE WHEN dl.unit_price IS NOT NULL THEN dl.qty::numeric * dl.unit_price::numeric ELSE 0 END) AS line_total,
-                COALESCE(NULLIF(dl.currency_code,''),NULLIF(d.currency_code,''),'RON') AS line_currency_code
+                d.reception_id,rec.aviz_number AS reception_aviz_number,
+                rec.invoice_number AS reception_invoice_number,rec.reception_date,
+                rec.supplier_id AS reception_supplier_id,
+                ${historicalBrandSql} AS brand_name,
+                ${historicalCurrencySql} AS line_currency_code,
+                count(*)::int AS line_count,
+                COALESCE(sum(r.qty),0)::numeric AS quantity,
+                round(COALESCE(sum(${historicalValueSql}),0)::numeric,2) AS selected_value,
+                count(*) FILTER (WHERE dl.line_total IS NULL AND dl.unit_price IS NULL)::int AS unpriced_lines,
+                min(r.received_at) AS first_received_at,
+                max(r.received_at) AS last_received_at
          FROM aif_shop_transfer_receipts r
          JOIN aif_stock_transfer_documents d ON d.id=r.document_id
          JOIN aif_stock_transfer_document_lines dl ON dl.id=r.document_line_id
-         WHERE r.target_location_id=$1 ${monthWhere}
+         LEFT JOIN aif_receptions rec ON rec.id::text=d.reception_id
+         LEFT JOIN aif_product_variants v ON v.id=r.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands br ON br.id=m.brand_id
+         WHERE ${where.join(' AND ')}
+         GROUP BY d.id,rec.id,${historicalBrandSql},${historicalCurrencySql}
+         ORDER BY max(r.received_at) DESC,d.document_number ASC,brand_name ASC`,
+        params,
+      );
+      const groups = result.rows.map((row) => ({
+        documentId: String(row.document_id),
+        documentNumber: row.document_number,
+        documentDate: row.document_date ? String(row.document_date).slice(0, 10) : null,
+        documentCreatedAt: row.document_created_at ? new Date(row.document_created_at).toISOString() : null,
+        documentTotalValue: aifNumber(row.document_total_value),
+        documentCurrencyCode: text(row.document_currency_code || 'RON').toUpperCase() || 'RON',
+        sourceName: row.from_location_summary || '–',
+        targetName: row.to_location_summary || '–',
+        receptionId: row.reception_id ? String(row.reception_id) : null,
+        receptionAvizNumber: row.reception_aviz_number || null,
+        receptionInvoiceNumber: row.reception_invoice_number || null,
+        receptionDate: row.reception_date ? String(row.reception_date).slice(0, 10) : null,
+        brandName: row.brand_name,
+        currencyCode: text(row.line_currency_code || 'RON').toUpperCase() || 'RON',
+        lineCount: Number(row.line_count || 0),
+        qty: aifNumber(row.quantity),
+        lineValue: aifNumber(row.selected_value),
+        unpricedLines: Number(row.unpriced_lines || 0),
+        firstReceivedAt: row.first_received_at ? new Date(row.first_received_at).toISOString() : null,
+        lastReceivedAt: row.last_received_at ? new Date(row.last_received_at).toISOString() : null,
+      }));
+      res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        from,
+        to,
+        groups,
+        count: groups.length,
+      });
+    } catch (error) {
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A beérkezési kimutatás nem tölthető be.', code: error?.code || null });
+    }
+  });
+
+  // Régi klienssel kompatibilis tételes API, plusz dátum-, Aviz- és márkaszűrő.
+  // A frontend csak a megnyitott bizonylat sorait kérdezi le.
+  router.get('/history', requireAuthed, async (req, res) => {
+    try {
+      await ensureSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const { params, where, from, to } = historicalWhere(location.id, req.query);
+      const documentId = text(req.query.documentId || req.query.document);
+      if (documentId) {
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(documentId)) {
+          return res.status(400).json({ error: 'Érvénytelen Aviz-azonosító.' });
+        }
+        params.push(documentId);
+        where.push(`d.id=$${params.length}::uuid`);
+      }
+      const brand = text(req.query.brand);
+      if (brand) {
+        params.push(brand);
+        where.push(`lower(${historicalBrandSql})=lower($${params.length}::text)`);
+      }
+      const result = await pool.query(
+        `SELECT r.id,r.received_at,r.actor,r.qty,r.stock_applied,
+                d.id AS document_id,d.document_number,d.document_date,d.reception_id,
+                d.from_location_summary,d.to_location_summary,
+                d.created_at AS document_created_at,d.raw AS document_raw,
+                d.total_value AS document_total_value,d.currency_code AS document_currency_code,
+                rec.aviz_number AS reception_aviz_number,
+                rec.invoice_number AS reception_invoice_number,rec.reception_date,
+                dl.id AS line_id,dl.variant_id,dl.line_no,dl.product_title,
+                dl.product_code,dl.barcode,${historicalBrandSql} AS brand_name,
+                dl.color_name,dl.size,dl.image_url,dl.unit_price,
+                ${historicalValueSql} AS line_total,
+                ${historicalCurrencySql} AS line_currency_code
+         FROM aif_shop_transfer_receipts r
+         JOIN aif_stock_transfer_documents d ON d.id=r.document_id
+         JOIN aif_stock_transfer_document_lines dl ON dl.id=r.document_line_id
+         LEFT JOIN aif_receptions rec ON rec.id::text=d.reception_id
+         LEFT JOIN aif_product_variants v ON v.id=r.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands br ON br.id=m.brand_id
+         WHERE ${where.join(' AND ')}
          ORDER BY r.received_at DESC,d.document_number,dl.line_no`,
-        args,
+        params,
       );
       const items = result.rows.map((row) => ({
         id: String(row.id),
         receivedAt: row.received_at ? new Date(row.received_at).toISOString() : null,
         receivedBy: row.actor || null,
         qty: aifNumber(row.qty),
-        lineValue: Math.round((aifNumber(row.line_total) + Number.EPSILON) * 100) / 100,
-        currencyCode: text(row.line_currency_code || row.document_currency_code || "RON").toUpperCase() || "RON",
+        lineValue: row.line_total === null ? null : Math.round((aifNumber(row.line_total) + Number.EPSILON) * 100) / 100,
+        currencyCode: text(row.line_currency_code || row.document_currency_code || 'RON').toUpperCase() || 'RON',
         stockApplied: row.stock_applied === true,
         document: {
           id: String(row.document_id),
           documentNumber: row.document_number,
-          sourceName: row.from_location_summary || "–",
-          targetName: row.to_location_summary || "–",
+          documentDate: row.document_date ? String(row.document_date).slice(0, 10) : null,
+          sourceName: row.from_location_summary || '–',
+          targetName: row.to_location_summary || '–',
           createdAt: row.document_created_at ? new Date(row.document_created_at).toISOString() : null,
           totalValue: Math.round((aifNumber(row.document_total_value) + Number.EPSILON) * 100) / 100,
-          currencyCode: text(row.document_currency_code || "RON").toUpperCase() || "RON",
+          currencyCode: text(row.document_currency_code || 'RON').toUpperCase() || 'RON',
           inventoryMode: inventoryMode(row.document_raw),
+          receptionId: row.reception_id ? String(row.reception_id) : null,
+          receptionAvizNumber: row.reception_aviz_number || null,
+          receptionInvoiceNumber: row.reception_invoice_number || null,
+          receptionDate: row.reception_date ? String(row.reception_date).slice(0, 10) : null,
         },
         product: {
           lineId: String(row.line_id),
-          variantId: String(row.variant_id || ""),
+          variantId: String(row.variant_id || ''),
           lineNo: aifNumber(row.line_no),
-          title: row.product_title || "Ismeretlen termék",
+          title: row.product_title || 'Ismeretlen termék',
           productCode: row.product_code || null,
           barcode: row.barcode || null,
           brandName: row.brand_name || null,
@@ -198,10 +350,19 @@ export default function createAifShopIncomingRouter({
           imageUrl: row.image_url || null,
         },
       }));
-      res.json({ ok: true, location: { id: String(location.id), code: location.code, name: location.name }, month: /^\d{4}-\d{2}$/.test(month) ? month : null, items, count: items.length });
+      const month = text(req.query.month);
+      res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        month: !from && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : null,
+        from,
+        to,
+        items,
+        count: items.length,
+      });
     } catch (error) {
       const status = Number(error?.statusCode || 500);
-      res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A beérkezési előzmény nem tölthető be.", code: error?.code || null });
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A beérkezési előzmény nem tölthető be.', code: error?.code || null });
     }
   });
 
