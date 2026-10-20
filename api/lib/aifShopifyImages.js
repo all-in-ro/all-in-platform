@@ -184,7 +184,7 @@ const PRODUCT_MEDIA_QUERY = `query AifGalleryRead($id: ID!) {
     id title
     media(first:250) {
       pageInfo { hasNextPage }
-      nodes { id alt mediaContentType status }
+      nodes { id alt mediaContentType status ... on MediaImage { image { url } originalSource { url } } }
     }
   }
 }`;
@@ -256,6 +256,41 @@ async function readOriginalExportImage(client,productId,desiredUrls) {
     };
   }
   return null;
+}
+
+// AIF_SHOPIFY_LEGACY_DUPLICATE_GUARD_V9
+function aifMediaFileKey(value) {
+  try {
+    const name=decodeURIComponent(new URL(text(value)).pathname.split('/').pop()||'');
+    return name.replace(/\.[a-z0-9]{2,5}$/i,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  } catch {return '';}
+}
+function aifSpecificMediaKey(key) {
+  return key.length>=15 && /[a-z]/.test(key) && /[0-9]/.test(key);
+}
+function aifLegacyDuplicatesCoveredByManaged(desired,remote,links) {
+  const knownIds=new Set([...links.values()].map(link=>text(link.media_id)));
+  const nodes=remote.nodes||[];
+  const byId=new Map(nodes.map(node=>[text(node.id),node]));
+  const legacy=nodes.filter(node=>
+    node.mediaContentType==='IMAGE' &&
+    !/AIFIMG:[a-f0-9]{20}/i.test(text(node.alt)) &&
+    !knownIds.has(text(node.id)));
+  if(!legacy.length) return false;
+  for(const node of legacy) {
+    const keys=new Set([aifMediaFileKey(node.image?.url),aifMediaFileKey(node.originalSource?.url)]
+      .filter(aifSpecificMediaKey));
+    const matches=desired.urls.filter(url=>keys.has(aifMediaFileKey(url)));
+    if(matches.length!==1) return false;
+    const url=matches[0];
+    const link=links.get(url);
+    if(!link || link.managed!==true || text(link.media_id)===text(node.id)) return false;
+    const managed=byId.get(text(link.media_id));
+    if(!managed || managed.mediaContentType!=='IMAGE' ||
+      text(managed.status)!=='READY' ||
+      !text(managed.alt).includes(marker(url))) return false;
+  }
+  return true;
 }
 
 async function adoptUnmarkedLegacyPhoto(client,productId,desired,remote,links,bootstrapUrls){
@@ -337,8 +372,10 @@ async function syncProductImages(client, row) {
   // V8: a régi Shopify képeket csak bizonyított eredeti CSV URL és ALT
   // alapján párosítjuk. A bizonytalan legacy képek mellett TILOS új képet
   // feltölteni, mert 274 regi parositasnal kep-duplazast okozhatna.
-  const bootstrap=await adoptUnmarkedLegacyPhoto(
-    client,productId,desired,remote,links,row.bootstrap_urls);
+  const covered=aifLegacyDuplicatesCoveredByManaged(desired,remote,links);
+  const bootstrap=covered
+    ? {adopted:0,unverified:0}
+    : await adoptUnmarkedLegacyPhoto(client,productId,desired,remote,links,row.bootstrap_urls);
   if(bootstrap.unverified>0) {
     throw Object.assign(new Error(`Ellenorizetlen regi Shopify foto: ${bootstrap.unverified} db. Automatikus duplazast leallitottam.`),
       {code:'shopify_image_legacy_unverified'});
@@ -380,7 +417,8 @@ async function syncProductImages(client, row) {
   // Torles csak akkor, ha a Shopify-on is megvan a pontos AIFIMG URL-jeloles.
   // Mas alt-nak / ID-nek megfelelo, kezzel kezelt fotot nem torlunk.
   const remoteById=new Map(remote.nodes.map(n=>[text(n.id),n]));
-  const discarded=[...current.entries()].filter(([url,entry])=>
+  const protectedLegacy=covered;
+  const discarded=protectedLegacy ? [] : [...current.entries()].filter(([url,entry])=>
     !desired.urls.includes(url) && entry.managed &&
     remoteIds.has(text(entry.media_id)) &&
     text(remoteById.get(text(entry.media_id))?.alt).includes(marker(url)));
@@ -394,7 +432,7 @@ async function syncProductImages(client, row) {
     }`,{productId,mediaIds:removeIds});
     checkShopifyErrors(result.data?.productDeleteMedia,'Shopify képtörlés');
   }
-  await client.query(`DELETE FROM aif_shopify_image_links WHERE shopify_product_id=$1 AND NOT (source_url=ANY($2::text[]))`,[productId,desired.urls]);
+  if(!protectedLegacy) await client.query(`DELETE FROM aif_shopify_image_links WHERE shopify_product_id=$1 AND NOT (source_url=ANY($2::text[]))`,[productId,desired.urls]);
   remote=await loadRemoteMedia(productId);
   remoteIds=new Set(remote.nodes.map((m)=>text(m.id)));
   links=await readLinks(client,productId);
@@ -404,7 +442,7 @@ async function syncProductImages(client, row) {
   const currentOrder=remote.nodes.map((m)=>text(m.id));
   const alreadyOrdered=desiredIds.every((id,index)=>currentOrder[index]===id);
   if(!alreadyOrdered && desiredIds.length) {
-    const moves=desiredIds.map((id,index)=>({id,newPosition:index}));
+    const moves=desiredIds.map((id,index)=>({id,newPosition:String(index)}));
     const result=await shopifyGraphql(`mutation AifGalleryReorder($id:ID!,$moves:[MoveInput!]!) {
       productReorderMedia(id:$id,moves:$moves) {
         job { id }
