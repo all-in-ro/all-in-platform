@@ -24555,6 +24555,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return text(latestActivity.rows[0]?.actor);
   }
 
+  // A könyvelt pénz a főnöki visszaigazolásig még az üzlet elszámolásában van,
+  // de a zárolt/átadásra kijelölt összeg NEM számolható meg a fizikai kasszában.
+  // A képletet az előnézet, a napzárás és a műszakátadás is ugyanúgy használja.
+  function aifShopFreePhysicalCash(balance) {
+    return aifRoundMoney(aifRoundMoney(balance?.availableCash) - aifRoundMoney(balance?.pendingOut));
+  }
+
   // Olvasási előnézet: nem nyit tranzakciót és nem ír semmit.
   // A végleges POST minden feltételt tranzakcióban ismét ellenőriz.
   async function aifShopDayClosePreview(client, {
@@ -24580,6 +24587,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!reasonCode && dayClosure) {
       reasonCode = 'shop_day_already_closed';
       reason = `A(z) ${workDate} napi kassza már le van zárva.`;
+    }
+    if (!reasonCode && aifShopFreePhysicalCash(cashBalance) < -0.005) {
+      reasonCode = 'shop_day_close_pending_exceeds_book_balance';
+      reason = 'A zárolt készpénz meghaladja a könyvelt kasszát. Ellenőrizd az átvételre váró pénzátadásokat.';
     }
     if (!reasonCode) {
       const pending = handovers.find((item) => item.status === 'pending');
@@ -24609,7 +24620,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       canClose: !reasonCode,
       reasonCode, reason, previousWorkDate,
       actor, activeActor, workDate,
-      expectedCash: aifRoundMoney(cashBalance?.availableCash),
+      // Csak a ténylegesen megszámolható készpénz; függő főnöki átvétel nem blokkol.
+      expectedCash: aifShopFreePhysicalCash(cashBalance),
+      lockedCash: aifRoundMoney(cashBalance?.pendingOut),
       checkedAt: new Date().toISOString(),
     };
   }
@@ -25001,7 +25014,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (closureResult.rowCount) {
       baselineClosure = closureResult.rows[0];
       baselineAt = baselineClosure.closed_at;
-      baselineCash = aifRoundMoney(baselineClosure.counted_cash);
+      // Új záráskor a megszámolt pénz FIZIKAI, a függő átadás külön tartozik
+      // a könyvelt egyenleghez. Így egy későbbi főnöki igazolás csak egyszer von le.
+      // Régi (snapshot mező nélküli) zárásoknál a korábbi számítás változatlan.
+      const closureSnapshot = baselineClosure.snapshot && typeof baselineClosure.snapshot === 'object'
+        ? baselineClosure.snapshot : {};
+      const reservedAtClose = closureSnapshot.pendingReservedAtClose;
+      baselineCash = aifRoundMoney(
+        aifRoundMoney(baselineClosure.counted_cash) +
+        (closureSnapshot.cashAccountingMode === 'physical_plus_pending_v1'
+          ? aifRoundMoney(reservedAtClose)
+          : 0)
+      );
       baselineType = "day_closure";
     } else {
       const acceptedHandover = await client.query(
@@ -25017,7 +25041,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (acceptedHandover.rowCount) {
         const handover = acceptedHandover.rows[0];
         baselineAt = handover.accepted_at || handover.cutoff_at || handover.created_at;
-        baselineCash = aifRoundMoney(handover.counted_cash ?? handover.expected_cash);
+        const shiftSnapshot = handover.snapshot && typeof handover.snapshot === 'object' ? handover.snapshot : {};
+        baselineCash = aifRoundMoney(
+          aifRoundMoney(handover.counted_cash ?? handover.expected_cash) +
+          (shiftSnapshot.cashAccountingMode === 'physical_plus_pending_v1'
+            ? aifRoundMoney(shiftSnapshot.pendingReservedAtHandover)
+            : 0)
+        );
         baselineType = "shift_handover";
       } else {
         const dayStart = await client.query(
@@ -25101,7 +25131,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       confirmedOut,
       pendingOut,
       pendingCount: aifNumber(pendingOutResult.rows[0]?.count),
+      // booked = még nem igazolt zárolásokkal együtt; free = tényleg a kasszában.
       availableCash,
+      physicalCash: aifRoundMoney(availableCash - pendingOut),
       closure: baselineClosure ? aifDayClosureResponse(baselineClosure) : null,
     };
   }
@@ -25445,37 +25477,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       throw error;
     }
     if (requestedAfterDate && requestedAfterDate >= today) {
-      const error = new Error('Az utolsó átadott napnak a mai nap előtt kell lennie.');
+      const error = new Error('Az átadási időszak kezdete előtti napnak a mai nap előtt kell lennie.');
       error.statusCode = 400;
       error.code = 'shop_cash_handover_after_date_not_past';
       throw error;
     }
 
-    const [lastConfirmedResult, confirmedHandoverDates, lastExplicitTo, pendingPeriods] = await Promise.all([
-      client.query(
-        `SELECT *
-         FROM aif_shop_cash_movements
-         WHERE location_id=$1
-           AND movement_type='manager_handover'
-           AND status='confirmed'
-         ORDER BY COALESCE(confirmed_at,effective_at,requested_at) DESC, id DESC
-         LIMIT 1`,
-        [locationId]
-      ),
+    const [confirmedHandoverDates, lastExplicitTo, pendingPeriods] = await Promise.all([
       aifShopCashConfirmedHandoverDates(client, locationId),
       aifShopCashLastExplicitHandoverTo(client, locationId),
       aifShopCashPendingHandoverPeriods(client, locationId),
     ]);
 
-    const lastConfirmed = lastConfirmedResult.rows[0] || null;
-    const lastConfirmedTo = lastConfirmed
-      ? String(
-          lastConfirmed.raw?.handoverToDate
-          || lastConfirmed.raw?.handover_to_date
-          || lastConfirmed.handover_to_date
-          || aifBucharestIsoDate(lastConfirmed.requested_at)
-        ).slice(0, 10)
-      : null;
+    // Az UTOLSÓ ÁTVETT nap csak confirmed rekordból származhat. A függő időszak
+    // vége kizárólag az új átadás kezdőpontját mozdíthatja el, nem a főnöki dátumot.
+    const lastConfirmedTo = aifLatestIsoDate(confirmedHandoverDates, lastExplicitTo);
     const latestPendingTo = aifLatestIsoDate(pendingPeriods.map((period) => period.to));
 
     // Egy függő átadás időszaka már le van foglalva. Következő átadás csak
@@ -25592,8 +25608,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
 
     const activityStart = await aifShopCashHandoverActivityStart(client, locationId, today).catch(() => today);
+    const lastConfirmedTo = aifLatestIsoDate(confirmedHandoverDates, lastExplicitTo);
     const suggestedAfterDate =
-      aifLatestIsoDate(lastExplicitTo, confirmedHandoverDates[0], latestPendingTo)
+      aifLatestIsoDate(lastConfirmedTo, latestPendingTo)
       || aifShiftIsoDate(activityStart, -1);
     const selectedAfterDate = requestedAfterDate || suggestedAfterDate;
     let periodFrom = aifShiftIsoDate(selectedAfterDate, 1);
@@ -25661,7 +25678,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const pendingItems = pendingPeriods.map((period) => aifCashMovementResponse(period.row));
     return {
-      lastConfirmedTo: confirmedHandoverDates[0] || null,
+      lastConfirmedTo,
       lastExplicitTo,
       latestPendingTo,
       suggestedAfterDate,
@@ -30286,14 +30303,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return {
           ...employee,
           shiftStartAt: hasActivity ? bounds.start : null,
-          openingCash: hasActivity ? aifRoundMoney(dayOpeningBalance.availableCash) : null,
+          openingCash: hasActivity ? aifShopFreePhysicalCash(dayOpeningBalance) : null,
           openingCashSource: hasActivity ? "day_start" : null,
         };
       });
       const totalsWithOpening = {
         ...totals,
         shiftStartAt: bounds.start,
-        openingCash: aifRoundMoney(dayOpeningBalance.availableCash),
+        openingCash: aifShopFreePhysicalCash(dayOpeningBalance),
         openingCashSource: "day_start",
       };
       let handoverPreview = null;
@@ -30339,7 +30356,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const cutoffBalance = canCreate
           ? await aifShopCashBalanceAt(pool, { locationId: location.id, at: until })
           : null;
-        if (openingBalance) openingCash = aifRoundMoney(openingBalance.availableCash);
+        if (openingBalance) openingCash = aifShopFreePhysicalCash(openingBalance);
         handoverPreview = {
           canCreate,
           reason,
@@ -30348,7 +30365,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           cutoffAt: until ? new Date(until).toISOString() : null,
           openingCash,
           newCashDuringShift,
-          expectedCash: aifRoundMoney(cutoffBalance?.availableCash ?? openingCash + newCashDuringShift),
+          expectedCash: cutoffBalance ? aifShopFreePhysicalCash(cutoffBalance) : aifRoundMoney(openingCash + newCashDuringShift),
           cashBalance: cutoffBalance,
           shift: currentShift,
           day: totalsWithOpening,
@@ -30543,11 +30560,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         aifShopCashBalanceAt(client, { locationId: location.id, at: shiftStart }),
         aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff }),
       ]);
-      const previousCash = aifRoundMoney(openingBalance.availableCash);
+      const previousCash = aifShopFreePhysicalCash(openingBalance);
       const newCashDuringShift = aifRoundMoney(shiftSnapshot.receipts?.cash?.amount || 0);
-      const expectedCash = aifRoundMoney(cutoffBalance.availableCash);
+      const expectedCash = aifShopFreePhysicalCash(cutoffBalance);
       const snapshot = {
-        version: 2,
+        version: 3,
+        cashAccountingMode: 'physical_plus_pending_v1',
+        pendingReservedAtHandover: aifRoundMoney(cutoffBalance.pendingOut),
         createdAt: new Date(cutoff).toISOString(),
         workDate,
         fromActor: senderActor,
@@ -30989,7 +31008,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const handoverAfterDate = requestedHandoverAfterDate ? cleanAifDocumentDate(requestedHandoverAfterDate) : null;
       const historyMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth) ? requestedMonth : today.slice(0, 7);
       const historyStart = `${historyMonth}-01`;
-      const [balance, movementsResult, closuresResult, todayClosureResult, managerHistoryResult, managerHistoryMonthsResult] = await Promise.all([
+      const [balance, movementsResult, closuresResult, todayClosureResult, managerHistoryResult, managerHistoryMonthsResult, pendingManagerResult] = await Promise.all([
         aifShopCashBalanceAt(pool, { locationId: location.id, at: now }),
         pool.query(
           `SELECT m.*, l.code AS location_code, l.name AS location_name
@@ -31038,6 +31057,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            WHERE m.location_id=$1
              AND m.movement_type='manager_handover'
            ORDER BY month DESC`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT m.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_cash_movements m
+           JOIN aif_locations l ON l.id=m.location_id
+           WHERE m.location_id=$1 AND m.movement_type='manager_handover'
+             AND m.status='pending'
+           ORDER BY m.handover_to_date ASC NULLS LAST, m.requested_at ASC, m.id ASC`,
           [location.id]
         ),
       ]);
@@ -31101,7 +31129,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         handoverPlan,
         managerHandoverHistory,
         handoverHistoryMonths,
-        pendingManagerHandovers: movements.filter((item) => item.type === "manager_handover" && item.status === "pending"),
+        pendingManagerHandovers: pendingManagerResult.rows.map(aifCashMovementResponse),
         movements,
         closures: closuresResult.rows.map(aifDayClosureResponse),
         todayClosure: todayClosureResult.rowCount ? aifDayClosureResponse(todayClosureResult.rows[0]) : null,
@@ -31146,6 +31174,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
       const location = await aifResolveShopLocation(req, client, body.location);
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+      // A készpénzátadás írásaival együtt zárolunk, különben zárás közben
+      // egy új függő tétel megváltoztathatná a megszámolható kasszát.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${location.id}`]);
 
       const actor = actorFrom(req);
       const isAdmin = aifIsAdminSession(req);
@@ -31241,7 +31272,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const cashBalance = await aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff });
-      const expectedCash = aifRoundMoney(cashBalance.availableCash);
+      const expectedCash = aifShopFreePhysicalCash(cashBalance);
+      if (expectedCash < -0.005) {
+        const error = new Error('A zárolt készpénz meghaladja a könyvelt kasszát. Ellenőrizd az átvételre váró pénzátadásokat.');
+        error.statusCode = 409;
+        error.code = 'shop_day_close_pending_exceeds_book_balance';
+        throw error;
+      }
       const counted = aifRoundMoney(countedCash);
       const difference = aifRoundMoney(counted - expectedCash);
 
@@ -31266,7 +31303,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const recordedAt = new Date();
       const snapshot = {
-        version: 2,
+        version: 3,
+        cashAccountingMode: 'physical_plus_pending_v1',
+        // Fizikai kassza + külön zárolt pénz = könyvelt egyenleg. A confirmed
+        // tranzakció később ezt a zárolt részt mozgatja át, nem von le kétszer.
+        pendingReservedAtClose: aifRoundMoney(cashBalance.pendingOut),
+        bookCashAtClose: aifRoundMoney(cashBalance.availableCash),
         workDate,
         closedAt: cutoff.toISOString(),
         recordedAt: recordedAt.toISOString(),
@@ -31332,7 +31374,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return res.status(400).json({ error: "Bankbefizetésnél a referencia / bizonylatszám kötelező." });
     }
     if (movementType === "manager_handover" && !cleanAifDocumentDate(handoverAfterDateInput)) {
-      return res.status(400).json({ error: "Válaszd ki az utolsó ténylegesen átadott napot.", code: "shop_cash_handover_after_date_required" });
+      return res.status(400).json({ error: "Válaszd ki az átadási időszak kezdete előtti napot.", code: "shop_cash_handover_after_date_required" });
     }
     if (movementType === "manager_handover" && !cleanAifDocumentDate(handoverToDateInput)) {
       return res.status(400).json({ error: "Válaszd ki, melyik üzleti napig adod át a készpénzt.", code: "shop_cash_handover_date_required" });
@@ -31456,14 +31498,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const balance = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
-      const availableForNewMovement = movementType === "manager_handover"
-        ? Math.max(0, aifRoundMoney(aifRoundMoney(balance.availableCash) - aifRoundMoney(balance.pendingOut)))
-        : aifRoundMoney(balance.availableCash);
+      // Függő átadásban lévő összeget sem másik átadásra, sem bankbefizetésre
+      // nem engedünk újra felhasználni.
+      const availableForNewMovement = Math.max(0, aifShopFreePhysicalCash(balance));
       if (amount - availableForNewMovement > 0.005) {
         const error = new Error(
           movementType === "manager_handover"
             ? `Nincs ennyi még szabadon átadható készpénz az üzletben. Kassza: ${aifRoundMoney(balance.availableCash).toFixed(2)} RON, már átvételre vár: ${aifRoundMoney(balance.pendingOut).toFixed(2)} RON, újonnan átadható: ${availableForNewMovement.toFixed(2)} RON.`
-            : `Nincs ennyi igazolt készpénz az üzletben. Jelenlegi rendszer szerinti kassza: ${aifRoundMoney(balance.availableCash).toFixed(2)} RON.`
+            : `Nincs ennyi szabad készpénz az üzletben. Szabad kassza: ${availableForNewMovement.toFixed(2)} RON, zárolt: ${aifRoundMoney(balance.pendingOut).toFixed(2)} RON.`
         );
         error.statusCode = 409;
         error.code = "shop_cash_amount_exceeds_balance";
@@ -31616,6 +31658,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error.statusCode = 409;
         throw error;
       }
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${movement.location_id}`]);
       const adminActor = actorFrom(req);
       const updated = await client.query(
         `UPDATE aif_shop_cash_movements
@@ -31675,6 +31718,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error.statusCode = 403;
         throw error;
       }
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${movement.location_id}`]);
       const updated = await client.query(
         `UPDATE aif_shop_cash_movements
          SET status='cancelled', cancelled_by=$2, cancelled_at=now(), updated_at=now()
