@@ -3504,6 +3504,15 @@ export type AifShopDailyPaymentItem = {
 };
 
 export type AifShopDailyProductItem = {
+  /** Credit-origin rows never become original-day cash sales after settlement. */
+  dailyCategory?: "credit" | "sale" | "settlement" | "exchange";
+  /** Snapshot at the end of the selected Europe/Bucharest day. */
+  historyDate?: string | null;
+  historyComplete?: boolean;
+  currentBalanceDue?: number | null;
+  currentPaymentStatus?: string | null;
+  currentLastPaymentAt?: string | null;
+
   key: string;
   lineId?: string | null;
   saleId?: string | null;
@@ -3535,6 +3544,10 @@ export type AifShopDailyProductItem = {
   transactions: number;
   paymentLabel?: string | null;
   settlementAmount?: number;
+  settlementPartial?: boolean;
+  returnedLaterQty?: number;
+  returnedLaterAt?: string | null;
+  paidLaterAt?: string | null;
   stockEffect?: number;
 };
 
@@ -3627,6 +3640,10 @@ export type AifShopSaleDetailLine = {
 };
 
 export type AifShopSaleDetailResponse = {
+  historyDate?: string | null;
+  historyComplete?: boolean;
+  currentBalanceDue?: number | null;
+  currentPaymentStatus?: string | null;
   ok: true;
   recordType: "sale" | "exchange" | string;
   id: string;
@@ -3663,6 +3680,15 @@ export type AifShopSaleDetailResponse = {
 };
 
 export type AifShopDailySaleItem = {
+  /** Credit-origin rows never become original-day cash sales after settlement. */
+  dailyCategory?: "credit" | "sale" | "settlement" | "exchange";
+  /** Snapshot at the end of the selected Europe/Bucharest day. */
+  historyDate?: string | null;
+  historyComplete?: boolean;
+  currentBalanceDue?: number | null;
+  currentPaymentStatus?: string | null;
+  currentLastPaymentAt?: string | null;
+
   id: string;
   saleNumber: string;
   soldAt?: string | null;
@@ -3682,6 +3708,7 @@ export type AifShopDailySaleItem = {
 };
 
 export type AifShopDailySummaryResponse = {
+  history?: { version: string; date: string; basis: "selected_day_end"; complete: boolean; warnings: string[] };
   ok: true;
   generatedAt: string;
   date: string;
@@ -3701,8 +3728,13 @@ export type AifShopDailySummaryResponse = {
     averageBasket: number;
     discountTotal: number;
     paidTotal: number;
+    /** Selected day's issue cohort: unpaid at the end of that day. */
     unpaidTotal: number;
     unpaidSales: number;
+    /** Current balances of the SAME daily cohort, not the whole client register. */
+    currentUnpaidTotal?: number;
+    currentUnpaidSales?: number;
+    creditSales?: number;
     customerSales: number;
     firstSaleAt?: string | null;
     lastSaleAt?: string | null;
@@ -3729,11 +3761,13 @@ export function apiAifShopDailySummary(options: {
 export function apiAifShopSaleDetail(options: {
   location: string;
   id: string;
+  asOfDate?: string | null;
   recordType?: "sale" | "exchange" | string;
 }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   if (options.recordType) q.set("recordType", options.recordType);
+  if (options.asOfDate) q.set("asOfDate", options.asOfDate);
   return fetchAifJSON<AifShopSaleDetailResponse>(
     `/shop-operations/sale-detail/${encodeURIComponent(options.id)}?${q.toString()}`,
   );
