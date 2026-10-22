@@ -3751,6 +3751,22 @@ export type AifShopDailySummaryResponse = {
   sales: AifShopDailySaleItem[];
 };
 
+/** Letöltendő, valódi PDF. A szerver ellenőrzi a szerepkört és az üzletet. */
+export function apiAifShopDailyAuditPdfUrl(options: {
+  location: string;
+  date: string;
+  scope: "mine" | "all";
+  employee?: string;
+  handoverId?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("date", options.date);
+  if (options.scope === "all" && options.employee?.trim()) q.set("employee", options.employee.trim());
+  if (options.scope === "mine" && options.handoverId?.trim()) q.set("handoverId", options.handoverId.trim());
+  return `${AIF_BASE}/shop-audit/${options.scope}.pdf?${q.toString()}`;
+}
+
 export function apiAifShopDailySummary(options: {
   location: string;
   date?: string;
