@@ -53,6 +53,7 @@ import {
   apiAifListLocations,
   apiAifShopCashOverview,
   apiAifShopFinancialNotes,
+  apiAifShopDailyAuditPdfUrl,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
   apiAifShopSaleDetail,
@@ -107,6 +108,8 @@ const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string
   stock: { title: "Készlet", eyebrow: "Aktuális helyszíni készlet", icon: Boxes },
   summary: { title: "Napi összesítés", eyebrow: "Saját műszak és eladások", icon: Receipt },
 };
+
+const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
 const PAYMENT_META = [
   { method: "cash", label: "Készpénz", icon: Banknote },
@@ -2965,6 +2968,16 @@ export default function AllInShopOperations({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
+                    onClick={() => window.open(apiAifShopDailyAuditPdfUrl({ location: locationCode, date: summaryDate, scope: "mine" }), "_blank", "noopener,noreferrer")}
+                    title="Saját napi audit: termékek, árak, kedvezmények, hitel, kassza, megjegyzések"
+                    aria-label="Saját napi audit PDF export"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl border border-[#B5EDE9]/52 bg-[#2a8d8b] px-3 text-sm text-white shadow-[0_8px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98]"
+                  >
+                    <img src={AIF_PDF_ICON} alt="" className="h-6 w-6 object-contain" />
+                    <span>PDF</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => { setDailyNotesOpen(true); void loadDailyFinancialNotes(summaryDate); }}
                     title={dailyNotesLoadedKey === `${locationCode}|${summaryDate}` && dailyFinancialNotes.length ? "A kiválasztott nap megjegyzéseinek megnyitása és új hozzáadása" : "Nincs megjegyzés. Kattints egy új megjegyzéshez."}
                     className={`group inline-flex h-12 touch-manipulation items-center justify-center gap-2 rounded-xl border px-3.5 text-[12px] transition active:scale-[0.98] sm:px-4 sm:text-sm ${dailyNotesLoadedKey === `${locationCode}|${summaryDate}` && dailyFinancialNotes.length
@@ -3500,7 +3513,20 @@ export default function AllInShopOperations({
                                   <p className="truncate text-base text-white">{index + 1}. {item.fromActor} <ArrowRight className="mx-1.5 inline" size={15} /> {item.toActor}</p>
                                   <p className="mt-1 text-[11px] text-white/46">{formatTime(item.shiftStartAt)} → {formatTime(item.cutoffAt)}</p>
                                 </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  {employeeKey(item.fromActor) === employeeKey(actor) ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => window.open(apiAifShopDailyAuditPdfUrl({ location: locationCode, date: summaryDate, scope: "mine", handoverId: item.id }), "_blank", "noopener,noreferrer")}
+                                      title="Csak az átadott saját műszak auditja PDF-ben"
+                                      aria-label="Műszak PDF export"
+                                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/50 bg-[#2a8d8b] px-2.5 text-xs text-white hover:bg-[#319c99]"
+                                    >
+                                      <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" />PDF
+                                    </button>
+                                  ) : null}
                                 <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${pending ? "border-amber-200/30 bg-amber-300/12 text-amber-50" : accepted ? "border-[#9be9e5]/30 bg-[#2a8d8b] text-white" : "border-white/12 bg-black/10 text-white/50"}`}>{shiftStatusLabel(item.status)}</span>
+                                </div>
                               </div>
                               <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
                                 {[
@@ -4993,6 +5019,7 @@ export default function AllInShopOperations({
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-5 py-4">
                 <p className="text-xs text-white/42">{handoverTarget ? `${actor} → ${handoverTarget}` : "Válassz átvevő kollégát"}</p>
                 <div className="flex gap-2">
+                  <button type="button" onClick={() => window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:summaryDate,scope:"mine"}),"_blank","noopener,noreferrer")} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]/25 px-3 text-sm text-white hover:bg-[#2a8d8b]/45"><img src={AIF_PDF_ICON} alt="" className="h-6 w-6 object-contain" /> Saját PDF</button>
                   <button type="button" disabled={handoverSaving} onClick={() => setHandoverOpen(false)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09] disabled:opacity-45"><X size={16} /> Mégse</button>
                   <button type="button" disabled={handoverSaving || !handoverTarget} onClick={() => void createShiftHandover()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45">
                     {handoverSaving ? <Loader2 className="animate-spin" size={17} /> : <ArrowRightLeft size={17} />}
