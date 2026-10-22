@@ -4836,6 +4836,11 @@ export type AifAdminShopOverviewSummary = {
   unpaidTotal: number;
   unpaidSales: number;
   creditSales: number;
+  currentUnpaidTotal?: number;
+  currentUnpaidSales?: number;
+  historicalCreditTotal?: number;
+  historicalCreditSales?: number;
+  historicalCreditItems?: number;
   paidTotal: number;
   estimatedCost: number;
   grossProfit: number;
@@ -4933,6 +4938,16 @@ export type AifAdminShopRecentSale = {
   settlementDirection?: "in" | "out" | "none" | string | null;
   settlementMethod?: string | null;
   settlementAmount?: number;
+  settlementApproximate?: boolean;
+  dailyCategory?: string | null;
+  historyDate?: string | null;
+  historyComplete?: boolean | null;
+  historyWarning?: string | null;
+  currentBalanceDue?: number | null;
+  currentPaymentStatus?: string | null;
+  returnedLaterQty?: number;
+  returnedLaterAt?: string | null;
+  paidLaterAt?: string | null;
 };
 
 export type AifAdminShopSaleLineDeleteMode = "restore_stock" | "permanent";
@@ -4968,6 +4983,17 @@ export type AifAdminShopOverviewResponse = {
   };
   summary: AifAdminShopOverviewSummary;
   previousSummary: AifAdminShopOverviewSummary;
+  history?: {
+    version: string;
+    basis: string;
+    complete: boolean;
+    warnings: string[];
+    historicalCreditTotal: number;
+    currentCreditTotal: number;
+    creditSales: number;
+    creditLines: number;
+    creditItems: number;
+  };
   stockSnapshot: {
     variantCount: number;
     totalQty: number;
