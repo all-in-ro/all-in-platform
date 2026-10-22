@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import {
   apiAifAdminDeleteShopSaleLine,
+  apiAifShopDailyAuditPdfUrl,
   apiAifAdminShopOverview,
   apiAifCreateShopSaleLineNote,
   apiAifDeleteShopSaleLineNote,
@@ -81,6 +82,8 @@ export type AllInAdminMagazinDashboardProps = {
 
 type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card" | "bank_transfer"; indent?: boolean };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
+
+const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
 const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] shadow-[0_16px_36px_rgba(15,23,42,0.20)]";
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
@@ -2040,7 +2043,24 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-0.5 text-base">Mit nézzünk?</h2>
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button type="button"
+                onClick={() => {
+                  if (applied.from !== applied.to) { window.alert("Napi PDF-hez válassz egyetlen dátumot."); return; }
+                  window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all"}),"_blank","noopener,noreferrer");
+                }}
+                title="Teljes üzleti napi audit: minden eladó, külön bontásban"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/40 bg-[#2a8d8b] px-2.5 text-xs text-white hover:bg-[#319c99]">
+                <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Teljes napi PDF
+              </button>
+              {applied.employee ? (
+                <button type="button" onClick={() => {
+                  if (applied.from !== applied.to) { window.alert("Napi PDF-hez válassz egyetlen dátumot."); return; }
+                  window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all",employee:applied.employee}),"_blank","noopener,noreferrer");
+                }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white hover:bg-[#46556B]" title={`${applied.employee} napi auditja`}>
+                  <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Eladó PDF
+                </button>
+              ) : null}
               {[
                 ["today", "Ma"],
                 ["yesterday", "Tegnap"],
@@ -2359,7 +2379,10 @@ export default function AllInAdminMagazinDashboard({
                 <tbody>
                   {(data?.employees || []).map((item) => (
                     <tr key={item.actor} className="border-t border-white/8 hover:bg-white/[0.035]">
-                      <td className="px-3 py-3"><span className="flex items-center gap-2"><UserRound size={14} className="text-[#8ee6e2]" />{item.actor}</span></td>
+                      <td className="px-3 py-3"><span className="flex items-center gap-2"><UserRound size={14} className="text-[#8ee6e2]" />{item.actor}<button type="button" title={`${item.actor} napi auditja PDF-ben`} aria-label={`${item.actor} PDF export`} onClick={() => {
+                        if(applied.from!==applied.to){window.alert("Napi PDF-hez válassz egyetlen dátumot.");return;}
+                        window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all",employee:item.actor}),"_blank","noopener,noreferrer");
+                      }} className="ml-2 inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-2 text-white hover:bg-[#2a8d8b]/40"><img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /><span className="text-[10px]">PDF</span></button></span></td>
                       <td className="px-3 py-3 text-right">{money(item.revenue)}</td>
                       <td className="px-3 py-3 text-center">{integer(item.transactions)}</td>
                       <td className="px-3 py-3 text-center">{integer(item.itemsSold)}</td>
