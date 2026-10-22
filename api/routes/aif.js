@@ -7,6 +7,7 @@ import createAifShopIncomingRouter from "./aif/shopIncoming.js";
 import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
+import createAifShopDailyAuditPdfRouter from "./aif/shopDailyAuditPdf.js";
 import createAifLegacyExportRouter from "./aif/legacyExport.js";
 import { createHash } from "node:crypto";
 import { aifImageGallery, aifImageUrl, aifValidatedGallery, aifGalleryFamilyKey } from "../lib/aifImageGallery.js";
@@ -34115,6 +34116,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     normCode,
     aifNumber,
     insertStockMovementSafe,
+  }));
+
+  // Napi és műszak PDF audit: csak SELECT műveletek, saját üzlet / admin jogosultság.
+  router.use("/shop-audit", createAifShopDailyAuditPdfRouter({
+    pool,
+    requireAuthed,
+    requireAdminOrSecret,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    aifLoadDailyCreditHistory,
   }));
 
   // Utólagos, terméksor-szintű eladási megjegyzések. Külön modulban marad,
