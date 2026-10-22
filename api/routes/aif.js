@@ -269,6 +269,65 @@ async function aifLoadDailyCreditHistory(db, { locationId, date, employee }) {
 }
 // AIF_DAILY_CREDIT_HISTORY_END_20261022
 
+// AIF_SETTLED_GROSS_DISCOUNT_BEGIN_20261022
+// A korabbi tartozasok rendezesi napjan a LISTAAR es a tenylegesen fizetett
+// netto sorar kulonbozetet is mutatjuk a 'kedvezmeny nelkuli' kimutatasban.
+// Ez KIZAROLAG SELECT: a tranzakciokat, keszletet, penztarat NEM modosithatja.
+// Reszfizetes eseten csak a TENYLEGESEN befizetett hanyadra jutó kedvezmény jar.
+function aifSettledGrossDiscountSql(paymentWhere) {
+  return `WITH eligible_receipts AS (
+    SELECT DISTINCT
+      p.customer_payment_id,
+      p.sale_id,
+      (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS payment_day,
+      COALESCE(NULLIF(btrim(p.actor),''),NULLIF(btrim(cp.actor),''),s.actor) AS payment_actor
+    FROM aif_shop_sale_payments p
+    JOIN aif_shop_sales s ON s.id=p.sale_id
+    LEFT JOIN aif_shop_customer_payments cp ON cp.id=p.customer_payment_id
+    WHERE ${paymentWhere}
+      AND p.customer_payment_id IS NOT NULL
+      AND p.method <> 'credit'
+      AND s.status='completed'
+  ), lines_with_pricing AS (
+    SELECT
+      pr.payment_day, pr.payment_actor,
+      la.amount::numeric AS paid_amount,
+      (GREATEST(COALESCE(sl.list_price,0),0)::numeric * la.quantity::numeric) AS regular_value,
+      (GREATEST(COALESCE(sl.line_total,0),0)::numeric *
+       la.quantity::numeric / NULLIF(sl.quantity,0)::numeric) AS net_value
+    FROM eligible_receipts pr
+    JOIN aif_shop_customer_payment_line_allocations la
+      ON la.customer_payment_id=pr.customer_payment_id AND la.sale_id=pr.sale_id
+    JOIN aif_shop_sale_lines sl ON sl.id=la.sale_line_id AND sl.sale_id=la.sale_id
+    WHERE la.amount > 0 AND la.quantity > 0 AND sl.quantity > 0
+  ), dated_discounts AS (
+    SELECT payment_day, payment_actor,
+      CASE
+        WHEN net_value > 0 AND regular_value > net_value
+        THEN round(
+          (regular_value-net_value) * LEAST(1::numeric, paid_amount / net_value), 2)
+        ELSE 0::numeric
+      END AS discount_value
+    FROM lines_with_pricing
+  )
+  SELECT payment_day::text AS date, payment_actor AS actor,
+         round(COALESCE(sum(discount_value),0),2)::numeric AS discount_total
+  FROM dated_discounts
+  GROUP BY payment_day, payment_actor
+  ORDER BY payment_day, payment_actor`;
+}
+async function aifReadSettledGrossDiscounts(db, paymentWhere, args) {
+  const result = await db.query(aifSettledGrossDiscountSql(paymentWhere), args);
+  const rows = result.rows.map((row) => ({
+    date: String(row.date).slice(0,10),
+    actor: String(row.actor || 'Ismeretlen'),
+    discount: Math.round(Number(row.discount_total || 0)*100)/100,
+  }));
+  const total = Math.round(rows.reduce((n, row) => n + row.discount, 0)*100)/100;
+  return {total, rows};
+}
+// AIF_SETTLED_GROSS_DISCOUNT_END_20261022
+
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
@@ -33180,6 +33239,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           .filter((item) => item.method !== 'credit')
           .reduce((sum, item) => sum + aifNumber(item.amount), 0)
       );
+      // Same credited discount logic as the admin shop monitor.  On the day of
+      // collection an older credit's original line price counts as its gross
+      // reference; the actual receipt is still counted ONLY ONCE as money.
+      const paymentDiscountWhere = `s.location_id=$1
+        AND s.status='completed'
+        AND p.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND p.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND lower(regexp_replace(btrim(COALESCE(NULLIF(cp.actor,''),p.actor,s.actor)), '[[:space:]]+', ' ', 'g'))
+            = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))`;
+      const settledDiscounts = await aifReadSettledGrossDiscounts(pool, paymentDiscountWhere, baseArgs);
+      const originalSalesGross = aifRoundMoney(
+        aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount));
+      const originalSalesDiscount = aifRoundMoney(aifNumber(saleSummary.discount_total));
+      const grossCollectedTotal = aifRoundMoney(
+        originalSalesGross + customerPaymentTotal + settledDiscounts.total);
+      const collectedDiscountTotal = aifRoundMoney(originalSalesDiscount + settledDiscounts.total);
 
       res.json({
         ok: true,
@@ -33198,7 +33273,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           salesRevenue: revenue,
           collectedTotal,
           customerPaymentTotal,
-          salesBeforeDiscount: aifRoundMoney(aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount)),
+          // Keep the original sales-only fields for older consumers. These two
+          // new values also include the gross discount of later credit receipts.
+          grossCollectedTotal,
+          collectedDiscountTotal,
+          settlementDiscountTotal: settledDiscounts.total,
+          salesBeforeDiscount: originalSalesGross,
           transactions,
           itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold),
           averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
@@ -34147,6 +34227,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifMapShopSummary,
     aifPaymentMethodLabel,
     aifBuildDailyCreditHistory, // SAME audited day-end reconstruction as shop's Daily Summary
+    aifReadSettledGrossDiscounts, // SAME historic settlement-discount lookup as the shop screen
     readSalesTvaSettings,
   }));
 
