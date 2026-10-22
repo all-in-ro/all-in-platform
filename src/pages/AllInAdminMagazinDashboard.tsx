@@ -1104,7 +1104,7 @@ function MetricCard({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-rose-200/25 bg-gradient-to-br from-[#593544] to-[#3d394b]"
+      ? "border-[#ff9aa4]/42 bg-gradient-to-br from-[#cf142b] via-[#e21c2a] to-[#95131f]"
       : tone === "warning"
         ? "border-amber-200/24 bg-gradient-to-br from-[#5a5039] to-[#3d4452]"
         : tone === "success"
@@ -1146,7 +1146,7 @@ function MetricCard({
       <button
         type="button"
         onClick={onClick}
-        className={`${baseClass} w-full transition hover:-translate-y-0.5 hover:border-[#9be9e5]/48 hover:brightness-110 active:translate-y-0 active:scale-[0.99]`}
+        className={`${baseClass} w-full transition hover:-translate-y-0.5 ${tone === "danger" ? "hover:border-[#ffb0b8]/70" : "hover:border-[#9be9e5]/48 hover:brightness-110"} active:translate-y-0 active:scale-[0.99]`}
       >
         {content}
       </button>
@@ -1486,6 +1486,7 @@ export default function AllInAdminMagazinDashboard({
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
+  const [showHistoricalCreditRows, setShowHistoricalCreditRows] = useState(false);
   const [eventLogRowNumberDescending, setEventLogRowNumberDescending] = useState(true);
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
@@ -1758,14 +1759,40 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
-  const showCreditRowsInEventLog = applied.saleType === "credit" || applied.paymentStatus === "credit";
-  const eventLogSales = useMemo(
+  const historicalCreditSales = useMemo(
     () => (data?.recentSales || []).filter((sale) =>
-      showCreditRowsInEventLog
-      || isPaymentSettlement(sale)
-      || String(sale.saleType || "").toLowerCase() !== "credit"
+      !isPaymentSettlement(sale)
+      && String(sale.recordType || "sale") === "sale"
+      && String(sale.saleType || "").toLowerCase() === "credit"
     ),
-    [data?.recentSales, showCreditRowsInEventLog],
+    [data?.recentSales],
+  );
+  const historicalCreditSaleNumbers = useMemo(
+    () => new Set(historicalCreditSales.map((sale) => String(sale.saleNumber || "").trim()).filter(Boolean)),
+    [historicalCreditSales],
+  );
+  const historicalCreditTotal = useMemo(
+    () => historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.lineTotal), 0),
+    [historicalCreditSales],
+  );
+  const historicalCreditItems = useMemo(
+    () => historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.quantity), 0),
+    [historicalCreditSales],
+  );
+  const historicalCreditSalesCount = historicalCreditSaleNumbers.size;
+  const showCreditRowsInEventLog = showHistoricalCreditRows || applied.saleType === "credit" || applied.paymentStatus === "credit";
+  const eventLogSales = useMemo(
+    () => (data?.recentSales || []).filter((sale) => {
+      if (showHistoricalCreditRows) {
+        return !isPaymentSettlement(sale)
+          && String(sale.recordType || "sale") === "sale"
+          && String(sale.saleType || "").toLowerCase() === "credit";
+      }
+      return showCreditRowsInEventLog
+        || isPaymentSettlement(sale)
+        || String(sale.saleType || "").toLowerCase() !== "credit";
+    }),
+    [data?.recentSales, showCreditRowsInEventLog, showHistoricalCreditRows],
   );
   const eventLogProductCount = useMemo(
     () => eventLogSales.filter((sale) => !isPaymentSettlement(sale)).length,
@@ -1822,7 +1849,7 @@ export default function AllInAdminMagazinDashboard({
   const previousDiscountPercent = numberValue(previous?.salesBeforeDiscount) > 0
     ? numberValue(previous?.discountTotal) / numberValue(previous?.salesBeforeDiscount) * 100
     : 0;
-  const creditFilterActive = applied.paymentStatus === "credit" && applied.saleType === "credit";
+  const creditFilterActive = showHistoricalCreditRows;
   const stockSnapshotHistorical = applied.to < localIsoDate(new Date());
   const marginCostMissingQty = numberValue((summary as any)?.costMissingQty);
   const marginCostFallbackQty = numberValue((summary as any)?.costFallbackQty);
@@ -2204,16 +2231,16 @@ export default function AllInAdminMagazinDashboard({
           />
           <MetricCard
             title="Kintlévőség"
-            value={money(summary?.unpaidTotal)}
-            hint={creditFilterActive ? "Hitelszűrő aktív • kattints a kikapcsoláshoz" : `${integer(summary?.unpaidSales)} nyitott fizetés • kattints a hiteles sorokhoz`}
+            value={money(historicalCreditTotal)}
+            hint={creditFilterActive
+              ? "Napi hiteles lista aktív • kattints a teljes nap visszanézéséhez"
+              : `${historicalCreditSalesCount} hiteles bizonylat • ${integer(historicalCreditItems)} termék • jelenleg nyitott: ${money(summary?.unpaidTotal)}`}
             icon={WalletCards}
-            current={numberValue(summary?.unpaidTotal)}
+            current={historicalCreditTotal}
             previous={numberValue(previous?.unpaidTotal)}
-            tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"}
-            onClick={() => applyInstantFilter(creditFilterActive
-              ? { paymentStatus: "", saleType: "" }
-              : { paymentStatus: "credit", saleType: "credit" })}
-            actionLabel={creditFilterActive ? "Szűrő ki" : "Hitel szűrés"}
+            tone={historicalCreditTotal > 0.005 || numberValue(summary?.unpaidTotal) > 0.005 ? "danger" : "normal"}
+            onClick={() => setShowHistoricalCreditRows((current) => !current)}
+            actionLabel={creditFilterActive ? "Lista ki" : "Hitel lista"}
           />
           <MetricCard
             title="Becsült árrés"
@@ -2351,10 +2378,12 @@ export default function AllInAdminMagazinDashboard({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Eseménynapló</p>
-                <h2 className="mt-1 text-base">Eladott termékek és fizetési események</h2>
+                <h2 className="mt-1 text-base">{showHistoricalCreditRows ? "Napi hiteles elvitelek" : "Eladott termékek és fizetési események"}</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-[10px] text-white/50">
-                {integer(summary?.itemsSold)} db eladva • {eventLogSales.length} sor
+                {showHistoricalCreditRows
+                  ? `${integer(historicalCreditItems)} db hitellel elvive • ${historicalCreditSalesCount} bizonylat`
+                  : `${integer(summary?.itemsSold)} db eladva • ${eventLogSales.length} sor`}
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -2540,7 +2569,7 @@ export default function AllInAdminMagazinDashboard({
                 <div className="px-4 py-12 text-center">
                   <ReceiptText className="mx-auto text-[#7bd7d4]/70" size={28} />
                   <p className="mt-2 text-sm text-white">Nincs eladási vagy fizetési esemény ebben az időszakban.</p>
-                  <p className="mt-1 text-xs text-white/42">A lista az eladásokat, cseréket és a korábbi vásárlások későbbi rendezéseit is mutatja.</p>
+                  <p className="mt-1 text-xs text-white/42">{showHistoricalCreditRows ? "Itt az adott nap hitellel elvitt termékei látszanak, a későbbi rendezések nélkül." : "A lista az eladásokat, cseréket és a korábbi vásárlások későbbi rendezéseit is mutatja."}</p>
                 </div>
               ) : null}
             </div>
