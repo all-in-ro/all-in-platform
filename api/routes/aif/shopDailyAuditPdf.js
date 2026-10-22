@@ -40,6 +40,75 @@ const boldCandidates = [
 ];
 const palette = { ink:'#25344A',muted:'#617186',line:'#D5DFE7',light:'#F3F7FA',teal:'#148A86',red:'#C71B32' };
 
+// Human-readable product identifiers: barcode / internal product code, never the
+// misleading receipt ID. Values remain text, preserving leading zeroes.
+export const aifAuditIdentity = item => [
+  String(item?.barcode ?? '').trim(),
+  String(item?.product_code ?? '').trim(),
+].filter(Boolean).join(' / ');
+
+// Show an actual cash transfer on the day it was requested AND, when on another
+// day, its later acceptance/cancellation as a separate non-revenue audit event.
+// Historical PDFs must not retroactively mark a pending day as confirmed.
+export function aifDailyAuditCashEvents(m, date) {
+  const requestedDay = dateInZone(m.requested_at);
+  const confirmedDay = dateInZone(m.confirmed_at || m.effective_at);
+  const rejectedDay = dateInZone(m.rejected_at);
+  const cancelledDay = dateInZone(m.cancelled_at);
+  const manager = String(m.movement_type) === 'manager_handover';
+  const from = String(m.requested_by || '–').trim();
+  const to = String(m.confirmed_by || (manager ? 'Főnök' : 'Bank')).trim();
+  const periodIso = v => {
+    if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0,10);
+    return /^\d{4}-\d{2}-\d{2}/.test(String(v || '')) ? String(v).slice(0,10) : '';
+  };
+  const periodFrom = periodIso(m.handover_from_date);
+  const periodTo = periodIso(m.handover_to_date);
+  const period = manager && periodFrom && periodTo
+    ? `Időszak: ${periodFrom === periodTo ? periodFrom : periodFrom + ' – ' + periodTo}`
+    : '';
+  const ref = String(m.reference || '').trim();
+  const appendix = [period, ref ? `Hivatkozás: ${ref}` : ''].filter(Boolean).join(' • ');
+  const persons = [from, `→ ${to}`, appendix].filter(Boolean).join(' ');
+  const base = {cashType:String(m.movement_type || ''),amount:moneyNumber(m.amount),
+    requestedBy:from, confirmedBy:to, movementId:String(m.id || ''),
+    cashNote:String(m.note || '').trim()};
+  const list=[];
+  if (date === requestedDay) {
+    let status = manager ? 'Zárolva · átvételre vár' : 'Bankbefizetés rögzítve';
+    let cashStatus = manager ? 'pending' : 'confirmed';
+    if (date === confirmedDay) {
+      status = manager ? `Átvéve ${bucharest(m.confirmed_at || m.effective_at,'time')}` : 'Befizetve';
+      cashStatus = 'confirmed';
+    } else if (date === rejectedDay) {
+      status = 'Elutasítva'; cashStatus='rejected';
+    } else if (date === cancelledDay) {
+      status = 'Visszavonva'; cashStatus='cancelled';
+    }
+    list.push({ ...base, at:m.requested_at,
+      type:manager?'Készpénz átadása':'Bankbefizetés',people:persons,status,
+      cashStatus,cashPhase:'request'});
+  }
+  if (date === confirmedDay && date !== requestedDay) {
+    list.push({...base,at:m.confirmed_at || m.effective_at,
+      type:manager?'Korábbi pénzátadás átvétele':'Bankbefizetés megerősítve',
+      people:[persons,`Kezdeményezve: ${requestedDay||'–'}`].join(' • '),
+      status:manager?'Átvéve':'Befizetve', cashStatus:'confirmed',cashPhase:'confirmation'});
+  }
+  if (date === rejectedDay && date !== requestedDay) {
+    list.push({...base,at:m.rejected_at,type:'Pénzátadás elutasítva',
+      people:[persons,`Kezdeményezve: ${requestedDay||'–'}`].join(' • '),
+      status:'Elutasítva',cashStatus:'rejected',cashPhase:'resolution'});
+  }
+  if (date === cancelledDay && date !== requestedDay) {
+    list.push({...base,at:m.cancelled_at,type:'Pénzátadás visszavonva',
+      people:[persons,`Kezdeményezve: ${requestedDay||'–'}`].join(' • '),
+      status:'Visszavonva',cashStatus:'cancelled',cashPhase:'resolution'});
+  }
+  return list;
+}
+
+
 /** PDF drawing, A4 landscape. Every table row may wrap and is never clipped. */
 /**
  * Compact, print-first A4 landscape daily audit.
@@ -171,8 +240,8 @@ export function writeShopDailyAuditPdf(doc, report) {
     const details = [];
     if (item?.color_name) details.push(`Szín: ${String(item.color_name).trim()}`);
     if (item?.size) details.push(`Méret: ${String(item.size).trim()}`);
-    details.push(`Termékkód: ${item?.product_code ? String(item.product_code).trim() : '–'}`);
-    details.push(`Vonalkód: ${item?.barcode ? String(item.barcode).trim() : '–'}`);
+    const identification = aifAuditIdentity(item);
+    if (identification) details.push(identification);
     if (item?.sn_cod) details.push(`S/N: ${String(item.sn_cod).trim()}`);
     return [name, details.join('  •  ')].filter(Boolean).join('\n');
   };
@@ -200,7 +269,8 @@ export function writeShopDailyAuditPdf(doc, report) {
     }
     heading(`${actor} · megjegyzések (${list.length})`,38);
     for (const n of list) {
-      const titleText = `${bucharest(n.at)}  •  ${n.actor || '–'}  •  ${n.types.join(' / ')}`;
+      const notedLater = dateInZone(n.at) && dateInZone(n.at) !== report.date;
+      const titleText = `${bucharest(n.at)}  •  ${n.actor || '–'}  •  ${n.types.join(' / ')}${notedLater ? '  •  Utólagos bejegyzés' : ''}`;
       const productDescription = (n.products || []).map(p => productText(p)).join('\n');
       const noteText = String(n.note || '').trim();
       doc.font(B).fontSize(7.6);
@@ -265,12 +335,20 @@ export function writeShopDailyAuditPdf(doc, report) {
       '');
     const shifts=s.moves;
     const balanceEvent=shifts.filter(x=>x.type==='Napzárás'||x.type==='Műszakátadás').at(-1);
+    const newTransfers=shifts.filter(x=>x.cashPhase==='request'&&x.cashType==='manager_handover'&& !['cancelled','rejected'].includes(x.cashStatus));
+    const bankDeposits=shifts.filter(x=>x.cashPhase==='request'&&x.cashType==='bank_deposit'&&x.cashStatus==='confirmed');
+    const acceptedPriorTransfers=shifts.filter(x=>x.cashPhase==='confirmation'&&x.cashType==='manager_handover');
+    const cashMoveNotes=[
+      newTransfers.length?`Készpénz átadásra zárolva / átadva: ${fmt(total(newTransfers,x=>x.amount))} RON`:null,
+      bankDeposits.length?`Bankbefizetés: ${fmt(total(bankDeposits,x=>x.amount))} RON`:null,
+      acceptedPriorTransfers.length?`Korábbi pénzátadás átvétele: ${fmt(total(acceptedPriorTransfers,x=>x.amount))} RON (nem új levonás)`:null,
+    ].filter(Boolean).join('  •  ');
     sectionTable('Műszakátadások / pénzmozgások',
       ['Idő','Művelet','Kinek / kitől','Állapot','Összeg / kassza'],
       shifts.map(r=>[bucharest(r.at,'time'),r.type,r.people||'',r.status||'',fmt(r.amount)]),
       [63,203,232,142,141],
       {numeric:[4],cells:[[1,'ÖSSZESEN'],[2,`${shifts.length} esemény`], ...(balanceEvent?[[4,`Záró: ${fmt(balanceEvent.amount)}`]]:[])]},
-      '');
+      cashMoveNotes);
     employeeNotes(s.actor,s.notes);
   }
   if(report.scope==='all'){
@@ -406,7 +484,13 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     client.query(`SELECT * FROM aif_shop_day_closures WHERE location_id=$1 AND work_date=$2::date LIMIT 1`,[id,date]),
     client.query(`SELECT * FROM aif_shop_daily_financial_notes WHERE location_id=$1 AND work_date=$2::date ORDER BY created_at`,[id,date]),
     client.query(`SELECT * FROM aif_shop_cash_movements WHERE location_id=$1
-      AND (requested_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY requested_at`,[id,date]),
+      AND (
+        (requested_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+        OR (confirmed_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+        OR (effective_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+        OR (rejected_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+        OR (cancelled_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+      ) ORDER BY requested_at`,[id,date]),
     client.query(`SELECT ev.*,s.sale_number,s.sold_at,s.actor AS sale_actor FROM aif_shop_sale_events ev JOIN aif_shop_sales s ON s.id=ev.sale_id
       WHERE s.location_id=$1 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
       AND NULLIF(btrim(COALESCE(ev.note,'')),'') IS NOT NULL ORDER BY ev.created_at`,[id,date]),
@@ -441,7 +525,11 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   for(const n of productNotes)push(n.type,n.actor,n.at,n.note,n.reference,n.productInfo,n.lineId);
   for(const h of handovers.rows){push('Műszakátadás',h.from_actor,h.cutoff_at,h.note,`${h.from_actor} → ${h.to_actor}`);push('Átvételi megjegyzés',h.accepted_by||h.to_actor,h.accepted_at||h.created_at,h.acceptance_note,`${h.from_actor} → ${h.to_actor}`);}
   for(const n of closings.rows)push('Napzárási megjegyzés',n.actor,n.closed_at,n.note);
-  for(const n of cashMoves.rows)push('Készpénzátadás / bankbefizetés',n.requested_by,n.requested_at,n.note,`${n.movement_type} • ${amount(n.amount)}`);
+  // A készpénzmozgás megjegyzése a kezdeményezés napján kerül be.
+  // A későbbi átvétel az eseménynaplóban külön sor, nem újabb kiadás.
+  for(const n of cashMoves.rows)if(dateInZone(n.requested_at)===date)
+    push(n.movement_type==='manager_handover'?'Készpénzátadási megjegyzés':'Bankbefizetési megjegyzés',
+      n.requested_by,n.requested_at,n.note,`${n.movement_type} • ${amount(n.amount)}`);
   for(const n of customerReceipts.rows)push('Tartozásrendezési megjegyzés',n.actor,n.paid_at,n.note);
   const actors=new Set();
   if(employee)actors.add(employee);
@@ -452,6 +540,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       if(r.to_actor)actors.add(r.to_actor);
     }
     for(const r of normalReceipts.rows)if(r.receipt_actor)actors.add(r.receipt_actor);
+    for(const r of cashMoves.rows)if(r.requested_by)actors.add(r.requested_by);
     for(const n of allNotes)if(n.actor&&n.actor!=='–')actors.add(n.actor);
   }
   const sections=[];
@@ -504,10 +593,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
         ? `${titles[0]} + ${titles.length-1} másik termék`
         : titles[0]||'Eladás';
       const item=lines.length===1?lines[0]:null;
-      const codes=item?[
-        item.product_code?`Kód: ${item.product_code}`:'',
-        item.barcode?`Vonalkód: ${item.barcode}`:''
-      ].filter(Boolean).join(' • '):'';
+      const codes=item?aifAuditIdentity(item):'';
       return [product,items>1?`(${items} db)`:'',customer?`• ${customer}`:'',codes].filter(Boolean).join(' ');
     };
     const describeCustomerPayment=(receipt)=>{
@@ -516,10 +602,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       const titles=Array.from(new Set(allocations.map(r=>String(r.product_title||r.product_code||'').trim()).filter(Boolean)));
       const product=titles.length>1?`${titles[0]} + ${titles.length-1} másik termék`:titles[0]||'Korábbi tartozás';
       const item=allocations.length===1?allocations[0]:null;
-      const codes=item?[
-        item.product_code?`Kód: ${item.product_code}`:'',
-        item.barcode?`Vonalkód: ${item.barcode}`:''
-      ].filter(Boolean).join(' • '):'';
+      const codes=item?aifAuditIdentity(item):'';
       return ['Korábbi tartozás',customer?`• ${customer}`:'',product?`• ${product}`:'',codes].filter(Boolean).join(' ');
     };
     const payments=[
@@ -545,8 +628,10 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       shiftEvents.push({label:'Napzárás',period:bucharest(c.closed_at),person:c.actor,cash:amount(c.counted_cash),status:`Eltérés ${amount(c.cash_difference)}`});
       moves.push({at:c.closed_at,type:'Napzárás',people:c.actor,status:'Lezárva',amount:c.counted_cash});
     }
-    for(const m of cashMoves.rows)if(matches(m.requested_by)&&withinShift({at:m.requested_at},handover))moves.push({at:m.requested_at,type:m.movement_type==='manager_handover'?'Készpénzátadás':'Bankbefizetés',people:m.requested_by,status:m.status,amount:m.amount});
-    for(const e of returnEvents.rows)if(matches(e.actor)&&withinShift({at:e.created_at},handover))moves.push({at:e.created_at,type:'Visszáru',people:[e.product_title, e.product_code?`Kód: ${e.product_code}`:'',e.barcode?`Vonalkód: ${e.barcode}`:''].filter(Boolean).join(' • '),status:'Visszavett',amount:moneyNumber(e.return_credit)*-1});
+    for(const m of cashMoves.rows)if(matches(m.requested_by))
+      for(const ev of aifDailyAuditCashEvents(m,date))
+        if(withinShift(ev,handover))moves.push(ev);
+    for(const e of returnEvents.rows)if(matches(e.actor)&&withinShift({at:e.created_at},handover))moves.push({at:e.created_at,type:'Visszáru',people:[e.product_title,aifAuditIdentity(e)].filter(Boolean).join(' • '),status:'Visszavett',amount:moneyNumber(e.return_credit)*-1});
     const productsBySale=new Map();
     for (const line of [...normal,...credits]) {
       const key=String(line.sale_number||'');
@@ -555,7 +640,18 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       productsBySale.get(key).push(line);
     }
     const notes=allNotes.filter(r=>matches(r.actor)&&(!handover || withinShift(r,handover)))
-      .map(n=>({...n,products:n.productInfo?[n.productInfo]:(productsBySale.get(String(n.reference||''))||[])}))
+      .map(n=>{
+        const bySale=productsBySale.get(String(n.reference||''))||[];
+        // When a sale-event note names one returned item, never print ALL items
+        // from the original sale under it. If the name identifies several sizes,
+        // keep all of those variants; never guess which one was returned.
+        const normalizedNote=String(n.note||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('hu-HU');
+        const matched=bySale.filter(p=>{
+          const title=String(p.product_title||p.title||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('hu-HU');
+          return title.length>=5 && normalizedNote.includes(title);
+        });
+        return {...n,products:n.productInfo?[n.productInfo]:(matched.length?matched:bySale)};
+      })
       .sort((a,b)=>eventTime(a)-eventTime(b));
     const section={actor,normal,credits,settlements:settlement,payments,notes,moves: moves.sort((a,b)=>eventTime(a)-eventTime(b)),shifts:shiftEvents,
       creditReceipts:new Set(credits.map(r=>r.sale_number))};
