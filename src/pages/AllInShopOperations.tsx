@@ -4438,7 +4438,7 @@ export default function AllInShopOperations({
                   }`}><CircleDollarSign size={23} /></span>
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Készpénz útja</p>
-                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz zárolása átadásra" : "Bankba befizetés"}</h3>
+                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz átadása" : "Bankba befizetés"}</h3>
                     <p className="mt-1 text-xs text-white/52">{locationName} • jelenlegi kassza {formatMoney(currentCashBalance)}</p>
                   </div>
                 </div>
@@ -4456,7 +4456,7 @@ export default function AllInShopOperations({
                         : "border-white/12 bg-[#374357] text-white hover:border-[#ffe66b]/45"
                     }`}
                   >
-                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Átadásra zárolás</p>
+                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Készpénz átadása</p>
                     <p className={`mt-1 text-[11px] ${cashMoveType === "manager_handover" ? "text-[#243044]/70" : "text-white/48"}`}>Válaszd ki, melyik üzleti napig adod át az összegyűlt készpénzt.</p>
                   </button>
                   <button
@@ -4625,7 +4625,7 @@ export default function AllInShopOperations({
                   }`}
                 >
                   {cashMoveSaving ? <Loader2 size={17} className="animate-spin" /> : cashMoveType === "manager_handover" ? <WalletCards size={17} /> : <Landmark size={17} />}
-                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Zárolás rögzítése" : "Bankbefizetés rögzítése"}
+                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Átadás rögzítése" : "Bankbefizetés rögzítése"}
                 </button>
               </footer>
             </section>
