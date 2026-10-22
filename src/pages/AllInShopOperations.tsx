@@ -3143,10 +3143,10 @@ export default function AllInShopOperations({
                            <p className="mt-1 text-lg text-orange-50">{datedShiftData || summaryIsToday ? formatMoney(currentLockedCash) : "–"}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
-                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">{summaryIsToday ? "Utolsó zárás" : "Kiválasztott nap zárása"}</p>
-                          <p className="mt-1 truncate text-sm text-white">{summaryIsToday
-                            ? (cashData?.closures?.[0] ? `${cashData.closures[0].date || ""} • ${formatMoney(cashData.closures[0].countedCash)}` : "Még nincs")
-                            : (currentDayClosure ? `${summaryDate} • ${formatMoney(currentDayClosure.countedCash)}` : shiftLoading || !datedShiftData ? "Betöltés…" : "Nincs lezárva")}</p>
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Kiválasztott nap zárása</p>
+                          <p className="mt-1 truncate text-sm text-white">{currentDayClosure
+                            ? `${summaryDate} • ${formatMoney(currentDayClosure.countedCash)}`
+                            : (shiftLoading || !datedShiftData ? "Betöltés…" : "Nincs lezárva")}</p>
                         </div>
                       </div>
 
