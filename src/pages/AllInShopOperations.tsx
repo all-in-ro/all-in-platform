@@ -643,6 +643,25 @@ function paymentStatusLabel(value?: string | null) {
   return value || "–";
 }
 
+type DailyClassifiableRecord = {
+  recordType?: string | null;
+  dailyCategory?: string | null;
+  saleType?: string | null;
+  paymentStatus?: string | null;
+  balanceDue?: number | null;
+};
+
+// AIF_DAILY_CLASSIFICATION_BEGIN_20261022
+function isDailyCreditRecord(item: DailyClassifiableRecord) {
+  // A receipt belongs to the payment day even though the original sale was credit.
+  if (String(item.recordType || "").toLowerCase() === "payment_settlement") return false;
+  // Origin is stable; current paid/partial/unpaid status is not a historical category.
+  if (item.dailyCategory === "credit" || String(item.saleType || "").toLowerCase() === "credit") return true;
+  return numberValue(item.balanceDue) > 0.005 ||
+    ["unpaid", "partial", "credit"].includes(String(item.paymentStatus || "").toLowerCase());
+}
+// AIF_DAILY_CLASSIFICATION_END_20261022
+
 function safeColorHex(value?: string | null) {
   const raw = String(value || "").trim();
   return /^#[0-9a-f]{3,8}$/i.test(raw) ? raw : "";
@@ -981,6 +1000,7 @@ function DailySaleDetailModal({
   const source = detail || sale;
   const isExchange = String(detail?.recordType || sale.recordType || "sale") === "exchange";
   const hasDiscount = numberValue(source.discountTotal) > 0.005;
+  const historical = Boolean(source.historyDate);
 
   return createPortal(
     <div
@@ -997,7 +1017,7 @@ function DailySaleDetailModal({
             </span>
             <div className="min-w-0">
               <p className="text-[9px] uppercase tracking-[0.16em] text-white/55">
-                {isExchange ? "Csere részletei" : "Eladás részletei"}
+                {isExchange ? "Csere részletei" : source.historyDate ? "Hiteles elvitel · napi állapot" : "Eladás részletei"}
               </p>
               <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{source.saleNumber}</h3>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1012,7 +1032,7 @@ function DailySaleDetailModal({
                     ? "border-rose-200/28 bg-rose-500/14 text-rose-50"
                     : "border-[#9be9e5]/30 bg-[#2a8d8b]/20 text-[#efffff]"
                 }`}>
-                  {paymentStatusLabel(detail?.paymentStatus || (numberValue(source.balanceDue) > 0.005 ? "credit" : "paid"))}
+                  {paymentStatusLabel(source.paymentStatus || (numberValue(source.balanceDue) > 0.005 ? "credit" : "paid"))}
                 </span>
                 <span className="rounded-full border border-[#9be9e5]/35 bg-[#237c7a] px-2.5 py-1 text-[10px] text-white">
                   {detail?.paymentLabel || sale.paymentLabel}
@@ -1031,6 +1051,13 @@ function DailySaleDetailModal({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-24 sm:p-5 sm:pb-28">
+          {historical ? (
+            <div className="mb-3 rounded-xl border border-[#9be9e5]/25 bg-[#244f55] px-4 py-3 text-[12px] text-[#d7fffd]">
+              {formatDate(source.historyDate || "")} nap végi állapota.
+              {source.historyComplete === false ? " A történeti napló hiányos, az összeg ellenőrzendő." : ""}
+              {source.currentBalanceDue != null ? ` A bizonylat jelenlegi tartozása: ${formatMoney(source.currentBalanceDue)}.` : ""}
+            </div>
+          ) : null}
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b] px-4 py-3">
               <p className="text-[9px] uppercase tracking-[0.12em] text-[#dffffd]/72">Végösszeg</p>
@@ -1224,7 +1251,7 @@ function EmployeeDaySalesModal({
 }) {
   const summary = data?.summary;
   const lines = (data?.productLines?.length ? data.productLines : data?.products || [])
-    .filter((item) => String(item.recordType || "sale") !== "payment_settlement");
+    .filter((item) => !isDailyCreditRecord(item));
   const collected = numberValue(summary?.collectedTotal ?? summary?.revenue);
   const gross = numberValue(summary?.salesBeforeDiscount);
   const discount = numberValue(summary?.discountTotal);
@@ -1240,7 +1267,7 @@ function EmployeeDaySalesModal({
           <div className="flex min-w-0 items-center gap-3">
             <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/26 bg-white/10 text-white"><UserRound size={23} /></span>
             <div className="min-w-0">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-white/58">Dolgozó napi eladásai</p>
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/58">Dolgozó napi eladásai és befizetései</p>
               <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{employee.name}</h3>
               <p className="mt-1 text-[11px] text-white/62">{formatDate(date)} • kattints egy termékre a bizonylat részleteihez</p>
             </div>
@@ -1297,11 +1324,11 @@ function EmployeeDaySalesModal({
                     <div className="min-w-0">
                       <p className="truncate text-[15px] text-white">{item.title}</p>
                       <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
-                      <p className="mt-2 text-[10px] text-white/38">{item.saleNumber || "–"} • {item.soldAt ? formatExactDateTime(item.soldAt) : "–"}</p>
+                      <p className="mt-2 text-[10px] text-white/38">{item.saleNumber || "–"} • {item.soldAt ? formatExactDateTime(item.soldAt) : "–"}{item.recordType === "payment_settlement" ? " • Tartozásrendezés" : ""}</p>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-right sm:grid-cols-1 sm:gap-1">
                       <p className="text-[11px] text-white/54">{item.qty} db</p>
-                      <p className="text-[12px] text-white/78">Bruttó {formatMoney(listTotal)}</p>
+                      <p className="text-[12px] text-white/78">{item.recordType === "payment_settlement" ? `Befizetve ${formatMoney(item.settlementAmount ?? item.revenue)}` : `Bruttó ${formatMoney(listTotal)}`}</p>
                       <p className={discountValue > 0.005 ? "text-[11px] text-amber-100" : "text-[11px] text-white/32"}>{discountValue > 0.005 ? `Kedv. ${lineDiscountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}% • ${formatMoney(discountValue)}` : "Kedvezmény nincs"}</p>
                     </div>
                   </button>
@@ -1478,6 +1505,7 @@ export default function AllInShopOperations({
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const summaryRequestIdRef = useRef(0);
   const [dailyFinancialNotes, setDailyFinancialNotes] = useState<AifFinancialNoteItem[]>([]);
   const [dailyNotesLoadedKey, setDailyNotesLoadedKey] = useState("");
   const [dailyNotesLoading, setDailyNotesLoading] = useState(false);
@@ -1905,6 +1933,8 @@ export default function AllInShopOperations({
   }
 
   async function loadDailySummary(date = summaryDate) {
+    const requestId = ++summaryRequestIdRef.current;
+    setSummaryData((current) => current?.date === date ? current : null);
     setSummaryLoading(true);
     setError("");
     try {
@@ -1913,12 +1943,14 @@ export default function AllInShopOperations({
         date,
         employee: actor,
       });
+      if (requestId !== summaryRequestIdRef.current) return;
       setSummaryData(response);
     } catch (caught) {
+      if (requestId !== summaryRequestIdRef.current) return;
       setError(caught instanceof Error ? caught.message : "A napi összesítés nem tölthető be.");
       setSummaryData(null);
     } finally {
-      setSummaryLoading(false);
+      if (requestId === summaryRequestIdRef.current) setSummaryLoading(false);
     }
   }
 
@@ -2060,6 +2092,7 @@ export default function AllInShopOperations({
         location: locationCode,
         id: sale.id,
         recordType: sale.recordType || "sale",
+        asOfDate: sale.historyDate || null,
       });
       setSaleDetail(detail);
     } catch (caught) {
@@ -2654,25 +2687,16 @@ export default function AllInShopOperations({
     ? summaryData.productLines
     : (summaryData?.products || []);
 
-  const isOutstandingProductLine = (item: (typeof dailyProductLines)[number]) => {
-    const settlement = String(item.recordType || "") === "payment_settlement";
-    if (settlement) return false;
-    const paymentStatus = String(item.paymentStatus || "").toLowerCase();
-    return (
-      numberValue(item.balanceDue) > 0.005 ||
-      ["unpaid", "partial", "credit"].includes(paymentStatus)
-    );
-  };
-
   const visibleDailyProductLines = dailyProductLines.filter((item) =>
-    outstandingOnly ? isOutstandingProductLine(item) : !isOutstandingProductLine(item)
+    outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item)
   );
 
   const dailySales = summaryData?.sales || [];
-  const visibleDailySales = dailySales.filter((sale) => {
-    const outstanding = numberValue(sale.balanceDue) > 0.005;
-    return outstandingOnly ? outstanding : !outstanding;
-  });
+  const visibleDailySales = dailySales.filter((sale) =>
+    outstandingOnly ? isDailyCreditRecord(sale) : !isDailyCreditRecord(sale)
+  );
+  const historyAvailable = summaryData?.history?.basis === "selected_day_end";
+  const historyComplete = summaryData?.history?.complete !== false;
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -2940,11 +2964,15 @@ export default function AllInShopOperations({
                   <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[10px] uppercase tracking-[0.12em] text-white/82">Kintlévőség</p>
-                    <WalletCards size={17} className="text-white" />
-                  </div>
-                  <p className="mt-2 text-2xl">{formatMoney(daySummary.unpaidTotal)}</p>
+                      <WalletCards size={17} className="text-white" />
+                    </div>
+                    {historyAvailable ? <p className="mt-1 text-[9px] text-white/70">Aznap kiadott tételek · nap végi állapot</p> : null}
+                    <p className="mt-2 text-2xl">{historyComplete ? formatMoney(daySummary.unpaidTotal) : "Ellenőrzendő"}</p>
+                    {historyAvailable && !summaryIsToday ? (
+                      <p className="mt-1 text-[10px] text-white/75">Ebből most nyitott: {formatMoney(summaryData?.summary.currentUnpaidTotal)}</p>
+                    ) : null}
                   <p className="mt-1.5 text-[10px] text-white/76">
-                    {outstandingOnly ? "Kintlévőség nézet aktív • kattints vissza" : "Kattints a nyitott tételekhez"}
+                    {outstandingOnly ? "Hiteles tételek • kattints vissza" : "Kattints a hiteles tételekhez"}
                   </p>
                 </button>
               </div>
@@ -2964,7 +2992,7 @@ export default function AllInShopOperations({
                         <span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span>
                         <span className="text-[10px] text-white/38">{payment.transactions} {item.method === "credit" ? "hitel" : "fizetés"}</span>
                       </div>
-                      <p className="mt-2 text-xl">{formatMoney(payment.amount)}</p>
+                      <p className="mt-2 text-xl">{item.method === "credit" && !historyComplete ? "Ellenőrzendő" : formatMoney(payment.amount)}</p>
                       {item.method !== "credit" && payment.customerPaymentAmount > 0.005 ? (
                         <p className="mt-1.5 text-[10px] text-[#bdf8f5]/72">
                           ebből tartozásrendezés: {formatMoney(payment.customerPaymentAmount)} • {payment.customerPaymentTransactions} befizetés
@@ -3452,18 +3480,31 @@ export default function AllInShopOperations({
                     <div>
                       <p className="text-[10px] uppercase tracking-[0.14em] text-[#9be9e5]/62">Mit adtam el / mit fizettek ki?</p>
                       <h3 className="mt-1 text-[19px] text-white">
-                        {outstandingOnly ? "Kintlévőséges termékek" : "Termékek és későbbi kifizetések"}
+                        {outstandingOnly ? "Hiteles elvitelek / kintlévőség" : "Termékek és későbbi kifizetések"}
                       </h3>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-[10px] text-white/42">{visibleDailyProductLines.length} eseménysor</span>
                       {daySummary.unpaidSales > 0 ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E21C2A] px-2.5 py-1 text-[10px] text-white shadow-[0_4px_12px_rgba(226,28,42,0.18)]">
-                          <TriangleAlert size={11} /> {daySummary.unpaidSales} nyitott fizetés
+                          <TriangleAlert size={11} /> {daySummary.unpaidSales} {historyAvailable ? "nap végi tartozás" : "nyitott fizetés"}
                         </span>
                       ) : null}
                     </div>
                   </div>
+                  {outstandingOnly && historyAvailable ? (
+                    <p className="px-1 pt-2 text-[11px] leading-5 text-white/55">
+                      {formatDate(summaryDate)} nap végi állapota, kizárólag az ezen a napon kiadott tételekről. A későbbi rendezés külön jelzést kap.
+                    </p>
+                  ) : null}
+                  {!historyComplete ? (
+                    <div role="alert" className="mt-2 rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-100">
+                      Egyes régi tételek történeti naplója hiányos; a történeti kintlévőség ellenőrzendő.
+                      <details className="mt-1"><summary className="cursor-pointer">Érintett bizonylatok</summary>
+                        {(summaryData?.history?.warnings || []).map((warning) => <p key={warning}>{warning}</p>)}
+                      </details>
+                    </div>
+                  ) : null}
                   <div className="mt-2 overflow-hidden rounded-2xl bg-[#293548] divide-y divide-white/[0.14]">
                     {visibleDailyProductLines.map((item, itemIndex) => {
                       const settlement = String(item.recordType || "") === "payment_settlement";
@@ -3546,7 +3587,7 @@ export default function AllInShopOperations({
                               ) : null}
                               {settlement ? (
                                 <span className="shrink-0 rounded-md border border-[#b9f5f2]/52 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white shadow-[0_3px_10px_rgba(42,141,139,0.22)]">
-                                  Korábbi vásárlás rendezve
+                                  {item.settlementPartial ? "Tartozás részfizetése" : localDateKey(item.originalSoldAt) === summaryDate ? "Hiteles vásárlás rendezve" : "Korábbi vásárlás rendezve"}
                                 </span>
                               ) : null}
                             </div>
@@ -3557,6 +3598,17 @@ export default function AllInShopOperations({
                             >
                               {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
                             </p>
+                            {!settlement && isDailyCreditRecord(item) && item.historyDate ? (
+                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                                <span className="text-rose-100/80">Hiteles elvitel · {item.historyComplete === false ? "történeti állapot ellenőrzendő" : numberValue(item.balanceDue) > 0.005 ? "a bizonylaton a nap végén még volt tartozás" : "aznap rendezve"}</span>
+                                {numberValue(item.returnedLaterQty) > 0 ? (
+                                  <span className="text-amber-100/80">Később visszahozva: {item.returnedLaterQty} db · {formatExactDateTime(item.returnedLaterAt)}</span>
+                                ) : item.paidLaterAt ? (
+                                  <span className="text-[#bdf8f5]/85">Későbbi befizetés: {formatExactDateTime(item.paidLaterAt)}</span>
+                                ) : null}
+                                {item.currentBalanceDue != null ? <span className="text-white/50">Bizonylat most: {numberValue(item.currentBalanceDue) > 0.005 ? `${formatMoney(item.currentBalanceDue)} tartozás` : "rendezve"}</span> : null}
+                              </div>
+                            ) : null}
                             {settlement && item.originalSoldAt ? (
                               <p className="mt-1 text-[10px] text-[#cfe5ff]/82">
                                 Eredeti eladás: {formatExactDateTime(item.originalSoldAt)}
@@ -3708,7 +3760,7 @@ export default function AllInShopOperations({
                         <ShoppingBag size={34} />
                         <p className="mt-2 text-sm">
                           {outstandingOnly
-                            ? "Ezen a napon nincs nyitott kintlévőséges termék."
+                            ? "Ezen a napon nincs megjeleníthető hiteles termék."
                             : "Ezen a napon még nincs megjeleníthető eladási vagy későbbi kifizetési termékesemény."}
                         </p>
                       </div>
@@ -3771,13 +3823,14 @@ export default function AllInShopOperations({
                           <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] text-white/52">
                             <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>
                             {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={11} />{sale.customerName}</span> : null}
-                            {sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-[#E21C2A] px-2 py-1 text-white">Hátralék: {formatMoney(sale.balanceDue)}</span> : null}
+                              {sale.historyComplete === false ? <span className="rounded-lg border border-amber-200/30 bg-amber-400/10 px-2 py-1 text-amber-100">Történeti állapot ellenőrzendő</span> : sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-[#E21C2A] px-2 py-1 text-white">{sale.historyDate ? "Nap végi tartozás" : "Hátralék"}: {formatMoney(sale.balanceDue)}</span> : null}
+                              {sale.historyDate && sale.currentBalanceDue != null ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Most: {numberValue(sale.currentBalanceDue) > 0.005 ? formatMoney(sale.currentBalanceDue) : "rendezve"}</span> : null}
                           </div>
                         </button>
                       ))}
                       {!summaryLoading && !visibleDailySales.length ? (
                         <div className="rounded-xl border border-dashed border-white/12 px-3 py-8 text-center text-xs text-white/42">
-                          {outstandingOnly ? "Ezen a napon nincs nyitott kintlévőséges bizonylat." : "Ezen a napon még nincs megjeleníthető eladás."}
+                          {outstandingOnly ? "Ezen a napon nincs hiteles bizonylat." : "Ezen a napon még nincs megjeleníthető eladás."}
                         </div>
                       ) : null}
                     </div>
