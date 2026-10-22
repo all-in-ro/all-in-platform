@@ -1506,6 +1506,9 @@ export default function AllInShopOperations({
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRequestIdRef = useRef(0);
+  // A gyors napváltás régebbi API-válaszai nem írhatják felül az újabb napot.
+  const shiftOverviewRequestRef = useRef(0);
+  const cashOverviewRequestRef = useRef(0);
   const [dailyFinancialNotes, setDailyFinancialNotes] = useState<AifFinancialNoteItem[]>([]);
   const [dailyNotesLoadedKey, setDailyNotesLoadedKey] = useState("");
   const [dailyNotesLoading, setDailyNotesLoading] = useState(false);
@@ -1569,6 +1572,11 @@ export default function AllInShopOperations({
   const [cashCancelBusyId, setCashCancelBusyId] = useState<string | null>(null);
   const [cashHistoryOpen, setCashHistoryOpen] = useState(false);
 
+  // A képernyőn csak a kiválasztott napra válaszolt adatok jelenhetnek meg.
+  // Ez a védelem a töltés közben is blokkolja a korábbi napi kasszazárást.
+  const datedSummaryData = summaryData?.date === summaryDate ? summaryData : null;
+  const datedShiftData = shiftData?.date === summaryDate ? shiftData : null;
+
   const paymentMap = useMemo(() => {
     const map = new Map<string, {
       amount: number;
@@ -1576,7 +1584,7 @@ export default function AllInShopOperations({
       customerPaymentAmount: number;
       customerPaymentTransactions: number;
     }>();
-    for (const item of summaryData?.payments || []) {
+    for (const item of datedSummaryData?.payments || []) {
       map.set(item.method, {
         amount: numberValue(item.amount),
         transactions: numberValue(item.transactions),
@@ -1585,44 +1593,52 @@ export default function AllInShopOperations({
       });
     }
     return map;
-  }, [summaryData]);
+  }, [datedSummaryData]);
 
   const currentEmployeeDay = useMemo(
-    () => (shiftData?.employees || []).find((item) => employeeKey(item.name) === employeeKey(actor)) || null,
-    [actor, shiftData],
+    () => (datedShiftData?.employees || []).find((item) => employeeKey(item.name) === employeeKey(actor)) || null,
+    [actor, datedShiftData],
   );
   const currentOutgoingHandover = useMemo(
-    () => (shiftData?.handovers || []).find((item) => item.status === "pending" && employeeKey(item.fromActor) === employeeKey(actor)) || null,
-    [actor, shiftData],
+    () => (datedShiftData?.handovers || []).find((item) => item.status === "pending" && employeeKey(item.fromActor) === employeeKey(actor)) || null,
+    [actor, datedShiftData],
   );
   const currentIncomingHandover = useMemo(
-    () => (shiftData?.handovers || []).find((item) => item.status === "pending" && employeeKey(item.toActor) === employeeKey(actor)) || null,
-    [actor, shiftData],
+    () => (datedShiftData?.handovers || []).find((item) => item.status === "pending" && employeeKey(item.toActor) === employeeKey(actor)) || null,
+    [actor, datedShiftData],
   );
   const selectableShiftEmployees = useMemo(
     () => shiftEmployees.filter((item) => employeeKey(item.name) !== employeeKey(actor)),
     [actor, shiftEmployees],
   );
   const summaryIsToday = summaryDate === todayIso();
-  const handoverPreview = shiftData?.handoverPreview || null;
+  const handoverPreview = datedShiftData?.handoverPreview || null;
   const handoverShiftPreview = handoverPreview?.shift || currentEmployeeDay;
-  const handoverExpectedCash = handoverPreview?.expectedCash ?? shiftPayment(shiftData?.totals, "cash").amount;
+  const handoverExpectedCash = handoverPreview?.expectedCash ?? shiftPayment(datedShiftData?.totals, "cash").amount;
   // A könyvelt kassza a főnök által MÉG NEM igazolt összeget is tartalmazza.
   // A napi záráshoz és a következő átadáshoz kizárólag a szabad, fizikai pénz kell.
   const currentBookCash = numberValue(
     summaryIsToday
-      ? (cashData?.balance.availableCash ?? shiftData?.cashBalance?.availableCash ?? handoverExpectedCash)
-      : (shiftData?.cashBalance?.availableCash ?? 0),
+      ? (cashData?.balance.availableCash ?? datedShiftData?.cashBalance?.availableCash ?? handoverExpectedCash)
+      : (datedShiftData?.cashBalance?.availableCash ?? 0),
   );
   const currentLockedCash = numberValue(
     summaryIsToday
-      ? (cashData?.balance.pendingOut ?? shiftData?.cashBalance?.pendingOut ?? 0)
-      : (shiftData?.cashBalance?.pendingOut ?? 0),
+      ? (cashData?.balance.pendingOut ?? datedShiftData?.cashBalance?.pendingOut ?? 0)
+      : (datedShiftData?.cashBalance?.pendingOut ?? 0),
   );
-  const currentCashBalance = Math.round((currentBookCash - currentLockedCash) * 100) / 100;
-  const currentDayClosure = summaryIsToday
-    ? (shiftData?.dayClosure || cashData?.todayClosure || null)
-    : (shiftData?.dayClosure || null);
+  const closureCandidate = summaryIsToday
+    ? (datedShiftData?.dayClosure || cashData?.todayClosure || null)
+    : (datedShiftData?.dayClosure || null);
+  // A day-overview API SQL-je már a kiválasztott üzleti napra szűr.
+  // Nem a closure.date megjelenítési formátumától függ az ellenőrzés:
+  // a dátumazonos shift-válasz a hiteles forrás.
+  const currentDayClosure = closureCandidate;
+  // A lezárt múltbeli napnál a ténylegesen megszámolt és rögzített zárás
+  // az irányadó. Nem az aktuális üzleti pénzállás és nem egy másik nap zárása.
+  const currentCashBalance = !summaryIsToday && currentDayClosure
+    ? Math.round(numberValue(currentDayClosure.countedCash) * 100) / 100
+    : Math.round((currentBookCash - currentLockedCash) * 100) / 100;
   const pendingBossHandovers = cashData?.pendingManagerHandovers || [];
   // Már levontuk a zárolt részt a fizikai kasszából: tilos kétszer levonni.
   const availableCashForNewHandover = Math.max(0, currentCashBalance);
@@ -1742,7 +1758,7 @@ export default function AllInShopOperations({
       });
     }
 
-    for (const handover of shiftData?.handovers || []) {
+    for (const handover of datedShiftData?.handovers || []) {
       const notes = [
         { value: String(handover.note || "").trim(), label: "Műszakátadás megjegyzése" },
         { value: String(handover.acceptanceNote || "").trim(), label: "Átvételi megjegyzés" },
@@ -1767,8 +1783,8 @@ export default function AllInShopOperations({
       const right = new Date(b.happenedAt || `${b.date}T12:00:00`).getTime();
       return right - left;
     });
-  }, [cashData?.closures, cashData?.movements, shiftData?.handovers, summaryDate]);
-  const dayClosePreview = (shiftData as (AifShopShiftDayOverview & {
+  }, [cashData?.closures, cashData?.movements, datedShiftData?.handovers, summaryDate]);
+  const dayClosePreview = (datedShiftData as (AifShopShiftDayOverview & {
     dayClosePreview?: AifDayClosePreview | null;
   }) | null)?.dayClosePreview || null;
   const usableDayClosePreview = dayClosePreview?.workDate === summaryDate ? dayClosePreview : null;
@@ -1944,6 +1960,7 @@ export default function AllInShopOperations({
         employee: actor,
       });
       if (requestId !== summaryRequestIdRef.current) return;
+      if (response.date !== date) throw new Error("A szerver másik nap összesítését küldte vissza.");
       setSummaryData(response);
     } catch (caught) {
       if (requestId !== summaryRequestIdRef.current) return;
@@ -1955,7 +1972,10 @@ export default function AllInShopOperations({
   }
 
   async function loadShiftContext(date = summaryDate) {
+    const requestId = ++shiftOverviewRequestRef.current;
     setShiftLoading(true);
+    setShiftData((current) => current?.date === date ? current : null);
+    setShiftEmployees([]);
     try {
       const [overview, employees] = await Promise.all([
         apiAifShopShiftDayOverview({ location: locationCode, date }),
@@ -1963,18 +1983,22 @@ export default function AllInShopOperations({
           ? apiAifShopShiftEmployees({ location: locationCode })
           : Promise.resolve({ items: [] as Array<{ name: string; current?: boolean }> }),
       ]);
+      if (requestId !== shiftOverviewRequestRef.current) return;
+      if (overview.date !== date) throw new Error("A szerver másik nap műszakadatait küldte vissza.");
       setShiftData(overview);
       setShiftEmployees(employees.items || []);
     } catch (caught) {
+      if (requestId !== shiftOverviewRequestRef.current) return;
       setError(caught instanceof Error ? caught.message : "A műszakadatok nem tölthetők be.");
       setShiftData(null);
       setShiftEmployees([]);
     } finally {
-      setShiftLoading(false);
+      if (requestId === shiftOverviewRequestRef.current) setShiftLoading(false);
     }
   }
 
   async function loadCashContext(month = cashHistoryMonth, handoverAfterDate = cashHandoverAfterDate) {
+    const requestId = ++cashOverviewRequestRef.current;
     setCashLoading(true);
     try {
       const response = await apiAifShopCashOverview({
@@ -1983,14 +2007,16 @@ export default function AllInShopOperations({
         month,
         handoverAfterDate: handoverAfterDate || undefined,
       });
+      if (requestId !== cashOverviewRequestRef.current) return null;
       setCashData(response);
       return response;
     } catch (caught) {
+      if (requestId !== cashOverviewRequestRef.current) return null;
       setError(caught instanceof Error ? caught.message : "A kassza naplója nem tölthető be.");
       setCashData(null);
       return null;
     } finally {
-      setCashLoading(false);
+      if (requestId === cashOverviewRequestRef.current) setCashLoading(false);
     }
   }
 
@@ -2369,6 +2395,11 @@ export default function AllInShopOperations({
   }
 
   async function refreshDayCloseCheck() {
+    const requestId = ++shiftOverviewRequestRef.current;
+    const cashRequestId = ++cashOverviewRequestRef.current;
+    const requestedDate = summaryDate;
+    setShiftLoading(true);
+    setCashLoading(true);
     setDayCloseChecking(true);
     setDayCloseCheckFailed(false);
     setDayCloseError("");
@@ -2384,19 +2415,30 @@ export default function AllInShopOperations({
           handoverAfterDate: cashHandoverAfterDate || undefined,
         }),
       ]);
-      setShiftData(shift);
-      setCashData(cash);
+      if (requestId === shiftOverviewRequestRef.current && shift.date === requestedDate) {
+        setShiftData(shift);
+      }
+      if (cashRequestId === cashOverviewRequestRef.current) {
+        setCashData(cash);
+      }
     } catch (caught) {
+      if (requestId !== shiftOverviewRequestRef.current) return;
       setDayCloseCheckFailed(true);
       setDayCloseError(
         `A napzárás előzetes ellenőrzése nem sikerült. ${caught instanceof Error ? caught.message : "Próbáld újra a Frissítés gombbal."}`,
       );
     } finally {
+      if (requestId === shiftOverviewRequestRef.current) setShiftLoading(false);
+      if (cashRequestId === cashOverviewRequestRef.current) setCashLoading(false);
       setDayCloseChecking(false);
     }
   }
 
   function openDayClose() {
+    if (!datedShiftData || shiftLoading) {
+      setError("A kiválasztott nap műszakadatai még nincsenek betöltve. Frissítsd az összesítést.");
+      return;
+    }
     setError("");
     setDayCloseError("");
     setDayCloseCounted(currentCashBalance.toFixed(2).replace(".", ","));
@@ -2477,9 +2519,9 @@ export default function AllInShopOperations({
 
   useEffect(() => {
     if (!open || mode !== "summary") return;
-    const sourceItems = summaryData?.productLines?.length
-      ? summaryData.productLines
-      : (summaryData?.products || []);
+    const sourceItems = datedSummaryData?.productLines?.length
+      ? datedSummaryData.productLines
+      : (datedSummaryData?.products || []);
     const lineIds = Array.from(new Set(
       sourceItems
         .filter((item) => String(item.recordType || "sale") === "sale")
@@ -2507,7 +2549,7 @@ export default function AllInShopOperations({
     return () => {
       cancelled = true;
     };
-  }, [locationCode, mode, open, summaryData?.productLines, summaryData?.products]);
+  }, [locationCode, mode, open, datedSummaryData?.productLines, datedSummaryData?.products]);
 
   useEffect(() => {
     if (!open) return;
@@ -2659,7 +2701,7 @@ export default function AllInShopOperations({
     retailValue: 0,
     lowStockVariants: 0,
   };
-  const daySummary = summaryData?.summary || {
+  const daySummary = datedSummaryData?.summary || {
     revenue: 0,
     salesRevenue: 0,
     collectedTotal: 0,
@@ -2683,20 +2725,20 @@ export default function AllInShopOperations({
   const dayCustomerPaymentTotal = numberValue(daySummary.customerPaymentTotal);
   // A napi bruttó forgalomhoz a ma rendezett korábbi tartozások is hozzátartoznak.
   const dayGrossTurnover = numberValue(daySummary.salesBeforeDiscount) + dayCustomerPaymentTotal;
-  const dailyProductLines = summaryData?.productLines?.length
-    ? summaryData.productLines
-    : (summaryData?.products || []);
+  const dailyProductLines = datedSummaryData?.productLines?.length
+    ? datedSummaryData.productLines
+    : (datedSummaryData?.products || []);
 
   const visibleDailyProductLines = dailyProductLines.filter((item) =>
     outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item)
   );
 
-  const dailySales = summaryData?.sales || [];
+  const dailySales = datedSummaryData?.sales || [];
   const visibleDailySales = dailySales.filter((sale) =>
     outstandingOnly ? isDailyCreditRecord(sale) : !isDailyCreditRecord(sale)
   );
-  const historyAvailable = summaryData?.history?.basis === "selected_day_end";
-  const historyComplete = summaryData?.history?.complete !== false;
+  const historyAvailable = datedSummaryData?.history?.basis === "selected_day_end";
+  const historyComplete = datedSummaryData?.history?.complete !== false;
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -2969,7 +3011,7 @@ export default function AllInShopOperations({
                     {historyAvailable ? <p className="mt-1 text-[9px] text-white/70">Aznap kiadott tételek · nap végi állapot</p> : null}
                     <p className="mt-2 text-2xl">{historyComplete ? formatMoney(daySummary.unpaidTotal) : "Ellenőrzendő"}</p>
                     {historyAvailable && !summaryIsToday ? (
-                      <p className="mt-1 text-[10px] text-white/75">Ebből most nyitott: {formatMoney(summaryData?.summary.currentUnpaidTotal)}</p>
+                      <p className="mt-1 text-[10px] text-white/75">Ebből most nyitott: {formatMoney(datedSummaryData?.summary.currentUnpaidTotal)}</p>
                     ) : null}
                   <p className="mt-1.5 text-[10px] text-white/76">
                     {outstandingOnly ? "Hiteles tételek • kattints vissza" : "Kattints a hiteles tételekhez"}
@@ -3016,12 +3058,12 @@ export default function AllInShopOperations({
                     <div className="pr-4 sm:pr-5">
                       <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Napi kezdő kassza</p>
                       <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">
-                        {shiftData?.totals.openingCash == null ? "–" : formatMoney(shiftData.totals.openingCash)}
+                        {datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}
                       </p>
                     </div>
                     <div className="border-l border-white/40 pl-4 sm:pl-5">
-                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">Szabad készpénz az üzletben</p>
-                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">{summaryIsToday ? "Szabad készpénz az üzletben" : "Kiválasztott napi kassza"}</p>
+                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{datedShiftData || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
                     </div>
                   </div>
                 </div>
@@ -3033,7 +3075,7 @@ export default function AllInShopOperations({
                         <LockKeyhole size={17} />
                       </span>
                       <div className="flex min-w-0 items-center px-3">
-                        <span className="truncate text-[13px] text-white">A mai kassza le van zárva</span>
+                        <span className="truncate text-[13px] text-white">{summaryIsToday ? "A mai kassza le van zárva" : "A kiválasztott nap kasszája le van zárva"}</span>
                       </div>
                       <div className="flex min-w-0 items-center border-l border-white/28 px-3">
                         <span className="truncate text-[11px] text-white/92">{currentDayClosure.actor}</span>
@@ -3050,7 +3092,7 @@ export default function AllInShopOperations({
                     </div>
                   ) : null}
 
-                  {pendingBossHandovers.length ? (
+                  {summaryIsToday && pendingBossHandovers.length ? (
                     <div className="mb-3 space-y-2">
                       {pendingBossHandovers.map((pendingHandover, index) => (
                         <div
@@ -3094,15 +3136,17 @@ export default function AllInShopOperations({
                       <div className="grid gap-2 sm:grid-cols-3">
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
                            <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Szabad kassza</p>
-                          <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                          <p className="mt-1 text-lg text-[#d7fffd]">{datedShiftData || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
                            <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Zárolva • átvételre vár</p>
-                           <p className="mt-1 text-lg text-orange-50">{formatMoney(currentLockedCash)}</p>
+                           <p className="mt-1 text-lg text-orange-50">{datedShiftData || summaryIsToday ? formatMoney(currentLockedCash) : "–"}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
-                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Utolsó zárás</p>
-                          <p className="mt-1 truncate text-sm text-white">{cashData?.closures?.[0] ? `${cashData.closures[0].date || ""} • ${formatMoney(cashData.closures[0].countedCash)}` : "Még nincs"}</p>
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">{summaryIsToday ? "Utolsó zárás" : "Kiválasztott nap zárása"}</p>
+                          <p className="mt-1 truncate text-sm text-white">{summaryIsToday
+                            ? (cashData?.closures?.[0] ? `${cashData.closures[0].date || ""} • ${formatMoney(cashData.closures[0].countedCash)}` : "Még nincs")
+                            : (currentDayClosure ? `${summaryDate} • ${formatMoney(currentDayClosure.countedCash)}` : shiftLoading || !datedShiftData ? "Betöltés…" : "Nincs lezárva")}</p>
                         </div>
                       </div>
 
@@ -3111,7 +3155,7 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={() => void openCashMovement("manager_handover")}
-                            disabled={availableCashForNewHandover <= 0 || cashLoading}
+                            disabled={availableCashForNewHandover <= 0 || cashLoading || shiftLoading || !datedShiftData}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                              <WalletCards size={17} /> Készpénz átadása
@@ -3119,7 +3163,7 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={() => void openCashMovement("bank_deposit")}
-                            disabled={currentCashBalance <= 0}
+                            disabled={currentCashBalance <= 0 || shiftLoading || !datedShiftData}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/34 bg-[#2a8d8b]/18 px-3 text-sm text-[#d7fffd] hover:bg-[#2a8d8b]/28 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Landmark size={17} /> Bankba befizetés
@@ -3127,7 +3171,7 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={openDayClose}
-                            disabled={Boolean(currentDayClosure) || Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
+                            disabled={shiftLoading || !datedShiftData || Boolean(currentDayClosure) || Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#b9f5f2]/48 bg-[#2a8d8b] px-3 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <LockKeyhole size={17} /> Napi kassza lezárása
@@ -3140,7 +3184,7 @@ export default function AllInShopOperations({
                           <button
                             type="button"
                             onClick={openDayClose}
-                            disabled={Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
+                            disabled={shiftLoading || !datedShiftData || Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
                             className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#b9f5f2]/48 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <LockKeyhole size={17} />
@@ -3244,7 +3288,7 @@ export default function AllInShopOperations({
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-white/14 bg-black/10 px-3 py-1.5 text-[11px] text-white/58">
-                      {shiftData?.handovers.filter((item) => item.status === "accepted").length || 0} lezárt átadás
+                      {datedShiftData?.handovers.filter((item) => item.status === "accepted").length || 0} lezárt átadás
                     </span>
                     {summaryIsToday && !currentOutgoingHandover && !currentIncomingHandover ? (
                       <button
@@ -3324,12 +3368,12 @@ export default function AllInShopOperations({
                         </div>
                         <div className="text-right">
                           <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi befolyt összeg</p>
-                          <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(shiftData?.totals))}</p>
+                          <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(datedShiftData?.totals))}</p>
                           <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-white/44">
-                            <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(shiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
-                            <span>Kedvezmény <strong className="font-normal text-amber-100/86">{formatMoney(shiftData?.totals.discountTotal || 0)}</strong></span>
-                            <span>Eladás <strong className="font-normal text-white/78">{formatMoney(shiftData?.totals.revenue || 0)}</strong></span>
-                            <span>Nyitó kassza <strong className="font-normal text-[#d7fffd]">{shiftData?.totals.openingCash == null ? "–" : formatMoney(shiftData.totals.openingCash)}</strong></span>
+                            <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
+                            <span>Kedvezmény <strong className="font-normal text-amber-100/86">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</strong></span>
+                            <span>Eladás <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.revenue || 0)}</strong></span>
+                            <span>Nyitó kassza <strong className="font-normal text-[#d7fffd]">{datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}</strong></span>
                           </div>
                         </div>
                       </div>
@@ -3337,7 +3381,7 @@ export default function AllInShopOperations({
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                         {PAYMENT_META.map((metaItem) => {
                           const Icon = metaItem.icon;
-                          const payment = shiftPayment(shiftData?.totals, metaItem.method);
+                          const payment = shiftPayment(datedShiftData?.totals, metaItem.method);
                           return (
                             <div key={metaItem.method} className="rounded-2xl border border-white/10 bg-[#303c4f] p-3">
                               <div className="flex items-center gap-2 text-[11px] text-white/52"><Icon size={15} className="text-[#8ee6e2]" />{metaItem.label}</div>
@@ -3386,7 +3430,7 @@ export default function AllInShopOperations({
                         <UsersRound size={22} className="text-[#8ee6e2]" />
                       </div>
                       <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] gap-2.5">
-                        {(shiftData?.employees || []).map((employee) => {
+                        {(datedShiftData?.employees || []).map((employee) => {
                           const active = employeeKey(employee.name) === employeeKey(actor);
                           return (
                             <button type="button" onClick={() => void openEmployeeSales(employee)} key={employee.name} className={`rounded-2xl border p-3.5 text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/48 hover:shadow-[0_10px_24px_rgba(0,0,0,0.18)] active:translate-y-0 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`} title={`${employee.name} napi termékeinek megnyitása`}>
@@ -3421,7 +3465,7 @@ export default function AllInShopOperations({
                             </button>
                           );
                         })}
-                        {!shiftLoading && !(shiftData?.employees || []).length ? <div className="col-span-full rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">Ezen a napon még nincs dolgozóhoz kötött forgalom.</div> : null}
+                        {!shiftLoading && !(datedShiftData?.employees || []).length ? <div className="col-span-full rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">Ezen a napon még nincs dolgozóhoz kötött forgalom.</div> : null}
                       </div>
                     </div>
 
@@ -3431,10 +3475,10 @@ export default function AllInShopOperations({
                           <p className="text-[9px] uppercase tracking-[0.13em] text-white/42">Visszanézhető napló</p>
                           <h4 className="mt-1 text-lg text-white">Műszakátadások</h4>
                         </div>
-                        <span className="rounded-full border border-white/12 bg-black/10 px-3 py-1.5 text-[11px] text-white/58">{shiftData?.handovers.length || 0} átadás</span>
+                        <span className="rounded-full border border-white/12 bg-black/10 px-3 py-1.5 text-[11px] text-white/58">{datedShiftData?.handovers.length || 0} átadás</span>
                       </div>
                       <div className="mt-3 space-y-2.5">
-                        {(shiftData?.handovers || []).map((item, index) => {
+                        {(datedShiftData?.handovers || []).map((item, index) => {
                           const accepted = item.status === "accepted";
                           const pending = item.status === "pending";
                           return (
@@ -3467,7 +3511,7 @@ export default function AllInShopOperations({
                             </div>
                           );
                         })}
-                        {!shiftLoading && !(shiftData?.handovers || []).length ? <div className="rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">Ezen a napon még nem volt műszakátadás.</div> : null}
+                        {!shiftLoading && !(datedShiftData?.handovers || []).length ? <div className="rounded-2xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">Ezen a napon még nem volt műszakátadás.</div> : null}
                       </div>
                     </div>
                   </div>
@@ -3501,7 +3545,7 @@ export default function AllInShopOperations({
                     <div role="alert" className="mt-2 rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-100">
                       Egyes régi tételek történeti naplója hiányos; a történeti kintlévőség ellenőrzendő.
                       <details className="mt-1"><summary className="cursor-pointer">Érintett bizonylatok</summary>
-                        {(summaryData?.history?.warnings || []).map((warning) => <p key={warning}>{warning}</p>)}
+                        {(datedSummaryData?.history?.warnings || []).map((warning) => <p key={warning}>{warning}</p>)}
                       </details>
                     </div>
                   ) : null}
@@ -3518,7 +3562,7 @@ export default function AllInShopOperations({
 
                       const linkedSale = settlement
                         ? null
-                        : (summaryData?.sales || []).find(
+                        : (datedSummaryData?.sales || []).find(
                             (sale) =>
                               String(sale.id || "") === String(item.saleId || "") &&
                               String(sale.recordType || "sale") === String(item.recordType || "sale"),
@@ -4886,8 +4930,8 @@ export default function AllInShopOperations({
                         <div className="rounded-xl border border-white/12 bg-black/10 px-3 py-2"><p className="text-white/42">Új KP ebben a műszakban</p><p className="mt-1 text-white">{formatMoney(handoverPreview.newCashDuringShift)}</p></div>
                       </div>
                     ) : null}
-                    {shiftPayment(shiftData?.totals, "cash").customerPaymentAmount > 0 ? (
-                      <div className="mt-3 rounded-xl border border-white/12 bg-black/10 px-3 py-2 text-[10px] text-white/55">Tartozásból beérkezett készpénz is van benne: {formatMoney(shiftPayment(shiftData?.totals, "cash").customerPaymentAmount)}</div>
+                    {shiftPayment(datedShiftData?.totals, "cash").customerPaymentAmount > 0 ? (
+                      <div className="mt-3 rounded-xl border border-white/12 bg-black/10 px-3 py-2 text-[10px] text-white/55">Tartozásból beérkezett készpénz is van benne: {formatMoney(shiftPayment(datedShiftData?.totals, "cash").customerPaymentAmount)}</div>
                     ) : null}
                   </div>
                 </div>
