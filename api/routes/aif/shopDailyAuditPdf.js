@@ -26,6 +26,7 @@ const toIso = (v) => v ? new Date(v).toISOString() : null;
 const dateInZone = (v) => v ? new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(v)) : null;
 const eventTime = (r) => new Date(r.at || r.sold_at || r.paid_at || 0).getTime();
 const withinShift = (r, handover) => !handover || (eventTime(r) >= new Date(handover.shift_start_at).getTime() && eventTime(r) <= new Date(handover.cutoff_at).getTime());
+const hasRealStartTime = (v) => Boolean(v) && bucharest(v,'time') !== '00:00' && bucharest(v,'time') !== '–';
 
 const fontCandidates = [
   '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
@@ -44,7 +45,8 @@ const palette = { ink:'#25344A',muted:'#617186',line:'#D5DFE7',light:'#F3F7FA',t
  * Compact, print-first A4 landscape daily audit.
  * A single employee starts on page 1 (no decorative cover page).
  * Empty sections never render. Tables always include their own totals.
- * Receipt/Sale identifiers remain in the database but are not printed.
+ * Receipt/Sale identifiers stay in the database, but product SKU/barcode/color/size
+ * are printed so each item remains traceable without long internal receipt IDs.
  */
 export function writeShopDailyAuditPdf(doc, report) {
   const normalFont = fontCandidates.find(f => fs.existsSync(f));
@@ -58,7 +60,7 @@ export function writeShopDailyAuditPdf(doc, report) {
   const qty = n => Number(n||0).toLocaleString('ro-RO',{maximumFractionDigits:3});
   const total = (rows,fn) => moneyNumber(rows.reduce((v,r) => v + Number(fn(r) || 0),0));
   const W = 841.89, H = 595.28, margin = 30, contentWidth = W - margin * 2;
-  const bottom = H - 46;
+  const bottom = H - 40;
   let y = 0, pageTitle = '', pageCount = 0;
   const paragraph = (s,x,top,width,opts={}) => doc.text(clean(s),x,top,{width,lineGap:0,...opts});
   function newPage(heading, subtitle = '') {
@@ -77,56 +79,56 @@ export function writeShopDailyAuditPdf(doc, report) {
       y += 16;
     }
   }
-  function reserve(h) { if (y + h > bottom) newPage(`${pageTitle} (folytatás)`); }
+  function reserve(h) { if (y + h > bottom) newPage(pageTitle); }
   function heading(title, heightAfter=0) {
-    reserve(31 + heightAfter);
+    reserve(28 + heightAfter);
     doc.fillColor(palette.teal).font(B).fontSize(10.3);
     paragraph(title,margin,y,contentWidth);
-    y += 19;
+    y += 17;
     doc.moveTo(margin,y).lineTo(W-margin,y).strokeColor(palette.line).lineWidth(0.6).stroke();
-    y += 7;
+    y += 6;
   }
   function statCells(cells) {
     if (!cells.length) return;
-    reserve(53);
+    reserve(49);
     const gap = 6, cw = (contentWidth - gap*(cells.length-1))/cells.length;
     for (let i=0;i<cells.length;i++) {
       const x = margin + i*(cw+gap);
-      doc.roundedRect(x,y,cw,43,5).fillAndStroke(palette.light,palette.line);
+      doc.roundedRect(x,y,cw,40,5).fillAndStroke(palette.light,palette.line);
       doc.font(F).fontSize(7).fillColor(palette.muted);
       paragraph(cells[i][0],x+7,y+6,cw-14,{lineBreak:false});
       doc.font(B).fontSize(10).fillColor(cells[i][2]===true?palette.red:palette.ink);
       paragraph(cells[i][1],x+7,y+22,cw-14,{lineBreak:false});
     }
-    y += 49;
+    y += 46;
   }
   function infoLine(key,value) {
-    reserve(17);
+    reserve(16);
     doc.font(F).fontSize(7.7).fillColor(palette.muted);
     paragraph(key,margin,y,152,{lineBreak:false});
     doc.font(B).fontSize(8).fillColor(palette.ink);
     paragraph(value,margin+157,y,contentWidth-157,{lineBreak:false});
-    y += 17;
+    y += 16;
   }
   function sectionTable(label, headers, rows, widths, sums, footnote='') {
     if (!rows.length) return;
     const numeric = new Set(sums?.numeric ?? []);
     const positions = [margin];
     widths.forEach(w=>positions.push(positions[positions.length-1]+w));
-    const headerHeight=23, footerHeight=28;
-    const fontSize=7.5;
+    const headerHeight=21, footerHeight=23;
+    const fontSize=7.2;
     const rowHeight = vals => {
       doc.font(F).fontSize(fontSize);
       const measured = vals.map((value,i) => doc.heightOfString(clean(value),{
         width: Math.max(15,widths[i]-12),lineGap:0
       }));
-      return Math.max(23,Math.ceil(Math.max(...measured,12)+9));
+      return Math.max(21,Math.ceil(Math.max(...measured,12)+7));
     };
     function tableHeader() {
-      if (y + headerHeight > bottom) newPage(`${pageTitle} (folytatás)`);
+      if (y + headerHeight > bottom) newPage(pageTitle);
       doc.rect(margin,y,contentWidth,headerHeight).fill(palette.ink);
       doc.font(B).fontSize(7.1).fillColor('#FFFFFF');
-      headers.forEach((h,i)=>paragraph(h,positions[i]+5,y+6,widths[i]-10,{
+      headers.forEach((h,i)=>paragraph(h,positions[i]+5,y+5,widths[i]-10,{
         align:numeric.has(i)?'right':'left',lineBreak:false
       }));
       y += headerHeight;
@@ -140,7 +142,7 @@ export function writeShopDailyAuditPdf(doc, report) {
       const last = k===data.length-1;
       // Keep an ending subtotal directly below the last row, never on its own sheet.
       if (y + rh + (last?footerHeight:0) > bottom) {
-        newPage(`${pageTitle} (folytatás)`);
+        newPage(pageTitle);
         tableHeader();
       }
       if (k%2===0)doc.rect(margin,y,contentWidth,rh).fill(palette.light);
@@ -153,7 +155,7 @@ export function writeShopDailyAuditPdf(doc, report) {
     }
     doc.rect(margin,y,contentWidth,footerHeight).fill('#E3F3F1');
     doc.font(B).fontSize(7.7).fillColor(palette.ink);
-    sums.cells.forEach(([column,val])=>paragraph(clean(val),positions[column]+5,y+7,widths[column]-10,{
+    sums.cells.forEach(([column,val])=>paragraph(clean(val),positions[column]+5,y+5,widths[column]-10,{
       align:numeric.has(column)?'right':'left',lineBreak:false
     }));
     y += footerHeight+7;
@@ -163,50 +165,71 @@ export function writeShopDailyAuditPdf(doc, report) {
       reserve(h+8);paragraph(footnote,margin,y,contentWidth);y+=h+7;
     }
   }
-  function sanitizeReference(v) {
-    const s=String(v||'').trim()
-      .replace(/^EL\/[A-Z0-9_-]+\/\d{4}\/\d+\s*(?:\/\s*)?/i,'')
-      .replace(/^CS\/[A-Z0-9_-]+\/\d{4}\/\d+\s*(?:\/\s*)?/i,'');
-    if (/^(?:[0-9a-f]{8}-){1,}/i.test(s)) return '';
-    return s;
-  }
-  function employeeNotes(actor,entries){
-    if(!entries?.length)return;
-    const list=[];const dedup=new Map();
-    for(const n of entries){
-      const ref=sanitizeReference(n.reference);
-      const t=bucharest(n.at);
-      const id=[actorKey(n.actor),String(n.note||'').trim().replace(/\s+/g,' ').toLocaleLowerCase('hu-HU'),t,ref].join('|');
-      if(dedup.has(id)){
-        const existing=dedup.get(id);
-        if(!existing.types.includes(n.type))existing.types.push(n.type);
-      }else{
-        const item={...n,reference:ref,types:[n.type]};
-        dedup.set(id,item);list.push(item);
+  // Identifiers are preserved as strings (leading barcode zeroes must survive).
+  const productText = (item, nameOverride = '') => {
+    const name = String(nameOverride || item?.product_title || item?.title || item?.product_code || 'Ismeretlen termék').trim();
+    const details = [];
+    if (item?.color_name) details.push(`Szín: ${String(item.color_name).trim()}`);
+    if (item?.size) details.push(`Méret: ${String(item.size).trim()}`);
+    details.push(`Termékkód: ${item?.product_code ? String(item.product_code).trim() : '–'}`);
+    details.push(`Vonalkód: ${item?.barcode ? String(item.barcode).trim() : '–'}`);
+    if (item?.sn_cod) details.push(`S/N: ${String(item.sn_cod).trim()}`);
+    return [name, details.join('  •  ')].filter(Boolean).join('\n');
+  };
+  function employeeNotes(actor, entries) {
+    if (!entries?.length) return;
+    const list = [], dedup = new Map();
+    for (const n of entries) {
+      const t = bucharest(n.at);
+      const noteKey = String(n.note||'').trim().replace(/\s+/g,' ').toLocaleLowerCase('hu-HU');
+      // A note for two different items must NEVER be merged just because its text matches.
+      const identity = n.lineId || (n.reference && /^EL\//.test(n.reference) ? n.reference : '');
+      const id = [actorKey(n.actor), noteKey, t, identity].join('|');
+      if (dedup.has(id)) {
+        const existing = dedup.get(id);
+        if (!existing.types.includes(n.type)) existing.types.push(n.type);
+        for (const pi of n.products || []) {
+          if (!existing.products.some(ex => String(ex.line_id||'') === String(pi.line_id||'') &&
+            String(ex.product_code||'') === String(pi.product_code||'') &&
+            String(ex.barcode||'') === String(pi.barcode||''))) existing.products.push(pi);
+        }
+      } else {
+        const item = { ...n, types:[n.type], products:[...(n.products || [])] };
+        dedup.set(id,item); list.push(item);
       }
     }
     heading(`${actor} · megjegyzések (${list.length})`,38);
-    for(const n of list){
-      const titleText=`${bucharest(n.at)}  •  ${n.actor || '–'}  •  ${n.types.join(' / ')}${n.reference ? '  •  '+n.reference:''}`;
-      doc.font(F).fontSize(7.7);
+    for (const n of list) {
+      const titleText = `${bucharest(n.at)}  •  ${n.actor || '–'}  •  ${n.types.join(' / ')}`;
+      const productDescription = (n.products || []).map(p => productText(p)).join('\n');
+      const noteText = String(n.note || '').trim();
+      doc.font(B).fontSize(7.6);
       const labelH=doc.heightOfString(clean(titleText),{width:contentWidth-20});
-      const textH=doc.heightOfString(clean(n.note),{width:contentWidth-20});
-      const blockH=Math.ceil(10+labelH+5+textH+9);
-      if(y+blockH>bottom)newPage(`${actor} · megjegyzések (folytatás)`);
+      doc.font(F).fontSize(7.2);
+      const productH=productDescription ? doc.heightOfString(clean(productDescription),{width:contentWidth-20}) + 5 : 0;
+      doc.font(F).fontSize(8);
+      const textH=doc.heightOfString(clean(noteText),{width:contentWidth-20});
+      const blockH=Math.ceil(10+labelH+productH+5+textH+9);
+      if(y+blockH>bottom)newPage(actor);
       doc.roundedRect(margin,y,contentWidth,blockH,4).fillAndStroke(palette.light,palette.line);
-      doc.font(B).fontSize(7.7).fillColor(palette.ink);
+      doc.font(B).fontSize(7.6).fillColor(palette.ink);
       paragraph(titleText,margin+10,y+6,contentWidth-20);
+      let nextY=y+6+labelH+5;
+      if (productDescription) {
+        doc.font(F).fontSize(7.2).fillColor(palette.teal);
+        paragraph(productDescription,margin+10,nextY,contentWidth-20);
+        nextY+=productH;
+      }
       doc.font(F).fontSize(8).fillColor(palette.ink);
-      paragraph(n.note,margin+10,y+6+labelH+5,contentWidth-20);
+      paragraph(noteText,margin+10,nextY,contentWidth-20);
       y+=blockH+5;
     }
   }
   const receiptMethod=m=>({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás'})[String(m||'').toLowerCase()]||m||'–';
-  const productText=(name,size)=>[name||'Ismeretlen termék',size?`Méret: ${size}`:''].filter(Boolean).join('\n');
   function employeeSection(s, first=false) {
     if(!first)newPage(s.actor);
     else newPage(s.actor, report.scope==='handover' && report.handover
-      ? `Műszak: ${bucharest(report.handover.shift_start_at)} → ${bucharest(report.handover.cutoff_at)}  •  Kiállítva: ${bucharest(new Date().toISOString())}`
+      ? `Műszakátadás: ${hasRealStartTime(report.handover.shift_start_at)?`${bucharest(report.handover.shift_start_at)} → `:''}${bucharest(report.handover.cutoff_at)}  •  Kiállítva: ${bucharest(new Date().toISOString())}`
       : `Eladó: ${s.actor}  •  Kiállítva: ${bucharest(new Date().toISOString())}`);
     const a=s.totals;
     statCells([['Befolyt',amount(a.received)],['Bruttó érték',amount(a.gross)],['Kedvezmény',amount(a.discount)],['Készpénz',amount(a.cash)],['Bankkártya',amount(a.card)]]);
@@ -217,21 +240,21 @@ export function writeShopDailyAuditPdf(doc, report) {
     statCells(extra);
     if(s.shifts.length){
       heading('Kassza és műszakidők',10);
-      for(const h of s.shifts)infoLine(h.label,`${h.period}  •  ${h.person}  •  ${h.cash}${h.status?`  •  ${h.status}`:''}`);
+      for(const h of s.shifts)infoLine(h.label,[h.period,h.person,h.cash,h.status].filter(Boolean).join('  •  '));
     }
     sectionTable('Eladott termékek · időrendben',
-      ['Idő','Termék / méret','Kliens','Db','Rendes ár','Kedvezmény','Fizetendő'],
-      s.normal.map(r=>[bucharest(r.sold_at,'time'),productText(r.product_title||r.product_code,r.size),r.customer_name||'',String(r.quantity),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),
+      ['Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Fizetendő'],
+      s.normal.map(r=>[bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.quantity),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),
       [55,318,112,37,87,82,90],
       {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.normal,r=>r.quantity))],[4,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)))],[5,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)))],[6,fmt(total(s.normal,r=>r.line_total))]]});
     sectionTable('Hitelre kiadott termékek · nem napi bevétel',
-      ['Idő','Termék / méret','Kliens','Db','Rendes ár','Kedvezmény','Hitel összege'],
-      s.credits.map(r=>[bucharest(r.sold_at,'time'),productText(r.title,r.size),r.customer_name||'',String(r.qty),fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),
+      ['Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Hitel összege'],
+      s.credits.map(r=>[bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.qty),fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),
       [55,318,112,37,87,82,90],
       {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.credits,r=>r.qty))],[4,fmt(total(s.credits,r=>r.list_total))],[5,fmt(total(s.credits,r=>r.discount_total))],[6,fmt(total(s.credits,r=>r.net_total))]]});
     sectionTable('Korábbi hitel rendezése · fizetés napján',
       ['Idő','Termék','Kliens','Db','Eredeti ár','Kedvezmény','Fizetve'],
-      s.settlements.map(r=>[bucharest(r.paid_at,'time'),productText(r.product_title,r.size),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
+      s.settlements.map(r=>[bucharest(r.paid_at,'time'),productText(r),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
       [55,318,112,37,87,82,90],
       {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.settlements,r=>r.quantity))],[4,fmt(total(s.settlements,r=>r.gross))],[5,fmt(total(s.settlements,r=>r.discount))],[6,fmt(total(s.settlements,r=>r.amount))]]});
     sectionTable('Tételes fizetési események',
@@ -239,7 +262,7 @@ export function writeShopDailyAuditPdf(doc, report) {
       s.payments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Fizetés',receiptMethod(r.method),fmt(r.amount)]),
       [63,477,132,109],
       {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${s.payments.length} fizetés`],[3,fmt(total(s.payments,r=>r.amount))]]},
-      `Készpénz: ${amount(a.cash)}  •  Bankkártya: ${amount(a.card)}${a.bank?`  •  Átutalás: ${amount(a.bank)}`:''}`);
+      '');
     const shifts=s.moves;
     const balanceEvent=shifts.filter(x=>x.type==='Napzárás'||x.type==='Műszakátadás').at(-1);
     sectionTable('Műszakátadások / pénzmozgások',
@@ -247,7 +270,7 @@ export function writeShopDailyAuditPdf(doc, report) {
       shifts.map(r=>[bucharest(r.at,'time'),r.type,r.people||'',r.status||'',fmt(r.amount)]),
       [63,203,232,142,141],
       {numeric:[4],cells:[[1,'ÖSSZESEN'],[2,`${shifts.length} esemény`], ...(balanceEvent?[[4,`Záró: ${fmt(balanceEvent.amount)}`]]:[])]},
-      'A műszakátadás és napzárás a kassza állapota, nem bevétel; ezeket nem összegezzük.');
+      '');
     employeeNotes(s.actor,s.notes);
   }
   if(report.scope==='all'){
@@ -321,34 +344,52 @@ async function readProductNotes(client,locationId,date){
   // Linked to selected day's sold products, including notes written later.
   const activeNoteFilter = (cols.has('deleted_at')?' AND n.deleted_at IS NULL':'')+(cols.has('is_deleted')?' AND COALESCE(n.is_deleted,false)=false':'')+(cols.has('is_active')?' AND COALESCE(n.is_active,true)=true':'');
   const sql=`SELECT sl.sale_id,sl.id AS line_id,s.sale_number,s.actor AS sale_actor,s.sold_at,
-    sl.product_title, ${actorCol?`n.${quote(actorCol)}::text`:'s.actor'} AS note_actor,
+    sl.product_title,
+    COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+    COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+    COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+    sl.size, NULLIF(v.sn_cod,'') AS sn_cod,
+    ${actorCol?`n.${quote(actorCol)}::text`:'s.actor'} AS note_actor,
     n.${quote(noteCol)}::text AS note,
     ${whenCol?`n.${quote(whenCol)}`:'s.sold_at'} AS note_at
     FROM ${quote(name)} n JOIN aif_shop_sale_lines sl ON sl.id=n.${quote(lineCol)}
     JOIN aif_shop_sales s ON s.id=sl.sale_id
+    LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     WHERE s.location_id=$1 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ${activeNoteFilter}
     ORDER BY note_at, s.sale_number`;
   const result=await client.query(sql,[locationId,date]);
-  return result.rows.map(r=>({type:'Termékmegjegyzés',actor:r.note_actor||r.sale_actor,at:r.note_at,reference:`${r.sale_number} / ${r.product_title||'–'}`,note:r.note}));
+  return result.rows.map(r=>({type:'Termékmegjegyzés',actor:r.note_actor||r.sale_actor,at:r.note_at,
+    reference:r.sale_number,lineId:r.line_id,productInfo:{...r},note:r.note}));
 }
 
 export async function loadShopDailyAudit({client,location,date,employee=null,handoverId=null,loadCreditHistory,scope='mine'}){
   const id=location.id;
   const [original,receiptLines,customerReceipts,normalReceipts,exchangePayments,handovers,closings,dailyNotes,cashMoves,saleEvents,saleNotes,returnEvents]=await Promise.all([
     client.query(`SELECT s.id AS sale_id,s.sale_number,s.sold_at,s.actor,s.customer_name,s.customer_phone,s.sale_type,s.status,s.note AS sale_note,
-      sl.id AS line_id,sl.product_title,sl.product_code,sl.size,sl.quantity,sl.list_price,sl.discount_amount,sl.discount_percent,sl.line_total
+      sl.id AS line_id,sl.product_title,
+      COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+      COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+      COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+      sl.size, NULLIF(v.sn_cod,'') AS sn_cod,
+      sl.quantity,sl.list_price,sl.discount_amount,sl.discount_percent,sl.line_total
       FROM aif_shop_sales s JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+      LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
       WHERE s.location_id=$1 AND s.status='completed' AND s.sale_type<>'credit'
         AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
       ORDER BY s.sold_at,s.sale_number,sl.line_no`,[id,date]),
     client.query(`SELECT cp.id AS payment_id,cp.paid_at,cp.actor,cp.method,cp.amount AS payment_total,cp.note,
       s.sale_number,s.customer_name,s.sold_at AS original_sold_at,
-      sl.product_title,sl.product_code,sl.size,
+      sl.product_title,
+      COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+      COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+      COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+      sl.size, NULLIF(v.sn_cod,'') AS sn_cod,
       sl.list_price,sl.line_total,sl.quantity AS original_qty,la.quantity,la.amount
       FROM aif_shop_customer_payments cp
       JOIN aif_shop_customer_payment_line_allocations la ON la.customer_payment_id=cp.id
       JOIN aif_shop_sales s ON s.id=la.sale_id
       JOIN aif_shop_sale_lines sl ON sl.id=la.sale_line_id
+      LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
       WHERE cp.location_id=$1 AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
       ORDER BY cp.paid_at,s.sale_number,sl.line_no`,[id,date]),
     client.query(`SELECT cp.* FROM aif_shop_customer_payments cp
@@ -373,9 +414,14 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       WHERE s.location_id=$1 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
       AND NULLIF(btrim(COALESCE(s.note,'')),'') IS NOT NULL ORDER BY s.sold_at`,[id,date]),
     client.query(`SELECT e.id,e.exchange_number,e.actor,e.created_at,e.returned_qty,e.return_credit,
-      s.sale_number,s.customer_name,sl.product_title
+      s.sale_number,s.customer_name,sl.product_title,
+      COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+      COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+      COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+      sl.size, NULLIF(v.sn_cod,'') AS sn_cod
       FROM aif_shop_exchanges e JOIN aif_shop_sales s ON s.id=e.source_sale_id
       JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
+      LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
       WHERE e.location_id=$1 AND e.status='completed'
       AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY e.created_at`,[id,date]),
   ]);
@@ -385,14 +431,14 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   if(handover && selected && actorKey(handover.from_actor)!==selected){const e=new Error('Ez a műszakátadás nem ehhez az eladóhoz tartozik.');e.statusCode=403;throw e;}
   const productNotes = await readProductNotes(client,id,date);
   const allNotes=[];
-  const push=(type,actor,at,note,reference='')=>{if(String(note||'').trim())allNotes.push({type,actor:actor||'–',at,reference,note:String(note).trim()});};
+  const push=(type,actor,at,note,reference='',productInfo=null,lineId=null)=>{if(String(note||'').trim())allNotes.push({type,actor:actor||'–',at,reference,productInfo,lineId,note:String(note).trim()});};
   for(const n of dailyNotes.rows)push('Napi megjegyzés',n.actor,n.created_at,n.note);
   for(const n of saleNotes.rows)push('Bizonylat megjegyzés',n.actor,n.sold_at,n.note,n.sale_number);
   for(const n of saleEvents.rows){
     if(n.event_type==='completed'&&saleNotes.rows.some(s=>s.sale_number===n.sale_number&&String(s.note||'').trim()===String(n.note||'').trim()))continue;
     push('Eladási esemény',n.actor||n.sale_actor,n.created_at,n.note,n.sale_number);
   }
-  for(const n of productNotes)push(n.type,n.actor,n.at,n.note,n.reference);
+  for(const n of productNotes)push(n.type,n.actor,n.at,n.note,n.reference,n.productInfo,n.lineId);
   for(const h of handovers.rows){push('Műszakátadás',h.from_actor,h.cutoff_at,h.note,`${h.from_actor} → ${h.to_actor}`);push('Átvételi megjegyzés',h.accepted_by||h.to_actor,h.accepted_at||h.created_at,h.acceptance_note,`${h.from_actor} → ${h.to_actor}`);}
   for(const n of closings.rows)push('Napzárási megjegyzés',n.actor,n.closed_at,n.note);
   for(const n of cashMoves.rows)push('Készpénzátadás / bankbefizetés',n.requested_by,n.requested_at,n.note,`${n.movement_type} • ${amount(n.amount)}`);
@@ -420,6 +466,21 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       const creditHistory=await loadCreditHistory(client,{locationId:id,date,employee:actor});
       credits=creditHistory.productLines.filter(r=>withinShift({at:r.sold_at},handover));
     }
+    // Credit history is reconstructed first, but its line snapshots do not include a barcode.
+    // Enrich the printable identity without altering any sale or credit-history math.
+    if (credits.length) {
+      const ids=credits.map(c=>c.line_id).filter(Boolean);
+      const details=await client.query(`SELECT sl.id AS line_id,
+          COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+          COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+          COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+          sl.size, NULLIF(v.sn_cod,'') AS sn_cod
+        FROM aif_shop_sale_lines sl
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+        WHERE sl.id=ANY($1::uuid[])`,[ids]);
+      const lookup=new Map(details.rows.map(d=>[String(d.line_id),d]));
+      credits=credits.map(c=>({...c,...(lookup.get(String(c.line_id))||{})}));
+    }
     const normal=original.rows.filter(r=>matches(r.actor) && withinShift({at:r.sold_at},handover)).map(r=>({...r,gross:moneyNumber(moneyNumber(r.list_price)*moneyNumber(r.quantity))}));
     const settlement=receiptLines.rows.filter(r=>matches(r.actor)&&withinShift({at:r.paid_at},handover)).map(r=>{
       const net=moneyNumber(moneyNumber(r.line_total)*moneyNumber(r.quantity)/Math.max(1,moneyNumber(r.original_qty)));
@@ -442,14 +503,24 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       const product= titles.length>1
         ? `${titles[0]} + ${titles.length-1} másik termék`
         : titles[0]||'Eladás';
-      return [product,items>1?`(${items} db)`:'',customer?`• ${customer}`:''].filter(Boolean).join(' ');
+      const item=lines.length===1?lines[0]:null;
+      const codes=item?[
+        item.product_code?`Kód: ${item.product_code}`:'',
+        item.barcode?`Vonalkód: ${item.barcode}`:''
+      ].filter(Boolean).join(' • '):'';
+      return [product,items>1?`(${items} db)`:'',customer?`• ${customer}`:'',codes].filter(Boolean).join(' ');
     };
     const describeCustomerPayment=(receipt)=>{
       const allocations=receiptLines.rows.filter(r=>String(r.payment_id)===String(receipt.id));
       const customer=allocations.find(r=>String(r.customer_name||'').trim())?.customer_name;
       const titles=Array.from(new Set(allocations.map(r=>String(r.product_title||r.product_code||'').trim()).filter(Boolean)));
       const product=titles.length>1?`${titles[0]} + ${titles.length-1} másik termék`:titles[0]||'Korábbi tartozás';
-      return ['Korábbi tartozás',customer?`• ${customer}`:'',product?`• ${product}`:''].filter(Boolean).join(' ');
+      const item=allocations.length===1?allocations[0]:null;
+      const codes=item?[
+        item.product_code?`Kód: ${item.product_code}`:'',
+        item.barcode?`Vonalkód: ${item.barcode}`:''
+      ].filter(Boolean).join(' • '):'';
+      return ['Korábbi tartozás',customer?`• ${customer}`:'',product?`• ${product}`:'',codes].filter(Boolean).join(' ');
     };
     const payments=[
       ...normalReceipts.rows.filter(r=>matches(r.receipt_actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Eladás',description:describeNormalPayment(r),method:r.method})),
@@ -461,22 +532,31 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     for(const h of handovers.rows){
       if(!withinShift({at:h.cutoff_at},handover))continue;
       if(matches(h.from_actor)){
-        if(h.snapshot?.openingCash != null) shiftEvents.push({label:'Műszak kezdő kassza',period:bucharest(h.shift_start_at),person:h.from_actor,cash:amount(h.snapshot.openingCash),status:'Átvett / nyitó'});
-        shiftEvents.push({label:'Műszakátadás',period:`${bucharest(h.shift_start_at)} → ${bucharest(h.cutoff_at)}`,person:h.to_actor,cash:amount(h.counted_cash??h.expected_cash),status:`${h.status==='accepted'?'Átvéve':h.status}  •  eltérés: ${amount(h.cash_difference)}`});
+        if(h.snapshot?.openingCash != null) shiftEvents.push({label:'Nyitó kassza',period:hasRealStartTime(h.shift_start_at)?bucharest(h.shift_start_at):'',person:h.from_actor,cash:amount(h.snapshot.openingCash),status:'Nyitó összeg'});
+        shiftEvents.push({label:'Műszakátadás',period:`${hasRealStartTime(h.shift_start_at)?bucharest(h.shift_start_at)+' → ':''}${bucharest(h.cutoff_at)}`,person:h.to_actor,cash:amount(h.counted_cash??h.expected_cash),status:`${h.status==='accepted'?'Átvéve':h.status}  •  eltérés: ${amount(h.cash_difference)}`});
         moves.push({at:h.cutoff_at,type:'Műszakátadás',people:`${h.from_actor} → ${h.to_actor}`,status:h.status,amount:h.counted_cash??h.expected_cash});
       }
       if(matches(h.to_actor))shiftEvents.push({label:'Műszak átvétele',period:bucharest(h.accepted_at||h.cutoff_at),person:h.from_actor,cash:amount(h.counted_cash??h.expected_cash),status:h.status==='accepted'?'Átvéve':h.status});
     }
     for(const c of closings.rows)if(matches(c.actor)&&withinShift({at:c.closed_at},handover)){
-      const alreadyHasStart=shiftEvents.some(r=>r.label==='Műszak átvétele'||r.label==='Műszak kezdő kassza');
+      const alreadyHasStart=shiftEvents.some(r=>r.label==='Műszak átvétele'||r.label==='Nyitó kassza');
       const openingCash=c.snapshot?.openingCash ?? c.snapshot?.cashBalance?.baselineCash ?? null;
-      if(!alreadyHasStart && openingCash != null)shiftEvents.push({label:'Műszak kezdő kassza',period:date,person:c.actor,cash:amount(openingCash),status:'Nyitó / átvett'});
+      if(!alreadyHasStart && openingCash != null)shiftEvents.push({label:'Nyitó kassza',period:'',person:c.actor,cash:amount(openingCash),status:'Nyitó összeg'});
       shiftEvents.push({label:'Napzárás',period:bucharest(c.closed_at),person:c.actor,cash:amount(c.counted_cash),status:`Eltérés ${amount(c.cash_difference)}`});
       moves.push({at:c.closed_at,type:'Napzárás',people:c.actor,status:'Lezárva',amount:c.counted_cash});
     }
     for(const m of cashMoves.rows)if(matches(m.requested_by)&&withinShift({at:m.requested_at},handover))moves.push({at:m.requested_at,type:m.movement_type==='manager_handover'?'Készpénzátadás':'Bankbefizetés',people:m.requested_by,status:m.status,amount:m.amount});
-    for(const e of returnEvents.rows)if(matches(e.actor)&&withinShift({at:e.created_at},handover))moves.push({at:e.created_at,type:'Visszáru',people:`${e.sale_number} • ${e.product_title}`,status:'Visszavett',amount:moneyNumber(e.return_credit)*-1});
-    const notes=allNotes.filter(r=>matches(r.actor)&&(!handover || withinShift(r,handover))).sort((a,b)=>eventTime(a)-eventTime(b));
+    for(const e of returnEvents.rows)if(matches(e.actor)&&withinShift({at:e.created_at},handover))moves.push({at:e.created_at,type:'Visszáru',people:[e.product_title, e.product_code?`Kód: ${e.product_code}`:'',e.barcode?`Vonalkód: ${e.barcode}`:''].filter(Boolean).join(' • '),status:'Visszavett',amount:moneyNumber(e.return_credit)*-1});
+    const productsBySale=new Map();
+    for (const line of [...normal,...credits]) {
+      const key=String(line.sale_number||'');
+      if (!key) continue;
+      if(!productsBySale.has(key))productsBySale.set(key,[]);
+      productsBySale.get(key).push(line);
+    }
+    const notes=allNotes.filter(r=>matches(r.actor)&&(!handover || withinShift(r,handover)))
+      .map(n=>({...n,products:n.productInfo?[n.productInfo]:(productsBySale.get(String(n.reference||''))||[])}))
+      .sort((a,b)=>eventTime(a)-eventTime(b));
     const section={actor,normal,credits,settlements:settlement,payments,notes,moves: moves.sort((a,b)=>eventTime(a)-eventTime(b)),shifts:shiftEvents,
       creditReceipts:new Set(credits.map(r=>r.sale_number))};
     section.totals=buildTotals(section);sections.push(section);
