@@ -1627,13 +1627,20 @@ export default function AllInShopOperations({
       ? (cashData?.balance.pendingOut ?? datedShiftData?.cashBalance?.pendingOut ?? 0)
       : (datedShiftData?.cashBalance?.pendingOut ?? 0),
   );
-  const closureCandidate = summaryIsToday
-    ? (datedShiftData?.dayClosure || cashData?.todayClosure || null)
-    : (datedShiftData?.dayClosure || null);
-  // A day-overview API SQL-je már a kiválasztott üzleti napra szűr.
-  // Nem a closure.date megjelenítési formátumától függ az ellenőrzés:
-  // a dátumazonos shift-válasz a hiteles forrás.
-  const currentDayClosure = closureCandidate;
+  // A napzárás már a kasszanapló olcsóbb lekérdezésében is szerepel.
+  // A régebbi napok teljes műszak-statisztikája lassabban érkezhet, ezért
+  // a tárolt, pontosan dátumhoz ÉS üzlethez kötött kasszazárást addig is
+  // megmutatjuk. Ez csak olvasás, pénzhez / készlethez nem nyúlunk.
+  const cashOverviewMatchesLocation = cashData?.location?.code === locationCode;
+  const cashHistoryDayClosure = cashOverviewMatchesLocation
+    ? (cashData?.closures || []).find((closure) => String(closure.date || '').slice(0, 10) === summaryDate)
+      || (cashData?.todayClosure && String(cashData.todayClosure.date || '').slice(0, 10) === summaryDate
+        ? cashData.todayClosure
+        : null)
+    : null;
+  // A konkrét napra lekért műszak-válasz elsőbbséget élvez, ha már megérkezett.
+  // A mai és a múltbeli napnál is tilos más nap zárását átvenni.
+  const currentDayClosure = datedShiftData?.dayClosure || cashHistoryDayClosure || null;
   // A lezárt múltbeli napnál a ténylegesen megszámolt és rögzített zárás
   // az irányadó. Nem az aktuális üzleti pénzállás és nem egy másik nap zárása.
   const currentCashBalance = !summaryIsToday && currentDayClosure
@@ -3063,7 +3070,7 @@ export default function AllInShopOperations({
                     </div>
                     <div className="border-l border-white/40 pl-4 sm:pl-5">
                         <p className="text-[9px] uppercase tracking-[0.12em] text-white/50">{summaryIsToday ? "Szabad készpénz az üzletben" : "Kiválasztott napi kassza"}</p>
-                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{datedShiftData || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
+                      <p className="mt-1 whitespace-nowrap text-2xl tabular-nums tracking-tight text-[#d7fffd]">{datedShiftData || currentDayClosure || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
                     </div>
                   </div>
                 </div>
@@ -3136,7 +3143,7 @@ export default function AllInShopOperations({
                       <div className="grid gap-2 sm:grid-cols-3">
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
                            <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Szabad kassza</p>
-                          <p className="mt-1 text-lg text-[#d7fffd]">{datedShiftData || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
+                          <p className="mt-1 text-lg text-[#d7fffd]">{datedShiftData || currentDayClosure || summaryIsToday ? formatMoney(currentCashBalance) : "–"}</p>
                         </div>
                         <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
                            <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Zárolva • átvételre vár</p>
