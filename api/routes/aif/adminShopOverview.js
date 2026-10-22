@@ -87,7 +87,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
     pool, requireAdminOrSecret, ensureAifShopSalesSchema, text, normCode,
     aifNumber, aifBucharestIsoDate, aifValidIsoDate, aifInclusiveDayCount,
     aifShiftIsoDate, aifMapShopSummary, aifPaymentMethodLabel,
-    aifBuildDailyCreditHistory, readSalesTvaSettings,
+    aifBuildDailyCreditHistory, aifReadSettledGrossDiscounts, readSalesTvaSettings,
   } = deps;
   const router = express.Router();
   let retailBookSchemaPromise = null;
@@ -1681,6 +1681,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
         pool.query(aifAdminCreditHistorySql(previousFilters.where), previousFilters.args),
       ]);
 
+      // Same SOURCE and algorithm as the seller's Daily Summary, not a
+      // recalculation from the displayed (possibly discounted) current rows.
+      const [currentReceiptDiscounts, previousReceiptDiscounts] = await Promise.all([
+        aifReadSettledGrossDiscounts(pool, currentPaymentFilters.where, currentPaymentFilters.args),
+        aifReadSettledGrossDiscounts(pool, previousPaymentFilters.where, previousPaymentFilters.args),
+      ]);
+
       const currentCreditHistory = aifAdminBuildCreditHistory(
         currentCreditHistoryResult.rows, aifBuildDailyCreditHistory);
       const previousCreditHistory = aifAdminBuildCreditHistory(
@@ -1787,6 +1794,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
       summary.revenue = aifNumber(currentCombinedRow.paid_total);
       previousSummary.revenue = aifNumber(previousCombinedRow.paid_total);
 
+      // Later, discounted credit payments are counted as cash ONLY at their
+      // paid amount. Their original sticker-price difference goes to discount,
+      // not to extra income and never backdated to the original issue day.
+      summary.settlementDiscountTotal = currentReceiptDiscounts.total;
+      previousSummary.settlementDiscountTotal = previousReceiptDiscounts.total;
+      summary.discountTotal = roundMoney(summary.discountTotal + currentReceiptDiscounts.total);
+      previousSummary.discountTotal = roundMoney(previousSummary.discountTotal + previousReceiptDiscounts.total);
+
       // Bruttó forgalom a dashboardon ugyanazon realizált forgalmi alapon:
       // kedvezmény nélküli eladási érték = tényleges forgalom + adott időszaki kedvezmény.
       // Így a kártya nem keveri a sale-dátum szerinti subtotal-t a payment-dátum szerinti
@@ -1875,6 +1890,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
       }
       const trend = Array.from(trendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
+      // The daily discount trend follows the same settlement-day allocation.
+      for (const receipt of currentReceiptDiscounts.rows) {
+        const point = trendMap.get(receipt.date);
+        if (point) point.discountTotal = roundMoney(point.discountTotal + receipt.discount);
+      }
+
       const paymentMap = new Map();
       for (const row of [...paymentResult.rows, ...exchangePaymentResult.rows]) {
         const method = String(row.method || "");
@@ -1905,6 +1926,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
         current.discountTotal += aifNumber(row.discount_total);
         current.unpaidTotal += aifNumber(row.unpaid_total);
         employeeMap.set(key, current);
+      }
+      // Include the discount on settled older credit lines under the cashier
+      // who received the payment; do not alter sale/stock ownership.
+      for (const receipt of currentReceiptDiscounts.rows) {
+        const key = String(receipt.actor || 'Ismeretlen').toLocaleLowerCase('hu-HU');
+        const entry = employeeMap.get(key);
+        if (entry) entry.discountTotal = roundMoney(entry.discountTotal + receipt.discount);
       }
       for (const sale of currentCreditHistory.sales) {
         const actorName = String(sale.actor || 'Ismeretlen');
