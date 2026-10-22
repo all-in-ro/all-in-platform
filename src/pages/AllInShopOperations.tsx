@@ -1253,8 +1253,8 @@ function EmployeeDaySalesModal({
   const lines = (data?.productLines?.length ? data.productLines : data?.products || [])
     .filter((item) => !isDailyCreditRecord(item));
   const collected = numberValue(summary?.collectedTotal ?? summary?.revenue);
-  const gross = numberValue(summary?.salesBeforeDiscount);
-  const discount = numberValue(summary?.discountTotal);
+  const gross = numberValue(summary?.grossCollectedTotal ?? summary?.salesBeforeDiscount);
+  const discount = numberValue(summary?.collectedDiscountTotal ?? summary?.discountTotal);
   const discountPercent = gross > 0.005 ? discount / gross * 100 : 0;
 
   return createPortal(
@@ -2730,8 +2730,13 @@ export default function AllInShopOperations({
   const daySalesRevenue = numberValue(daySummary.salesRevenue ?? daySummary.revenue);
   const dayCollectedTotal = numberValue(daySummary.collectedTotal ?? daySummary.revenue);
   const dayCustomerPaymentTotal = numberValue(daySummary.customerPaymentTotal);
-  // A napi bruttó forgalomhoz a ma rendezett korábbi tartozások is hozzátartoznak.
-  const dayGrossTurnover = numberValue(daySummary.salesBeforeDiscount) + dayCustomerPaymentTotal;
+  // Az eredeti termékár és a későbbi tartozásrendezés kedvezménye is része
+  // a kedvezmény nélküli értéknek. A tényleges pénzbevétel ettől nem változik.
+  // Régebbi backendhez megmarad a korábbi, biztonságos fallback.
+  const dayGrossTurnover = numberValue(daySummary.grossCollectedTotal ?? (
+    numberValue(daySummary.salesBeforeDiscount) + dayCustomerPaymentTotal
+  ));
+  const dayCollectedDiscount = numberValue(daySummary.collectedDiscountTotal ?? daySummary.discountTotal);
   const dailyProductLines = datedSummaryData?.productLines?.length
     ? datedSummaryData.productLines
     : (datedSummaryData?.products || []);
@@ -2994,7 +2999,7 @@ export default function AllInShopOperations({
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-3">
-                    <span className="text-[12px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(daySummary.discountTotal)}</strong></span>
+                    <span className="text-[12px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(dayCollectedDiscount)}</strong></span>
                     <span className="text-[12px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
