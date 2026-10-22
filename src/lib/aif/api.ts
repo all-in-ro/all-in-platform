@@ -3722,6 +3722,12 @@ export type AifShopDailySummaryResponse = {
     collectedTotal?: number;
     /** A collectedTotal azon része, amely korábbi hiteles vásárlások aznapi rendezése. */
     customerPaymentTotal?: number;
+    /** Kedvezmény előtti érték: aznapi eladások + rendezett korábbi termékek eredeti ára. */
+    grossCollectedTotal?: number;
+    /** Kedvezmény az aznapi eladásokon és a rendezett korábbi hitelsorokon. */
+    collectedDiscountTotal?: number;
+    /** Kifejezetten a korábbi hitelek rendezéséhez tartozó kedvezmény. */
+    settlementDiscountTotal?: number;
     salesBeforeDiscount: number;
     transactions: number;
     itemsSold: number;
@@ -4833,6 +4839,7 @@ export type AifAdminShopOverviewSummary = {
   itemsSold: number;
   averageBasket: number;
   discountTotal: number;
+  settlementDiscountTotal?: number;
   unpaidTotal: number;
   unpaidSales: number;
   creditSales: number;
