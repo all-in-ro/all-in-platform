@@ -40,104 +40,241 @@ const boldCandidates = [
 const palette = { ink:'#25344A',muted:'#617186',line:'#D5DFE7',light:'#F3F7FA',teal:'#148A86',red:'#C71B32' };
 
 /** PDF drawing, A4 landscape. Every table row may wrap and is never clipped. */
+/**
+ * Compact, print-first A4 landscape daily audit.
+ * A single employee starts on page 1 (no decorative cover page).
+ * Empty sections never render. Tables always include their own totals.
+ * Receipt/Sale identifiers remain in the database but are not printed.
+ */
 export function writeShopDailyAuditPdf(doc, report) {
-  const haveFont = fontCandidates.find(f=>fs.existsSync(f));
-  const boldFont = boldCandidates.find(f=>fs.existsSync(f));
-  if (haveFont) doc.registerFont('AIF',haveFont);
-  if (boldFont) doc.registerFont('AIF-B',boldFont);
-  const bodyFont = haveFont ? 'AIF' : 'Helvetica';
-  const heavyFont = boldFont ? 'AIF-B' : haveFont ? 'AIF' : 'Helvetica-Bold';
-  const ascii = s => haveFont ? String(s ?? '') : String(s ?? '').replace(/ő/g,'ö').replace(/ű/g,'ü').replace(/Ő/g,'Ö').replace(/Ű/g,'Ü');
-  const paperW = 841.89, paperH = 595.28, margin = 34, cw=paperW-2*margin, floor=paperH-38;
-  const text = (s,x,y,w,options={})=>doc.text(ascii(s),x,y,{width:w,breakLine:false,...options});
-  const fmt = n => moneyNumber(n).toLocaleString('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
-  let y=0;
-  function page(title,subtitle='') {
+  const normalFont = fontCandidates.find(f => fs.existsSync(f));
+  const boldFont = boldCandidates.find(f => fs.existsSync(f));
+  if (normalFont) doc.registerFont('AIF', normalFont);
+  if (boldFont) doc.registerFont('AIF-B', boldFont);
+  const F = normalFont ? 'AIF' : 'Helvetica';
+  const B = boldFont ? 'AIF-B' : normalFont ? 'AIF' : 'Helvetica-Bold';
+  const clean = s => normalFont ? String(s ?? '') : String(s ?? '').replace(/ő/g,'ö').replace(/ű/g,'ü').replace(/Ő/g,'Ö').replace(/Ű/g,'Ü');
+  const fmt = n => moneyNumber(n).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const qty = n => Number(n||0).toLocaleString('ro-RO',{maximumFractionDigits:3});
+  const total = (rows,fn) => moneyNumber(rows.reduce((v,r) => v + Number(fn(r) || 0),0));
+  const W = 841.89, H = 595.28, margin = 30, contentWidth = W - margin * 2;
+  const bottom = H - 46;
+  let y = 0, pageTitle = '', pageCount = 0;
+  const paragraph = (s,x,top,width,opts={}) => doc.text(clean(s),x,top,{width,lineGap:0,...opts});
+  function newPage(heading, subtitle = '') {
+    pageTitle = heading;
     doc.addPage({size:'A4',layout:'landscape',margin:0});
-    doc.rect(0,0,paperW,54).fill(palette.ink);
-    doc.font(heavyFont).fontSize(14).fillColor('#FFFFFF');
-    text('ALLINFASHION  /  NAPI AUDIT',margin,15,cw*0.5);
-    doc.font(bodyFont).fontSize(9).fillColor('#E5F8F6');
-    text(`${report.date}  •  ${report.location.name}  •  ${title}`,margin+300,18,cw-300,{align:'right'});
-    y=69;
-    if(subtitle){doc.fillColor(palette.muted).font(bodyFont).fontSize(9);text(subtitle,margin,y,cw);y+=19;}
-  }
-  function ensure(needed=35){if(y+needed>floor)page(report.section || 'Napi audit (folytatás)');}
-  function title(label){ensure(34);doc.fillColor(palette.teal).font(heavyFont).fontSize(11);text(label,margin,y,cw);y+=20;doc.moveTo(margin,y).lineTo(paperW-margin,y).strokeColor(palette.line).lineWidth(0.7).stroke();y+=9;}
-  function small(label,value){ensure(17);doc.font(bodyFont).fontSize(8).fillColor(palette.muted);text(label,margin,y,182);doc.font(heavyFont).fillColor(palette.ink);text(value,margin+185,y,cw-185);y+=16;}
-  function indicators(items){ensure(58);const gap=9;const itemW=(cw-(items.length-1)*gap)/items.length;items.forEach((item,i)=>{const x=margin+i*(itemW+gap);doc.roundedRect(x,y,itemW,48,6).fillAndStroke(palette.light,palette.line);doc.font(bodyFont).fontSize(7).fillColor(palette.muted);text(item[0],x+9,y+8,itemW-18);doc.font(heavyFont).fontSize(11).fillColor(item[2]===true?palette.red:palette.ink);text(item[1],x+9,y+23,itemW-18);});y+=61;}
-  function table(headers,rows,widths){
-    const positions=[margin];for(let i=0;i<widths.length;i++)positions.push(positions[positions.length-1]+widths[i]);
-    const renderHeader=()=>{ensure(30);doc.roundedRect(margin,y,cw,25,3).fill(palette.ink);doc.font(heavyFont).fontSize(7.5).fillColor('white');headers.forEach((h,i)=>text(h,positions[i]+5,y+7,widths[i]-10,{align:i>=3?'right':'left'}));y+=25;};
-    renderHeader();
-    if(!rows.length){ensure(22);doc.font(bodyFont).fontSize(8).fillColor(palette.muted);text('Nincs tétel.',margin+8,y+6,cw);y+=22;return;}
-    rows.forEach((row,k)=>{
-      const values=row.map(v=>String(v??''));
-      doc.font(bodyFont).fontSize(7.5);
-      const lineH=Math.max(...values.map((v,i)=>doc.heightOfString(ascii(v),{width:widths[i]-10,lineGap:0})),12);
-      const rh=Math.max(24,lineH+10);
-      if(y+rh>floor)renderHeaderWithPage();
-      if(k%2===0)doc.rect(margin,y,cw,rh).fill(palette.light);
-      doc.font(bodyFont).fontSize(7.5).fillColor(palette.ink);
-      values.forEach((v,i)=>text(v,positions[i]+5,y+5,widths[i]-10,{align:i>=3?'right':'left'}));
-      doc.moveTo(margin,y+rh).lineTo(paperW-margin,y+rh).strokeColor(palette.line).lineWidth(0.4).stroke();y+=rh;
-    });y+=10;
-    function renderHeaderWithPage(){page(report.section || 'Napi audit (folytatás)');renderHeader();}
-  }
-  function notes(label,items){title(label);if(!items.length){small('Megjegyzés','Nincs rögzített megjegyzés.');return;}
-    for(const n of items){
-      const titleLine=`${bucharest(n.at)}  |  ${n.actor || '–'}  |  ${n.type}${n.reference ? `  |  ${n.reference}` : ''}`;
-      doc.font(bodyFont).fontSize(8);const h=doc.heightOfString(ascii(n.note),{width:cw-22})+31;
-      ensure(Math.min(floor-75,h)+8);if(y+h>floor-4){page(report.section||'Megjegyzések (folytatás)');}
-      doc.roundedRect(margin,y,cw,h,4).fillAndStroke(palette.light,palette.line);
-      doc.font(heavyFont).fontSize(8).fillColor(palette.ink);text(titleLine,margin+10,y+7,cw-20);
-      doc.font(bodyFont).fontSize(8.2).fillColor(palette.ink);text(n.note,margin+10,y+23,cw-20);
-      y+=h+6;
+    pageCount++;
+    doc.rect(0,0,W,49).fill(palette.ink);
+    doc.fillColor('#FFFFFF').font(B).fontSize(13);
+    paragraph('ALLINFASHION  /  NAPI AUDIT',margin,14,330,{lineBreak:false});
+    doc.fillColor('#E7F8F7').font(F).fontSize(8.5);
+    paragraph(`${report.date}  •  ${report.location.name}  •  ${heading}`,margin+310,17,contentWidth-310,{align:'right',lineBreak:false});
+    y = 61;
+    if (subtitle) {
+      doc.font(F).fontSize(8).fillColor(palette.muted);
+      paragraph(subtitle,margin,y,contentWidth);
+      y += 16;
     }
   }
-  page(report.scope==='all'?'Teljes üzleti jelentés':report.scope==='handover'?'Műszakátadási jelentés':'Eladói napi jelentés',`Kiállítva: ${bucharest(new Date().toISOString())} • A könyvelt pénzmozgások és a fizikai kassza külön szerepelnek.`);
-  report.section='Összesítés';
-  if(report.scope==='all') {
-    const a=report.totals;
-    indicators([['Befolyt összesen',amount(a.received)],['Bruttó érték',amount(a.gross)],['Kedvezmény',amount(a.discount)],['Készpénz',amount(a.cash)],['Bankkártya',amount(a.card)]]);
-    indicators([['Új eladások',amount(a.newSales)],['Korábbi tartozás fizetve',amount(a.creditReceived)],['Hitelre kiadva',amount(a.creditIssued)],['Napi záró kassza',report.closure?amount(report.closure.counted_cash):'Nem zárt'],['Kasszaeltérés',report.closure?amount(report.closure.cash_difference):'–',Boolean(report.closure && Math.abs(moneyNumber(report.closure.cash_difference))>0.005)]]);
-    title('Eladók napi pénzügyi összesítője');
-    table(['Eladó','Eladás / bevétel','Bruttó','Kedvezmény','Készpénz','Kártya','Hitel elvitel'],report.sections.map(s=>[s.actor,fmt(s.totals.received),fmt(s.totals.gross),fmt(s.totals.discount),fmt(s.totals.cash),fmt(s.totals.card),fmt(s.totals.creditIssued)]),[136,113,100,93,103,105,122]);
-    const firstHandover=report.sections.flatMap(s=>s.shifts).find(x=>x.label==='Műszak kezdő kassza');
-    if(firstHandover){small('Első műszak nyitó kasszája',firstHandover.cash);}
-    if(report.closure){title('Napi kasszazárás');small('Lezárta',`${report.closure.actor}  •  ${bucharest(report.closure.closed_at)}`);small('Megszámolt záró kassza',amount(report.closure.counted_cash));small('Eltérés',amount(report.closure.cash_difference));}
+  function reserve(h) { if (y + h > bottom) newPage(`${pageTitle} (folytatás)`); }
+  function heading(title, heightAfter=0) {
+    reserve(31 + heightAfter);
+    doc.fillColor(palette.teal).font(B).fontSize(10.3);
+    paragraph(title,margin,y,contentWidth);
+    y += 19;
+    doc.moveTo(margin,y).lineTo(W-margin,y).strokeColor(palette.line).lineWidth(0.6).stroke();
+    y += 7;
   }
-  for(const s of report.sections){
-    page(s.actor, report.scope==='handover'?`Műszak: ${bucharest(report.handover.shift_start_at)} → ${bucharest(report.handover.cutoff_at)}`:`Napi eladói audit: ${s.actor}`);
-    report.section=s.actor;
+  function statCells(cells) {
+    if (!cells.length) return;
+    reserve(53);
+    const gap = 6, cw = (contentWidth - gap*(cells.length-1))/cells.length;
+    for (let i=0;i<cells.length;i++) {
+      const x = margin + i*(cw+gap);
+      doc.roundedRect(x,y,cw,43,5).fillAndStroke(palette.light,palette.line);
+      doc.font(F).fontSize(7).fillColor(palette.muted);
+      paragraph(cells[i][0],x+7,y+6,cw-14,{lineBreak:false});
+      doc.font(B).fontSize(10).fillColor(cells[i][2]===true?palette.red:palette.ink);
+      paragraph(cells[i][1],x+7,y+22,cw-14,{lineBreak:false});
+    }
+    y += 49;
+  }
+  function infoLine(key,value) {
+    reserve(17);
+    doc.font(F).fontSize(7.7).fillColor(palette.muted);
+    paragraph(key,margin,y,152,{lineBreak:false});
+    doc.font(B).fontSize(8).fillColor(palette.ink);
+    paragraph(value,margin+157,y,contentWidth-157,{lineBreak:false});
+    y += 17;
+  }
+  function sectionTable(label, headers, rows, widths, sums, footnote='') {
+    if (!rows.length) return;
+    const numeric = new Set(sums?.numeric ?? []);
+    const positions = [margin];
+    widths.forEach(w=>positions.push(positions[positions.length-1]+w));
+    const headerHeight=23, footerHeight=28;
+    const fontSize=7.5;
+    const rowHeight = vals => {
+      doc.font(F).fontSize(fontSize);
+      const measured = vals.map((value,i) => doc.heightOfString(clean(value),{
+        width: Math.max(15,widths[i]-12),lineGap:0
+      }));
+      return Math.max(23,Math.ceil(Math.max(...measured,12)+9));
+    };
+    function tableHeader() {
+      if (y + headerHeight > bottom) newPage(`${pageTitle} (folytatás)`);
+      doc.rect(margin,y,contentWidth,headerHeight).fill(palette.ink);
+      doc.font(B).fontSize(7.1).fillColor('#FFFFFF');
+      headers.forEach((h,i)=>paragraph(h,positions[i]+5,y+6,widths[i]-10,{
+        align:numeric.has(i)?'right':'left',lineBreak:false
+      }));
+      y += headerHeight;
+    }
+    const data=rows.map(row=>row.map(val=>String(val??'')));
+    const firstHeight=rowHeight(data[0]);
+    heading(label,headerHeight+firstHeight+4);
+    tableHeader();
+    for(let k=0;k<data.length;k++){
+      const row=data[k],rh=rowHeight(row);
+      const last = k===data.length-1;
+      // Keep an ending subtotal directly below the last row, never on its own sheet.
+      if (y + rh + (last?footerHeight:0) > bottom) {
+        newPage(`${pageTitle} (folytatás)`);
+        tableHeader();
+      }
+      if (k%2===0)doc.rect(margin,y,contentWidth,rh).fill(palette.light);
+      doc.font(F).fontSize(fontSize).fillColor(palette.ink);
+      row.forEach((value,i)=>paragraph(value,positions[i]+5,y+5,widths[i]-10,{
+        align:numeric.has(i)?'right':'left'
+      }));
+      doc.moveTo(margin,y+rh).lineTo(W-margin,y+rh).strokeColor(palette.line).lineWidth(0.4).stroke();
+      y += rh;
+    }
+    doc.rect(margin,y,contentWidth,footerHeight).fill('#E3F3F1');
+    doc.font(B).fontSize(7.7).fillColor(palette.ink);
+    sums.cells.forEach(([column,val])=>paragraph(clean(val),positions[column]+5,y+7,widths[column]-10,{
+      align:numeric.has(column)?'right':'left',lineBreak:false
+    }));
+    y += footerHeight+7;
+    if(footnote){
+      doc.font(F).fontSize(7).fillColor(palette.muted);
+      const h=doc.heightOfString(clean(footnote),{width:contentWidth});
+      reserve(h+8);paragraph(footnote,margin,y,contentWidth);y+=h+7;
+    }
+  }
+  function sanitizeReference(v) {
+    const s=String(v||'').trim()
+      .replace(/^EL\/[A-Z0-9_-]+\/\d{4}\/\d+\s*(?:\/\s*)?/i,'')
+      .replace(/^CS\/[A-Z0-9_-]+\/\d{4}\/\d+\s*(?:\/\s*)?/i,'');
+    if (/^(?:[0-9a-f]{8}-){1,}/i.test(s)) return '';
+    return s;
+  }
+  function employeeNotes(actor,entries){
+    if(!entries?.length)return;
+    const list=[];const dedup=new Map();
+    for(const n of entries){
+      const ref=sanitizeReference(n.reference);
+      const t=bucharest(n.at);
+      const id=[actorKey(n.actor),String(n.note||'').trim().replace(/\s+/g,' ').toLocaleLowerCase('hu-HU'),t,ref].join('|');
+      if(dedup.has(id)){
+        const existing=dedup.get(id);
+        if(!existing.types.includes(n.type))existing.types.push(n.type);
+      }else{
+        const item={...n,reference:ref,types:[n.type]};
+        dedup.set(id,item);list.push(item);
+      }
+    }
+    heading(`${actor} · megjegyzések (${list.length})`,38);
+    for(const n of list){
+      const titleText=`${bucharest(n.at)}  •  ${n.actor || '–'}  •  ${n.types.join(' / ')}${n.reference ? '  •  '+n.reference:''}`;
+      doc.font(F).fontSize(7.7);
+      const labelH=doc.heightOfString(clean(titleText),{width:contentWidth-20});
+      const textH=doc.heightOfString(clean(n.note),{width:contentWidth-20});
+      const blockH=Math.ceil(10+labelH+5+textH+9);
+      if(y+blockH>bottom)newPage(`${actor} · megjegyzések (folytatás)`);
+      doc.roundedRect(margin,y,contentWidth,blockH,4).fillAndStroke(palette.light,palette.line);
+      doc.font(B).fontSize(7.7).fillColor(palette.ink);
+      paragraph(titleText,margin+10,y+6,contentWidth-20);
+      doc.font(F).fontSize(8).fillColor(palette.ink);
+      paragraph(n.note,margin+10,y+6+labelH+5,contentWidth-20);
+      y+=blockH+5;
+    }
+  }
+  const receiptMethod=m=>({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás'})[String(m||'').toLowerCase()]||m||'–';
+  const productText=(name,size)=>[name||'Ismeretlen termék',size?`Méret: ${size}`:''].filter(Boolean).join('\n');
+  function employeeSection(s, first=false) {
+    if(!first)newPage(s.actor);
+    else newPage(s.actor, report.scope==='handover' && report.handover
+      ? `Műszak: ${bucharest(report.handover.shift_start_at)} → ${bucharest(report.handover.cutoff_at)}  •  Kiállítva: ${bucharest(new Date().toISOString())}`
+      : `Eladó: ${s.actor}  •  Kiállítva: ${bucharest(new Date().toISOString())}`);
     const a=s.totals;
-    indicators([['Befolyt',amount(a.received)],['Bruttó érték',amount(a.gross)],['Kedvezmény',amount(a.discount)],['Készpénz',amount(a.cash)],['Bankkártya',amount(a.card)]]);
-    indicators([['Új eladás',amount(a.newSales)],['Régi hitel rendezés',amount(a.creditReceived)],['Hitelre elvitt',amount(a.creditIssued)],['Hiteles bizonylat',String(s.creditReceipts.size)],['Eladott termék',String(s.normal.reduce((sum,r)=>sum+moneyNumber(r.quantity),0))]]);
-    title('Kassza és műszakidők');
-    if(!s.shifts.length)small('Műszak','Nincs rögzített műszakátadás vagy napzárás.');
-    else for(const shift of s.shifts){
-      small(shift.label,`${shift.period}  |  ${shift.person}  |  ${shift.cash}  |  ${shift.status}`);
+    statCells([['Befolyt',amount(a.received)],['Bruttó érték',amount(a.gross)],['Kedvezmény',amount(a.discount)],['Készpénz',amount(a.cash)],['Bankkártya',amount(a.card)]]);
+    const extra=[['Új eladás',amount(a.newSales)],['Eladott termék',`${qty(total(s.normal,r=>r.quantity))} db`]];
+    if(Math.abs(a.creditReceived)>0.005)extra.push(['Régi hitel fizetve',amount(a.creditReceived)]);
+    if(Math.abs(a.creditIssued)>0.005)extra.push(['Hitelre elvitt',amount(a.creditIssued)]);
+    if(s.creditReceipts.size)extra.push(['Hiteles vásárlás',String(s.creditReceipts.size)]);
+    statCells(extra);
+    if(s.shifts.length){
+      heading('Kassza és műszakidők',10);
+      for(const h of s.shifts)infoLine(h.label,`${h.period}  •  ${h.person}  •  ${h.cash}${h.status?`  •  ${h.status}`:''}`);
     }
-    title('Eladott termékek · időrendben');
-    table(['Idő','Bizonylat','Termék / változat','Db','Rendes ár','Kedvezmény','Fizetendő'],s.normal.map(r=>[bucharest(r.sold_at,'time'),r.sale_number,`${r.product_title || r.product_code || '–'}${r.size ? ` / ${r.size}` : ''}\n${r.customer_name || '–'}`,r.quantity,fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),[55,116,290,37,95,86,93]);
-    title('Hitelre kiadott termékek · nem napi bevétel');
-    table(['Idő','Bizonylat','Termék / változat / kliens','Db','Rendes ár','Kedvezmény','Hitel értéke'],s.credits.map(r=>[bucharest(r.sold_at,'time'),r.sale_number,`${r.title}${r.size?` / ${r.size}`:''}\n${r.customer_name || '–'}`,r.qty,fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),[55,116,290,37,95,86,93]);
-    title('Korábbi hitel rendezése · fizetés napján');
-    table(['Idő','Eredeti bizonylat','Termék / kliens','Db','Fizetve','Eredeti ár','Kedvezmény'],s.settlements.map(r=>[bucharest(r.paid_at,'time'),r.sale_number,`${r.product_title||'–'}\n${r.customer_name||'–'}`,r.quantity,fmt(r.amount),fmt(r.gross),fmt(r.discount)]),[55,116,290,37,95,86,93]);
-    title('Tételes fizetési események');
-    table(['Idő','Hivatkozás','Esemény','Mód','Összeg'],s.payments.map(r=>[bucharest(r.paid_at,'time'),r.reference||'–',r.type,r.method,fmt(r.amount)]),[70,190,220,110,182]);
-    title('Műszakátadások / pénzmozgások');
-    table(['Idő','Művelet','Átadó / átvevő','Állapot','Pénz'],s.moves.map(r=>[bucharest(r.at,'time'),r.type,r.people,r.status,fmt(r.amount)]),[70,190,220,140,152]);
-    // All comments written by this employee come here: line comments,
-    // original sale notes, handover and acceptance, closing/day notes.
-    notes(`${s.actor} · termék- és műszakmegjegyzések`,s.notes);
+    sectionTable('Eladott termékek · időrendben',
+      ['Idő','Termék / méret','Kliens','Db','Rendes ár','Kedvezmény','Fizetendő'],
+      s.normal.map(r=>[bucharest(r.sold_at,'time'),productText(r.product_title||r.product_code,r.size),r.customer_name||'',String(r.quantity),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),
+      [55,318,112,37,87,82,90],
+      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.normal,r=>r.quantity))],[4,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)))],[5,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)))],[6,fmt(total(s.normal,r=>r.line_total))]]});
+    sectionTable('Hitelre kiadott termékek · nem napi bevétel',
+      ['Idő','Termék / méret','Kliens','Db','Rendes ár','Kedvezmény','Hitel összege'],
+      s.credits.map(r=>[bucharest(r.sold_at,'time'),productText(r.title,r.size),r.customer_name||'',String(r.qty),fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),
+      [55,318,112,37,87,82,90],
+      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.credits,r=>r.qty))],[4,fmt(total(s.credits,r=>r.list_total))],[5,fmt(total(s.credits,r=>r.discount_total))],[6,fmt(total(s.credits,r=>r.net_total))]]});
+    sectionTable('Korábbi hitel rendezése · fizetés napján',
+      ['Idő','Termék','Kliens','Db','Eredeti ár','Kedvezmény','Fizetve'],
+      s.settlements.map(r=>[bucharest(r.paid_at,'time'),productText(r.product_title,r.size),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
+      [55,318,112,37,87,82,90],
+      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.settlements,r=>r.quantity))],[4,fmt(total(s.settlements,r=>r.gross))],[5,fmt(total(s.settlements,r=>r.discount))],[6,fmt(total(s.settlements,r=>r.amount))]]});
+    sectionTable('Tételes fizetési események',
+      ['Idő','Mit fizettek ki?','Fizetési mód','Összeg'],
+      s.payments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Fizetés',receiptMethod(r.method),fmt(r.amount)]),
+      [63,477,132,109],
+      {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${s.payments.length} fizetés`],[3,fmt(total(s.payments,r=>r.amount))]]},
+      `Készpénz: ${amount(a.cash)}  •  Bankkártya: ${amount(a.card)}${a.bank?`  •  Átutalás: ${amount(a.bank)}`:''}`);
+    const shifts=s.moves;
+    const balanceEvent=shifts.filter(x=>x.type==='Napzárás'||x.type==='Műszakátadás').at(-1);
+    sectionTable('Műszakátadások / pénzmozgások',
+      ['Idő','Művelet','Kinek / kitől','Állapot','Összeg / kassza'],
+      shifts.map(r=>[bucharest(r.at,'time'),r.type,r.people||'',r.status||'',fmt(r.amount)]),
+      [63,203,232,142,141],
+      {numeric:[4],cells:[[1,'ÖSSZESEN'],[2,`${shifts.length} esemény`], ...(balanceEvent?[[4,`Záró: ${fmt(balanceEvent.amount)}`]]:[])]},
+      'A műszakátadás és napzárás a kassza állapota, nem bevétel; ezeket nem összegezzük.');
+    employeeNotes(s.actor,s.notes);
   }
-  if(report.miscNotes.length){page('Egyéb szerzők');report.section='Egyéb szerzők';notes('Nem eladóhoz kapcsolt megjegyzések',report.miscNotes);}
+  if(report.scope==='all'){
+    newPage('Teljes üzleti jelentés',`Kiállítva: ${bucharest(new Date().toISOString())}`);
+    const a=report.totals;
+    statCells([['Befolyt összesen',amount(a.received)],['Bruttó érték',amount(a.gross)],['Kedvezmény',amount(a.discount)],['Készpénz',amount(a.cash)],['Bankkártya',amount(a.card)]]);
+    const extras=[['Új eladás',amount(a.newSales)]];
+    if(a.creditReceived)extras.push(['Régi hitel fizetve',amount(a.creditReceived)]);
+    if(a.creditIssued)extras.push(['Hitelre elvitt',amount(a.creditIssued)]);
+    if(report.closure)extras.push(['Záró kassza',amount(report.closure.counted_cash)]);
+    statCells(extras);
+    sectionTable('Eladók pénzügyi összesítője',
+      ['Eladó','Befolyt','Bruttó','Kedvezmény','Készpénz','Bankkártya','Hitelre elvitt'],
+      report.sections.map(s=>[s.actor,fmt(s.totals.received),fmt(s.totals.gross),fmt(s.totals.discount),fmt(s.totals.cash),fmt(s.totals.card),fmt(s.totals.creditIssued)]),
+      [156,108,102,102,100,105,108],
+      {numeric:[1,2,3,4,5,6],cells:[[0,'ÖSSZESEN'],[1,fmt(a.received)],[2,fmt(a.gross)],[3,fmt(a.discount)],[4,fmt(a.cash)],[5,fmt(a.card)],[6,fmt(a.creditIssued)]]});
+    if(report.closure){heading('Kasszazárás');infoLine('Lezárta',`${report.closure.actor} • ${bucharest(report.closure.closed_at)}`);infoLine('Záró kassza',amount(report.closure.counted_cash));infoLine('Eltérés',amount(report.closure.cash_difference));}
+  }
+  for(let i=0;i<report.sections.length;i++)employeeSection(report.sections[i],i===0&&report.scope!=='all');
+  if(!report.sections.length && report.scope!=='all') {newPage('Napi audit'); infoLine('Napi állapot','Nincs rögzített eladás vagy műszakadat.');}
+  if(report.miscNotes.length){newPage('Egyéb megjegyzések'); employeeNotes('Egyéb szerzők',report.miscNotes);}
   const pages=doc.bufferedPageRange();
   for(let i=pages.start;i<pages.start+pages.count;i++){
-    doc.switchToPage(i);doc.font(bodyFont).fontSize(7).fillColor(palette.muted);
-    text(`${report.location.name}  •  ${report.date}  •  ${report.scope==='all'?'Teljes üzlet':report.sections.map(s=>s.actor).join(', ')}`,margin,paperH-24,cw-95);
-    text(`${i+1}/${pages.count}`,paperW-margin-75,paperH-24,75,{align:'right'});
+    doc.switchToPage(i);
+    doc.font(F).fontSize(7).fillColor(palette.muted);
+    paragraph(`${report.location.name}  •  ${report.date}  •  ${report.scope==='all'?'Teljes üzlet':report.sections.map(s=>s.actor).join(', ')}`,margin,H-21,contentWidth-95,{lineBreak:false});
+    paragraph(`${i-pages.start+1}/${pages.count}`,W-margin-73,H-21,73,{align:'right',lineBreak:false});
   }
 }
 
@@ -295,10 +432,29 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     const allocatedPaymentIds=new Set(receiptLines.rows.map(r=>String(r.payment_id)));
     const fallback=customerReceipts.rows.filter(r=>matches(r.actor)&&!allocatedPaymentIds.has(String(r.id))&&withinShift({at:r.paid_at},handover));
     for(const cp of fallback)settlement.push({paid_at:cp.paid_at,sale_number:'Nincs sor-hozzárendelés',product_title:'Tartozás rendezése',customer_name:'',quantity:0,amount:moneyNumber(cp.amount),gross:moneyNumber(cp.amount),discount:0});
+    // Display meaningful product/customer descriptions, not internal sale numbers or UUIDs.
+    // Payment IDs remain in the database for audit traceability, but waste no paper.
+    const describeNormalPayment=(receipt)=>{
+      const lines=original.rows.filter(r=>r.sale_number===receipt.sale_number);
+      const customer=lines.find(r=>String(r.customer_name||'').trim())?.customer_name;
+      const items=lines.reduce((sum,r)=>sum+moneyNumber(r.quantity),0);
+      const titles=Array.from(new Set(lines.map(r=>String(r.product_title||r.product_code||'').trim()).filter(Boolean)));
+      const product= titles.length>1
+        ? `${titles[0]} + ${titles.length-1} másik termék`
+        : titles[0]||'Eladás';
+      return [product,items>1?`(${items} db)`:'',customer?`• ${customer}`:''].filter(Boolean).join(' ');
+    };
+    const describeCustomerPayment=(receipt)=>{
+      const allocations=receiptLines.rows.filter(r=>String(r.payment_id)===String(receipt.id));
+      const customer=allocations.find(r=>String(r.customer_name||'').trim())?.customer_name;
+      const titles=Array.from(new Set(allocations.map(r=>String(r.product_title||r.product_code||'').trim()).filter(Boolean)));
+      const product=titles.length>1?`${titles[0]} + ${titles.length-1} másik termék`:titles[0]||'Korábbi tartozás';
+      return ['Korábbi tartozás',customer?`• ${customer}`:'',product?`• ${product}`:''].filter(Boolean).join(' ');
+    };
     const payments=[
-      ...normalReceipts.rows.filter(r=>matches(r.receipt_actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Eladás',reference:r.sale_number,method:r.method})),
-      ...customerReceipts.rows.filter(r=>matches(r.actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Régi tartozás',reference:r.reference||String(r.id).slice(0,8),method:r.method})),
-      ...exchangePayments.rows.filter(r=>matches(r.actor)&&withinShift({at:r.created_at},handover)).map(r=>({paid_at:r.created_at,at:r.created_at,amount:moneyNumber(r.amount)*(r.direction==='out'?-1:1),type:'Csere különbözet',reference:r.exchange_number,method:r.method})),
+      ...normalReceipts.rows.filter(r=>matches(r.receipt_actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Eladás',description:describeNormalPayment(r),method:r.method})),
+      ...customerReceipts.rows.filter(r=>matches(r.actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Régi tartozás',description:describeCustomerPayment(r),method:r.method})),
+      ...exchangePayments.rows.filter(r=>matches(r.actor)&&withinShift({at:r.created_at},handover)).map(r=>({paid_at:r.created_at,at:r.created_at,amount:moneyNumber(r.amount)*(r.direction==='out'?-1:1),type:'Csere különbözet',description:'Csere / visszáru pénzügyi különbözete',method:r.method})),
     ].sort((a,b)=>eventTime(a)-eventTime(b));
     const shiftEvents=[];
     const moves=[];
@@ -306,10 +462,10 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       if(!withinShift({at:h.cutoff_at},handover))continue;
       if(matches(h.from_actor)){
         if(h.snapshot?.openingCash != null) shiftEvents.push({label:'Műszak kezdő kassza',period:bucharest(h.shift_start_at),person:h.from_actor,cash:amount(h.snapshot.openingCash),status:'Átvett / nyitó'});
-        shiftEvents.push({label:'Műszakátadás',period:`${bucharest(h.shift_start_at)} → ${bucharest(h.cutoff_at)}`,person:h.to_actor,cash:amount(h.counted_cash??h.expected_cash),status:`${h.status}  •  eltérés: ${amount(h.cash_difference)}`});
+        shiftEvents.push({label:'Műszakátadás',period:`${bucharest(h.shift_start_at)} → ${bucharest(h.cutoff_at)}`,person:h.to_actor,cash:amount(h.counted_cash??h.expected_cash),status:`${h.status==='accepted'?'Átvéve':h.status}  •  eltérés: ${amount(h.cash_difference)}`});
         moves.push({at:h.cutoff_at,type:'Műszakátadás',people:`${h.from_actor} → ${h.to_actor}`,status:h.status,amount:h.counted_cash??h.expected_cash});
       }
-      if(matches(h.to_actor))shiftEvents.push({label:'Műszak átvétele',period:bucharest(h.accepted_at||h.cutoff_at),person:h.from_actor,cash:amount(h.counted_cash??h.expected_cash),status:h.status});
+      if(matches(h.to_actor))shiftEvents.push({label:'Műszak átvétele',period:bucharest(h.accepted_at||h.cutoff_at),person:h.from_actor,cash:amount(h.counted_cash??h.expected_cash),status:h.status==='accepted'?'Átvéve':h.status});
     }
     for(const c of closings.rows)if(matches(c.actor)&&withinShift({at:c.closed_at},handover)){
       const alreadyHasStart=shiftEvents.some(r=>r.label==='Műszak átvétele'||r.label==='Műszak kezdő kassza');
