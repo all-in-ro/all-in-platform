@@ -232,6 +232,7 @@ type AdminRecentSaleExtended = AifAdminShopRecentSale & {
   settlementPaymentId?: string | null;
   customerPaymentId?: string | null;
   settlementLineCount?: number | null;
+  settlementApproximate?: boolean;
   stockEffect?: number | null;
   paymentMethod?: string | null;
 };
@@ -1771,15 +1772,13 @@ export default function AllInAdminMagazinDashboard({
     () => new Set(historicalCreditSales.map((sale) => String(sale.saleNumber || "").trim()).filter(Boolean)),
     [historicalCreditSales],
   );
-  const historicalCreditTotal = useMemo(
-    () => historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.lineTotal), 0),
-    [historicalCreditSales],
-  );
-  const historicalCreditItems = useMemo(
-    () => historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.quantity), 0),
-    [historicalCreditSales],
-  );
-  const historicalCreditSalesCount = historicalCreditSaleNumbers.size;
+  // The backend uses exactly the same audited, selected-day reconstruction as
+  // the seller's daily summary. Never calculate historical debt from current line totals.
+  const historicalCreditTotal = numberValue(summary?.unpaidTotal);
+  const historicalCreditItems = numberValue(data?.history?.creditItems ??
+    historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.quantity), 0));
+  const historicalCreditSalesCount = numberValue(data?.history?.creditSales ?? historicalCreditSaleNumbers.size);
+  const historyComplete = data?.history?.complete !== false;
   const showCreditRowsInEventLog = showHistoricalCreditRows || applied.saleType === "credit" || applied.paymentStatus === "credit";
   const eventLogSales = useMemo(
     () => (data?.recentSales || []).filter((sale) => {
@@ -2231,10 +2230,10 @@ export default function AllInAdminMagazinDashboard({
           />
           <MetricCard
             title="Kintlévőség"
-            value={money(historicalCreditTotal)}
+            value={historyComplete ? money(historicalCreditTotal) : "Ellenőrzendő"}
             hint={creditFilterActive
               ? "Napi hiteles lista aktív • kattints a teljes nap visszanézéséhez"
-              : `${historicalCreditSalesCount} hiteles bizonylat • ${integer(historicalCreditItems)} termék • jelenleg nyitott: ${money(summary?.unpaidTotal)}`}
+              : `${historicalCreditSalesCount} hiteles bizonylat • ${integer(historicalCreditItems)} termék • jelenleg nyitott: ${money(summary?.currentUnpaidTotal)}`}
             icon={WalletCards}
             current={historicalCreditTotal}
             previous={numberValue(previous?.unpaidTotal)}
@@ -2407,7 +2406,7 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-center">Típus</th>
                     <th className="px-3 py-3 text-center">Darab</th>
                     <th className="min-w-[205px] px-3 py-3 text-right">Árazás</th>
-                    <th className="px-3 py-3 text-right">Hátralévő</th>
+                    <th className="px-3 py-3 text-right">{showHistoricalCreditRows ? "Aznap fennálló / most" : "Hátralévő"}</th>
                     <th className="min-w-[132px] px-2 py-3 text-center">Állapot</th>
                     <th className="sticky right-0 z-20 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#293548] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)]">
                       <span className="sr-only">Műveletek</span>
@@ -2471,6 +2470,13 @@ export default function AllInAdminMagazinDashboard({
                               <p className="mt-1 max-w-[275px] truncate text-[10px] text-[#cfe5ff]/80">
                                 Korábbi vásárlás • készletmozgás nélkül
                               </p>
+                            ) : sale.dailyCategory === "credit" ? (
+                              <p className="mt-1 max-w-[275px] text-[10px] text-rose-100/80">
+                                Hiteles elvitel · aznapi állapot
+                                {numberValue(sale.returnedLaterQty) > 0 ? ` · később ${integer(sale.returnedLaterQty)} db visszahozva` : ""}
+                                {sale.paidLaterAt ? " · később rendezve" : ""}
+                                {sale.historyComplete === false ? " · audit ellenőrzendő" : ""}
+                              </p>
                             ) : null}
                           </div>
                         </div>
@@ -2496,7 +2502,7 @@ export default function AllInAdminMagazinDashboard({
                         {settlement ? (
                           <div className="ml-auto w-[184px] overflow-hidden rounded-xl border border-[#9bc8ff]/22 bg-[#31506a]/24">
                             <div className="flex items-center justify-between gap-3 px-2.5 py-2">
-                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55">Befizetés</span>
+                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55" title={settlementMeta.settlementApproximate ? "Régi befizetés: terméksori allokáció hiányában arányosan felosztva" : "Termékszinten rögzített befizetés"}>{settlementMeta.settlementApproximate ? "Felosztott befizetés" : "Befizetés"}</span>
                               <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</span>
                             </div>
                           </div>
@@ -2504,7 +2510,14 @@ export default function AllInAdminMagazinDashboard({
                           <SalePriceBreakdown sale={sale} compact />
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">
+                        {sale.historyComplete === false ? "Ellenőrzendő" : money(sale.balanceDue)}
+                        {sale.dailyCategory === "credit" && sale.currentBalanceDue != null ? (
+                          <span className="mt-1 block text-[9px] text-white/46">
+                            Most: {numberValue(sale.currentBalanceDue) > 0.005 ? money(sale.currentBalanceDue) : "rendezve"}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="min-w-[132px] px-2 py-3">
                         <div className="flex items-center justify-center gap-1.5">
                           {settlement ? (
@@ -2521,6 +2534,13 @@ export default function AllInAdminMagazinDashboard({
                                 || ""
                             ).trim().toLowerCase();
 
+                            if (sale.dailyCategory === "credit") {
+                              return (
+                                <span className="rounded-full border border-red-300/45 bg-[#E21C2A] px-2 py-1 text-[10px] text-white">
+                                  {sale.historyComplete === false ? "Ellenőrzendő" : "Hitel aznap"}
+                                </span>
+                              );
+                            }
                             if (sale.paymentStatus === "paid" && method) {
                               return <PaymentMethodIcon method={method} />;
                             }
