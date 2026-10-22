@@ -34146,6 +34146,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifShiftIsoDate,
     aifMapShopSummary,
     aifPaymentMethodLabel,
+    aifBuildDailyCreditHistory, // SAME audited day-end reconstruction as shop's Daily Summary
     readSalesTvaSettings,
   }));
 
