@@ -3086,7 +3086,7 @@ export default function AllInShopOperations({
                             disabled={availableCashForNewHandover <= 0 || cashLoading}
                             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#ffe66b] bg-[#fed700] px-3 text-sm text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.18)] hover:bg-[#eac600] disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                             <WalletCards size={17} /> Pénzátadás zárolása
+                             <WalletCards size={17} /> Készpénz átadása
                           </button>
                           <button
                             type="button"
