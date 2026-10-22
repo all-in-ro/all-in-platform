@@ -1,12 +1,93 @@
 import express from "express";
 
+
+// AIF_ADMIN_HISTORICAL_CREDIT_20261022
+// A vezetői és az eladói nézet UGYANAZT a már ellenőrzött,
+// eseménynapló-alapú (visszáru + későbbi kedvezmény + befizetés) vetítést használja.
+// Ezt nem lehet a mai sale-line összegéből utólag rekonstruálni.
+export function aifAdminCreditHistorySql(where) {
+  return `SELECT s.*,
+      (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date::text AS history_day,
+      (((s.sold_at AT TIME ZONE 'Europe/Bucharest')::date + 1)::timestamp
+        AT TIME ZONE 'Europe/Bucharest') AS history_cutoff,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(sl) || jsonb_build_object(
+          'image_url', COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,''))
+        ) ORDER BY sl.line_no, sl.id)
+        FROM aif_shop_sale_lines sl
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+        WHERE sl.sale_id=s.id
+      ), '[]'::jsonb) AS history_lines,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(ev) ORDER BY ev.created_at, ev.id)
+        FROM aif_shop_sale_events ev WHERE ev.sale_id=s.id
+      ), '[]'::jsonb) AS history_events,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(p) ORDER BY p.paid_at, p.id)
+        FROM aif_shop_sale_payments p
+        WHERE p.sale_id=s.id AND p.method <> 'credit'
+      ), '[]'::jsonb) AS history_payments,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(ex) ORDER BY ex.created_at, ex.id)
+        FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id
+      ), '[]'::jsonb) AS history_returns,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(la) || jsonb_build_object('paid_at', cp.paid_at)
+          ORDER BY cp.paid_at, la.id)
+        FROM aif_shop_customer_payment_line_allocations la
+        JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
+        WHERE la.sale_id=s.id
+      ), '[]'::jsonb) AS history_line_payments
+    FROM aif_shop_sales s
+    WHERE ${where}
+      AND s.status='completed'
+      AND s.sale_type='credit'
+    ORDER BY s.sold_at, s.id`;
+}
+
+export function aifAdminBuildCreditHistory(rows, buildDailyHistory) {
+  if (typeof buildDailyHistory !== 'function') {
+    throw new Error('Hiányzik a közös történeti hitelszámítás; a főnöki nézet nem készíthet becsült adatot.');
+  }
+  const buckets = new Map();
+  for (const sale of rows || []) {
+    const day = String(sale.history_day || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      throw new Error(`Érvénytelen hiteles vásárlási nap: ${sale.sale_number || 'ismeretlen'}`);
+    }
+    if (!buckets.has(day)) buckets.set(day, []);
+    buckets.get(day).push(sale);
+  }
+  const total = {
+    sales: [], productLines: [], unpaidTotal: 0, unpaidSales: 0,
+    currentUnpaidTotal: 0, currentUnpaidSales: 0, creditSales: 0,
+    creditLineCount: 0, creditItems: 0, warnings: [],
+  };
+  const money = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+  for (const [day, sales] of buckets) {
+    // The SAME pure builder used by /shop-operations/daily-summary.
+    const history = buildDailyHistory(sales, day);
+    total.sales.push(...history.sales);
+    total.productLines.push(...history.productLines);
+    total.unpaidTotal = money(total.unpaidTotal + history.unpaidTotal);
+    total.currentUnpaidTotal = money(total.currentUnpaidTotal + history.currentUnpaidTotal);
+    total.unpaidSales += history.unpaidSales;
+    total.currentUnpaidSales += history.currentUnpaidSales;
+    total.creditSales += history.creditSales;
+    total.warnings.push(...history.warnings);
+  }
+  total.creditLineCount = total.productLines.length;
+  total.creditItems = total.productLines.reduce((qty, item) => qty + Number(item.qty || 0), 0);
+  return total;
+}
+
 // Admin üzleti vezérlőpult: forgalom, készletpillanat, rangsorok, eladási napló.
 export default function createAifAdminShopOverviewRouter(deps) {
   const {
     pool, requireAdminOrSecret, ensureAifShopSalesSchema, text, normCode,
     aifNumber, aifBucharestIsoDate, aifValidIsoDate, aifInclusiveDayCount,
     aifShiftIsoDate, aifMapShopSummary, aifPaymentMethodLabel,
-    readSalesTvaSettings,
+    aifBuildDailyCreditHistory, readSalesTvaSettings,
   } = deps;
   const router = express.Router();
   let retailBookSchemaPromise = null;
@@ -111,11 +192,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
           const p = push(employee);
           where.push(`s.actor=${p}`);
         }
-        if (paymentStatus) {
+        if (paymentStatus === "credit") {
+          where.push(`(s.sale_type='credit' OR s.payment_status='credit')`);
+        } else if (paymentStatus) {
           const p = push(paymentStatus);
           where.push(`s.payment_status=${p}`);
+          if (paymentStatus === "paid") where.push(`s.sale_type<>'credit'`);
         }
         if (paymentMethod) {
+          // A későbbi hitelrendezés nem változtatja meg az eredeti elvitel módját.
+          where.push(`s.sale_type<>'credit'`);
           const p = push(paymentMethod);
           where.push(`EXISTS (
             SELECT 1
@@ -782,11 +868,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
           const p = push(employee);
           where.push(`s.actor=${p}`);
         }
-        if (paymentStatus) {
+        if (paymentStatus === "credit") {
+          where.push(`(s.sale_type='credit' OR s.payment_status='credit')`);
+        } else if (paymentStatus) {
           const p = push(paymentStatus);
           where.push(`s.payment_status=${p}`);
+          if (paymentStatus === "paid") where.push(`s.sale_type<>'credit'`);
         }
         if (paymentMethod) {
+          // A későbbi hitelrendezés nem változtatja meg az eredeti elvitel módját.
+          where.push(`s.sale_type<>'credit'`);
           const p = push(paymentMethod);
           where.push(`EXISTS (
             SELECT 1
@@ -933,6 +1024,8 @@ export default function createAifAdminShopOverviewRouter(deps) {
         exchangeEmployeesOptionResult,
         exchangeBrandsOptionResult,
         exchangeCategoriesOptionResult,
+        currentCreditHistoryResult,
+        previousCreditHistoryResult,
       ] = await Promise.all([
         pool.query(stockSnapshotQuery.sql, stockSnapshotQuery.args),
         pool.query(
@@ -1184,10 +1277,17 @@ export default function createAifAdminShopOverviewRouter(deps) {
              s.subtotal,
              s.discount_total,
              s.total,
-             p.amount AS paid_total,
+             CASE
+               WHEN allocation_stats.line_count > 0 THEN COALESCE(line_allocation.amount,0)::numeric
+               WHEN active_totals.line_value_total > 0 AND sl.quantity > 0 THEN round(
+                 p.amount::numeric * COALESCE(sl.line_total,0)::numeric
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                 / sl.quantity::numeric / active_totals.line_value_total, 2)
+               ELSE 0::numeric
+             END AS paid_total,
              s.balance_due,
-             active_totals.item_count,
-             active_totals.line_count,
+             CASE WHEN allocation_stats.line_count > 0 THEN allocation_stats.item_count ELSE active_totals.item_count END AS item_count,
+             CASE WHEN allocation_stats.line_count > 0 THEN allocation_stats.line_count ELSE active_totals.line_count END AS line_count,
              COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS product_title,
              sl.product_code,
              sl.barcode,
@@ -1202,7 +1302,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
                NULLIF(sl.raw->>'imageUrl',''),
                NULLIF(sl.raw->>'image_url','')
              ) AS image_url,
-             GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric AS quantity,
+             CASE
+               WHEN allocation_stats.line_count > 0 THEN LEAST(
+                 GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0),
+                 COALESCE(line_allocation.quantity,0))::numeric
+               ELSE GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+             END AS quantity,
              sl.list_price,
              sl.unit_price,
              CASE
@@ -1228,10 +1333,18 @@ export default function createAifAdminShopOverviewRouter(deps) {
              END AS line_total,
              'payment_settlement'::text AS record_type,
              false AS deletable,
-             p.amount AS settlement_amount,
+             CASE
+               WHEN allocation_stats.line_count > 0 THEN COALESCE(line_allocation.amount,0)::numeric
+               WHEN active_totals.line_value_total > 0 AND sl.quantity > 0 THEN round(
+                 p.amount::numeric * COALESCE(sl.line_total,0)::numeric
+                 * GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
+                 / sl.quantity::numeric / active_totals.line_value_total, 2)
+               ELSE 0::numeric
+             END AS settlement_amount,
              p.id AS settlement_payment_id,
              p.customer_payment_id,
-             active_totals.line_count AS settlement_line_count,
+             CASE WHEN allocation_stats.line_count > 0 THEN allocation_stats.line_count ELSE active_totals.line_count END AS settlement_line_count,
+             allocation_stats.line_count=0 AS settlement_approximate,
              0::numeric AS stock_effect
            FROM aif_shop_sale_payments p
            JOIN aif_shop_sales s ON s.id=p.sale_id
@@ -1245,6 +1358,19 @@ export default function createAifAdminShopOverviewRouter(deps) {
              WHERE ex.source_sale_line_id=sl.id
                AND ex.status='completed'
            ) ret ON true
+           -- Az egyetlen kliensbefizetés több terméksorhoz is tartozhat.
+           -- A soronkénti ténylegesen fizetett összeg és darabszám az allokációból jön.
+           LEFT JOIN LATERAL (
+             SELECT count(*)::int AS line_count,
+                    COALESCE(sum(la2.quantity),0)::numeric AS item_count
+             FROM aif_shop_customer_payment_line_allocations la2
+             WHERE la2.customer_payment_id=p.customer_payment_id
+               AND la2.sale_id=s.id
+           ) allocation_stats ON true
+           LEFT JOIN aif_shop_customer_payment_line_allocations line_allocation
+             ON line_allocation.customer_payment_id=p.customer_payment_id
+            AND line_allocation.sale_id=s.id
+            AND line_allocation.sale_line_id=sl.id
            LEFT JOIN LATERAL (
              SELECT
                count(*) FILTER (
@@ -1254,7 +1380,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
                  GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0)
                ) FILTER (
                  WHERE GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0) > 0
-               ),0)::numeric AS item_count
+               ),0)::numeric AS item_count,
+               COALESCE(sum(CASE WHEN x.quantity > 0 THEN
+                 COALESCE(x.line_total,0)::numeric
+                 * GREATEST(x.quantity - COALESCE(xr.returned_qty,0),0)::numeric
+                 / x.quantity::numeric ELSE 0::numeric END),0)::numeric AS line_value_total
              FROM aif_shop_sale_lines x
              LEFT JOIN LATERAL (
                SELECT COALESCE(sum(ex2.returned_qty),0)::numeric AS returned_qty
@@ -1265,6 +1395,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              WHERE x.sale_id=s.id
            ) active_totals ON true
            WHERE ${settlementLineFilters.where}
+             AND (allocation_stats.line_count=0 OR line_allocation.id IS NOT NULL)
            ORDER BY p.paid_at DESC, s.sale_number DESC, sl.line_no ASC, sl.id ASC
            LIMIT 500`,
           settlementLineFilters.args
@@ -1544,7 +1675,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
            ORDER BY value ASC`,
           [location.id]
         ),
+        // Tényleges napi hiteles elvitelek, eredeti napi árakkal és egyenlegekkel.
+        // Sem készlet, sem fizetés, sem kassza nem módosul.
+        pool.query(aifAdminCreditHistorySql(currentFilters.where), currentFilters.args),
+        pool.query(aifAdminCreditHistorySql(previousFilters.where), previousFilters.args),
       ]);
+
+      const currentCreditHistory = aifAdminBuildCreditHistory(
+        currentCreditHistoryResult.rows, aifBuildDailyCreditHistory);
+      const previousCreditHistory = aifAdminBuildCreditHistory(
+        previousCreditHistoryResult.rows, aifBuildDailyCreditHistory);
 
       const combineSummaryRows = (saleRow = {}, exchangeRow = {}) => {
         const revenue = aifNumber(saleRow.revenue) + aifNumber(exchangeRow.revenue);
@@ -1622,6 +1762,22 @@ export default function createAifAdminShopOverviewRouter(deps) {
 
       const summary = mapSummary(currentCombinedRow);
       const previousSummary = mapSummary(previousCombinedRow);
+      const roundMoney = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+      const applyHistory = (target, cohort) => {
+        const live = aifNumber(target.unpaidTotal);
+        const liveCount = aifNumber(target.unpaidSales);
+        // The existing SQL includes today's outstanding credit. Replace ONLY
+        // that cohort with its status at the sale-day end; do not double count it.
+        target.currentUnpaidTotal = roundMoney(live);
+        target.currentUnpaidSales = liveCount;
+        target.unpaidTotal = roundMoney(Math.max(0, live - cohort.currentUnpaidTotal + cohort.unpaidTotal));
+        target.unpaidSales = Math.max(0, liveCount - cohort.currentUnpaidSales + cohort.unpaidSales);
+        target.historicalCreditTotal = cohort.unpaidTotal;
+        target.historicalCreditSales = cohort.creditSales;
+        target.historicalCreditItems = cohort.creditItems;
+      };
+      applyHistory(summary, currentCreditHistory);
+      applyHistory(previousSummary, previousCreditHistory);
 
       // Forgalom = ténylegesen realizált pénzmozgás.
       // A hitelbe kiadott áru addig NEM forgalom, amíg nincs tényleges befizetés.
@@ -1710,6 +1866,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
         current.unpaidTotal += aifNumber(row.unpaid_total);
         trendMap.set(key, current);
       }
+      for (const sale of currentCreditHistory.sales) {
+        const day = String(sale.history_date || '');
+        const point = trendMap.get(day);
+        if (!point) continue;
+        point.unpaidTotal = roundMoney(Math.max(0,
+          point.unpaidTotal - aifNumber(sale.current_balance_due) + aifNumber(sale.balance_due)));
+      }
       const trend = Array.from(trendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
       const paymentMap = new Map();
@@ -1742,6 +1905,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
         current.discountTotal += aifNumber(row.discount_total);
         current.unpaidTotal += aifNumber(row.unpaid_total);
         employeeMap.set(key, current);
+      }
+      for (const sale of currentCreditHistory.sales) {
+        const actorName = String(sale.actor || 'Ismeretlen');
+        const entry = employeeMap.get(actorName.toLocaleLowerCase('hu-HU'));
+        if (!entry) continue;
+        entry.unpaidTotal = roundMoney(Math.max(0,
+          entry.unpaidTotal - aifNumber(sale.current_balance_due) + aifNumber(sale.balance_due)));
       }
       const employees = Array.from(employeeMap.values())
         .map((row) => ({
@@ -1801,11 +1971,52 @@ export default function createAifAdminShopOverviewRouter(deps) {
         settlementPaymentId: row.settlement_payment_id ? String(row.settlement_payment_id) : null,
         customerPaymentId: row.customer_payment_id ? String(row.customer_payment_id) : null,
         settlementLineCount: aifNumber(row.settlement_line_count),
+        settlementApproximate: row.settlement_approximate === true,
         stockEffect: aifNumber(row.stock_effect),
       });
 
+      const historySalesById = new Map(currentCreditHistory.sales.map((s) => [String(s.id), s]));
+      const historyLinesById = new Map(currentCreditHistory.productLines.map((l) => [String(l.line_id), l]));
+      const mapCurrentSaleRow = (row) => {
+        if (String(row.sale_type || '') !== 'credit') {
+          return mapRecentRow({ ...row, record_type: 'sale', deletable: true });
+        }
+        const h = historyLinesById.get(String(row.line_id));
+        const hs = historySalesById.get(String(row.sale_id));
+        if (!h || !hs) {
+          // Fail visibly instead of silently presenting a later, discounted price.
+          return { ...mapRecentRow({ ...row, record_type: 'sale', deletable: false }),
+            historyComplete: false, historyWarning: 'Hiányzó történeti terméksor',
+            dailyCategory: 'credit' };
+        }
+        return {
+          ...mapRecentRow({ ...row, record_type: 'sale', deletable: true }),
+          paymentStatus: hs.payment_status,
+          balanceDue: aifNumber(hs.balance_due),
+          subtotal: aifNumber(hs.subtotal),
+          discountTotal: aifNumber(hs.discount_total),
+          total: aifNumber(hs.total),
+          paidTotal: aifNumber(hs.paid_total),
+          itemCount: aifNumber(hs.item_count),
+          lineCount: aifNumber(hs.line_count),
+          quantity: aifNumber(h.qty),
+          listPrice: aifNumber(h.list_price),
+          unitPrice: aifNumber(h.unit_price),
+          lineDiscountAmount: aifNumber(h.discount_total),
+          lineDiscountPercent: aifNumber(h.discount_percent),
+          lineTotal: aifNumber(h.net_total),
+          dailyCategory: 'credit',
+          historyDate: h.history_date,
+          historyComplete: h.history_complete !== false,
+          currentBalanceDue: aifNumber(h.current_balance_due),
+          currentPaymentStatus: h.current_payment_status,
+          returnedLaterQty: aifNumber(h.returned_later_qty),
+          returnedLaterAt: h.returned_later_at || null,
+          paidLaterAt: h.paid_later_at || null,
+        };
+      };
       const recentSales = [
-        ...recentResult.rows.map((row) => mapRecentRow({ ...row, record_type: "sale", deletable: true })),
+        ...recentResult.rows.map(mapCurrentSaleRow),
         ...settlementRecentResult.rows.map(mapRecentRow),
         ...exchangeRecentResult.rows.map(mapRecentRow),
       ]
@@ -1835,6 +2046,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
         },
         summary,
         previousSummary,
+        history: {
+          version: 'daily-credit-20261022', basis: 'sale_day_end',
+          complete: currentCreditHistory.warnings.length === 0,
+          warnings: currentCreditHistory.warnings,
+          historicalCreditTotal: currentCreditHistory.unpaidTotal,
+          currentCreditTotal: currentCreditHistory.currentUnpaidTotal,
+          creditSales: currentCreditHistory.creditSales,
+          creditLines: currentCreditHistory.creditLineCount,
+          creditItems: currentCreditHistory.creditItems,
+        },
         stockSnapshot: {
           asOfDate: stockSnapshotDate,
           variantCount: aifNumber(stockResult.rows[0]?.variant_count),
