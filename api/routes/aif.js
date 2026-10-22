@@ -53,6 +53,222 @@ import {
   refreshAifShopifyMappings,
 } from "../lib/aifShopifyExport.js";
 
+// AIF_DAILY_CREDIT_HISTORY_BEGIN_20261022
+// Read-only projection for the daily screen. No sale, payment, stock or cash
+// record is written here. The selected day's credit cohort stays separate from
+// its later receipts; late discounts are reversed using their saved snapshots.
+function aifDailyHistoryNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function aifDailyHistoryMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+function aifDailyHistoryTime(value) {
+  const t = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+function aifDailyCreditHistorySql() {
+  return `SELECT s.*,
+      (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest') AS history_cutoff,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(sl) || jsonb_build_object(
+          'image_url', COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,''))
+        ) ORDER BY sl.line_no, sl.id)
+        FROM aif_shop_sale_lines sl
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+        WHERE sl.sale_id=s.id
+      ), '[]'::jsonb) AS history_lines,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(ev) ORDER BY ev.created_at, ev.id)
+        FROM aif_shop_sale_events ev WHERE ev.sale_id=s.id
+      ), '[]'::jsonb) AS history_events,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(p) ORDER BY p.paid_at, p.id)
+        FROM aif_shop_sale_payments p
+        WHERE p.sale_id=s.id AND p.method <> 'credit'
+      ), '[]'::jsonb) AS history_payments,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(ex) ORDER BY ex.created_at, ex.id)
+        FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id
+      ), '[]'::jsonb) AS history_returns,
+      COALESCE((
+        SELECT jsonb_agg(to_jsonb(la) || jsonb_build_object('paid_at', cp.paid_at)
+          ORDER BY cp.paid_at, la.id)
+        FROM aif_shop_customer_payment_line_allocations la
+        JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
+        WHERE la.sale_id=s.id
+      ), '[]'::jsonb) AS history_line_payments
+    FROM aif_shop_sales s
+    WHERE s.location_id=$1
+      AND s.status='completed'
+      AND s.sale_type='credit'
+      AND s.sold_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+      AND s.sold_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+      AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g'))
+        = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+    ORDER BY s.sold_at, s.id`;
+}
+function aifBuildDailyCreditHistory(rows, date) {
+  const result = { sales: [], productLines: [], unpaidTotal: 0, unpaidSales: 0,
+    currentUnpaidTotal: 0, currentUnpaidSales: 0, creditSales: 0, warnings: [] };
+  const money = aifDailyHistoryMoney;
+  const number = (v) => aifDailyHistoryNumber(v) ?? 0;
+  const array = (v) => Array.isArray(v) ? v : [];
+  for (const sale of rows) {
+    const cutoff = aifDailyHistoryTime(sale.history_cutoff);
+    if (cutoff === null) throw new Error("A napi történeti nézet dátumhatára hiányzik.");
+    const events = array(sale.history_events);
+    const payments = array(sale.history_payments);
+    const returns = array(sale.history_returns);
+    const linePayments = array(sale.history_line_payments);
+    const issues = new Set();
+    const future = (value) => {
+      const at = aifDailyHistoryTime(value);
+      return at !== null && at >= cutoff;
+    };
+    const beforeCutoff = (value) => {
+      const at = aifDailyHistoryTime(value);
+      return at !== null && at < cutoff;
+    };
+    const futureEvents = events.filter((event) => future(event.created_at));
+    const coveredPayments = new Set();
+    const coveredReturns = new Set();
+    let balance = number(sale.balance_due);
+    // Reverse documented balance changes, not sale.total - paid_total:
+    // the latter is wrong when unpaid goods have been returned.
+    for (const event of futureEvents) {
+      const payload = event.payload || {};
+      const before = aifDailyHistoryNumber(payload.balanceBefore ?? payload.before?.balanceDue);
+      const after = aifDailyHistoryNumber(payload.balanceAfter ?? payload.after?.balanceDue);
+      if (before !== null && after !== null) {
+        balance = money(balance + before - after);
+        if (payload.customerPaymentId) coveredPayments.add(String(payload.customerPaymentId));
+        if (payload.exchangeId) coveredReturns.add(String(payload.exchangeId));
+      } else if (["customer_payment", "customer_credit_return", "late_discount",
+        "bon_consum_reclassified"].includes(event.event_type)) {
+        issues.add("Hiányos történeti egyenlegnapló");
+      }
+    }
+    // Older payments can have the same snapshots in their raw data even when
+    // their event entry is missing. Never count the payment and its event twice.
+    for (const payment of payments.filter((p) => future(p.paid_at))) {
+      if (payment.customer_payment_id && coveredPayments.has(String(payment.customer_payment_id))) continue;
+      const raw = payment.raw || {};
+      const before = aifDailyHistoryNumber(raw.balanceBefore);
+      const after = aifDailyHistoryNumber(raw.balanceAfter);
+      if (before !== null && after !== null) balance = money(balance + before - after);
+      else issues.add("Nincs történeti egyenlegpillanatkép egy későbbi befizetéshez");
+    }
+    for (const returned of returns) {
+      if (future(returned.created_at) && returned.status === "completed" && !coveredReturns.has(String(returned.id))) {
+        issues.add("Nincs történeti egyenlegnapló egy későbbi visszáruhoz");
+      }
+      if (returned.status === "cancelled" && future(returned.cancelled_at)) {
+        // The return's cancellation route belongs to a separate module; do not
+        // invent its historical financial effect if its snapshots are absent.
+        const cancellation = futureEvents.some((event) => {
+          const p = event.payload || {};
+          return String(p.exchangeId || "") === String(returned.id)
+            && /cancel|revers|restore/.test(String(event.event_type))
+            && aifDailyHistoryNumber(p.balanceBefore ?? p.before?.balanceDue) !== null
+            && aifDailyHistoryNumber(p.balanceAfter ?? p.after?.balanceDue) !== null;
+        });
+        if (!cancellation) issues.add("Később visszavont visszáru: történeti egyenleg ellenőrzendő");
+      }
+    }
+    if (balance < -0.005) issues.add("A történeti egyenlegnapló nem egyeztethető");
+    balance = money(Math.max(0, balance));
+    const paidAtDate = money(payments.filter((p) => beforeCutoff(p.paid_at))
+      .reduce((sum, p) => sum + number(p.amount), 0));
+    const paymentStatus = balance > 0.005 ? (paidAtDate > 0.005 ? "partial" : "credit") : "paid";
+    const currentBalance = number(sale.balance_due);
+    const currentPaymentTimes = payments.map((p) => aifDailyHistoryTime(p.paid_at)).filter((t) => t !== null);
+    const lastPaymentAt = currentPaymentTimes.length ? new Date(Math.max(...currentPaymentTimes)).toISOString() : null;
+    const metadata = { daily_category: "credit", history_date: date,
+      current_balance_due: currentBalance, current_payment_status: sale.payment_status,
+      current_last_payment_at: lastPaymentAt };
+    const displayLines = [];
+    for (const line of array(sale.history_lines)) {
+      const prices = { line_total: number(line.line_total), unit_price: number(line.unit_price),
+        discount_amount: number(line.discount_amount), discount_percent: number(line.discount_percent) };
+      const priceFields = { line_total: "lineTotal", unit_price: "unitPrice",
+        discount_amount: "discountAmount", discount_percent: "discountPercent" };
+      if (future(line.raw?.lateDiscountUpdatedAt) && !futureEvents.some((event) =>
+        event.event_type === "late_discount" && String(event.payload?.lineId) === String(line.id))) {
+        issues.add("A későbbi ármódosítás korábbi árpillanatképe hiányzik");
+      }
+      for (const event of futureEvents) {
+        if (event.event_type !== "late_discount" || String(event.payload?.lineId) !== String(line.id)) continue;
+        for (const [field, snapshotField] of Object.entries(priceFields)) {
+          const before = aifDailyHistoryNumber(event.payload?.before?.[snapshotField]);
+          const after = aifDailyHistoryNumber(event.payload?.after?.[snapshotField]);
+          if (before === null || after === null) { issues.add("Hiányos korábbi árpillanatkép"); continue; }
+          const precision = field === "discount_percent" ? 1000 : 100;
+          prices[field] = Math.round((prices[field] + before - after) * precision) / precision;
+        }
+      }
+      const lineReturns = returns.filter((ex) => String(ex.source_sale_line_id) === String(line.id));
+      const effectiveAtDate = (ex) => beforeCutoff(ex.created_at) && (
+        ex.status === "completed" || (ex.status === "cancelled" && future(ex.cancelled_at))
+      );
+      const originalQty = number(line.quantity);
+      const returnedAtDate = lineReturns.filter(effectiveAtDate).reduce((sum, ex) => sum + number(ex.returned_qty), 0);
+      const qty = Math.max(0, originalQty - returnedAtDate);
+      if (qty <= 0) continue;
+      const laterReturns = lineReturns.filter((ex) => ex.status === "completed" && future(ex.created_at));
+      const laterPayments = linePayments.filter((p) => String(p.sale_line_id) === String(line.id) && future(p.paid_at));
+      const latestAt = (items, field) => {
+        const times = items.map((item) => aifDailyHistoryTime(item[field])).filter((at) => at !== null);
+        return times.length ? new Date(Math.max(...times)).toISOString() : null;
+      };
+      const ratio = originalQty > 0 ? qty / originalQty : 0;
+      const netTotal = money(Math.max(0, prices.line_total * ratio));
+      const discountTotal = money(Math.max(0, prices.discount_amount * ratio));
+      displayLines.push({ ...metadata,
+        key: String(line.id), line_id: String(line.id), sale_id: String(sale.id),
+        sale_number: sale.sale_number, sold_at: sale.sold_at,
+        customer_id: sale.customer_id, customer_name: sale.customer_name, customer_phone: sale.customer_phone,
+        payment_status: paymentStatus, balance_due: balance, sale_type: "credit", record_type: "sale",
+        title: line.product_title || line.product_code || "Ismeretlen termék", product_code: line.product_code,
+        brand_name: line.brand_name, subcategory_name: line.subcategory_name,
+        color_name: line.color_name, size: line.size, image_url: line.image_url,
+        qty, list_price: number(line.list_price), unit_price: money(Math.max(0, prices.unit_price)),
+        list_total: money(number(line.list_price) * qty), discount_percent: Math.max(0, prices.discount_percent),
+        revenue: netTotal, net_total: netTotal, discount_total: discountTotal, transactions: 0,
+        payment_label: balance > 0.005 ? "Utólag fizet" : "Hiteles elvitel · aznap rendezve",
+        returned_later_qty: Math.min(qty, laterReturns.reduce((sum, ex) => sum + number(ex.returned_qty), 0)),
+        returned_later_at: latestAt(laterReturns, "created_at"), paid_later_at: latestAt(laterPayments, "paid_at"),
+      });
+    }
+    const complete = issues.size === 0;
+    for (const line of displayLines) line.history_complete = complete;
+    const historyTotal = money(displayLines.reduce((sum, line) => sum + line.net_total, 0));
+    const historyDiscount = money(displayLines.reduce((sum, line) => sum + line.discount_total, 0));
+    result.sales.push({ ...sale, ...metadata, history_complete: complete,
+      total: historyTotal, subtotal: money(historyTotal + historyDiscount), discount_total: historyDiscount,
+      paid_total: paidAtDate, balance_due: balance, payment_status: paymentStatus,
+      record_type: "sale", line_count: displayLines.length,
+      item_count: displayLines.reduce((sum, line) => sum + line.qty, 0),
+      payment_label: balance > 0.005 ? "Utólag fizet" : "Hiteles elvitel · aznap rendezve",
+    });
+    result.productLines.push(...displayLines);
+    result.unpaidTotal = money(result.unpaidTotal + balance);
+    result.unpaidSales += balance > 0.005 ? 1 : 0;
+    result.currentUnpaidTotal = money(result.currentUnpaidTotal + currentBalance);
+    result.currentUnpaidSales += currentBalance > 0.005 ? 1 : 0;
+    result.creditSales += 1;
+    for (const issue of issues) result.warnings.push(`${sale.sale_number}: ${issue}.`);
+  }
+  return result;
+}
+async function aifLoadDailyCreditHistory(db, { locationId, date, employee }) {
+  const result = await db.query(aifDailyCreditHistorySql(), [locationId, date, employee]);
+  return aifBuildDailyCreditHistory(result.rows, date);
+}
+// AIF_DAILY_CREDIT_HISTORY_END_20261022
+
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
@@ -31979,6 +32195,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
       if (!header.rowCount) return res.status(404).json({ error: "Az eladás nem található ennél az üzletnél vagy eladónál." });
       const s = header.rows[0];
+      const historyDate = s.sale_type === "credit" && req.query.asOfDate
+        ? cleanAifDocumentDate(text(req.query.asOfDate)) : null;
+      if (req.query.asOfDate && s.sale_type === "credit" && !historyDate) {
+        return res.status(400).json({ error: "Érvénytelen történeti dátum." });
+      }
+      const history = historyDate
+        ? await aifLoadDailyCreditHistory(pool, { locationId: location.id, date: historyDate, employee: s.actor })
+        : null;
+      const historicalSale = history?.sales.find((row) => String(row.id) === String(s.id));
+      if (historyDate && !historicalSale) {
+        return res.status(409).json({ error: "A bizonylat nem ehhez a történeti naphoz tartozik." });
+      }
 
       const [linesResult, paymentsResult] = await Promise.all([
         pool.query(
@@ -32054,16 +32282,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         lineTotal: aifNumber(row.line_total),
       });
 
-      const lines = linesResult.rows.map(mapLine);
-      const payments = paymentsResult.rows.map((row) => ({
+      const currentLines = linesResult.rows.map(mapLine);
+      const lines = historicalSale ? history.productLines
+        .filter((row) => String(row.sale_id) === String(s.id))
+        .map((row) => ({
+          ...(currentLines.find((line) => line.id === String(row.line_id)) || {}),
+          id: String(row.line_id), quantity: row.qty, listPrice: row.list_price,
+          unitPrice: row.unit_price, discountAmount: row.discount_total,
+          discountPercent: row.discount_percent, lineTotal: row.net_total,
+        })) : currentLines;
+      const shown = historicalSale || s;
+      const cutoff = historicalSale ? aifDailyHistoryTime(historicalSale.history_cutoff) : null;
+      const payments = paymentsResult.rows
+        .filter((row) => cutoff === null || (row.method !== "credit" && aifDailyHistoryTime(row.paid_at) < cutoff))
+        .map((row) => ({
         method: row.method,
         label: aifPaymentMethodLabel(row.method),
         amount: aifNumber(row.amount),
         paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
       }));
-      const paymentLabel = payments.length
+      const paymentLabel = historicalSale ? historicalSale.payment_label : payments.length
         ? Array.from(new Set(payments.map((row) => row.label))).join(", ")
-        : aifNumber(s.balance_due) > 0
+        : aifNumber(shown.balance_due) > 0
           ? "Utólag fizet"
           : "Nincs adat";
 
@@ -32075,16 +32315,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         soldAt: s.sold_at ? new Date(s.sold_at).toISOString() : null,
         actor: s.actor || null,
         status: s.status,
-        paymentStatus: s.payment_status,
+        paymentStatus: shown.payment_status,
         saleType: s.sale_type,
+        historyDate,
+        historyComplete: historicalSale?.history_complete !== false,
+        currentBalanceDue: historicalSale ? aifNumber(s.balance_due) : null,
+        currentPaymentStatus: historicalSale ? s.payment_status : null,
         customerName: s.customer_name || null,
         customerPhone: s.customer_phone || null,
         note: s.note || null,
-        subtotal: aifNumber(s.subtotal),
-        discountTotal: aifNumber(s.discount_total),
-        total: aifNumber(s.total),
-        paidTotal: aifNumber(s.paid_total),
-        balanceDue: aifNumber(s.balance_due),
+        subtotal: aifNumber(shown.subtotal),
+        discountTotal: aifNumber(shown.discount_total),
+        total: aifNumber(shown.total),
+        paidTotal: aifNumber(shown.paid_total),
+        balanceDue: aifNumber(shown.balance_due),
         lineCount: lines.length,
         itemCount: lines.reduce((sum, line) => sum + aifNumber(line.quantity), 0),
         paymentLabel,
@@ -32181,6 +32425,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         settlementProductLinesResult,
         salesResult,
         exchangeSalesResult,
+        creditHistory,
       ] = await Promise.all([
         pool.query(
           `WITH filtered_sales AS (
@@ -32200,8 +32445,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              COALESCE(sum(lt.item_count) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS items_sold,
              COALESCE(sum(fs.discount_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS discount_total,
              COALESCE(sum(fs.paid_total) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS paid_total,
-             COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
-             count(*) FILTER (WHERE fs.balance_due > 0)::int AS unpaid_sales,
+             COALESCE(sum(fs.balance_due) FILTER (WHERE fs.sale_type <> 'credit'),0)::numeric AS unpaid_total,
+             count(*) FILTER (WHERE fs.balance_due > 0.005 AND fs.sale_type <> 'credit')::int AS unpaid_sales,
              count(*) FILTER (WHERE fs.customer_id IS NOT NULL AND fs.sale_type <> 'credit')::int AS customer_sales,
              min(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS first_sale_at,
              max(fs.sold_at) FILTER (WHERE fs.sale_type <> 'credit') AS last_sale_at
@@ -32280,7 +32525,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     0::numeric AS customer_payment_amount,
                     0::int AS customer_payment_transactions
              FROM filtered_sales fs
-             WHERE fs.balance_due > 0
+             WHERE fs.balance_due > 0 AND fs.sale_type <> 'credit'
 
              UNION ALL
 
@@ -32398,11 +32643,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ),
         pool.query(
           `WITH filtered_sales AS (
-             -- A részletes terméksorokban a hiteles eladásokat is visszaadjuk.
-             -- A frontend normál nézetben elrejti, a Kintlévőség nézetben pedig
-             -- pontosan ezeket a credit / unpaid / partial sorokat mutatja.
+             -- Credit rows come from the separate, date-aware audit projection.
+             -- A later payment must never turn their original issue into a cash sale.
              SELECT s.* FROM aif_shop_sales s
-             WHERE ${salesFilter}
+             WHERE ${salesFilter} AND s.sale_type <> 'credit' 
            )
            SELECT
              sl.id::text AS key,
@@ -32522,20 +32766,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `WITH exact_line_events AS (
              SELECT
                la.sale_id AS payment_sale_id,
+               la.customer_payment_id,
+               (la.line_due_after > 0.005) AS settlement_partial,
                cp.paid_at,
-               CASE
-                 WHEN la.quantity > 0 THEN
-                   round(
-                     la.amount::numeric
-                     * LEAST(
-                         la.quantity::numeric,
-                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-                       )
-                     / la.quantity::numeric,
-                     2
-                   )
-                 ELSE 0::numeric
-               END AS paid_amount,
+               la.amount::numeric AS paid_amount,
                CASE
                  WHEN cp.method='cash' THEN 'Készpénz'
                  WHEN cp.method='card' THEN 'Bankkártya'
@@ -32545,10 +32779,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                sl.id AS sale_line_id,
                sl.line_no,
                sl.variant_id,
-               LEAST(
-                 la.quantity::numeric,
-                 GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-               ) AS active_qty,
+               la.quantity::numeric AS active_qty,
                sl.product_title,
                sl.product_code,
                sl.brand_name,
@@ -32563,10 +32794,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  WHEN sl.quantity > 0 THEN
                    round(
                      COALESCE(sl.list_price,0)::numeric
-                     * LEAST(
-                         la.quantity::numeric,
-                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-                       ),
+                     * la.quantity::numeric,
                      2
                    )
                  ELSE 0::numeric
@@ -32575,10 +32803,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  WHEN sl.quantity > 0 THEN
                    round(
                      COALESCE(sl.discount_amount,0)::numeric
-                     * LEAST(
-                         la.quantity::numeric,
-                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-                       )
+                     * la.quantity::numeric
                      / sl.quantity::numeric,
                      2
                    )
@@ -32588,10 +32813,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  WHEN sl.quantity > 0 THEN
                    round(
                      COALESCE(sl.line_total,0)::numeric
-                     * LEAST(
-                         la.quantity::numeric,
-                         GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-                       )
+                     * la.quantity::numeric
                      / sl.quantity::numeric,
                      2
                    )
@@ -32601,23 +32823,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              JOIN aif_shop_customer_payments cp ON cp.id=la.customer_payment_id
              JOIN aif_shop_sales ps ON ps.id=la.sale_id
              JOIN aif_shop_sale_lines sl ON sl.id=la.sale_line_id
-             LEFT JOIN LATERAL (
-               SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
-               FROM aif_shop_exchanges ex
-               WHERE ex.source_sale_line_id=sl.id
-                 AND ex.status='completed'
-             ) ret ON true
              WHERE ps.location_id=$1
                AND ps.status='completed'
                AND cp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND cp.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
-               AND ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND (ps.sale_type='credit' OR ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest'))
                AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g'))
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
-               AND LEAST(
-                     la.quantity::numeric,
-                     GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0)::numeric
-                   ) > 0
+               AND la.quantity > 0 AND la.amount > 0
            ), payment_events AS (
              SELECT
                p.sale_id AS payment_sale_id,
@@ -32645,7 +32858,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND p.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND p.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND p.method <> 'credit'
-               AND ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND (ps.sale_type='credit' OR ps.sold_at < ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest'))
                AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g'))
                    = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
                AND NOT EXISTS (
@@ -32705,7 +32918,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
                FROM aif_shop_exchanges ex
                WHERE ex.source_sale_line_id=sl.id
-                 AND ex.status='completed'
+                 AND ex.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+                 AND (ex.status='completed' OR (ex.status='cancelled' AND ex.cancelled_at >= (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')))
              ) ret ON true
            ), valued_lines AS (
              SELECT
@@ -32718,8 +32932,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              WHERE al.active_qty > 0
            ), settlement_rows AS (
              SELECT
-               ('payment_settlement:' || el.payment_sale_id::text || ':' || el.sale_line_id::text) AS key,
-               ('payment_settlement:' || el.payment_sale_id::text || ':' || el.sale_line_id::text) AS line_id,
+               ('payment_settlement:' || el.customer_payment_id::text || ':' || el.sale_line_id::text) AS key,
+               ('payment_settlement:' || el.customer_payment_id::text || ':' || el.sale_line_id::text) AS line_id,
                s.id::text AS sale_id,
                s.sale_number,
                el.paid_at AS sold_at,
@@ -32749,6 +32963,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                0::int AS transactions,
                el.payment_label,
                el.paid_amount AS settlement_amount,
+               el.settlement_partial,
                0::numeric AS stock_effect
              FROM exact_line_events el
              JOIN aif_shop_sales s ON s.id=el.payment_sale_id
@@ -32796,6 +33011,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  THEN round(vl.paid_amount * vl.active_line_value / vl.active_sale_value, 2)
                  ELSE 0::numeric
                END AS settlement_amount,
+               false AS settlement_partial,
                0::numeric AS stock_effect
              FROM valued_lines vl
              JOIN aif_shop_sales s ON s.id=vl.payment_sale_id
@@ -32808,7 +33024,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ),
         pool.query(
           `WITH filtered_sales AS (
-             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter} AND s.sale_type <> 'credit'
            ), line_totals AS (
              SELECT sale_id, count(*)::int AS line_count, COALESCE(sum(quantity),0)::int AS item_count
              FROM aif_shop_sale_lines
@@ -32879,6 +33095,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            WHERE ${exchangeFilter}`,
           baseArgs
         ),
+        aifLoadDailyCreditHistory(pool, { locationId: location.id, date, employee }),
       ]);
 
       const saleSummary = summaryResult.rows[0] || {};
@@ -32923,21 +33140,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Az üzleti eladó napi nézetében a kliens és a fizetési állapot csak
       // konkrét bizonylatsorhoz köthető biztonságosan. Ezért az összesített
       // products lista mellett külön sale-line szintű listát is visszaadunk.
-      // A sale/payment terméksorok a JELENLEGI megtartott mennyiséget mutatják:
-      // a később teljesen visszahozott termék eltűnik, részleges visszárunál pedig
-      // csak a kliensnél maradt darab és annak arányos összege marad látható.
-      // A felső napi forgalmi összesítést ettől nem írjuk át; az történelmi napérték.
+      // Credit issues use their selected-day snapshot. Allocated payments are
+      // separate immutable events. Regular paid-sale return behaviour is unchanged.
       const productLineRows = [
         ...productLinesResult.rows,
+        ...creditHistory.productLines,
         ...exchangeProductLinesResult.rows,
         ...settlementProductLinesResult.rows,
       ]
-        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
-        .slice(0, 300);
+        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime());
 
-      const saleRows = [...salesResult.rows, ...exchangeSalesResult.rows]
-        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
-        .slice(0, 200);
+      const saleRows = [...salesResult.rows, ...creditHistory.sales, ...exchangeSalesResult.rows]
+        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime());
 
       const payments = paymentsResult.rows.map((row) => ({
         method: row.method,
@@ -32947,6 +33161,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         customerPaymentAmount: aifNumber(row.customer_payment_amount),
         customerPaymentTransactions: aifNumber(row.customer_payment_transactions),
       }));
+      const historicalUnpaidTotal = aifRoundMoney(aifNumber(saleSummary.unpaid_total) + creditHistory.unpaidTotal);
+      const historicalUnpaidSales = aifNumber(saleSummary.unpaid_sales) + creditHistory.unpaidSales;
+      const creditPayment = payments.find((item) => item.method === "credit");
+      if (creditPayment) {
+        creditPayment.amount = historicalUnpaidTotal;
+        creditPayment.transactions = historicalUnpaidSales;
+      } else {
+        payments.push({ method: "credit", label: aifPaymentMethodLabel("credit"),
+          amount: historicalUnpaidTotal, transactions: historicalUnpaidSales,
+          customerPaymentAmount: 0, customerPaymentTransactions: 0 });
+      }
       const customerPaymentTotal = aifRoundMoney(
         payments.reduce((sum, item) => sum + aifNumber(item.customerPaymentAmount), 0)
       );
@@ -32961,6 +33186,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         generatedAt: new Date().toISOString(),
         date,
         employee,
+        history: { version: "daily-credit-20261022", date,
+          basis: "selected_day_end", complete: creditHistory.warnings.length === 0,
+          warnings: creditHistory.warnings },
         location: { id: String(location.id), code: location.code, name: location.name },
         summary: {
           // revenue = az adott napon létrejött eladások forgalma (átlagkosár alapja).
@@ -32976,8 +33204,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
           discountTotal: aifNumber(saleSummary.discount_total),
           paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)),
-          unpaidTotal: aifNumber(saleSummary.unpaid_total),
-          unpaidSales: aifNumber(saleSummary.unpaid_sales),
+          unpaidTotal: historicalUnpaidTotal,
+          unpaidSales: historicalUnpaidSales,
+          currentUnpaidTotal: aifRoundMoney(aifNumber(saleSummary.unpaid_total) + creditHistory.currentUnpaidTotal),
+          currentUnpaidSales: aifNumber(saleSummary.unpaid_sales) + creditHistory.currentUnpaidSales,
+          creditSales: creditHistory.creditSales,
           customerSales: aifNumber(saleSummary.customer_sales) + aifNumber(exchangeSummary.customer_sales),
           firstSaleAt: firstValues.length ? new Date(Math.min(...firstValues.map((value) => value.getTime()))).toISOString() : null,
           lastSaleAt: lastValues.length ? new Date(Math.max(...lastValues.map((value) => value.getTime()))).toISOString() : null,
@@ -33010,6 +33241,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           paymentStatus: row.payment_status || null,
           balanceDue: aifNumber(row.balance_due),
           saleType: row.sale_type || null,
+          dailyCategory: row.daily_category || (row.record_type === "payment_settlement" ? "settlement" : row.record_type === "exchange" ? "exchange" : "sale"),
+          historyDate: row.history_date || null,
+          historyComplete: row.history_complete !== false,
+          currentBalanceDue: row.current_balance_due == null ? null : aifNumber(row.current_balance_due),
+          currentPaymentStatus: row.current_payment_status || null,
+          currentLastPaymentAt: row.current_last_payment_at || null,
+          returnedLaterQty: aifNumber(row.returned_later_qty),
+          returnedLaterAt: row.returned_later_at || null,
+          paidLaterAt: row.paid_later_at || null,
+          settlementPartial: row.settlement_partial === true,
           recordType: row.record_type || "sale",
           title: row.title,
           productCode: row.product_code || null,
@@ -33044,6 +33285,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           balanceDue: aifNumber(row.balance_due),
           paymentStatus: row.payment_status,
           saleType: row.sale_type,
+          dailyCategory: row.daily_category || (row.record_type === "exchange" ? "exchange" : "sale"),
+          historyDate: row.history_date || null,
+          historyComplete: row.history_complete !== false,
+          currentBalanceDue: row.current_balance_due == null ? null : aifNumber(row.current_balance_due),
+          currentPaymentStatus: row.current_payment_status || null,
+          currentLastPaymentAt: row.current_last_payment_at || null,
           lineCount: aifNumber(row.line_count),
           itemCount: aifNumber(row.item_count),
           paymentLabel: row.payment_label,
