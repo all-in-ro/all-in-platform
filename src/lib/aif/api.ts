@@ -3758,10 +3758,12 @@ export function apiAifShopDailyAuditPdfUrl(options: {
   scope: "mine" | "all";
   employee?: string;
   handoverId?: string;
+  mode?: "summary" | "full";
 }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
   q.set("date", options.date);
+  if (options.mode) q.set("mode", options.mode);
   if (options.scope === "all" && options.employee?.trim()) q.set("employee", options.employee.trim());
   if (options.scope === "mine" && options.handoverId?.trim()) q.set("handoverId", options.handoverId.trim());
   return `${AIF_BASE}/shop-audit/${options.scope}.pdf?${q.toString()}`;
