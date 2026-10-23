@@ -342,21 +342,30 @@ export function writeShopDailyAuditPdf(doc, report) {
       heading('Kassza és műszakidők',10);
       for(const h of s.shifts)infoLine(h.label,[h.period,h.person,h.cash,h.status].filter(Boolean).join('  •  '));
     }
+    // Product line numbers run 1, 2, 3 ... in actual chronological order.
+    // The first column has deliberately NO '#' heading. Numbering is
+    // presentation-only, not a product or accounting identifier.
+    const numberedProductWidths = [24,48,318,104,37,84,79,87];
+    const chronological = (lines, at) => [...lines].sort((a, b) => {
+      const ta = new Date(a[at] || 0).getTime();
+      const tb = new Date(b[at] || 0).getTime();
+      return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
+    });
     sectionTable('Eladott termékek · időrendben',
-      ['Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Fizetendő'],
-      s.normal.map(r=>[bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.quantity),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),
-      [55,318,112,37,87,82,90],
-      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.normal,r=>r.quantity))],[4,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)))],[5,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)))],[6,fmt(total(s.normal,r=>r.line_total))]]});
+      ['','Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Fizetendő'],
+      chronological(s.normal,'sold_at').map((r,i)=>[String(i+1),bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.quantity),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)),fmt(moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)),fmt(r.line_total)]),
+      numberedProductWidths,
+      {numeric:[0,4,5,6,7],cells:[[2,'ÖSSZESEN'],[4,qty(total(s.normal,r=>r.quantity))],[5,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)))],[6,fmt(total(s.normal,r=>moneyNumber(r.list_price)*moneyNumber(r.quantity)-moneyNumber(r.line_total)))],[7,fmt(total(s.normal,r=>r.line_total))]]});
     sectionTable('Hitelre kiadott termékek · nem napi bevétel',
-      ['Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Hitel összege'],
-      s.credits.map(r=>[bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.qty),fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),
-      [55,318,112,37,87,82,90],
-      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.credits,r=>r.qty))],[4,fmt(total(s.credits,r=>r.list_total))],[5,fmt(total(s.credits,r=>r.discount_total))],[6,fmt(total(s.credits,r=>r.net_total))]]});
+      ['','Idő','Termék / azonosítók','Kliens','Db','Rendes ár','Kedvezmény','Hitel összege'],
+      chronological(s.credits,'sold_at').map((r,i)=>[String(i+1),bucharest(r.sold_at,'time'),productText(r),r.customer_name||'',String(r.qty),fmt(r.list_total),fmt(r.discount_total),fmt(r.net_total)]),
+      numberedProductWidths,
+      {numeric:[0,4,5,6,7],cells:[[2,'ÖSSZESEN'],[4,qty(total(s.credits,r=>r.qty))],[5,fmt(total(s.credits,r=>r.list_total))],[6,fmt(total(s.credits,r=>r.discount_total))],[7,fmt(total(s.credits,r=>r.net_total))]]});
     sectionTable('Korábbi hitel rendezése · fizetés napján',
-      ['Idő','Termék','Kliens','Db','Eredeti ár','Kedvezmény','Fizetve'],
-      s.settlements.map(r=>[bucharest(r.paid_at,'time'),productText(r),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
-      [55,318,112,37,87,82,90],
-      {numeric:[3,4,5,6],cells:[[1,'ÖSSZESEN'],[3,qty(total(s.settlements,r=>r.quantity))],[4,fmt(total(s.settlements,r=>r.gross))],[5,fmt(total(s.settlements,r=>r.discount))],[6,fmt(total(s.settlements,r=>r.amount))]]});
+      ['','Idő','Termék','Kliens','Db','Eredeti ár','Kedvezmény','Fizetve'],
+      chronological(s.settlements,'paid_at').map((r,i)=>[String(i+1),bucharest(r.paid_at,'time'),productText(r),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
+      numberedProductWidths,
+      {numeric:[0,4,5,6,7],cells:[[2,'ÖSSZESEN'],[4,qty(total(s.settlements,r=>r.quantity))],[5,fmt(total(s.settlements,r=>r.gross))],[6,fmt(total(s.settlements,r=>r.discount))],[7,fmt(total(s.settlements,r=>r.amount))]]});
     sectionTable('Tételes fizetési események',
       ['Idő','Mit fizettek ki?','Fizetési mód','Összeg'],
       s.payments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Fizetés',receiptMethod(r.method),fmt(r.amount)]),
