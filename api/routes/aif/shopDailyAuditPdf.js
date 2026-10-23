@@ -28,6 +28,113 @@ const eventTime = (r) => new Date(r.at || r.sold_at || r.paid_at || 0).getTime()
 const withinShift = (r, handover) => !handover || (eventTime(r) >= new Date(handover.shift_start_at).getTime() && eventTime(r) <= new Date(handover.cutoff_at).getTime());
 const hasRealStartTime = (v) => Boolean(v) && bucharest(v,'time') !== '00:00' && bucharest(v,'time') !== '–';
 
+// AIF_AUDIT_DAY_CASH_SNAPSHOT_V1
+// Mirrors the shop's read-only cash-balance calculation. In particular, cash
+// pending a manager handover is physically reserved, not freely countable.
+// Work-date boundaries are Bucharest local time, including DST changes.
+const cashAtNumber = value => value == null ? null : moneyNumber(value);
+function aifAuditCashBaseline(row, value) {
+  const raw = row?.snapshot && typeof row.snapshot === 'object' ? row.snapshot : {};
+  const reserved = raw.cashAccountingMode === 'physical_plus_pending_v1'
+    ? moneyNumber(raw[value]) : 0;
+  return moneyNumber(moneyNumber(row.counted_cash ?? row.expected_cash) + reserved);
+}
+
+async function aifAuditCashBalanceAt(client, locationId, at) {
+  const base = await client.query(`SELECT * FROM aif_shop_day_closures
+    WHERE location_id=$1 AND closed_at <= $2::timestamptz
+    ORDER BY closed_at DESC,id DESC LIMIT 1`, [locationId,at]);
+  let from=null, baseline=null, baselineKind='not_recorded';
+  if(base.rows.length) {
+    const c=base.rows[0];
+    from=c.closed_at;
+    baseline=aifAuditCashBaseline(c,'pendingReservedAtClose');
+    baselineKind='day_closure';
+  } else {
+    const priorShift = await client.query(`SELECT * FROM aif_shop_shift_handovers
+      WHERE location_id=$1 AND status='accepted'
+        AND COALESCE(accepted_at,cutoff_at,created_at) <= $2::timestamptz
+      ORDER BY COALESCE(accepted_at,cutoff_at,created_at) DESC,id DESC LIMIT 1`,[locationId,at]);
+    if(priorShift.rows.length) {
+      const h=priorShift.rows[0];
+      from=h.accepted_at||h.cutoff_at||h.created_at;
+      const snapshot=h.snapshot&&typeof h.snapshot==='object'?h.snapshot:{};
+      baseline=moneyNumber(moneyNumber(h.counted_cash??h.expected_cash) +
+        (snapshot.cashAccountingMode==='physical_plus_pending_v1'
+          ? moneyNumber(snapshot.pendingReservedAtHandover) : 0));
+      baselineKind='shift_handover';
+    }
+  }
+  // No recorded baseline: do not invent a zero opening balance in an audit.
+  if(!from) {
+    const localStart=await client.query(`SELECT (($1::timestamptz AT TIME ZONE 'Europe/Bucharest')::date)::timestamp
+      AT TIME ZONE 'Europe/Bucharest' AS value`,[at]);
+    from=localStart.rows[0]?.value||at;
+  }
+  const results=await Promise.all([
+    client.query(`SELECT COALESCE(sum(p.amount),0) AS value FROM aif_shop_sale_payments p
+      JOIN aif_shop_sales s ON s.id=p.sale_id
+      WHERE s.location_id=$1 AND s.status='completed' AND p.method='cash'
+        AND p.customer_payment_id IS NULL AND p.paid_at >= $2::timestamptz
+        AND p.paid_at < $3::timestamptz`,[locationId,from,at]),
+    client.query(`SELECT COALESCE(sum(cp.amount),0) AS value FROM aif_shop_customer_payments cp
+      WHERE cp.location_id=$1 AND cp.method='cash' AND cp.paid_at >= $2::timestamptz
+        AND cp.paid_at < $3::timestamptz`,[locationId,from,at]),
+    client.query(`SELECT COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0) AS value
+      FROM aif_shop_exchange_settlements es
+      JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+      WHERE es.location_id=$1 AND es.method='cash' AND es.created_at >= $2::timestamptz
+        AND es.created_at < $3::timestamptz`,[locationId,from,at]),
+    client.query(`SELECT COALESCE(sum(m.amount),0) AS value FROM aif_shop_cash_movements m
+      WHERE m.location_id=$1 AND m.status='confirmed' AND m.effective_at IS NOT NULL
+        AND m.effective_at >= $2::timestamptz AND m.effective_at < $3::timestamptz`,[locationId,from,at]),
+    // Reconstruct whether this money was still reserved at the selected
+    // instant. Checking the CURRENT status alone would make historical start
+    // balances change when the boss accepts cash on a later date.
+    client.query(`SELECT COALESCE(sum(m.amount),0) AS value FROM aif_shop_cash_movements m
+      WHERE m.location_id=$1 AND m.requested_at < $2::timestamptz
+        AND (m.status='pending' OR m.effective_at IS NOT NULL OR m.confirmed_at IS NOT NULL
+          OR m.rejected_at IS NOT NULL OR m.cancelled_at IS NOT NULL)
+        AND (m.effective_at IS NULL OR m.effective_at >= $2::timestamptz)
+        AND (m.confirmed_at IS NULL OR m.confirmed_at >= $2::timestamptz)
+        AND (m.rejected_at IS NULL OR m.rejected_at >= $2::timestamptz)
+        AND (m.cancelled_at IS NULL OR m.cancelled_at >= $2::timestamptz)`,[locationId,at]),
+  ]);
+  const [saleCash,customerCash,exchangeCash,confirmedOut,pendingOut]=results.map(r=>moneyNumber(r.rows[0]?.value));
+  const available=baseline==null?null:moneyNumber(baseline+saleCash+customerCash+exchangeCash-confirmedOut);
+  return {known:baseline!=null,from,baseline,baselineKind,saleCash,customerCash,
+    exchangeCash,confirmedOut,pendingOut,available,
+    free:available==null?null:moneyNumber(available-pendingOut)};
+}
+
+export async function aifAuditReadDailyCashSnapshot(client, locationId, day, closure=null) {
+  const bounds=await client.query(`SELECT
+    ($1::date::timestamp AT TIME ZONE 'Europe/Bucharest') AS start_at,
+    (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest') AS end_at,
+    now() AS generated_at`,[day]);
+  const row=bounds.rows[0];
+  const start=new Date(row.start_at);
+  const end=new Date(row.end_at);
+  const generated=new Date(row.generated_at);
+  if(generated.getTime()<start.getTime())return {day,available:false,closed:Boolean(closure)};
+  const at=new Date(Math.min(end.getTime(),generated.getTime()));
+  const opening=await aifAuditCashBalanceAt(client,locationId,start);
+  const balance=await aifAuditCashBalanceAt(client,locationId,at);
+  const closed=Boolean(closure);
+  const counted=closed?cashAtNumber(closure.counted_cash):null;
+  const free=closed?counted:balance.free;
+  const closeSnapshot=closure?.snapshot&&typeof closure.snapshot==='object'?closure.snapshot:{};
+  const pending=closed&&closeSnapshot.cashAccountingMode==='physical_plus_pending_v1'
+    ? moneyNumber(closeSnapshot.pendingReservedAtClose):balance.pendingOut;
+  return {day,available:true,closed,startAt:row.start_at,asOfAt:closed?(closure.closed_at||row.end_at):at,
+    opening:opening.free,openingKnown:opening.known,
+    free,booked:balance.available,pending,source:opening.baselineKind,
+    closureAmount:counted,closureBy:closure?.actor||null,closureAt:closure?.closed_at||null,
+    isLive:!closed&&at.getTime()===generated.getTime(),
+  };
+}
+
+
 const fontCandidates = [
   '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
   '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
@@ -338,8 +445,20 @@ export function writeShopDailyAuditPdf(doc, report) {
     if(Math.abs(a.creditIssued)>0.005)extra.push(['Hitelre elvitt',amount(a.creditIssued)]);
     if(s.creditReceipts.size)extra.push(['Hiteles vásárlás',String(s.creditReceipts.size)]);
     statCells(extra);
-    if(s.shifts.length){
+    const auditCash=report.cashSnapshot||null;
+    if(auditCash?.available || s.shifts.length){
       heading('Kassza és műszakidők',10);
+      if(auditCash?.available) {
+        infoLine('Napi kezdő kassza',auditCash.openingKnown?amount(auditCash.opening):'Nincs hiteles nyitó adat');
+        if(auditCash.closed) {
+          infoLine('Üzleti záró kassza',`${amount(auditCash.closureAmount)}  •  ${bucharest(auditCash.closureAt)}  •  ${aifAuditActorLabel(auditCash.closureBy)}`);
+          if(report.closure)infoLine('Kasszaeltérés',amount(report.closure.cash_difference));
+        } else {
+          infoLine('Szabad készpénz az üzletben',auditCash.free!=null
+            ? `${amount(auditCash.free)}  •  ${bucharest(auditCash.asOfAt)}` : 'Nem számolható');
+          if(auditCash.pending>0.005)infoLine('Zárolva · átvételre vár',amount(auditCash.pending));
+        }
+      }
       for(const h of s.shifts)infoLine(h.label,[h.period,h.person,h.cash,h.status].filter(Boolean).join('  •  '));
     }
     // Product line numbers run 1, 2, 3 ... in actual chronological order.
@@ -448,6 +567,18 @@ export function writeShopDailyAuditPdf(doc, report) {
     if(a.creditIssued)extras.push(['Hitelre elvitt',amount(a.creditIssued)]);
     if(report.closure)extras.push(['Záró kassza',amount(report.closure.counted_cash)]);
     statCells(extras);
+    const cash=report.cashSnapshot;
+    if(cash?.available){
+      heading('Kasszaegyeztetés');
+      infoLine('Napi kezdő kassza',cash.openingKnown?amount(cash.opening):'Nincs hiteles nyitó adat');
+      if(cash.closed){
+        infoLine('Üzleti záró kassza',amount(cash.closureAmount));
+        if(report.closure)infoLine('Kasszaeltérés',amount(report.closure.cash_difference));
+      }else{
+        infoLine('Szabad készpénz az üzletben',cash.free!=null?`${amount(cash.free)}  •  ${bucharest(cash.asOfAt)}`:'Nem számolható');
+        if(cash.pending>0.005)infoLine('Zárolva · átvételre vár',amount(cash.pending));
+      }
+    }
     sectionTable('Eladók pénzügyi összesítője',
       ['Eladó','Befolyt','Bruttó','Kedvezmény','Készpénz','Bankkártya','Hitelre elvitt'],
       report.sections.map(s=>[s.actor,fmt(s.totals.received),fmt(s.totals.gross),fmt(s.totals.discount),fmt(s.totals.cash),fmt(s.totals.card),fmt(s.totals.creditIssued)]),
@@ -524,8 +655,29 @@ export function writeShopDailySummaryPdf(doc, report) {
   if(a.creditIssued)highlights.push(['Hitelre elvitt',`${money(a.creditIssued)} RON`]);
   const itemsSold=report.sections.reduce((sum,s)=>sum+s.normal.reduce((n,r)=>n+Number(r.quantity||0),0),0);
   highlights.push(['Eladott darab',`${itemsSold.toLocaleString('ro-RO')} db`]);
-  if(report.closure)highlights.push(['Üzleti záró kassza',`${money(report.closure.counted_cash)} RON`]);
+  if(report.closure && !report.cashSnapshot?.available)
+    highlights.push(['Üzleti záró kassza',`${money(report.closure.counted_cash)} RON`]);
   cards(highlights);
+
+  // AIF_AUDIT_SUMMARY_OPEN_CASH_AND_LIVE_BALANCE_V1
+  // Not a financial guess: this is the same physical/free cash formula used
+  // for shop handovers and daily closure. Closed days use recorded counted cash.
+  const cash=report.cashSnapshot;
+  if(cash?.available) {
+    section('Kasszaegyeztetés');
+    const auditCards=[];
+    auditCards.push(['Napi kezdő kassza',cash.openingKnown?`${money(cash.opening)} RON`:'Nem ismert']);
+    if(cash.closed && cash.closureAmount!=null)
+      auditCards.push(['Üzleti záró kassza',`${money(cash.closureAmount)} RON`]);
+    else auditCards.push(['Szabad készpénz az üzletben',cash.free!=null?`${money(cash.free)} RON`:'Nem számolható']);
+    if(cash.closed && report.closure)
+      auditCards.push(['Kasszaeltérés',`${money(report.closure.cash_difference)} RON`]);
+    if(!cash.closed && cash.pending>0.005)
+      auditCards.push(['Zárolva · átvételre vár',`${money(cash.pending)} RON`]);
+    if(auditCards.length)cards(auditCards);
+    if(!cash.closed && cash.free!=null)
+      line('Kassza pillanatképe',bucharest(cash.asOfAt));
+  }
 
   if(report.scope==='all') {
     section('Eladónkénti összegek');
@@ -771,6 +923,10 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       WHERE e.location_id=$1 AND e.status='completed'
       AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY e.created_at`,[id,date]),
   ]);
+  // As of the selected day. This works for OPEN days too, when there is no
+  // day-closure or shift-handover record yet (such as 2026-10-23 in the screenshot).
+  // Kept in the same read-only transaction as the sale and payment rows.
+  const cashSnapshot=await aifAuditReadDailyCashSnapshot(client,id,date,closings.rows[0]||null);
   const handover=handoverId?handovers.rows.find(r=>String(r.id)===handoverId):null;
   if(handoverId&&!handover){const e=new Error('A műszakátadás nem található ezen a napon.');e.statusCode=404;throw e;}
   const selected = employee ? actorKey(employee):null;
@@ -923,7 +1079,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   const miscNotes=scope==='all' ? allNotes.filter(n=>!allCovered.has(n)) : [];
   const totals=Object.fromEntries(['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank']
     .map(key=>[key,moneyNumber(sections.reduce((sum,s)=>sum+moneyNumber(s.totals[key]),0))]));
-  return {location,date,scope,handover,sections,totals,closure:closings.rows[0]||null,miscNotes};
+  return {location,date,scope,handover,sections,totals,closure:closings.rows[0]||null,miscNotes,cashSnapshot};
 }
 
 export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,requireAdminOrSecret,ensureAifShopSalesSchema,aifResolveShopLocation,actorFrom,aifLoadDailyCreditHistory}){
@@ -943,7 +1099,7 @@ export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,req
       if(handoverId&&scope==='all')return res.status(400).json({error:'Műszak PDF csak eladóhoz.'});
       const client=await pool.connect();let report;
       try{
-        await client.query('BEGIN TRANSACTION READ ONLY');
+        await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
         await client.query("SET LOCAL statement_timeout = '60000ms'");
         report=await loadShopDailyAudit({client,location,date,employee,handoverId:handoverId||null,loadCreditHistory:aifLoadDailyCreditHistory,scope:handoverId?'handover':employee&&scope==='all'?'employee':scope});
         await client.query('ROLLBACK');
