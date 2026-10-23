@@ -558,8 +558,73 @@ export function writeShopDailySummaryPdf(doc, report) {
       line(`${bucharest(e.at)} • ${period}`,`${persons} • ${money(e.amount)} RON • ${e.status}`,true);
     }
   }
-  // Avoid printing details on a 'one page' summary; full audit contains product
-  // identifiers, returns, timestamped payment events, notes and every handover.
+  // The one-page summary includes financial/day-end remarks, not product or
+  // sale-line remarks. These are *notes*, never additional booked cash entries.
+  // Daily and closing notes with the same text and timestamp often refer to
+  // the same entry; deduplicate those without suppressing distinct payments.
+  const financialNoteTypes = new Set([
+    'Napi megjegyzés', 'Napzárási megjegyzés', 'Műszakátadás',
+    'Átvételi megjegyzés', 'Készpénzátadási megjegyzés',
+    'Bankbefizetési megjegyzés', 'Tartozásrendezési megjegyzés',
+  ]);
+  const financialNotesRaw = [
+    ...report.sections.flatMap(s => s.notes || []),
+    ...(report.scope === 'all' ? report.miscNotes || [] : []),
+  ]
+    .filter(n => financialNoteTypes.has(String(n.type || '')) && String(n.note || '').trim())
+    .sort((a,b) => (new Date(a.at || 0).getTime() || 0) - (new Date(b.at || 0).getTime() || 0));
+  // AIF_AUDIT_SUMMARY_FINANCIAL_NOTES_20261023
+  const financialNotes=[];
+  for (const item of financialNotesRaw) {
+    const actor=actorKey(item.actor);
+    const note=String(item.note || '').trim();
+    const instant = new Date(item.at || 0).getTime();
+    const duplicate = financialNotes.some(previous => {
+      const timeGap = Math.abs(new Date(previous.at || 0).getTime() - instant);
+      const closingPair = new Set([String(previous.type || ''),String(item.type || '')]);
+      const sameEvent = timeGap === 0 && String(previous.type || '') === String(item.type || '');
+      const sameClosingNote = timeGap <= 120000 && closingPair.has('Napi megjegyzés') && closingPair.has('Napzárási megjegyzés');
+      return actorKey(previous.actor) === actor
+        && String(previous.note || '').trim() === note
+        && (sameEvent || sameClosingNote);
+    });
+    if (!duplicate) financialNotes.push(item);
+  }
+  if (financialNotes.length && y+9+24+38 <= H-43) {
+    // Keep enough room for a title and at least one useful note; never
+    // introduce a second page or overlap the footer of the summary.
+    y += 9;
+    section('Napi és kasszamegjegyzések');
+    const spaceBottom=H-43;
+    const rowHeight=38;
+    const reserveOverflow=14;
+    const maxRows=Math.max(1,Math.floor((spaceBottom-y-reserveOverflow)/rowHeight));
+    // If many notes exist, prioritise notes about cash outlays. All notes
+    // remain available in the full audit, without silently fabricating entries.
+    const mentionsCashOut=note => /(?:-\s*\d+[\d\s.,]*\s*(?:RON|LEJ|LEI)|\b(?:hús|hus|előleg|eloleg|kasszából|kasszabol|kifizetve|kiadás|kiadas|kivett)\b)/i.test(String(note.note || ''));
+    const selectedNotes=financialNotes.length > maxRows
+      ? [...financialNotes].sort((a,b)=>Number(mentionsCashOut(b))-Number(mentionsCashOut(a)) || (new Date(a.at || 0).getTime()-new Date(b.at || 0).getTime()))
+      : financialNotes;
+    let shown=0;
+    for(const item of selectedNotes){
+      if(shown>=maxRows || y+rowHeight>spaceBottom)break;
+      if(shown%2===0)doc.roundedRect(M,y,CW,rowHeight-3,3).fill(palette.light);
+      doc.font(B).fontSize(7.2).fillColor(palette.ink);
+      put(`${bucharest(item.at)}  •  ${aifAuditActorLabel(item.actor)}  •  ${item.type}`,M+8,y+4,CW-16,{lineBreak:false,ellipsis:true});
+      doc.font(F).fontSize(8.2).fillColor(palette.ink);
+      put(String(item.note).replace(/\s*\n\s*/g,' • '),M+8,y+17,CW-16,{
+        height:rowHeight-19,ellipsis:true,lineGap:0,
+      });
+      y+=rowHeight;
+      shown++;
+    }
+    const remaining=financialNotes.length-shown;
+    if(remaining>0 && y+12<H-39){
+      doc.font(F).fontSize(7.2).fillColor(palette.muted);
+      put(`További ${remaining} megjegyzés a teljes auditban.`,M+7,y,CW-14,{lineBreak:false});
+    }
+  }
+  // Product lines and all payment events remain in the full export only.
   doc.moveTo(M,H-34).lineTo(W-M,H-34).strokeColor(palette.line).lineWidth(.5).stroke();
   doc.font(F).fontSize(7).fillColor(palette.muted);
   put(`${report.location.name}  •  ${report.date}  •  ${actor}`,M,H-25,CW-95,{lineBreak:false});
