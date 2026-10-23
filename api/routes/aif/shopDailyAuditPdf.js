@@ -39,6 +39,25 @@ const boldCandidates = [
   '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
 ];
 const palette = { ink:'#25344A',muted:'#617186',line:'#D5DFE7',light:'#F3F7FA',teal:'#148A86',red:'#C71B32' };
+// The manager account is recorded as ADMIN in historical data. The printable
+// recipient name is a display alias only; the stored actor remains unchanged.
+export const aifAuditActorLabel = value => {
+  const name = String(value || '').trim();
+  return name.toUpperCase() === 'ADMIN' ? 'Kerekes Zsolt' : (name || '–');
+};
+export const aifAuditExportFilename = ({date, location, employee, handoverId, mode='full'}) => {
+  const name = String(employee || '').trim();
+  const code = String(location?.code || '').toLowerCase();
+  const city = code === 'main_warehouse' ? 'Csíkszereda'
+    : code === 'magazin_targu_secuiesc' ? 'Kézdivásárhely'
+    : String(location?.name || 'Uzlet').trim();
+  // Preserve Hungarian accents for UTF-8 filename*; never include path delimiters.
+  const cleanPart = value => String(value).replace(/[/\\:*?"<>|\x00-\x1f]/g,'')
+    .trim().replace(/\s+/g,'_').replace(/[^\p{L}\p{N}_-]/gu,'').slice(0,76) || 'Uzlet';
+  const personOrCity = cleanPart(name || city);
+  const suffix = `${handoverId ? '_Muszak' : ''}${mode==='summary' ? '_Osszefoglalo' : ''}`;
+  return `AllInFashion_${date}-${personOrCity}${suffix}.pdf`;
+};
 
 // Human-readable product identifiers: barcode / internal product code, never the
 // misleading receipt ID. Values remain text, preserving leading zeroes.
@@ -56,10 +75,10 @@ export function aifDailyAuditCashEvents(m, date) {
   const rejectedDay = dateInZone(m.rejected_at);
   const cancelledDay = dateInZone(m.cancelled_at);
   const manager = String(m.movement_type) === 'manager_handover';
-  const from = String(m.requested_by || '–').trim();
+  const from = aifAuditActorLabel(m.requested_by);
   // Only print the actual recipient when the database records one. Never
   // invent a boss name for an as-yet unconfirmed cash handover.
-  const to = String(m.confirmed_by || '').trim();
+  const to = m.confirmed_by ? aifAuditActorLabel(m.confirmed_by) : '';
   const raw = m.raw && typeof m.raw === 'object' ? m.raw : {};
   const periodIso = v => {
     if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0,10);
@@ -402,7 +421,7 @@ export function writeShopDailyAuditPdf(doc, report) {
         confirmedPreviously.length ? `Korábbi átadás átvétele: ${fmt(total(confirmedPreviously,r=>r.amount))} RON (nem új levonás)` : '',
       ].filter(Boolean);
       const totalLabel=summaryParts.join('  •  ') || 'Nem történt új pénzlevonás';
-      sectionTable('Főnöki készpénzátadás / átvétel · elszámolt időszak',
+      sectionTable('Készpénzátadás / átvétel · elszámolt időszak',
         ['Esemény ideje','Ettől – eddig','Átadó / átvevő','Átvétel / státusz','Összeg'],
         cashTransferRows,
         [132,163,160,215,111.89],
@@ -438,6 +457,115 @@ export function writeShopDailyAuditPdf(doc, report) {
     paragraph(`${i-pages.start+1}/${pages.count}`,W-margin-73,H-21,73,{align:'right',lineBreak:false});
   }
 }
+
+
+/**
+ * Single-page executive / employee overview, intentionally not a cropped first
+ * page of the detailed audit. It contains figures and cash events, no product
+ * rows. Unlike full export, it always produces exactly one A4 landscape page.
+ */
+export function writeShopDailySummaryPdf(doc, report) {
+  const normalFont=fontCandidates.find(f=>fs.existsSync(f));
+  const boldFont=boldCandidates.find(f=>fs.existsSync(f));
+  if(normalFont)doc.registerFont('AIF',normalFont);
+  if(boldFont)doc.registerFont('AIF-B',boldFont);
+  const F=normalFont?'AIF':'Helvetica';
+  const B=boldFont?'AIF-B':normalFont?'AIF':'Helvetica-Bold';
+  const clean=s=>normalFont?String(s??''):String(s??'').replace(/ő/g,'ö').replace(/ű/g,'ü');
+  const money=v=>moneyNumber(v).toLocaleString('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const sum=(rows,key)=>moneyNumber(rows.reduce((v,r)=>v+moneyNumber(r[key]),0));
+  const W=841.89,H=595.28,M=30,CW=W-2*M;
+  const actor=report.scope==='all'?'Teljes üzlet':(report.sections[0]?.actor||'Eladó');
+  const a=report.scope==='all'?report.totals:(report.sections[0]?.totals||report.totals);
+  let y=64;
+  const put=(value,x,top,width,opts={})=>doc.text(clean(value),x,top,{width,lineGap:0,...opts});
+  const label=(value,x,top,width)=>{doc.font(F).fontSize(7.4).fillColor(palette.muted);put(value,x,top,width,{lineBreak:false});};
+  const section=title=>{doc.font(B).fontSize(10).fillColor(palette.teal);put(title,M,y,CW);y+=16;
+    doc.moveTo(M,y).lineTo(W-M,y).strokeColor(palette.line).lineWidth(.7).stroke();y+=8;};
+  const cards=items=>{
+    if(!items.length)return;
+    const gap=8,cw=(CW-gap*(items.length-1))/items.length;
+    for(let i=0;i<items.length;i++){
+      const [title,value]=items[i];const x=M+i*(cw+gap);
+      doc.roundedRect(x,y,cw,49,5).fillAndStroke(palette.light,palette.line);
+      label(title,x+8,y+8,cw-16);
+      doc.font(B).fontSize(11).fillColor(palette.ink);
+      put(value,x+8,y+25,cw-16,{lineBreak:false,ellipsis:true});
+    }
+    y+=58;
+  };
+  const line=(left,right,flag=false)=>{
+    const h=21;
+    doc.font(F).fontSize(8).fillColor(palette.muted);put(left,M+5,y+3,CW*.43,{lineBreak:false,ellipsis:true});
+    doc.font(flag?B:F).fontSize(8).fillColor(palette.ink);put(right,M+CW*.43,y+3,CW*.56,{lineBreak:false,ellipsis:true});
+    doc.moveTo(M,y+h).lineTo(W-M,y+h).strokeColor(palette.line).lineWidth(.35).stroke();y+=h;
+  };
+  const singleActor=report.sections.length===1?report.sections[0]:null;
+  doc.addPage({size:'A4',layout:'landscape',margin:0});
+  doc.rect(0,0,W,49).fill(palette.ink);
+  doc.font(B).fontSize(13).fillColor('#fff');put('ALLINFASHION / NAPI AUDIT',M,14,340,{lineBreak:false});
+  doc.font(F).fontSize(8.5).fillColor('#E7F8F7');
+  put(`${report.date}  •  ${report.location.name}  •  ${actor}`,M+310,17,CW-310,{align:'right',lineBreak:false});
+  doc.font(B).fontSize(14).fillColor(palette.ink);
+  put('Napi pénzügyi összefoglaló',M,y,CW,{lineBreak:false});y+=27;
+  cards([['Befolyt',`${money(a.received)} RON`],['Bruttó',`${money(a.gross)} RON`],
+    ['Kedvezmény',`${money(a.discount)} RON`],['Készpénz',`${money(a.cash)} RON`],['Bankkártya',`${money(a.card)} RON`]]);
+  const highlights=[['Új eladás',`${money(a.newSales)} RON`]];
+  if(a.creditReceived)highlights.push(['Régi hitel fizetve',`${money(a.creditReceived)} RON`]);
+  if(a.creditIssued)highlights.push(['Hitelre elvitt',`${money(a.creditIssued)} RON`]);
+  const itemsSold=report.sections.reduce((sum,s)=>sum+s.normal.reduce((n,r)=>n+Number(r.quantity||0),0),0);
+  highlights.push(['Eladott darab',`${itemsSold.toLocaleString('ro-RO')} db`]);
+  if(report.closure)highlights.push(['Üzleti záró kassza',`${money(report.closure.counted_cash)} RON`]);
+  cards(highlights);
+
+  if(report.scope==='all') {
+    section('Eladónkénti összegek');
+    doc.rect(M,y,CW,21).fill(palette.ink);doc.font(B).fontSize(7.7).fillColor('#fff');
+    const labels=[['Eladó',M+7,183,'left'],['Befolyt',M+193,96,'right'],['Bruttó',M+298,96,'right'],
+      ['Kedvezmény',M+403,96,'right'],['Készpénz',M+508,96,'right'],['Bankkártya',M+613,96,'right']];
+    for(const [k,x,w,align] of labels)put(k,x,y+5,w,{align,lineBreak:false});y+=21;
+    // At most the rows that fit on the page. The sums above always represent
+    // ALL employees, and the detailed report contains the complete breakdown.
+    const available=Math.max(1,Math.floor((H-155-y)/22));
+    for(const [index,s] of report.sections.entries()){
+      if(index>=available)break;
+      if(index%2===0)doc.rect(M,y,CW,22).fill(palette.light);
+      doc.font(F).fontSize(8).fillColor(palette.ink);
+      for(const [value,x,w,align] of [
+        [s.actor,M+7,183,'left'],[money(s.totals.received),M+193,96,'right'],
+        [money(s.totals.gross),M+298,96,'right'],[money(s.totals.discount),M+403,96,'right'],
+        [money(s.totals.cash),M+508,96,'right'],[money(s.totals.card),M+613,96,'right']
+      ])put(value,x,y+5,w,{align,lineBreak:false,ellipsis:true});
+      y+=22;
+    }
+    if(report.sections.length>available)line('További dolgozók a részletes auditban',`${report.sections.length-available} eladó`,true);
+    if(report.closure&&y< H-100){y+=7;line('Napzárás',`${bucharest(report.closure.closed_at)} • ${aifAuditActorLabel(report.closure.actor)} • ${money(report.closure.counted_cash)} RON`,true);}
+  }else if(singleActor) {
+    section('Kassza és műszak');
+    for(const h of singleActor.shifts.slice(0,5))line(h.label,[h.period,aifAuditActorLabel(h.person),h.cash,h.status].filter(Boolean).join(' • '));
+    if(report.handover)line('Műszak elszámolása',`${hasRealStartTime(report.handover.shift_start_at)?bucharest(report.handover.shift_start_at)+' – ':''}${bucharest(report.handover.cutoff_at)}`);
+  }
+  // Real manager cash handovers only; never synthesize them from free-text notes.
+  const managerEvents=report.sections.flatMap(s=>s.moves||[]).filter(e=>e.cashType==='manager_handover'&&e.cashPhase);
+  // An overall report must not double-print one shared cash event if it appears
+  // in multiple employee sections.
+  const uniqueCash=[...new Map(managerEvents.map(e=>[`${e.movementId}:${e.cashPhase}`,e])).values()];
+  if(uniqueCash.length&&y< H-120){
+    y+=8;section('Készpénzátadás / átvétel · elszámolt időszak');
+    for(const e of uniqueCash.slice(0,Math.max(1,Math.floor((H-77-y)/25)))){
+      const period=e.periodFrom&&e.periodTo?`${e.periodFrom} – ${e.periodTo}`:'Időszak nincs rögzítve';
+      const persons=`${aifAuditActorLabel(e.requestedBy)} → ${e.confirmedBy?aifAuditActorLabel(e.confirmedBy):'átvételre vár'}`;
+      line(`${bucharest(e.at)} • ${period}`,`${persons} • ${money(e.amount)} RON • ${e.status}`,true);
+    }
+  }
+  // Avoid printing details on a 'one page' summary; full audit contains product
+  // identifiers, returns, timestamped payment events, notes and every handover.
+  doc.moveTo(M,H-34).lineTo(W-M,H-34).strokeColor(palette.line).lineWidth(.5).stroke();
+  doc.font(F).fontSize(7).fillColor(palette.muted);
+  put(`${report.location.name}  •  ${report.date}  •  ${actor}`,M,H-25,CW-95,{lineBreak:false});
+  put('1/1',W-M-73,H-25,73,{align:'right',lineBreak:false});
+}
+
 
 function buildTotals(employee) {
   const regular=employee.normal;
@@ -730,6 +858,8 @@ export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,req
     try{
       // No schema migrations or database writes are allowed during an audit export.
       const date=String(req.query.date||'');
+      const pdfMode=String(req.query.mode || 'full').toLowerCase();
+      if(!['full','summary'].includes(pdfMode))return res.status(400).json({error:'Ismeretlen PDF-változat.'});
       if(!validDay(date))return res.status(400).json({error:'Érvénytelen napi dátum.'});
       const location=await aifResolveShopLocation(req,pool,req.query.location);
       let employee=scope==='mine'?String(actorFrom(req)||'').trim():String(req.query.employee||'').trim()||null;
@@ -745,14 +875,16 @@ export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,req
         await client.query('ROLLBACK');
       }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
       if(handoverId&&!report.handover)return res.status(404).json({error:'A műszakátadás nem található.'});
-      const name=(employee||'teljes-uzlet').replace(/[^\w\d-]+/g,'_').slice(0,55);
-      const fn=`AllInFashion_napi_audit_${date}_${name}${handoverId?'_muszak':''}.pdf`;
+      const fn=aifAuditExportFilename({date,location,employee:employee || (scope==='mine' ? String(actorFrom(req)||'').trim() : null),handoverId,mode:pdfMode});
+      // RFC 5987: Unicode city names are preserved in modern browser downloads.
+      const asciiFallback=fn.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'_');
       res.setHeader('Content-Type','application/pdf');
-      res.setHeader('Content-Disposition',`attachment; filename="${fn}"`);
+      res.setHeader('Content-Disposition',`attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(fn)}`);
       res.setHeader('Cache-Control','private, no-store, max-age=0');
       const doc=new PDFDocument({autoFirstPage:false,bufferPages:true,compress:true,info:{Title:`AllInFashion napi audit ${date}`,Author:'AllInFashion'}});
       doc.pipe(res);
-      writeShopDailyAuditPdf(doc,report);
+      if(pdfMode==='summary')writeShopDailySummaryPdf(doc,report);
+      else writeShopDailyAuditPdf(doc,report);
       doc.end();
     }catch(e){console.error('AIF daily audit PDF failed',e);if(!res.headersSent)res.status(e.statusCode||500).json({error:e.message||'A PDF nem készíthető el.'});else res.destroy(e);}
   }
