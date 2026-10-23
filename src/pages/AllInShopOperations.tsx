@@ -3149,7 +3149,7 @@ export default function AllInShopOperations({
                   </div>
                   {previousPurchasePayments > 0 ? (
                     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-[#8ce7e2]/22 bg-[#2a8d8b]/15 px-2.5 py-1.5">
-                      <span className="text-[15px] tabular-nums text-[#bff8f5]">+{integer(previousPurchasePayments)}</span>
+                      <span className="text-[15px] tabular-nums text-[#bff8f5]">+{Math.round(previousPurchasePayments).toLocaleString("hu-HU")}</span>
                       <span className="text-[10px] leading-4 text-white/70">Korábbi vásárlás rendezve</span>
                     </div>
                   ) : null}
