@@ -1275,7 +1275,7 @@ function EmployeeDaySalesModal({
             <div className="min-w-0">
               <p className="text-[9px] uppercase tracking-[0.16em] text-white/58">Dolgozó napi eladásai és befizetései</p>
               <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{employee.name}</h3>
-              <p className="mt-1 text-[11px] text-white/62">{formatDate(date)} • kattints egy termékre a bizonylat részleteihez</p>
+              <p className="mt-1 text-[11px] text-white/62">{formatDate(date)}</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white transition hover:bg-white/10"><X size={18} /></button>
@@ -1587,6 +1587,8 @@ export default function AllInShopOperations({
 
   const [pdfChoice, setPdfChoice] = useState<{date:string;handoverId?:string} | null>(null);
   const [summaryDate, setSummaryDate] = useState(todayIso());
+  // The cashier can switch which audited total is prominent; figures never change.
+  const [grossTurnoverPrimary, setGrossTurnoverPrimary] = useState(false);
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRequestIdRef = useRef(0);
@@ -2649,6 +2651,7 @@ export default function AllInShopOperations({
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
     setOutstandingOnly(false);
+    setGrossTurnoverPrimary(false);
     setSalesPanelOpen(false);
     setCustomerQuickId(null);
     setCustomerQuickName("");
@@ -2842,8 +2845,22 @@ export default function AllInShopOperations({
     ? datedSummaryData.productLines
     : (datedSummaryData?.products || []);
 
-  const visibleDailyProductLines = dailyProductLines.filter((item) =>
-    outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item)
+  // Oldest first, as on the paper audit. Reorder only the displayed rows;
+  // payment classification, the underlying report and sale references stay unchanged.
+  const visibleDailyProductLines = dailyProductLines
+    .filter((item) => outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item))
+    .slice()
+    .sort((a, b) => {
+      const aTime = a.soldAt ? new Date(a.soldAt).getTime() : Number.POSITIVE_INFINITY;
+      const bTime = b.soldAt ? new Date(b.soldAt).getTime() : Number.POSITIVE_INFINITY;
+      return (Number.isFinite(aTime) ? aTime : Number.POSITIVE_INFINITY) -
+        (Number.isFinite(bTime) ? bTime : Number.POSITIVE_INFINITY);
+    });
+  // Count actual customer-payment events, not their product lines. For example,
+  // four credit items paid together are ONE previously purchased transaction.
+  const previousPurchasePayments = (datedSummaryData?.payments || []).reduce(
+    (sum, payment) => sum + Math.max(0, numberValue(payment.customerPaymentTransactions)),
+    0,
   );
 
   const dailySales = datedSummaryData?.sales || [];
@@ -3094,18 +3111,23 @@ export default function AllInShopOperations({
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 shadow-[0_10px_26px_rgba(42,141,139,0.20)] xl:col-span-2">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2.15fr)_minmax(0,1fr)_minmax(0,1.48fr)]">
+                <button
+                  type="button"
+                  onClick={() => setGrossTurnoverPrimary((current) => !current)}
+                  aria-pressed={grossTurnoverPrimary}
+                  title="Napi befolyt összeg / Bruttó forgalom"
+                  className="w-full rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 text-left text-white shadow-[0_10px_26px_rgba(42,141,139,0.20)] transition hover:bg-[#309b97] hover:border-[#b9f5f2]/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b9f5f2] active:scale-[0.995]"
+                >
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                     <div className="min-w-0">
-                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">Napi befolyt összeg</p>
-                      <p className="mt-2 text-4xl tracking-tight">{formatMoney(dayCollectedTotal)}</p>
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">{grossTurnoverPrimary ? "Bruttó forgalom" : "Napi befolyt összeg"}</p>
+                      <p className="mt-2 whitespace-nowrap text-[clamp(1.4rem,2.55vw,2.25rem)] tracking-tight">{formatMoney(grossTurnoverPrimary ? dayGrossTurnover : dayCollectedTotal)}</p>
                     </div>
-                    <div className="sm:min-w-[170px] sm:text-right">
-                      <span className="inline-flex rounded-full border border-white/20 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-white/68">Tényleges pénzmozgás</span>
+                    <div className="sm:min-w-[150px] sm:text-right">
                       <div className="mt-2">
-                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">Bruttó forgalom</p>
-                        <p className="mt-1 text-xl tracking-tight text-white">{formatMoney(dayGrossTurnover)}</p>
+                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">{grossTurnoverPrimary ? "Napi befolyt összeg" : "Bruttó forgalom"}</p>
+                        <p className="mt-1 whitespace-nowrap text-xl tracking-tight text-white">{formatMoney(grossTurnoverPrimary ? dayCollectedTotal : dayGrossTurnover)}</p>
                       </div>
                     </div>
                   </div>
@@ -3114,9 +3136,24 @@ export default function AllInShopOperations({
                     <span className="text-[12px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
                     <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
+                </button>
+                <div className="flex min-w-0 flex-col justify-between rounded-2xl border border-white/12 bg-[#374357] px-3.5 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-[0.1em] text-white/50">Eladások</p>
+                    <p className="text-2xl tabular-nums text-white">{daySummary.transactions}</p>
+                  </div>
+                  <div className="my-1.5 border-t border-white/10" />
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-[0.1em] text-white/50">Eladott darab</p>
+                    <p className="whitespace-nowrap text-2xl tabular-nums text-white">{daySummary.itemsSold}<span className="ml-1 text-[11px] text-white/50">db</span></p>
+                  </div>
+                  {previousPurchasePayments > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-[#8ce7e2]/22 bg-[#2a8d8b]/15 px-2.5 py-1.5">
+                      <span className="text-[15px] tabular-nums text-[#bff8f5]">+{integer(previousPurchasePayments)}</span>
+                      <span className="text-[10px] leading-4 text-white/70">Korábbi vásárlás rendezve</span>
+                    </div>
+                  ) : null}
                 </div>
-                <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladások</p><p className="mt-2 text-3xl">{daySummary.transactions}</p></div>
-                <div className="rounded-2xl border border-white/12 bg-[#374357] p-4"><p className="text-[10px] uppercase tracking-[0.12em] text-white/45">Eladott darab</p><p className="mt-2 text-3xl">{daySummary.itemsSold}</p></div>
                 <button
                   type="button"
                   onClick={() => setOutstandingOnly((current) => !current)}
@@ -3136,9 +3173,6 @@ export default function AllInShopOperations({
                     {historyAvailable && !summaryIsToday ? (
                       <p className="mt-1 text-[10px] text-white/75">Ebből most nyitott: {formatMoney(datedSummaryData?.summary.currentUnpaidTotal)}</p>
                     ) : null}
-                  <p className="mt-1.5 text-[10px] text-white/76">
-                    {outstandingOnly ? "Hiteles tételek • kattints vissza" : "Kattints a hiteles tételekhez"}
-                  </p>
                 </button>
               </div>
 
@@ -3604,7 +3638,6 @@ export default function AllInShopOperations({
                                   <p className="mt-1 text-sm text-white">{formatMoney(shiftPayment(employee, "card").amount)}</p>
                                 </div>
                               </div>
-                              <p className="mt-2 text-right text-[9px] text-[#bdf8f5]/56">Kattints a termékekhez →</p>
                             </button>
                           );
                         })}
@@ -3769,10 +3802,10 @@ export default function AllInShopOperations({
 
                           <div
                             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-black/[0.06] text-[12px] tabular-nums text-white/52"
-                            title={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
-                            aria-label={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
+                            title={`Sor ${itemIndex + 1} / ${visibleDailyProductLines.length}`}
+                            aria-label={`Sor ${itemIndex + 1} / ${visibleDailyProductLines.length}`}
                           >
-                            {visibleDailyProductLines.length - itemIndex}
+                            {itemIndex + 1}
                           </div>
 
                           <ProductImage src={item.imageUrl} title={item.title} compact />
