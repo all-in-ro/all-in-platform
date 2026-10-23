@@ -26,6 +26,7 @@ import {
   MessageSquareText,
   MapPin,
   PackageSearch,
+  Percent,
   Phone,
   Plus,
   Receipt,
@@ -111,10 +112,12 @@ const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string
 
 const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
+// AIF_SELLER_DAILY_DISCOUNT_TILE_20261023
+// Presentation tiles only. Bank transfers remain booked in payment totals.
 const PAYMENT_META = [
   { method: "cash", label: "Készpénz", icon: Banknote },
   { method: "card", label: "Bankkártya", icon: CreditCard },
-  { method: "bank_transfer", label: "Átutalás", icon: Landmark },
+  { method: "discount", label: "Kedvezmény", icon: Percent },
   { method: "credit", label: "Utólag fizet", icon: WalletCards },
 ] as const;
 
@@ -3142,6 +3145,18 @@ export default function AllInShopOperations({
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {PAYMENT_META.map((item) => {
                   const Icon = item.icon;
+                  if (item.method === "discount") {
+                    const discountRate = dayGrossTurnover > 0.005 ? dayCollectedDiscount / dayGrossTurnover * 100 : 0;
+                    return (
+                      <div key={item.method} className="rounded-2xl border border-amber-200/22 bg-[#4a4250] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="flex items-center gap-2 text-xs text-amber-100/85"><Icon size={16} className="text-amber-200" />Kedvezmény</span>
+                          <span className="text-[10px] text-amber-100/58">{discountRate.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</span>
+                        </div>
+                        <p className="mt-2 text-xl text-amber-50">{formatMoney(dayCollectedDiscount)}</p>
+                      </div>
+                    );
+                  }
                   const payment = paymentMap.get(item.method) || {
                     amount: 0,
                     transactions: 0,
@@ -3501,6 +3516,14 @@ export default function AllInShopOperations({
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                         {PAYMENT_META.map((metaItem) => {
                           const Icon = metaItem.icon;
+                          if (metaItem.method === "discount") {
+                            return (
+                              <div key={metaItem.method} className="rounded-2xl border border-amber-200/20 bg-amber-400/10 p-3">
+                                <div className="flex items-center gap-2 text-[11px] text-amber-100/72"><Icon size={15} />Kedvezmény</div>
+                                <p className="mt-2 text-lg text-amber-50">{formatMoney(dayCollectedDiscount)}</p>
+                              </div>
+                            );
+                          }
                           const payment = shiftPayment(datedShiftData?.totals, metaItem.method);
                           return (
                             <div key={metaItem.method} className="rounded-2xl border border-white/10 bg-[#303c4f] p-3">
@@ -5047,6 +5070,12 @@ export default function AllInShopOperations({
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       {PAYMENT_META.map((item) => {
                         const Icon = item.icon;
+                        if (item.method === "discount") return (
+                          <div key={item.method} className="rounded-xl border border-amber-200/16 bg-amber-400/8 p-3">
+                            <p className="flex items-center gap-2 text-[10px] text-amber-100/70"><Icon size={14} />Kedvezmény</p>
+                            <p className="mt-1 text-sm text-amber-50">{formatMoney(handoverShiftPreview?.discountTotal || 0)}</p>
+                          </div>
+                        );
                         const payment = shiftPayment(handoverShiftPreview, item.method);
                         return <div key={item.method} className="rounded-xl border border-white/10 bg-[#303c4f] p-3"><p className="flex items-center gap-2 text-[10px] text-white/46"><Icon size={14} className="text-[#8ee6e2]" />{item.label}</p><p className="mt-1 text-sm">{formatMoney(payment.amount)}</p></div>;
                       })}
