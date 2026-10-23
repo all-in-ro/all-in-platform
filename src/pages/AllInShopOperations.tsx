@@ -2845,17 +2845,11 @@ export default function AllInShopOperations({
     ? datedSummaryData.productLines
     : (datedSummaryData?.products || []);
 
-  // Oldest first, as on the paper audit. Reorder only the displayed rows;
-  // payment classification, the underlying report and sale references stay unchanged.
-  const visibleDailyProductLines = dailyProductLines
-    .filter((item) => outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item))
-    .slice()
-    .sort((a, b) => {
-      const aTime = a.soldAt ? new Date(a.soldAt).getTime() : Number.POSITIVE_INFINITY;
-      const bTime = b.soldAt ? new Date(b.soldAt).getTime() : Number.POSITIVE_INFINITY;
-      return (Number.isFinite(aTime) ? aTime : Number.POSITIVE_INFINITY) -
-        (Number.isFinite(bTime) ? bTime : Number.POSITIVE_INFINITY);
-    });
+  // A képernyőn az eredeti (legfrissebb elöl) sorrendet megtartjuk.
+  // Csak a nyomtatott napi audit PDF-ben nőnek a sorszámok 1-től.
+  const visibleDailyProductLines = dailyProductLines.filter((item) =>
+    outstandingOnly ? isDailyCreditRecord(item) : !isDailyCreditRecord(item)
+  );
   // Count actual customer-payment events, not their product lines. For example,
   // four credit items paid together are ONE previously purchased transaction.
   const previousPurchasePayments = (datedSummaryData?.payments || []).reduce(
@@ -3802,10 +3796,10 @@ export default function AllInShopOperations({
 
                           <div
                             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-black/[0.06] text-[12px] tabular-nums text-white/52"
-                            title={`Sor ${itemIndex + 1} / ${visibleDailyProductLines.length}`}
-                            aria-label={`Sor ${itemIndex + 1} / ${visibleDailyProductLines.length}`}
+                            title={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
+                            aria-label={`Sor ${visibleDailyProductLines.length - itemIndex} / ${visibleDailyProductLines.length}`}
                           >
-                            {itemIndex + 1}
+                            {visibleDailyProductLines.length - itemIndex}
                           </div>
 
                           <ProductImage src={item.imageUrl} title={item.title} compact />
