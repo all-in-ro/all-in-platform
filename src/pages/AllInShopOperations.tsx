@@ -1466,6 +1466,83 @@ function ShopFinancialNotesModal({
   );
 }
 
+
+/** AllIn-themed PDF export selector. No navigation before a real button click. */
+function AifAuditPdfChoiceDialog({
+  date, subject, onClose, onChoose,
+}: {
+  date: string;
+  subject: string;
+  onClose: () => void;
+  onChoose: (mode: "summary" | "full") => void;
+}) {
+  const summaryRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const priorOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    summaryRef.current?.focus();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      window.removeEventListener("keydown", escape, true);
+      document.body.style.overflow = priorOverflow;
+      previousFocus?.focus();
+    };
+  }, [onClose]);
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[1400] flex items-center justify-center bg-[#071421]/82 px-4 py-6 backdrop-blur-[8px]"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <section role="dialog" aria-modal="true" aria-label="Napi audit PDF típusa" className="w-full max-w-[550px] overflow-hidden rounded-[26px] border border-[#8ce7e2]/45 bg-[#303a4c] text-white shadow-[0_35px_115px_rgba(0,0,0,0.65)]">
+        <header className="flex items-center gap-3 border-b border-white/12 bg-gradient-to-r from-[#224e59] via-[#27656b] to-[#2a8d8b] px-5 py-4">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-black/10">
+            <img src={AIF_PDF_ICON} alt="" className="h-7 w-7 object-contain" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] uppercase tracking-[0.15em] text-[#d7fffd]/70">AllInFashion • Napi audit</p>
+            <h2 className="mt-0.5 text-lg font-medium leading-tight">Melyik PDF-et kéred?</h2>
+            <p className="mt-1 truncate text-[11px] text-white/65" title={`${date} • ${subject}`}>{date} • {subject}</p>
+          </div>
+          <button type="button" aria-label="PDF-választó bezárása" onClick={onClose} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/24 bg-black/10 hover:bg-black/20"><X size={17} /></button>
+        </header>
+        <div className="grid gap-3 p-5 sm:grid-cols-2">
+          <button
+            ref={summaryRef}
+            type="button"
+            onClick={() => onChoose("summary")}
+            className="group rounded-[19px] border border-[#aaf0ec]/42 bg-[#244f57] p-4 text-left outline-none transition hover:border-[#bafff9] hover:bg-[#2a7377] focus-visible:ring-2 focus-visible:ring-[#aaf0ec]"
+          >
+            <div className="flex items-center justify-between gap-3"><span className="text-[15px] font-medium text-white">Összefoglaló</span><span className="rounded-lg border border-[#bafff9]/35 bg-black/10 px-2 py-1 text-[10px] text-[#d7fffd]">1 oldal</span></div>
+            <p className="mt-2 text-xs leading-5 text-white/70">Befolyt összeg, bruttó, kedvezmény, fizetési módok, kassza és átadás.</p>
+            <span className="mt-4 inline-flex items-center gap-2 text-xs text-[#cffffd]">PDF megnyitása <ChevronRight size={14} /></span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onChoose("full")}
+            className="group rounded-[19px] border border-white/20 bg-[#354459] p-4 text-left outline-none transition hover:border-[#aaf0ec]/70 hover:bg-[#43566a] focus-visible:ring-2 focus-visible:ring-[#aaf0ec]"
+          >
+            <div className="flex items-center justify-between gap-3"><span className="text-[15px] font-medium text-white">Teljes audit</span><span className="rounded-lg border border-white/20 bg-white/[0.045] px-2 py-1 text-[10px] text-white/70">Részletes</span></div>
+            <p className="mt-2 text-xs leading-5 text-white/70">Minden termék, hitel, befizetés, pénzátadás, időpont és megjegyzés.</p>
+            <span className="mt-4 inline-flex items-center gap-2 text-xs text-[#cffffd]">PDF megnyitása <ChevronRight size={14} /></span>
+          </button>
+        </div>
+        <footer className="flex justify-end border-t border-white/10 bg-[#293548] px-5 py-3">
+          <button type="button" onClick={onClose} className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/18 bg-white/[0.05] px-4 text-xs text-white/75 hover:bg-white/10">Mégse</button>
+        </footer>
+      </section>
+    </div>, document.body,
+  );
+}
+
 export default function AllInShopOperations({
   open,
   mode,
@@ -1505,6 +1582,7 @@ export default function AllInShopOperations({
   const browsingOtherLocation = browsingInventory && String(browseLocationCode) !== String(locationCode);
   const displayLocationName = browsingInventory ? browseLocationName : locationName;
 
+  const [pdfChoice, setPdfChoice] = useState<{date:string;handoverId?:string} | null>(null);
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -2582,6 +2660,7 @@ export default function AllInShopOperations({
     setEmployeeSalesData(null);
     setEmployeeSalesError("");
     setEmployeeSalesLoading(false);
+    setPdfChoice(null);
     setSaleLineNoteThreads({});
     setSaleLineNoteTarget(null);
     setSaleLineNoteDraft("");
@@ -2646,6 +2725,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (pdfChoice) {
+          setPdfChoice(null);
+          return;
+        }
         if (dailyNotesOpen) {
           if (!dailyNotesSaving) setDailyNotesOpen(false);
           return;
@@ -2699,7 +2782,19 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, pdfChoice, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+
+  function openSellerPdfChoice(handoverId?: string) {
+    setPdfChoice({date:summaryDate,...(handoverId?{handoverId}:{})});
+  }
+  function chooseSellerPdfMode(pdfMode: "summary" | "full") {
+    if (!pdfChoice) return;
+    window.open(apiAifShopDailyAuditPdfUrl({
+      location:locationCode,date:pdfChoice.date,scope:"mine",
+      ...(pdfChoice.handoverId?{handoverId:pdfChoice.handoverId}:{}),mode:pdfMode,
+    }),"_blank","noopener,noreferrer");
+    setPdfChoice(null);
+  }
 
   if (!open || typeof document === "undefined") return null;
 
@@ -2968,7 +3063,7 @@ export default function AllInShopOperations({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => window.open(apiAifShopDailyAuditPdfUrl({ location: locationCode, date: summaryDate, scope: "mine" }), "_blank", "noopener,noreferrer")}
+                    onClick={() => openSellerPdfChoice()}
                     title="Saját napi audit: termékek, árak, kedvezmények, hitel, kassza, megjegyzések"
                     aria-label="Saját napi audit PDF export"
                     className="inline-flex h-12 items-center gap-2 rounded-xl border border-[#B5EDE9]/52 bg-[#2a8d8b] px-3 text-sm text-white shadow-[0_8px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98]"
@@ -3517,7 +3612,7 @@ export default function AllInShopOperations({
                                   {employeeKey(item.fromActor) === employeeKey(actor) ? (
                                     <button
                                       type="button"
-                                      onClick={() => window.open(apiAifShopDailyAuditPdfUrl({ location: locationCode, date: summaryDate, scope: "mine", handoverId: item.id }), "_blank", "noopener,noreferrer")}
+                                      onClick={() => openSellerPdfChoice(item.id)}
                                       title="Csak az átadott saját műszak auditja PDF-ben"
                                       aria-label="Műszak PDF export"
                                       className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/50 bg-[#2a8d8b] px-2.5 text-xs text-white hover:bg-[#319c99]"
@@ -5019,7 +5114,7 @@ export default function AllInShopOperations({
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-5 py-4">
                 <p className="text-xs text-white/42">{handoverTarget ? `${actor} → ${handoverTarget}` : "Válassz átvevő kollégát"}</p>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:summaryDate,scope:"mine"}),"_blank","noopener,noreferrer")} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]/25 px-3 text-sm text-white hover:bg-[#2a8d8b]/45"><img src={AIF_PDF_ICON} alt="" className="h-6 w-6 object-contain" /> Saját PDF</button>
+                  <button type="button" onClick={() => openSellerPdfChoice()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b]/25 px-3 text-sm text-white hover:bg-[#2a8d8b]/45"><img src={AIF_PDF_ICON} alt="" className="h-6 w-6 object-contain" /> Saját PDF</button>
                   <button type="button" disabled={handoverSaving} onClick={() => setHandoverOpen(false)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09] disabled:opacity-45"><X size={16} /> Mégse</button>
                   <button type="button" disabled={handoverSaving || !handoverTarget} onClick={() => void createShiftHandover()} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45">
                     {handoverSaving ? <Loader2 className="animate-spin" size={17} /> : <ArrowRightLeft size={17} />}
@@ -5032,6 +5127,12 @@ export default function AllInShopOperations({
           document.body,
         ) : null}
 
+        {pdfChoice ? <AifAuditPdfChoiceDialog
+          date={pdfChoice.date}
+          subject={pdfChoice.handoverId ? `${actor} • műszak` : actor}
+          onClose={() => setPdfChoice(null)}
+          onChoose={chooseSellerPdfMode}
+        /> : null}
       </section>
     </div>,
     document.body,
