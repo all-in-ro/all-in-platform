@@ -57,22 +57,33 @@ export function aifDailyAuditCashEvents(m, date) {
   const cancelledDay = dateInZone(m.cancelled_at);
   const manager = String(m.movement_type) === 'manager_handover';
   const from = String(m.requested_by || '–').trim();
-  const to = String(m.confirmed_by || (manager ? 'Főnök' : 'Bank')).trim();
+  // Only print the actual recipient when the database records one. Never
+  // invent a boss name for an as-yet unconfirmed cash handover.
+  const to = String(m.confirmed_by || '').trim();
+  const raw = m.raw && typeof m.raw === 'object' ? m.raw : {};
   const periodIso = v => {
     if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0,10);
     return /^\d{4}-\d{2}-\d{2}/.test(String(v || '')) ? String(v).slice(0,10) : '';
   };
-  const periodFrom = periodIso(m.handover_from_date);
-  const periodTo = periodIso(m.handover_to_date);
+  const periodFrom = periodIso(m.handover_from_date) || periodIso(raw.handoverFromDate || raw.handover_from_date);
+  const periodTo = periodIso(m.handover_to_date) || periodIso(raw.handoverToDate || raw.handover_to_date);
+  const inferredLegacy = Boolean(raw.handoverPeriodInferredLegacy);
+  const dayCount = Number(m.covered_day_count ?? raw.coveredDayCount ?? raw.covered_day_count) || null;
   const period = manager && periodFrom && periodTo
-    ? `Időszak: ${periodFrom === periodTo ? periodFrom : periodFrom + ' – ' + periodTo}`
+    ? `Időszak: ${periodFrom === periodTo ? periodFrom : periodFrom + ' – ' + periodTo}${inferredLegacy ? ' (régi adatból visszaszámítva)' : ''}`
     : '';
   const ref = String(m.reference || '').trim();
   const appendix = [period, ref ? `Hivatkozás: ${ref}` : ''].filter(Boolean).join(' • ');
-  const persons = [from, `→ ${to}`, appendix].filter(Boolean).join(' ');
-  const base = {cashType:String(m.movement_type || ''),amount:moneyNumber(m.amount),
-    requestedBy:from, confirmedBy:to, movementId:String(m.id || ''),
-    cashNote:String(m.note || '').trim()};
+  const persons = [from, to ? `→ ${to}` : '', appendix].filter(Boolean).join(' ');
+  const base = {
+    cashType:String(m.movement_type || ''), amount:moneyNumber(m.amount),
+    requestedBy:from, requestedAt:m.requested_at || null,
+    confirmedBy:to, confirmedAt:m.confirmed_at || m.effective_at || null,
+    periodFrom, periodTo, periodInferred:inferredLegacy,
+    coveredDayCount:dayCount, movementId:String(m.id || ''),
+    cashNote:String(m.note || '').trim(),
+    reference:ref,
+  };
   const list=[];
   if (date === requestedDay) {
     let status = manager ? 'Zárolva · átvételre vár' : 'Bankbefizetés rögzítve';
@@ -333,22 +344,71 @@ export function writeShopDailyAuditPdf(doc, report) {
       [63,477,132,109],
       {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${s.payments.length} fizetés`],[3,fmt(total(s.payments,r=>r.amount))]]},
       '');
-    const shifts=s.moves;
+    // Ordinary shifts and stock returns stay separate from the money physically
+    // handed over to the boss. Never add the same manager handover as a sale,
+    // shift transfer or a second cash deduction on the acceptance date.
+    const managerEvents=s.moves.filter(x=>x.cashType==='manager_handover' && x.cashPhase);
+    const shifts=s.moves.filter(x=>!(x.cashType==='manager_handover' && x.cashPhase));
     const balanceEvent=shifts.filter(x=>x.type==='Napzárás'||x.type==='Műszakátadás').at(-1);
-    const newTransfers=shifts.filter(x=>x.cashPhase==='request'&&x.cashType==='manager_handover'&& !['cancelled','rejected'].includes(x.cashStatus));
     const bankDeposits=shifts.filter(x=>x.cashPhase==='request'&&x.cashType==='bank_deposit'&&x.cashStatus==='confirmed');
-    const acceptedPriorTransfers=shifts.filter(x=>x.cashPhase==='confirmation'&&x.cashType==='manager_handover');
-    const cashMoveNotes=[
-      newTransfers.length?`Készpénz átadásra zárolva / átadva: ${fmt(total(newTransfers,x=>x.amount))} RON`:null,
-      bankDeposits.length?`Bankbefizetés: ${fmt(total(bankDeposits,x=>x.amount))} RON`:null,
-      acceptedPriorTransfers.length?`Korábbi pénzátadás átvétele: ${fmt(total(acceptedPriorTransfers,x=>x.amount))} RON (nem új levonás)`:null,
-    ].filter(Boolean).join('  •  ');
-    sectionTable('Műszakátadások / pénzmozgások',
+    sectionTable('Műszak- és kasszaesemények',
       ['Idő','Művelet','Kinek / kitől','Állapot','Összeg / kassza'],
       shifts.map(r=>[bucharest(r.at,'time'),r.type,r.people||'',r.status||'',fmt(r.amount)]),
       [63,203,232,142,141],
       {numeric:[4],cells:[[1,'ÖSSZESEN'],[2,`${shifts.length} esemény`], ...(balanceEvent?[[4,`Záró: ${fmt(balanceEvent.amount)}`]]:[])]},
-      cashMoveNotes);
+      bankDeposits.length?`Bankbefizetés: ${fmt(total(bankDeposits,x=>x.amount))} RON`:'' );
+
+    if (managerEvents.length) {
+      const periodText = r => {
+        if (!r.periodFrom || !r.periodTo) return 'Nincs rögzített időszak';
+        const from=r.periodFrom.replace(/-/g,'. ');
+        const to=r.periodTo.replace(/-/g,'. ');
+        const range=from===to?from:`${from} – ${to}`;
+        const count=Number(r.coveredDayCount)>0 ? ` (${Math.round(Number(r.coveredDayCount))} nap)` : '';
+        return range+count+(r.periodInferred?'\nRégi adatból rekonstruált':'');
+      };
+      const statusText = r => {
+        // At the request date, preserve what the seller knew at day end.
+        // A later acceptance may still be shown with its REAL timestamp,
+        // explicitly marked as occurring later (not as a same-day transfer).
+        const later = r.confirmedAt && dateInZone(r.confirmedAt)!==report.date;
+        const lines=[String(r.status||'').trim()];
+        if (r.confirmedAt) lines.push(
+          `${later?'Később átvéve':'Átvétel'}: ${bucharest(r.confirmedAt)} • ${r.confirmedBy||'átvevő neve nincs rögzítve'}`
+        );
+        else if (r.cashStatus==='pending') lines.push('Átvétel még nem igazolt');
+        if (r.cashPhase==='confirmation') lines.push('Visszaigazolás, nem új pénzlevonás');
+        return lines.filter(Boolean).join('\n');
+      };
+      const cashTransferRows=managerEvents.map(r=>[
+        `${bucharest(r.at)}\n${r.cashPhase==='request'?'Átadás rögzítve':r.cashPhase==='confirmation'?'Átvétel igazolva':'Átadás státuszváltozása'}`,
+        periodText(r),
+        `${r.requestedBy||'–'}\n→ ${r.confirmedBy||(r.cashStatus==='confirmed'?'Nincs név rögzítve':r.cashStatus==='pending'?'Átvételre vár':'Átvétel nem történt')}`,
+        statusText(r),
+        fmt(r.amount),
+      ]);
+      const requested=managerEvents.filter(r=>r.cashPhase==='request' && !['rejected','cancelled'].includes(r.cashStatus));
+      const acceptedToday=requested.filter(r=>r.cashStatus==='confirmed');
+      const pendingToday=requested.filter(r=>r.cashStatus==='pending');
+      const confirmedPreviously=managerEvents.filter(r=>r.cashPhase==='confirmation');
+      const footerAmount=requested.length
+        ? total(requested,r=>r.amount)
+        : confirmedPreviously.length
+          ? total(confirmedPreviously,r=>r.amount)
+          : 0;
+      const summaryParts = [
+        acceptedToday.length ? `Aznap átvéve: ${fmt(total(acceptedToday,r=>r.amount))} RON` : '',
+        pendingToday.length ? `Átvételre vár (zárolva): ${fmt(total(pendingToday,r=>r.amount))} RON` : '',
+        confirmedPreviously.length ? `Korábbi átadás átvétele: ${fmt(total(confirmedPreviously,r=>r.amount))} RON (nem új levonás)` : '',
+      ].filter(Boolean);
+      const totalLabel=summaryParts.join('  •  ') || 'Nem történt új pénzlevonás';
+      sectionTable('Főnöki készpénzátadás / átvétel · elszámolt időszak',
+        ['Esemény ideje','Ettől – eddig','Átadó / átvevő','Átvétel / státusz','Összeg'],
+        cashTransferRows,
+        [132,163,160,215,111.89],
+        {numeric:[4],cells:[[0,'ÖSSZESEN'],[1,`${managerEvents.length} esemény`],[3,requested.length?'Aznap átadott':confirmedPreviously.length?'Korábbi átvétel igazolva':'Státuszváltozás'],[4,fmt(footerAmount)]]},
+        totalLabel);
+    }
     employeeNotes(s.actor,s.notes);
   }
   if(report.scope==='all'){
