@@ -1488,6 +1488,8 @@ export default function AllInAdminMagazinDashboard({
   const [shiftDay, setShiftDay] = useState<AifShopShiftDayOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [dailyPdfDateNoticeOpen, setDailyPdfDateNoticeOpen] = useState(false);
+  const dailyPdfNoticeOkRef = useRef<HTMLButtonElement | null>(null);
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [showHistoricalCreditRows, setShowHistoricalCreditRows] = useState(false);
@@ -1505,6 +1507,29 @@ export default function AllInAdminMagazinDashboard({
   const [deleteError, setDeleteError] = useState("");
   const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [shiftRepairOpen, setShiftRepairOpen] = useState(false);
+
+  useEffect(() => {
+    if (!dailyPdfDateNoticeOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    dailyPdfNoticeOkRef.current?.focus();
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDailyPdfDateNoticeOpen(false);
+    };
+
+    window.addEventListener("keydown", onEscape, true);
+    return () => {
+      window.removeEventListener("keydown", onEscape, true);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [dailyPdfDateNoticeOpen]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2046,7 +2071,7 @@ export default function AllInAdminMagazinDashboard({
             <div className="flex flex-wrap items-center gap-1.5">
               <button type="button"
                 onClick={() => {
-                  if (applied.from !== applied.to) { window.alert("Napi PDF-hez válassz egyetlen dátumot."); return; }
+                  if (applied.from !== applied.to) { setDailyPdfDateNoticeOpen(true); return; }
                   window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all"}),"_blank","noopener,noreferrer");
                 }}
                 title="Teljes üzleti napi audit: minden eladó, külön bontásban"
@@ -2055,7 +2080,7 @@ export default function AllInAdminMagazinDashboard({
               </button>
               {applied.employee ? (
                 <button type="button" onClick={() => {
-                  if (applied.from !== applied.to) { window.alert("Napi PDF-hez válassz egyetlen dátumot."); return; }
+                  if (applied.from !== applied.to) { setDailyPdfDateNoticeOpen(true); return; }
                   window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all",employee:applied.employee}),"_blank","noopener,noreferrer");
                 }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white hover:bg-[#46556B]" title={`${applied.employee} napi auditja`}>
                   <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Eladó PDF
@@ -2380,7 +2405,7 @@ export default function AllInAdminMagazinDashboard({
                   {(data?.employees || []).map((item) => (
                     <tr key={item.actor} className="border-t border-white/8 hover:bg-white/[0.035]">
                       <td className="px-3 py-3"><span className="flex items-center gap-2"><UserRound size={14} className="text-[#8ee6e2]" />{item.actor}<button type="button" title={`${item.actor} napi auditja PDF-ben`} aria-label={`${item.actor} PDF export`} onClick={() => {
-                        if(applied.from!==applied.to){window.alert("Napi PDF-hez válassz egyetlen dátumot.");return;}
+                        if(applied.from!==applied.to){setDailyPdfDateNoticeOpen(true);return;}
                         window.open(apiAifShopDailyAuditPdfUrl({location:locationCode,date:applied.to,scope:"all",employee:item.actor}),"_blank","noopener,noreferrer");
                       }} className="ml-2 inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-2 text-white hover:bg-[#2a8d8b]/40"><img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /><span className="text-[10px]">PDF</span></button></span></td>
                       <td className="px-3 py-3 text-right">{money(item.revenue)}</td>
@@ -2966,6 +2991,70 @@ export default function AllInAdminMagazinDashboard({
         onClose={() => setShiftRepairOpen(false)}
         onRepaired={() => load()}
       />
+
+      {dailyPdfDateNoticeOpen ? createPortal(
+        <div
+          className="fixed inset-0 z-[1200] flex items-center justify-center overflow-y-auto bg-[#071421]/80 px-4 py-6 backdrop-blur-[7px]"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setDailyPdfDateNoticeOpen(false);
+          }}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="allin-admin-pdf-date-title"
+            aria-describedby="allin-admin-pdf-date-description"
+            className="w-full max-w-[470px] overflow-hidden rounded-[26px] border border-[#8ce7e2]/40 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.65)]"
+          >
+            <header className="flex items-center gap-3 border-b border-white/12 bg-gradient-to-r from-[#224e59] via-[#27656b] to-[#2a8d8b] px-5 py-4">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
+                <CalendarDays size={21} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Napi audit PDF</p>
+                <h3 id="allin-admin-pdf-date-title" className="mt-1 text-lg font-medium leading-tight text-white">
+                  Válassz egyetlen napot
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDailyPdfDateNoticeOpen(false)}
+                aria-label="Figyelmeztetés bezárása"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/24 bg-black/10 text-white transition hover:bg-black/20"
+              >
+                <X size={17} />
+              </button>
+            </header>
+
+            <div className="space-y-4 px-5 py-5">
+              <p id="allin-admin-pdf-date-description" className="text-[13px] leading-6 text-white/82">
+                A napi PDF csak egy dátumra készíthető. Állítsd az <span className="font-medium text-white">Ettől</span> és
+                <span className="font-medium text-white"> Eddig</span> mezőt ugyanarra a napra.
+              </p>
+              <div className="rounded-2xl border border-white/12 bg-[#273548] p-3">
+                <p className="mb-2 text-[10px] uppercase tracking-[0.12em] text-white/46">Jelenleg kiválasztott időszak</p>
+                <div className="flex flex-wrap items-center gap-2 text-[12px] text-white/86">
+                  <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 tabular-nums">{huDateLabel(applied.from)}</span>
+                  <ChevronRight size={16} className="text-[#8ce7e2]" />
+                  <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 tabular-nums">{huDateLabel(applied.to)}</span>
+                </div>
+              </div>
+            </div>
+
+            <footer className="flex justify-end border-t border-white/10 bg-[#293548] px-5 py-4">
+              <button
+                ref={dailyPdfNoticeOkRef}
+                type="button"
+                onClick={() => setDailyPdfDateNoticeOpen(false)}
+                className="inline-flex h-11 min-w-[124px] items-center justify-center gap-2 rounded-xl border border-[#baf7f3]/45 bg-[#2a8d8b] px-5 text-sm font-medium text-white shadow-[0_8px_20px_rgba(42,141,139,0.25)] outline-none transition hover:bg-[#319c99] focus-visible:ring-2 focus-visible:ring-[#baf7f3]/65 active:scale-[0.98]"
+              >
+                <Check size={17} /> Rendben
+              </button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       {loading ? (
         <div className="fixed inset-0 z-[300] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]">
