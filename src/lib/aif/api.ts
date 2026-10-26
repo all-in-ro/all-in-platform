@@ -24,6 +24,7 @@ export type AifCategory = {
   is_active: boolean;
 };
 
+
 export type AifLocation = {
   id: string;
   code: string;
