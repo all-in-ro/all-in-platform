@@ -3938,6 +3938,9 @@ export type AifShopCashMovement = {
   handoverFromDate?: string | null;
   handoverToDate?: string | null;
   coveredDayCount?: number;
+  /** Null for historical continuous periods, explicit dates for new handovers. */
+  handoverSelectedDates?: string[] | null;
+  handoverSelectionMode?: "selected_days" | "legacy_interval" | string;
   grossSales?: number | null;
   discountTotal?: number | null;
   netSales?: number | null;
@@ -3954,17 +3957,20 @@ export type AifShopCashMovement = {
 export type AifShopCashHandoverDay = {
   date: string;
   amount: number;
-  /** A kiválasztott átadási időszak kumulált rendes eladási ára (listaár × db). */
+  /** Napi, csak készpénzes bruttó érték (az új naplistás nézetben nem halmozott). */
   grossSales?: number;
-  /** A kiválasztott átadási időszak kumulált kedvezménye. */
+  /** Az adott nap készpénzbevételéhez tartozó kedvezmény. */
   discountTotal?: number;
-  /** A kiválasztott átadási időszak kedvezmény utáni eladási értéke. */
+  /** Az adott nap készpénzes nettó bevétele. */
   netSales?: number;
   closed: boolean;
   closingCash?: number | null;
   closedAt?: string | null;
   closedBy?: string | null;
-  status: "available" | "pending" | string;
+  status: "available" | "pending" | "confirmed" | string;
+  /** True only if the server says this individual day may be selected. */
+  selectable?: boolean;
+  dailyCashAmount?: number;
 };
 
 export type AifShopCashHandoverPlan = {
@@ -3974,6 +3980,12 @@ export type AifShopCashHandoverPlan = {
   selectedAfterDate?: string | null;
   earliestActivityDate?: string | null;
   confirmedHandoverDates?: string[];
+  pendingHandoverDates?: string[];
+  earliestSelectableDate?: string | null;
+  lastLegacyConfirmedTo?: string | null;
+  latestPendingTo?: string | null;
+  dailyAmountsNotCumulative?: boolean;
+  mode?: "selected_days" | string;
   nextFrom: string;
   today: string;
   pending?: AifShopCashMovement | null;
@@ -4002,6 +4014,9 @@ export type AifShopCashOverview = {
   location: { id: string; code: string; name: string };
   balance: AifShopCashBalance;
   handoverPlan?: AifShopCashHandoverPlan | null;
+  /** Non-contiguous, read-only plan; only this may drive the new day picker. */
+  handoverSelectionPlan?: AifShopCashHandoverPlan | null;
+  handoverSelectionError?: string | null;
   managerHandoverHistory?: AifShopCashMovement[];
   handoverHistoryMonths?: string[];
   pendingManagerHandovers: AifShopCashMovement[];
@@ -4184,7 +4199,9 @@ export function apiAifCreateShopCashMovement(input: {
   type: AifShopCashMovementType;
   amount?: number;
   handoverAfterDate?: string | null;
-  handoverToDate?: string | null;
+  handoverToDate?: string | null; // Retained only for older clients.
+  /** The chosen calendar dates, and no days between them. */
+  handoverSelectedDates?: string[];
   reference?: string | null;
   note?: string | null;
   idempotencyKey: string;
