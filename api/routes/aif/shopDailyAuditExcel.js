@@ -55,12 +55,21 @@ async function loadDay(client, args) {
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
-      COALESCE(NULLIF(sl.product_code,''),NULLIF(m.model_code,''),NULLIF(v.internal_sku,'')) AS export_product_code,
+      COALESCE(NULLIF(btrim(stock_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),''),NULLIF(btrim(m.model_code),'')) AS export_product_code,
       COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS export_barcode
     FROM aif_shop_sales s
     JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN LATERAL (
+      SELECT sc.supplier_product_code
+      FROM aif_variant_supplier_codes sc
+      WHERE sc.variant_id=v.id
+        AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
+      ORDER BY COALESCE(sc.is_active,true) DESC,
+        sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
+      LIMIT 1
+    ) stock_code ON true
     WHERE s.location_id=$1 AND s.status='completed' AND ${dayFilter('s.sold_at')} ${who('s.actor')}
     ORDER BY s.sold_at, s.sale_number, sl.line_no,sl.id LIMIT 20001`;
   const paymentsQuery = `
@@ -87,7 +96,7 @@ async function loadDay(client, args) {
       sl.quantity AS original_quantity,sl.list_price,sl.line_total,sl.discount_percent,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
-      COALESCE(NULLIF(sl.product_code,''),NULLIF(m.model_code,''),NULLIF(v.internal_sku,'')) AS export_product_code,
+      COALESCE(NULLIF(btrim(stock_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),''),NULLIF(btrim(m.model_code),'')) AS export_product_code,
       COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS export_barcode,
       s.customer_name
     FROM aif_shop_customer_payment_line_allocations la
@@ -96,25 +105,44 @@ async function loadDay(client, args) {
     JOIN aif_shop_sales s ON s.id=la.sale_id
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN LATERAL (
+      SELECT sc.supplier_product_code
+      FROM aif_variant_supplier_codes sc
+      WHERE sc.variant_id=v.id
+        AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
+      ORDER BY COALESCE(sc.is_active,true) DESC,
+        sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
+      LIMIT 1
+    ) stock_code ON true
     WHERE cp.location_id=$1 AND ${dayFilter('cp.paid_at')} ${who('cp.actor')}
     ORDER BY cp.paid_at,la.id LIMIT 20001`;
   const exchangeQuery = `
     SELECT e.id::text AS id,e.exchange_number,e.created_at,e.actor,e.customer_name,
       e.returned_qty,e.return_credit,e.replacement_total,e.difference,
       e.settlement_direction,e.settlement_method,e.settlement_amount,e.note,
-      sl.product_title AS returned_product_title,sl.product_code AS returned_product_code,
+      sl.product_title AS returned_product_title,
+      COALESCE(NULLIF(btrim(return_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),'')) AS returned_product_code,
       sl.barcode AS returned_barcode,sl.brand_name AS returned_brand,sl.color_name AS returned_color,
       sl.size AS returned_size,sl.list_price AS returned_list_price,
       sl.unit_price AS returned_unit_price,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod','')) AS returned_sn,
       (SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'id',el.id,'quantity',el.quantity,'unit_price',el.unit_price,'line_total',el.line_total,
-        'product_title',el.product_title,'product_code',el.product_code,'barcode',el.barcode,
+        'product_title',el.product_title,
+        'product_code',COALESCE(NULLIF(btrim(new_code.supplier_product_code),''),NULLIF(btrim(nv.attributes->>'legacyProductCode'),''),NULLIF(btrim(nv.internal_sku),''),NULLIF(btrim(el.product_code),'')),
+        'barcode',el.barcode,
         'brand_name',el.brand_name,'color_name',el.color_name,'size',el.size,
         'sn_cod',COALESCE(NULLIF(nv.sn_cod,''),NULLIF(el.raw->>'snCod','')))
         ORDER BY el.line_no), '[]'::jsonb)
         FROM aif_shop_exchange_lines el
         LEFT JOIN aif_product_variants nv ON nv.id=el.variant_id
+        LEFT JOIN LATERAL (
+          SELECT sc.supplier_product_code FROM aif_variant_supplier_codes sc
+          WHERE sc.variant_id=nv.id AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
+          ORDER BY COALESCE(sc.is_active,true) DESC,
+            sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
+          LIMIT 1
+        ) new_code ON true
         WHERE el.exchange_id=e.id) AS new_lines,
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('method',es.method,'direction',es.direction,'amount',es.amount)
         ORDER BY es.id),'[]'::jsonb)
@@ -122,6 +150,15 @@ async function loadDay(client, args) {
     FROM aif_shop_exchanges e
     LEFT JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
     LEFT JOIN aif_product_variants v ON v.id=e.source_variant_id
+    LEFT JOIN LATERAL (
+      SELECT sc.supplier_product_code
+      FROM aif_variant_supplier_codes sc
+      WHERE sc.variant_id=v.id
+        AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
+      ORDER BY COALESCE(sc.is_active,true) DESC,
+        sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
+      LIMIT 1
+    ) return_code ON true
     WHERE e.location_id=$1 AND e.status='completed' AND ${dayFilter('e.created_at')} ${who('e.actor')}
     ORDER BY e.created_at,e.id LIMIT 20001`;
 

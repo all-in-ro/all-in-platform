@@ -18,6 +18,19 @@ const number = (value) => {
 };
 const money = (value) => Math.round((number(value) + Number.EPSILON) * 100) / 100;
 const str = (v) => String(v ?? '');
+// A historical technical model key can be stored as "4f:4fwss..." while the
+// warehouse uses the actual supplier product code "4fwss...". The read-only
+// export prioritizes supplier codes; this strictly guarded fallback only strips
+// a technical prefix if it exactly matches the current row's brand name.
+// It never changes a leading zero or a hyphenated supplier code.
+function displayProductCode(value, brand) {
+  const code = str(value).trim();
+  const match = /^([a-z0-9_]+):([^:]+)$/i.exec(code);
+  if (!match) return code;
+  const brandKey = str(brand).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return brandKey && brandKey === match[1].toLowerCase() ? match[2] : code;
+}
 function escapeXml(value) {
   return str(value).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/g, '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -78,7 +91,7 @@ function sheetXml(entries) {
       str(item.dateTime || ''),
       str(item.brand || ''),
       str(item.sn || ''),
-      str(item.productCode || ''),
+      displayProductCode(item.productCode, item.brand),
       str(item.barcode || ''),
       str(item.color || ''),
       str(item.size || ''),
