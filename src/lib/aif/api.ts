@@ -3805,9 +3805,26 @@ export async function apiAifDownloadShopDailyAuditExcel(options: {
   const blob = await response.blob();
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
-  const location = options.location.replace(/[^a-z0-9_-]/gi, "_");
+  // Emberi, Windows-kompatibilis fájlnév, belső üzletkódok nélkül.
+  // A letöltött Excel tartalmát és szerkezetét ez nem módosítja.
+  const locationCode = String(options.location || "").trim().toLowerCase();
+  const locationName = locationCode === "main_warehouse"
+    ? "Csíkszereda"
+    : locationCode === "magazin_targu_secuiesc"
+      ? "Kézdivásárhely"
+      : "Üzlet";
+  const dateLabel = /^\d{4}-\d{2}-\d{2}$/.test(options.date)
+    ? options.date.replace(/-/g, ".")
+    : "Dátum nélkül";
+  const employeeLabel = String(options.employee || "").trim()
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const filenameParts = ["Auditnapló", locationName];
+  if (employeeLabel) filenameParts.push(employeeLabel);
+  filenameParts.push(dateLabel);
   link.href = url;
-  link.download = `AllInFashion_Auditnaplo_${location}_${options.date}${options.scope === "mine" || options.employee ? "_elado" : ""}.xlsx`;
+  link.download = `${filenameParts.join(" - ")}.xlsx`;
   link.style.display = "none";
   document.body.appendChild(link);
   try { link.click(); }
