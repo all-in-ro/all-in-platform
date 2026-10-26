@@ -3770,6 +3770,53 @@ export function apiAifShopDailyAuditPdfUrl(options: {
   return `${AIF_BASE}/shop-audit/${options.scope}.pdf?${q.toString()}`;
 }
 
+/** Napi Excel export: az eredeti AUDITNAPLO-minta 15 oszlopa + ellenőrző oszlopok. */
+export function apiAifShopDailyAuditExcelUrl(options: {
+  location: string;
+  date: string;
+  scope: "mine" | "all";
+  employee?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("date", options.date);
+  if (options.scope === "all" && options.employee?.trim()) q.set("employee", options.employee.trim());
+  return `${AIF_BASE}/shop-audit/${options.scope}.xlsx?${q.toString()}`;
+}
+
+/** Letöltés ellenőrzött HTTP-válasszal; jogosultsági hibát nem mentünk .xlsx néven. */
+export async function apiAifDownloadShopDailyAuditExcel(options: {
+  location: string;
+  date: string;
+  scope: "mine" | "all";
+  employee?: string;
+}) {
+  const response = await fetch(apiAifShopDailyAuditExcelUrl(options), {
+    credentials: "include",
+    headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(String(data?.error || data?.message || `Az Excel export sikertelen (HTTP ${response.status}).`));
+  }
+  const mime = String(response.headers.get("Content-Type") || "").toLowerCase();
+  if (!mime.includes("spreadsheetml.sheet")) throw new Error("A szerver nem Excel fájlt adott vissza.");
+  const blob = await response.blob();
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  const location = options.location.replace(/[^a-z0-9_-]/gi, "_");
+  link.href = url;
+  link.download = `AllInFashion_Auditnaplo_${location}_${options.date}${options.scope === "mine" || options.employee ? "_elado" : ""}.xlsx`;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  try { link.click(); }
+  finally {
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+}
+
 export function apiAifShopDailySummary(options: {
   location: string;
   date?: string;
