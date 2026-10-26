@@ -25077,16 +25077,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount + item.exchangeAmount);
     }
 
+    // A napi/muszakos BRUTTO elszamolas a korabban hitelre elvitt, de MOST
+    // kifizetett termek listaerteket is tartalmazza. A kedvezmenyt ugyanarra
+    // a befizetesi idoszakra es eladora szamoljuk, mint a tenyleges penzmozgast.
+    // Ez egy kizarolag SELECT-alapu kimutatas: NEM hoz letre uj eladast,
+    // keszletcsokkenest, es NEM irja at a regi hiteles bizonylatot.
+    const salesOnlyBeforeDiscount = aifRoundMoney(
+      aifNumber(row.sales_before_discount) + aifNumber(exchangeRow.sales_before_discount)
+    );
+    const salesOnlyDiscountTotal = aifRoundMoney(row.discount_total);
+    const customerPaymentTotal = aifRoundMoney(Object.values(payments).reduce(
+      (sum, payment) => sum + aifNumber(payment.customerPaymentAmount), 0
+    ));
+    const settledPaymentWhere = `s.location_id=$1
+      AND s.status='completed'
+      AND p.paid_at >= $2::timestamptz
+      AND p.paid_at < $3::timestamptz
+      ${actorPaymentFilter}`;
+    const settledDiscounts = await aifReadSettledGrossDiscounts(client, settledPaymentWhere, args);
+    const grossCollectedTotal = aifRoundMoney(
+      salesOnlyBeforeDiscount + customerPaymentTotal + settledDiscounts.total
+    );
+    const collectedDiscountTotal = aifRoundMoney(salesOnlyDiscountTotal + settledDiscounts.total);
+    const collectedTotal = aifRoundMoney(Object.values(payments)
+      .filter((payment) => payment.method !== 'credit')
+      .reduce((sum, payment) => sum + aifNumber(payment.amount), 0));
+
     return {
       fromAt: fromAt ? new Date(fromAt).toISOString() : null,
       toAt: toAt ? new Date(toAt).toISOString() : null,
       actor: actor || null,
-      revenue,
-      salesBeforeDiscount: aifRoundMoney(aifNumber(row.sales_before_discount) + aifNumber(exchangeRow.sales_before_discount)),
+      revenue, // Csak az adott idoszakban ujonnan eladott termekek forgalma.
+      salesBeforeDiscount: grossCollectedTotal,
+      discountTotal: collectedDiscountTotal,
+      // Az eredeti eladasok kulon maradnak az utolagos tartozasbefizetesektol.
+      salesOnlyBeforeDiscount,
+      salesOnlyDiscountTotal,
+      customerPaymentTotal,
+      settlementDiscountTotal: settledDiscounts.total,
+      grossCollectedTotal,
+      collectedDiscountTotal,
+      collectedTotal,
       transactions,
       itemsSold,
       averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
-      discountTotal: aifRoundMoney(row.discount_total),
       paidTotal: aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)),
       unpaidTotal: aifRoundMoney(row.unpaid_total),
       unpaidSales: aifNumber(row.unpaid_sales),
@@ -33274,16 +33308,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           salesRevenue: revenue,
           collectedTotal,
           customerPaymentTotal,
-          // Keep the original sales-only fields for older consumers. These two
-          // new values also include the gross discount of later credit receipts.
+          // A Napi Osszesites brutto/kedvezmeny mezoje a tenylegesen AZNAP
+          // befolyt regi hiteltartozas eredeti listaraval es kedvezmenyevel
+          // egeszul ki. Az eladas- es darabszam tovabbra is csak az uj eladas.
+          // A regi, eladas-kori szamokat kifejezett salesOnly mezokben tartjuk.
           grossCollectedTotal,
           collectedDiscountTotal,
           settlementDiscountTotal: settledDiscounts.total,
-          salesBeforeDiscount: originalSalesGross,
+          salesOnlyBeforeDiscount: originalSalesGross,
+          salesOnlyDiscountTotal: originalSalesDiscount,
+          salesBeforeDiscount: grossCollectedTotal,
           transactions,
           itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold),
           averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
-          discountTotal: aifNumber(saleSummary.discount_total),
+          discountTotal: collectedDiscountTotal,
           paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)),
           unpaidTotal: historicalUnpaidTotal,
           unpaidSales: historicalUnpaidSales,
