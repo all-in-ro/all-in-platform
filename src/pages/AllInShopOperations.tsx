@@ -2784,6 +2784,7 @@ export default function AllInShopOperations({
         location: locationCode,
         date: summaryDate,
         scope: "mine",
+        employee: actor, // Csak a mentési fájlnévhez; a szerver a belépett eladót azonosítja.
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A napi Excel letöltése sikertelen.");
