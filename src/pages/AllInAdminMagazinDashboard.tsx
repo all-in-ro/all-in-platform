@@ -1520,7 +1520,7 @@ function AifAuditPdfChoiceDialog({
             className="group rounded-[19px] border border-[#aaf0ec]/42 bg-[#244f57] p-4 text-left outline-none transition hover:border-[#bafff9] hover:bg-[#2a7377] focus-visible:ring-2 focus-visible:ring-[#aaf0ec]"
           >
             <div className="flex items-center justify-between gap-3"><span className="text-[15px] font-medium text-white">Összefoglaló</span><span className="rounded-lg border border-[#bafff9]/35 bg-black/10 px-2 py-1 text-[10px] text-[#d7fffd]">1 oldal</span></div>
-            <p className="mt-2 text-xs leading-5 text-white/70">Befolyt összeg, bruttó, kedvezmény, fizetési módok, kassza és átadás.</p>
+            <p className="mt-2 text-xs leading-5 text-white/70">Bruttó, napi bevétel, készpénz, bankkártya, kassza/műszak és megjegyzések.</p>
             <span className="mt-4 inline-flex items-center gap-2 text-xs text-[#cffffd]">PDF megnyitása <ChevronRight size={14} /></span>
           </button>
           <button
@@ -2373,22 +2373,22 @@ export default function AllInAdminMagazinDashboard({
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <MetricCard
-            title="Forgalom"
-            value={money(summary?.revenue)}
-            hint="TVA-val, kedvezmény után • hitel nélkül"
-            icon={CircleDollarSign}
-            current={numberValue(summary?.revenue)}
-            previous={numberValue(previous?.revenue)}
-            tone="success"
-          />
-          <MetricCard
-            title="Bruttó forgalom"
+            title="Bruttó"
             value={money(summary?.salesBeforeDiscount)}
             hint="Napi elszámolási bruttó • korábbi tartozások befizetésével"
             icon={CircleDollarSign}
             current={numberValue(summary?.salesBeforeDiscount)}
             previous={numberValue(previous?.salesBeforeDiscount)}
             tone="accent"
+          />
+          <MetricCard
+            title="Napi bevétel"
+            value={money(summary?.revenue)}
+            hint="TVA-val, kedvezmény után • hitel nélkül"
+            icon={CircleDollarSign}
+            current={numberValue(summary?.revenue)}
+            previous={numberValue(previous?.revenue)}
+            tone="success"
           />
           <SalesVolumeCard
             transactions={numberValue(summary?.transactions)}

@@ -753,7 +753,7 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
 
     <section class="audit-values" aria-label="A készpénzátadás 1-4. pénzügyi mutatói">
       <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Befolyt</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Napi bevétel</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
       <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Készpénz</div><div class="audit-money">${escapePrintHtml(metricText(totalCash))}</div></div>
       <div class="audit-value"><div class="audit-head"><span class="audit-number">4</span> Bankkártya</div><div class="audit-money">${escapePrintHtml(metricText(totalCard))}</div></div>
     </section>

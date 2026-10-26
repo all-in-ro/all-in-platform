@@ -1296,7 +1296,7 @@ function EmployeeDaySalesModal({
               <p className="mt-1 text-[9px] text-amber-100/62">{discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-              <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Befolyt összeg</p>
+              <p className="text-[9px] uppercase tracking-[0.11em] text-white/42">Napi bevétel</p>
               <p className="mt-2 text-xl text-[#d7fffd]">{formatMoney(collected)}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
@@ -1527,7 +1527,7 @@ function AifAuditPdfChoiceDialog({
             className="group rounded-[19px] border border-[#aaf0ec]/42 bg-[#244f57] p-4 text-left outline-none transition hover:border-[#bafff9] hover:bg-[#2a7377] focus-visible:ring-2 focus-visible:ring-[#aaf0ec]"
           >
             <div className="flex items-center justify-between gap-3"><span className="text-[15px] font-medium text-white">Összefoglaló</span><span className="rounded-lg border border-[#bafff9]/35 bg-black/10 px-2 py-1 text-[10px] text-[#d7fffd]">1 oldal</span></div>
-            <p className="mt-2 text-xs leading-5 text-white/70">Befolyt összeg, bruttó, kedvezmény, fizetési módok, kassza és átadás.</p>
+            <p className="mt-2 text-xs leading-5 text-white/70">Bruttó, napi bevétel, készpénz, bankkártya, kassza/műszak és megjegyzések.</p>
             <span className="mt-4 inline-flex items-center gap-2 text-xs text-[#cffffd]">PDF megnyitása <ChevronRight size={14} /></span>
           </button>
           <button
@@ -1591,7 +1591,7 @@ export default function AllInShopOperations({
   const [pdfChoice, setPdfChoice] = useState<{date:string;handoverId?:string} | null>(null);
   const [summaryDate, setSummaryDate] = useState(todayIso());
   // The cashier can switch which audited total is prominent; figures never change.
-  const [grossTurnoverPrimary, setGrossTurnoverPrimary] = useState(false);
+  const [grossTurnoverPrimary, setGrossTurnoverPrimary] = useState(true);
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRequestIdRef = useRef(0);
@@ -3109,17 +3109,17 @@ export default function AllInShopOperations({
                   type="button"
                   onClick={() => setGrossTurnoverPrimary((current) => !current)}
                   aria-pressed={grossTurnoverPrimary}
-                  title="Napi befolyt összeg / Bruttó forgalom"
+                  title="Napi bevétel / Bruttó forgalom"
                   className="w-full rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 text-left text-white shadow-[0_10px_26px_rgba(42,141,139,0.20)] transition hover:bg-[#309b97] hover:border-[#b9f5f2]/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b9f5f2] active:scale-[0.995]"
                 >
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                     <div className="min-w-0">
-                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">{grossTurnoverPrimary ? "Bruttó forgalom" : "Napi befolyt összeg"}</p>
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-white/70">{grossTurnoverPrimary ? "Bruttó" : "Napi bevétel"}</p>
                       <p className="mt-2 whitespace-nowrap text-[clamp(1.4rem,2.55vw,2.25rem)] tracking-tight">{formatMoney(grossTurnoverPrimary ? dayGrossTurnover : dayCollectedTotal)}</p>
                     </div>
                     <div className="sm:min-w-[150px] sm:text-right">
                       <div className="mt-2">
-                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">{grossTurnoverPrimary ? "Napi befolyt összeg" : "Bruttó forgalom"}</p>
+                        <p className="text-[9px] uppercase tracking-[0.1em] text-white/55">{grossTurnoverPrimary ? "Napi bevétel" : "Bruttó"}</p>
                         <p className="mt-1 whitespace-nowrap text-xl tracking-tight text-white">{formatMoney(grossTurnoverPrimary ? dayCollectedTotal : dayGrossTurnover)}</p>
                       </div>
                     </div>
@@ -3533,7 +3533,7 @@ export default function AllInShopOperations({
                           <p className="mt-1 text-sm text-white/55">Minden dolgozó együtt • {formatDate(summaryDate)}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi befolyt összeg</p>
+                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi bevétel</p>
                           <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(datedShiftData?.totals))}</p>
                           <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-white/44">
                             <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
@@ -3577,7 +3577,7 @@ export default function AllInShopOperations({
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5">
-                          <p className="text-[9px] text-white/38">Befolyt összeg</p>
+                          <p className="text-[9px] text-white/38">Napi bevétel</p>
                           <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(shiftCollectedTotal(currentEmployeeDay))}</p>
                           {shiftCustomerPaymentTotal(currentEmployeeDay) > 0.005 ? (
                             <p className="mt-1 text-[8px] text-[#bdf8f5]/60">ebből tartozás {formatMoney(shiftCustomerPaymentTotal(currentEmployeeDay))}</p>
@@ -3616,7 +3616,7 @@ export default function AllInShopOperations({
                                 {active ? <span className="rounded-full border border-[#9be9e5]/32 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white">Te</span> : null}
                               </div>
                               <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(employee))}</p>
-                              <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Befolyt összeg</p>
+                              <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Napi bevétel</p>
                               <p className="mt-1 text-[9px] text-white/36">
                                 Eladás {formatMoney(employee.revenue)}{shiftCustomerPaymentTotal(employee) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(employee))}` : ""}
                               </p>
