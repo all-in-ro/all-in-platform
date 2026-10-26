@@ -8,6 +8,7 @@ import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
 import createAifShopDailyAuditPdfRouter from "./aif/shopDailyAuditPdf.js";
+import createAifShopDailyAuditExcelRouter from "./aif/shopDailyAuditExcel.js";
 import createAifLegacyExportRouter from "./aif/legacyExport.js";
 import { createHash } from "node:crypto";
 import { aifImageGallery, aifImageUrl, aifValidatedGallery, aifGalleryFamilyKey } from "../lib/aifImageGallery.js";
@@ -34385,6 +34386,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     normCode,
     aifNumber,
     insertStockMovementSafe,
+  }));
+
+  // Napi, szerkeszthető Excel audit: pontos terméksorok, befizetések,
+  // cserék. Csak SELECT műveletek; a PDF jogosultsági szabályaival egyezően.
+  router.use("/shop-audit", createAifShopDailyAuditExcelRouter({
+    pool,
+    requireAuthed,
+    requireAdminOrSecret,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
   }));
 
   // Napi és műszak PDF audit: csak SELECT műveletek, saját üzlet / admin jogosultság.
