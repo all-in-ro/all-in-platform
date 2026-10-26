@@ -53,6 +53,7 @@ import {
 import {
   apiAifAdminDeleteShopSaleLine,
   apiAifShopDailyAuditPdfUrl,
+  apiAifDownloadShopDailyAuditExcel,
   apiAifAdminShopOverview,
   apiAifCreateShopSaleLineNote,
   apiAifDeleteShopSaleLineNote,
@@ -84,6 +85,7 @@ type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
 const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
+const AIF_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg";
 
 const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] shadow-[0_16px_36px_rgba(15,23,42,0.20)]";
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
@@ -1566,6 +1568,7 @@ export default function AllInAdminMagazinDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dailyPdfChoice, setDailyPdfChoice] = useState<{date: string; employee: string | null} | null>(null);
+  const [excelDownloadBusy, setExcelDownloadBusy] = useState(false);
   const [dailyPdfDateNoticeOpen, setDailyPdfDateNoticeOpen] = useState(false);
   const dailyPdfNoticeOkRef = useRef<HTMLButtonElement | null>(null);
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
@@ -1624,6 +1627,28 @@ export default function AllInAdminMagazinDashboard({
       ...(dailyPdfChoice.employee ? {employee:dailyPdfChoice.employee} : {}),mode,
     }),"_blank","noopener,noreferrer");
     setDailyPdfChoice(null);
+  }
+
+  async function downloadAdminDailyExcel(employee: string | null = null) {
+    if (applied.from !== applied.to) {
+      setDailyPdfDateNoticeOpen(true);
+      return;
+    }
+    if (excelDownloadBusy) return;
+    setExcelDownloadBusy(true);
+    setError("");
+    try {
+      await apiAifDownloadShopDailyAuditExcel({
+        location: locationCode,
+        date: applied.to,
+        scope: "all",
+        ...(employee ? { employee } : {}),
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A napi Excel letöltése sikertelen.");
+    } finally {
+      setExcelDownloadBusy(false);
+    }
   }
 
   const load = useCallback(async () => {
@@ -2172,11 +2197,27 @@ export default function AllInAdminMagazinDashboard({
                 className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/40 bg-[#2a8d8b] px-2.5 text-xs text-white hover:bg-[#319c99]">
                 <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Teljes napi PDF
               </button>
+              <button type="button"
+                onClick={() => void downloadAdminDailyExcel()}
+                disabled={excelDownloadBusy}
+                title="Teljes üzleti napi audit Excelben, a csatolt 15 oszlopos minta alapján"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white transition hover:bg-[#46556B] disabled:opacity-45">
+                {excelDownloadBusy ? <Loader2 size={15} className="animate-spin" /> : <img src={AIF_EXCEL_ICON} alt="" className="h-5 w-5 rounded object-contain" />}
+                Teljes napi Excel
+              </button>
               {applied.employee ? (
                 <button type="button" onClick={() => {
                   openAdminPdfChoice(applied.employee);
                 }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white hover:bg-[#46556B]" title={`${applied.employee} napi auditja`}>
                   <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Eladó PDF
+                </button>
+              ) : null}
+              {applied.employee ? (
+                <button type="button" disabled={excelDownloadBusy}
+                  onClick={() => void downloadAdminDailyExcel(applied.employee)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/30 bg-[#344154] px-2.5 text-xs text-white transition hover:bg-[#46556B] disabled:opacity-45"
+                  title={`${applied.employee} napi auditja Excelben`}>
+                  <img src={AIF_EXCEL_ICON} alt="" className="h-5 w-5 rounded object-contain" /> Eladó Excel
                 </button>
               ) : null}
               {[
@@ -3110,7 +3151,7 @@ export default function AllInAdminMagazinDashboard({
                 <CalendarDays size={21} />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Napi audit PDF</p>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Napi audit PDF / Excel</p>
                 <h3 id="allin-admin-pdf-date-title" className="mt-1 text-lg font-medium leading-tight text-white">
                   Válassz egyetlen napot
                 </h3>
@@ -3127,7 +3168,7 @@ export default function AllInAdminMagazinDashboard({
 
             <div className="space-y-4 px-5 py-5">
               <p id="allin-admin-pdf-date-description" className="text-[13px] leading-6 text-white/82">
-                A napi PDF csak egy dátumra készíthető. Állítsd az <span className="font-medium text-white">Ettől</span> és
+                A napi PDF és Excel csak egy dátumra készíthető. Állítsd az <span className="font-medium text-white">Ettől</span> és
                 <span className="font-medium text-white"> Eddig</span> mezőt ugyanarra a napra.
               </p>
               <div className="rounded-2xl border border-white/12 bg-[#273548] p-3">

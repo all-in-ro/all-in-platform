@@ -524,10 +524,10 @@ function storeByCode(code: string) {
   return STORES.find((store) => store.code === code) || STORES[0];
 }
 
-function printCashHandoverReceipt(store: StoreDef, item: any) {
+async function printCashHandoverReceipt(store: StoreDef, item: any) {
   const fromDate = String(item?.handoverFromDate || item?.handoverToDate || "").trim();
   const toDate = String(item?.handoverToDate || item?.handoverFromDate || "").trim();
-  const coveredDays = Math.max(1, Math.round(numberValue(item?.coveredDayCount || 1)));
+  const coveredDays = Array.isArray(item?.handoverSelectedDates) ? item.handoverSelectedDates.length : Math.max(1, Math.round(numberValue(item?.coveredDayCount || 1)));
   const requestedBy = String(item?.requestedBy || "–").trim() || "–";
   const confirmedByRaw = String(item?.confirmedBy || "").trim();
   const confirmedBy =
@@ -541,8 +541,24 @@ function printCashHandoverReceipt(store: StoreDef, item: any) {
     status === "rejected" ? "ELUTASÍTVA" :
     status === "cancelled" ? "VISSZAVONVA" :
     String(item?.status || "–").toUpperCase();
-  const periodText = fromDate && toDate
-    ? (fromDate === toDate ? formatDate(fromDate) : `${formatDate(fromDate)} – ${formatDate(toDate)}`)
+  // The old receipts describe a continuous period; selected-day receipts must
+  // show the EXACT days, never the dates between two selections.
+  const exactDates: string[] | null = Array.isArray(item?.handoverSelectedDates)
+    ? Array.from(new Set<string>(item.handoverSelectedDates.map((value: unknown) => normalizeDateOnly(String(value || ""))).filter(Boolean))).sort()
+    : null;
+  const receiptDates: string[] = exactDates !== null ? exactDates : (() => {
+    const dates: string[] = [];
+    if (fromDate && toDate && fromDate <= toDate) {
+      let date = fromDate;
+      for (let i = 0; i < 366 && date <= toDate; i++) {
+        dates.push(date);
+        date = addDays(date, 1);
+      }
+    }
+    return dates;
+  })();
+  const periodText = receiptDates.length
+    ? (receiptDates.length === 1 ? formatDate(receiptDates[0]) : receiptDates.map((d) => d.replace(/-/g, ".")).join(" • "))
     : "Nincs megadva";
   const requestedAtText = item?.requestedAt ? formatDateTime(item.requestedAt) : "–";
   const confirmedAtText = item?.confirmedAt ? formatDateTime(item.confirmedAt) : "–";
@@ -551,12 +567,41 @@ function printCashHandoverReceipt(store: StoreDef, item: any) {
   const note = String(item?.note || "").trim();
   const recordId = String(item?.id || "").trim();
 
+  // Open synchronously from the user's click, before any API request.
   const popup = window.open("", "_blank", "width=1100,height=850");
   if (!popup) {
     window.alert("A böngésző letiltotta a nyomtatási ablakot. Engedélyezd a felugró ablakokat ehhez az oldalhoz.");
     return;
   }
+  popup.document.write("<!doctype html><html><meta charset='utf-8'><body style='font:16px Arial;padding:30px'>A pénztári jegyzőkönyv adatainak betöltése…</body></html>");
+  popup.document.close();
 
+  // The six numbered values are read from EACH selected day's audited totals.
+  // Do not substitute cash-only handover gross for all-sales daily gross.
+  const dayReports: Array<AifShopShiftDayOverview | null> = [];
+  for (let start = 0; start < receiptDates.length; start += 4) {
+    const days = receiptDates.slice(start, start + 4);
+    const batch = await Promise.all(days.map((date) =>
+      apiAifShopShiftDayOverview({ location: store.code, date }).catch(() => null)
+    ));
+    dayReports.push(...batch);
+  }
+  const complete = Boolean(receiptDates.length && receiptDates.length === dayReports.length && dayReports.every(Boolean));
+  const totalOf = (key: "salesBeforeDiscount" | "collectedTotal" | "discountTotal") => complete
+    ? dayReports.reduce((sum, report) => sum + Number((report?.totals as (AifShopShiftDayOverview["totals"] & {collectedTotal?: number}) | undefined)?.[key] ?? 0), 0)
+    : null;
+  const totalGross = totalOf("salesBeforeDiscount");
+  const totalDiscount = totalOf("discountTotal");
+  const totalCollected = totalOf("collectedTotal");
+  const firstOpening = dayReports.length && dayReports[0]?.totals.openingCash != null
+    ? Number(dayReports[0].totals.openingCash) : null;
+  const lastReport = dayReports[dayReports.length - 1] || null;
+  const lastClosing = lastReport?.dayClosure?.countedCash != null
+    ? Number(lastReport.dayClosure.countedCash) : null;
+  const metricText = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : money(value);
+  const multipleDays = receiptDates.length > 1;
+
+  if (popup.closed) return;
   popup.document.open();
   popup.document.write(`<!doctype html>
 <html lang="hu">
@@ -579,7 +624,13 @@ function printCashHandoverReceipt(store: StoreDef, item: any) {
   .box { border: 1px solid #c3cad4; min-height: 17mm; padding: 3mm; border-radius: 2mm; }
   .label { font-size: 8px; text-transform: uppercase; letter-spacing: .10em; color: #778292; margin-bottom: 1.5mm; }
   .value { font-size: 12px; line-height: 1.35; }
-  .amount { margin: 5mm 0; border: 2px solid #354153; padding: 4mm; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+   .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5mm; }
+   .audit-value { min-height: 15mm; border: 1px solid #c3cad4; border-radius: 2mm; padding: 2.3mm 2.6mm; break-inside: avoid; }
+   .audit-head { display: flex; align-items: center; gap: 5px; color: #5e6978; font-size: 8px; text-transform: uppercase; }
+   .audit-number { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #354153; align-items: center; justify-content: center; font-size: 9px; color: #354153; font-weight: 700; }
+   .audit-money { margin-top: 1.5mm; font-size: 15px; font-weight: 700; color: #17202d; white-space: nowrap; }
+   .audit-help { margin: 1mm 0 0; font-size: 8px; color: #6a7786; line-height: 1.4; }
+   .amount { margin: 5mm 0; border: 2px solid #354153; padding: 4mm; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
   .amount .value { font-size: 24px; font-weight: 700; white-space: nowrap; }
   .statement { margin-top: 6mm; border-top: 1px solid #c3cad4; border-bottom: 1px solid #c3cad4; padding: 4mm 0; line-height: 1.65; font-size: 10px; }
   .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 17mm; }
@@ -627,6 +678,17 @@ function printCashHandoverReceipt(store: StoreDef, item: any) {
         <div class="value">${escapePrintHtml(confirmedBy || "________________________")}<br><span style="font-size:10px;color:#697586">${escapePrintHtml(confirmedAtText)}</span></div>
       </div>
     </section>
+
+    <section class="audit-values" aria-label="A készpénzátadás hat pénzügyi mutatója">
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó napi forgalom</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Befolyt napi összeg</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Kedvezmény</div><div class="audit-money">${escapePrintHtml(metricText(totalDiscount))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">4</span> Készpénz átadás</div><div class="audit-money">${escapePrintHtml(amountText)}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">5</span> ${multipleDays ? "Első nap kezdő kasszája" : "Napi kezdő kassza"}</div><div class="audit-money">${escapePrintHtml(metricText(firstOpening))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">6</span> ${multipleDays ? "Utolsó nap záró kasszája" : "Új eladó kezdő kassza / zárás"}</div><div class="audit-money">${escapePrintHtml(metricText(lastClosing))}</div></div>
+    </section>
+    ${multipleDays ? `<p class="audit-help">Több napos átadás: az 1–3. érték a kijelölt napok összege, az 5–6. érték az első/utolsó nap kasszaállapota; ezeket nem szabad összeadni.</p>` : ""}
+    ${!complete ? `<p class="audit-help">A napi forgalmi adatok egy része nem érhető el. A hiányzó mezők nem becsült értékek.</p>` : ""}
 
     <section class="amount">
       <div>
@@ -1664,7 +1726,7 @@ export default function AllInAdminShopWorkflows({
                             <p className="text-xl text-orange-50">{money(item.amount)}</p>
                             <button
                               type="button"
-                              onClick={() => printCashHandoverReceipt(store, item)}
+                              onClick={() => void printCashHandoverReceipt(store, item)}
                               className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/18 bg-white/[0.06] px-2.5 text-[10px] text-white transition hover:border-[#ffe66b]/35 hover:bg-[#fed700]/10"
                             >
                               <Printer size={13} /> PDF
@@ -1895,7 +1957,7 @@ export default function AllInAdminShopWorkflows({
                             </div>
                             <button
                               type="button"
-                              onClick={() => printCashHandoverReceipt(store, item)}
+                              onClick={() => void printCashHandoverReceipt(store, item)}
                               className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/16 bg-white/[0.055] px-2.5 text-[10px] text-white transition hover:border-[#ffe66b]/32 hover:bg-[#fed700]/10"
                             >
                               <Printer size={13} /> PDF

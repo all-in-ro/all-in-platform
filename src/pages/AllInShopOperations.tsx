@@ -2772,6 +2772,23 @@ export default function AllInShopOperations({
     setPdfChoice(null);
   }
 
+  async function downloadSellerDailyExcel() {
+    if (excelDownloadBusy) return;
+    setExcelDownloadBusy(true);
+    setError("");
+    try {
+      await apiAifDownloadShopDailyAuditExcel({
+        location: locationCode,
+        date: summaryDate,
+        scope: "mine",
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A napi Excel letöltése sikertelen.");
+    } finally {
+      setExcelDownloadBusy(false);
+    }
+  }
+
   if (!open || typeof document === "undefined") return null;
 
   const stockSummary = stockData?.summary || {
@@ -3054,6 +3071,14 @@ export default function AllInShopOperations({
                   >
                     <img src={AIF_PDF_ICON} alt="" className="h-6 w-6 object-contain" />
                     <span>PDF</span>
+                  </button>
+                  <button type="button" onClick={() => void downloadSellerDailyExcel()}
+                    disabled={excelDownloadBusy}
+                    title="Saját napi audit letöltése szerkeszthető Excel-fájlban"
+                    aria-label="Saját napi audit Excel export"
+                    className="inline-flex h-12 items-center gap-2 rounded-xl border border-[#B5EDE9]/40 bg-[#344154] px-3 text-sm text-white transition hover:bg-[#46556B] disabled:opacity-45">
+                    {excelDownloadBusy ? <Loader2 size={17} className="animate-spin" /> : <img src={AIF_EXCEL_ICON} alt="" className="h-6 w-6 rounded object-contain" />}
+                    <span>Excel</span>
                   </button>
                   <button
                     type="button"
