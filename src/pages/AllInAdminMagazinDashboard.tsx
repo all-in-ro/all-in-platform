@@ -2343,7 +2343,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Bruttó forgalom"
             value={money(summary?.salesBeforeDiscount)}
-            hint="Kedvezmény nélküli eladási érték • eladási ár × db"
+            hint="Napi elszámolási bruttó • korábbi tartozások befizetésével"
             icon={CircleDollarSign}
             current={numberValue(summary?.salesBeforeDiscount)}
             previous={numberValue(previous?.salesBeforeDiscount)}
