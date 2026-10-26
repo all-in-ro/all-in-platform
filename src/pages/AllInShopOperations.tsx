@@ -1648,8 +1648,11 @@ export default function AllInShopOperations({
   const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
   const [cashMoveAmount, setCashMoveAmount] = useState("");
   const [cashHandoverAfterDate, setCashHandoverAfterDate] = useState("");
-  const [cashHandoverToDate, setCashHandoverToDate] = useState("");
-  const [cashCalendarMode, setCashCalendarMode] = useState<"anchor" | "to" | null>(null);
+  // Exact day set: the cursor date is never interpreted as a continuous range.
+  const [cashSelectedDates, setCashSelectedDates] = useState<string[]>([]);
+  const [cashMoveError, setCashMoveError] = useState("");
+  const cashMovementSubmittingRef = useRef(false);
+  const [cashCalendarMode, setCashCalendarMode] = useState<"to" | null>(null);
   const [cashCalendarMonth, setCashCalendarMonth] = useState(() => todayIso().slice(0, 7));
   const [cashHistoryMonth, setCashHistoryMonth] = useState(() => todayIso().slice(0, 7));
   const [cashMoveReference, setCashMoveReference] = useState("");
@@ -1734,36 +1737,47 @@ export default function AllInShopOperations({
     : Math.round((currentBookCash - currentLockedCash) * 100) / 100;
   const pendingBossHandovers = cashData?.pendingManagerHandovers || [];
   // Már levontuk a zárolt részt a fizikai kasszából: tilos kétszer levonni.
-  const availableCashForNewHandover = Math.max(0, currentCashBalance);
-  const cashHandoverPlan = cashData?.handoverPlan || null;
-  const cashHandoverConfirmedTo = cashHandoverPlan?.lastConfirmedTo || cashHandoverPlan?.lastExplicitTo || null;
-  const cashHandoverPendingPeriods = pendingBossHandovers.map((item) => {
-    const fallback = localDateKey(item.requestedAt);
-    return {
-      from: item.handoverFromDate || item.handoverToDate || fallback,
-      to: item.handoverToDate || item.handoverFromDate || fallback,
-    };
-  });
-  const cashHandoverDays = useMemo(() => {
-    const serverDays = cashHandoverPlan?.days || [];
-    if (cashHandoverAfterDate) return serverDays;
-    const hasUsableServerDay = serverDays.some((day) => day.status !== "pending" && numberValue(day.amount) > 0);
-    if (hasUsableServerDay || currentCashBalance <= 0) return serverDays;
-    return [{
-      date: todayIso(),
-      amount: currentCashBalance,
-      closed: Boolean(currentDayClosure),
-      closingCash: currentDayClosure ? numberValue(currentDayClosure.countedCash) : null,
-      closedAt: currentDayClosure?.closedAt || null,
-      closedBy: currentDayClosure?.actor || null,
-      status: "available",
-    }];
-  }, [cashHandoverAfterDate, cashHandoverPlan?.days, currentCashBalance, currentDayClosure]);
-  const selectedCashHandoverDay = cashHandoverDays.find((day) => day.date === cashHandoverToDate) || null;
+  // A pénzátadás mindig a MOSTANI szabad kasszából történik, akkor is, ha
+  // a kezelő egy korábbi nap napi összesítőjét nézi. A múltbeli napzáró
+  // kasszaegyenleget nem szabad az új átadás felső korlátjaként használni.
+  const availableCashForNewHandover = cashData
+    ? Math.max(0, Math.round((numberValue(cashData.balance.availableCash) - numberValue(cashData.balance.pendingOut)) * 100) / 100)
+    : 0;
+  // Never fall back to a cumulative period picker for the new workflow.
+  // If the exact-day server projection fails, selection is blocked instead of
+  // incorrectly claiming every intervening date.
+  const cashHandoverPlan = cashData?.handoverSelectionPlan || null;
+  const cashHandoverSelectionError = cashData?.handoverSelectionError || "";
+  const cashHandoverDays = cashHandoverPlan?.days || [];
   const cashHandoverDayMap = useMemo(
     () => new Map(cashHandoverDays.map((day) => [day.date, day])),
     [cashHandoverDays],
   );
+  const cashHandoverConfirmedDates = useMemo(
+    () => new Set(cashHandoverPlan?.confirmedHandoverDates || []),
+    [cashHandoverPlan?.confirmedHandoverDates],
+  );
+  const cashHandoverPendingDates = useMemo(
+    () => new Set(cashHandoverPlan?.pendingHandoverDates || []),
+    [cashHandoverPlan?.pendingHandoverDates],
+  );
+  const cashSelectedDayDetails = cashSelectedDates.map((date) => cashHandoverDayMap.get(date));
+  const cashSelectedDaysValid = Boolean(cashHandoverPlan && cashSelectedDates.length &&
+    cashSelectedDayDetails.every((day) => day?.status === "available" && day.selectable !== false));
+  const cashSelectedAmount = Math.round(cashSelectedDayDetails.reduce(
+    (sum, day) => sum + numberValue(day?.amount), 0) * 100) / 100;
+  const cashSelectedGross = Math.round(cashSelectedDayDetails.reduce(
+    (sum, day) => sum + numberValue(day?.grossSales), 0) * 100) / 100;
+  const cashSelectedDiscount = Math.round(cashSelectedDayDetails.reduce(
+    (sum, day) => sum + numberValue(day?.discountTotal), 0) * 100) / 100;
+  const cashSelectedExceedsFreeCash = cashSelectedAmount > availableCashForNewHandover + 0.005;
+  const cashSelectionSubmitEnabled = Boolean(
+    cashSelectedDaysValid && !cashSelectedExceedsFreeCash && cashSelectedAmount > 0.005 &&
+    !cashLoading && !cashHandoverSelectionError,
+  );
+  const cashSelectedDateLabel = cashSelectedDates.length
+    ? cashSelectedDates.map((date) => date.slice(5).replace("-", ". ")).join(" • ")
+    : "Még nincs kijelölve nap";
   const cashHandoverHistory = useMemo(() => {
     const serverHistory = cashData?.managerHandoverHistory || [];
     if (serverHistory.length) return serverHistory;
@@ -2368,107 +2382,84 @@ export default function AllInShopOperations({
     }
   }
 
-  async function changeCashHandoverAfterDate(value: string) {
-    const safe = String(value || "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(safe)) return;
-    if (safe >= todayIso()) {
-      setError("Az utolsó átadott napnak a mai nap előtt kell lennie.");
-      return;
-    }
-    setError("");
-    setCashHandoverAfterDate(safe);
-    setCashHandoverToDate("");
-    const refreshed = await loadCashContext(cashHistoryMonth, safe);
-    if (!refreshed) return;
-    const days = refreshed.handoverPlan?.days || [];
-    if (!days.length) {
-      setError("A kiválasztott utolsó átadási nap után nincs átadható üzleti nap.");
-    }
-  }
-
-  function openCashCalendar(mode: "anchor" | "to") {
-    setError("");
-    const focusDate = mode === "anchor"
-      ? (cashHandoverAfterDate || cashHandoverPlan?.selectedAfterDate || cashHandoverPlan?.suggestedAfterDate || todayIso())
-      : (cashHandoverToDate || cashHandoverDays[cashHandoverDays.length - 1]?.date || todayIso());
-    setCashCalendarMonth(String(focusDate || todayIso()).slice(0, 7));
+  function openCashCalendar(mode: "to") {
+    setCashMoveError("");
+    setCashCalendarMonth((cashSelectedDates[0] || todayIso()).slice(0, 7));
     setCashCalendarMode(mode);
   }
 
-  async function chooseCashCalendarDate(date: string) {
-    if (cashCalendarMode === "anchor") {
-      if (date >= todayIso()) return;
-      await changeCashHandoverAfterDate(date);
-      setCashCalendarMode(null);
-      return;
-    }
-
-    if (cashCalendarMode === "to") {
-      const day = cashHandoverDayMap.get(date);
-      if (!day || date <= cashHandoverAfterDate || day.status === "pending") return;
-      setCashHandoverToDate(date);
-      setCashCalendarMode(null);
-    }
+  function chooseCashCalendarDate(date: string) {
+    const day = cashHandoverDayMap.get(date);
+    if (!cashHandoverPlan || !day || day.status !== "available" || day.selectable === false || date > todayIso()) return;
+    setCashSelectedDates((current) => current.includes(date)
+      ? current.filter((item) => item !== date)
+      : [...current, date].sort());
+    setCashMoveError("");
+    // Keep calendar open so several non-adjacent days can be picked in one go.
   }
 
   async function createCashMovement() {
+    if (cashMovementSubmittingRef.current) return;
     const bankAmount = Number(String(cashMoveAmount || "").replace(",", "."));
 
     if (cashMoveType === "manager_handover") {
-      if (!cashHandoverAfterDate) {
-        setError("Válaszd ki az utolsó ténylegesen átadott napot.");
-        return;
-      }
-      if (!selectedCashHandoverDay || !cashHandoverToDate) {
-        setError("Válaszd ki, melyik napig adod át a készpénzt.");
-        return;
-      }
-      if (numberValue(selectedCashHandoverDay.amount) <= 0) {
-        setError("A kiválasztott napig nincs átadható készpénz.");
+      if (!cashSelectionSubmitEnabled) {
+        setCashMoveError(
+          cashHandoverSelectionError || (cashSelectedExceedsFreeCash
+            ? `A kijelölt ${formatMoney(cashSelectedAmount)} meghaladja a szabad kasszát (${formatMoney(availableCashForNewHandover)}).`
+            : "Jelölj ki legalább egy átadható napot, amelyen ténylegesen érkezett készpénz."),
+        );
         return;
       }
     } else {
       if (!Number.isFinite(bankAmount) || bankAmount <= 0) {
-        setError("Add meg a bankba befizetett készpénz összegét.");
+        setCashMoveError("Add meg a bankba befizetett készpénz összegét.");
         return;
       }
       if (!cashMoveReference.trim()) {
-        setError("Bankbefizetésnél a referencia vagy bizonylatszám kötelező.");
+        setCashMoveError("Bankbefizetésnél a referencia vagy bizonylatszám kötelező.");
         return;
       }
     }
 
+    cashMovementSubmittingRef.current = true;
     setCashMoveSaving(true);
+    setCashMoveError("");
     setError("");
     try {
       const response = await apiAifCreateShopCashMovement({
         location: locationCode,
         type: cashMoveType,
         amount: cashMoveType === "bank_deposit" ? bankAmount : undefined,
-        handoverAfterDate: cashMoveType === "manager_handover" ? cashHandoverAfterDate : null,
-        handoverToDate: cashMoveType === "manager_handover" ? cashHandoverToDate : null,
+        // No handoverAfterDate/handoverToDate in the new request: never send a range.
+        handoverSelectedDates: cashMoveType === "manager_handover" ? [...cashSelectedDates] : undefined,
         reference: cashMoveType === "bank_deposit" ? (cashMoveReference.trim() || null) : null,
         note: cashMoveNote.trim() || null,
         idempotencyKey: typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
           : `cash-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       });
+      const registeredDates = response.item.handoverSelectedDates || cashSelectedDates;
       setHandoverNotice(
         response.item.type === "manager_handover"
-          ? `${formatMoney(response.item.amount)} zárolva (${response.item.handoverFromDate || "–"} → ${response.item.handoverToDate || "–"}). Főnöki átvételre vár; a napzárás ettől független.`
+          ? `${formatMoney(response.item.amount)} zárolva (${registeredDates.length} külön kijelölt nap: ${registeredDates.join(", ")}). Főnöki átvételre vár.`
           : `${formatMoney(response.item.amount)} bankbefizetés rögzítve (${response.item.reference || "referencia nélkül"}).`,
       );
       setCashMoveOpen(false);
       setCashCalendarMode(null);
       setCashMoveAmount("");
       setCashHandoverAfterDate("");
-      setCashHandoverToDate("");
+      setCashSelectedDates([]);
       setCashMoveReference("");
       setCashMoveNote("");
       await refreshSummaryPage(summaryDate, cashHistoryMonth, "");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A kasszamozgás rögzítése nem sikerült.");
+      const message = caught instanceof Error ? caught.message : "A kasszamozgás rögzítése nem sikerült.";
+      setCashMoveError(message);
+      // Refresh exact availability on a conflict, but keep the user's chosen dates visible.
+      void loadCashContext(cashHistoryMonth, "");
     } finally {
+      cashMovementSubmittingRef.current = false;
       setCashMoveSaving(false);
     }
   }
@@ -2541,59 +2532,38 @@ export default function AllInShopOperations({
     void refreshDayCloseCheck();
   }
 
-  function selectCashMovementType(
-    type: AifShopCashMovementType,
-    days = cashHandoverDays,
-  ) {
+  function selectCashMovementType(type: AifShopCashMovementType) {
     setCashMoveType(type);
     setCashMoveAmount("");
     setCashMoveReference("");
-    if (type === "manager_handover") {
-      const suggested = cashHandoverAfterDate
-        || cashHandoverPlan?.selectedAfterDate
-        || cashHandoverPlan?.suggestedAfterDate
-        || cashHandoverPlan?.lastConfirmedTo
-        || shiftIsoDate(todayIso(), -1);
-      setCashHandoverAfterDate(suggested);
-      setCashHandoverToDate("");
-    } else {
-      setCashHandoverAfterDate("");
-      setCashHandoverToDate("");
-    }
+    setCashMoveError("");
+    setCashSelectedDates([]);
+    setCashHandoverAfterDate("");
+    setCashCalendarMode(null);
+    if (type === "manager_handover") void loadCashContext(cashHistoryMonth, "");
   }
 
   async function openCashMovement(type: AifShopCashMovementType) {
     setError("");
+    setCashMoveError("");
     setCashCalendarMode(null);
     setCashMoveNote("");
+    setCashSelectedDates([]);
+    setCashHandoverAfterDate("");
 
     if (type === "manager_handover") {
       if (availableCashForNewHandover <= 0) {
-        setError(
-          pendingBossHandovers.length
-            ? "Nincs további szabad készpénz. A korábban kijelölt pénz zárolva van, átvételre vár."
-            : "Nincs átadható készpénz a kasszában.",
-        );
+        setError(pendingBossHandovers.length
+          ? "Nincs további szabad készpénz. A korábban kijelölt pénz zárolva van, átvételre vár."
+          : "Nincs átadható készpénz a kasszában.");
         return;
       }
-
-      let response = cashData;
-      if (!response?.handoverPlan) response = await loadCashContext(cashHistoryMonth, "");
-      const suggested = response?.handoverPlan?.selectedAfterDate
-        || response?.handoverPlan?.suggestedAfterDate
-        || response?.handoverPlan?.lastConfirmedTo
-        || shiftIsoDate(todayIso(), -1);
-
       setCashMoveType(type);
       setCashMoveAmount("");
       setCashMoveReference("");
-      setCashHandoverAfterDate(suggested);
-      setCashHandoverToDate("");
       setCashMoveOpen(true);
-
-      // A popup azonnal megnyílik, majd a kiválasztott utolsó átadási naphoz
-      // tartozó naplista frissül. Így a felület nem "gondolkodik" helyettünk.
-      if (suggested) void loadCashContext(cashHistoryMonth, suggested);
+      // Always fetch exact, non-cumulative daily values; never fall back to a range.
+      void loadCashContext(cashHistoryMonth, "");
       return;
     }
 
@@ -3272,9 +3242,13 @@ export default function AllInShopOperations({
                               <p className="mt-1 text-xs text-white/48">
                                 {pendingHandover.requestedBy} rögzítette • {formatTime(pendingHandover.requestedAt)}
                               </p>
-                              {(pendingHandover.handoverFromDate || pendingHandover.handoverToDate) ? (
+                              {pendingHandover.handoverSelectedDates != null ? (
                                 <p className="mt-1 text-[11px] text-[#fff4a5]/78">
-                                  Időszak: {pendingHandover.handoverFromDate || pendingHandover.handoverToDate} → {pendingHandover.handoverToDate || pendingHandover.handoverFromDate}
+                                  Külön napok: {pendingHandover.handoverSelectedDates.join(" • ")}
+                                </p>
+                              ) : (pendingHandover.handoverFromDate || pendingHandover.handoverToDate) ? (
+                                <p className="mt-1 text-[11px] text-[#fff4a5]/78">
+                                  Régi időszak: {pendingHandover.handoverFromDate || pendingHandover.handoverToDate} → {pendingHandover.handoverToDate || pendingHandover.handoverFromDate}
                                 </p>
                               ) : null}
                               {pendingHandover.grossSales != null ? <p className="mt-1 text-[10px] text-white/52">Bruttó: {formatMoney(pendingHandover.grossSales)} • Kedvezmény: {formatMoney(pendingHandover.discountTotal || 0)}</p> : null}
@@ -4352,14 +4326,18 @@ export default function AllInShopOperations({
                           </div>
 
                           <div className="flex min-w-0 items-center">
-                            {(movement.handoverFromDate || movement.handoverToDate) ? (
+                            {(movement.handoverFromDate || movement.handoverToDate || movement.handoverSelectedDates != null) ? (
                               <div className="w-full rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/16 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                                <p className="text-[9px] uppercase tracking-[0.15em] text-[#bff8f5]/68">Átadási időszak</p>
-                                <div className="mt-1.5 flex items-center gap-2 text-[15px] leading-tight text-[#f0fffe]">
-                                  <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverFromDate || movement.handoverToDate)}</span>
-                                  <ArrowRight size={15} className="shrink-0 text-[#8ee6e2]" />
-                                  <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverToDate || movement.handoverFromDate)}</span>
-                                </div>
+                                <p className="text-[9px] uppercase tracking-[0.15em] text-[#bff8f5]/68">{movement.handoverSelectedDates != null ? "Külön kijelölt napok" : "Korábbi átadási időszak"}</p>
+                                {movement.handoverSelectedDates != null ? (
+                                  <p className="mt-1.5 break-words text-[13px] leading-relaxed text-[#f0fffe]">{movement.handoverSelectedDates.join(" • ")}</p>
+                                ) : (
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[15px] leading-tight text-[#f0fffe]">
+                                    <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverFromDate || movement.handoverToDate)}</span>
+                                    <ArrowRight size={15} className="shrink-0 text-[#8ee6e2]" />
+                                    <span className="whitespace-nowrap tabular-nums">{formatCashPeriodDate(movement.handoverToDate || movement.handoverFromDate)}</span>
+                                  </div>
+                                )}
                                 {movement.confirmedAt ? (
                                   <p className="mt-1.5 text-[10px] tabular-nums text-emerald-100/72">Átvéve: {formatExactDateTime(movement.confirmedAt)}</p>
                                 ) : null}
@@ -4489,9 +4467,11 @@ export default function AllInShopOperations({
                                   {confirmed ? "Átvéve" : pending ? "Zárolva • átvételre vár" : movement.status === "cancelled" ? "Visszavonva" : movement.status === "rejected" ? "Elutasítva" : movement.status}
                                 </span>
                                 <span className="text-[10px] text-white/42">
-                                  {(movement.handoverFromDate || movement.handoverToDate)
-                                    ? `${movement.handoverFromDate || movement.handoverToDate} → ${movement.handoverToDate || movement.handoverFromDate}`
-                                    : formatDate(String(movement.requestedAt || "").slice(0, 10))}
+                                  {movement.handoverSelectedDates != null
+                                    ? `${movement.handoverSelectedDates.join(" • ")} (külön napok)`
+                                    : (movement.handoverFromDate || movement.handoverToDate)
+                                      ? `${movement.handoverFromDate || movement.handoverToDate} → ${movement.handoverToDate || movement.handoverFromDate}`
+                                      : formatDate(String(movement.requestedAt || "").slice(0, 10))}
                                 </span>
                               </div>
                               <p className="mt-2 text-[11px] text-white/58">
@@ -4719,7 +4699,7 @@ export default function AllInShopOperations({
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Készpénz útja</p>
                     <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Készpénz átadása" : "Bankba befizetés"}</h3>
-                    <p className="mt-1 text-xs text-white/52">{locationName} • jelenlegi kassza {formatMoney(currentCashBalance)}</p>
+                    <p className="mt-1 text-xs text-white/52">{locationName} • szabad, fizikailag átadható kassza {formatMoney(availableCashForNewHandover)}</p>
                   </div>
                 </div>
                 <button type="button" disabled={cashMoveSaving} onClick={() => setCashMoveOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-45"><X size={18} /></button>
@@ -4737,7 +4717,7 @@ export default function AllInShopOperations({
                     }`}
                   >
                     <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Készpénz átadása</p>
-                    <p className={`mt-1 text-[11px] ${cashMoveType === "manager_handover" ? "text-[#243044]/70" : "text-white/48"}`}>Válaszd ki, melyik üzleti napig adod át az összegyűlt készpénzt.</p>
+                    <p className={`mt-1 text-[11px] ${cashMoveType === "manager_handover" ? "text-[#243044]/70" : "text-white/48"}`}>Válaszd ki külön a napokat. Csak a kijelölt napok készpénze kerül az átadásba.</p>
                   </button>
                   <button
                     type="button"
@@ -4753,99 +4733,74 @@ export default function AllInShopOperations({
                   </button>
                 </div>
 
+                {cashMoveError ? (
+                  <div role="alert" className="mt-3 rounded-xl border border-red-300/60 bg-red-600/25 px-4 py-3 text-sm text-red-50">{cashMoveError}</div>
+                ) : null}
                 {cashMoveType === "manager_handover" ? (
                   <div className="mt-4 space-y-4">
                     <div className="grid gap-3 lg:grid-cols-[1.05fr_0.95fr]">
                       <div className="rounded-[22px] border border-[#ffe66b]/36 bg-[#2a3445] p-4">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
-                            <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Átadási időszak</p>
-                            <h4 className="mt-1 text-lg text-white">
-                              {cashHandoverAfterDate ? shiftIsoDate(cashHandoverAfterDate, 1) : "–"} → {cashHandoverToDate || "válassz napot"}
-                            </h4>
+                            <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Külön kijelölt üzleti napok</p>
+                            <h4 className="mt-1 text-lg text-white">{cashSelectedDates.length ? `${cashSelectedDates.length} nap kijelölve` : "Még nincs kijelölt nap"}</h4>
+                            <p className="mt-1 text-[11px] text-white/54">Egyik köztes nap sem kerül automatikusan az átadásba.</p>
                           </div>
                           <span className="rounded-xl border border-red-300/45 bg-red-600/18 px-3 py-2 text-[11px] text-red-50">
-                            Utolsó igazolt átvétel: {cashHandoverConfirmedTo ? formatDate(cashHandoverConfirmedTo) : "nincs"}
+                            Legutóbbi átvétel: {cashHandoverPlan?.lastConfirmedTo ? formatDate(cashHandoverPlan.lastConfirmedTo) : "nincs"}
                           </span>
                         </div>
-
-                        <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
-                          <button
-                            type="button"
-                            onClick={() => openCashCalendar("to")}
-                            className="flex min-h-[72px] items-center justify-between gap-3 rounded-2xl border-2 border-[#fed700] bg-[#293548] px-4 text-left text-white shadow-[0_8px_22px_rgba(254,215,0,0.10)] transition hover:bg-[#313e52] active:scale-[0.99]"
-                          >
-                            <span className="flex items-center gap-3">
-                              <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#fed700]/60 bg-[#fed700]/12 text-[#fed700]">
-                                <CalendarDays size={20} />
-                              </span>
-                              <span>
-                                <span className="block text-[10px] uppercase tracking-[0.12em] text-white/42">Készpénz átadása eddig</span>
-                                <span className="mt-1 block text-base text-white">
-                                  {cashHandoverToDate ? formatDate(cashHandoverToDate) : "Válassz zárónapot"}
-                                </span>
-                              </span>
+                        <button
+                          type="button"
+                          onClick={() => openCashCalendar("to")}
+                          disabled={cashLoading || !cashHandoverPlan || Boolean(cashHandoverSelectionError)}
+                          className="mt-4 flex min-h-[74px] w-full items-center justify-between gap-3 rounded-2xl border-2 border-[#fed700] bg-[#293548] px-4 text-left text-white shadow-[0_8px_22px_rgba(254,215,0,0.10)] transition hover:bg-[#313e52] disabled:cursor-wait disabled:opacity-50"
+                        >
+                          <span className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#fed700]/60 bg-[#fed700]/12 text-[#fed700]"><CalendarDays size={20} /></span>
+                            <span className="min-w-0">
+                              <span className="block text-[10px] uppercase tracking-[0.12em] text-white/42">Napok kiválasztása</span>
+                              <span className="mt-1 block text-sm text-white">{cashLoading ? "Napok betöltése…" : cashSelectedDateLabel}</span>
                             </span>
-                            <ChevronRight size={20} className="text-[#fed700]" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => openCashCalendar("anchor")}
-                            className="min-h-[72px] rounded-2xl border border-white/12 bg-white/[0.04] px-4 text-left text-[11px] text-white/58 transition hover:border-red-300/35 hover:bg-red-500/[0.06]"
-                          >
-                            <span className="block text-[9px] uppercase tracking-[0.1em] text-white/36">Csak javításhoz</span>
-                            <span className="mt-1 block">Átadási kezdőnap módosítása</span>
-                          </button>
-                        </div>
-
-                        {cashHandoverAfterDate && cashHandoverAfterDate !== cashHandoverConfirmedTo ? (
-                          <p className="mt-2 text-[11px] text-orange-100/80">Új átadás kezdőpontja: {formatDate(cashHandoverAfterDate)} után. Ez önmagában nem igazolt átvétel.</p>
+                          </span>
+                          <ChevronRight size={20} className="shrink-0 text-[#fed700]" />
+                        </button>
+                        {cashSelectedDates.length ? (
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {cashSelectedDates.map((date) => (
+                              <button key={date} type="button" onClick={() => setCashSelectedDates((dates) => dates.filter((value) => value !== date))}
+                                className="inline-flex items-center gap-1 rounded-lg border border-[#fed700]/42 bg-[#fed700]/14 px-2.5 py-1.5 text-[11px] text-[#fff2a5] transition hover:bg-[#fed700]/25"
+                                aria-label={`${formatDate(date)} kiválasztásának törlése`} title="Kattints a kijelölés törléséhez">
+                                {date} <X size={12} />
+                              </button>
+                            ))}
+                          </div>
                         ) : null}
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px]">
-                          <span className="inline-flex items-center gap-1.5 text-red-100/72">
-                            <span className="h-3 w-3 rounded-full border border-red-300 bg-red-600" /> főnök által átvéve
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 text-orange-100/78">
-                            <span className="h-3 w-3 rounded-full border border-orange-300 bg-orange-500/40" /> zárolva / átvételre vár
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 text-[#fff2a5]/78">
-                            <span className="h-3 w-3 rounded-full border-2 border-[#fed700]" /> még átadható nap
-                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-red-100/72"><span className="h-3 w-3 rounded-full border border-red-300 bg-red-600" /> átvéve</span>
+                          <span className="inline-flex items-center gap-1.5 text-orange-100/78"><span className="h-3 w-3 rounded-full border border-orange-300 bg-orange-500/40" /> zárolva</span>
+                          <span className="inline-flex items-center gap-1.5 text-[#fff2a5]/78"><span className="h-3 w-3 rounded-full border-2 border-[#fed700]" /> átadható</span>
+                          <span className="inline-flex items-center gap-1.5 text-[#bff8f5]/78"><span className="h-3 w-3 rounded-full border border-[#bff8f5] bg-[#2a8d8b]" /> kijelölve</span>
                         </div>
+                        {cashHandoverSelectionError ? <p className="mt-3 text-xs text-red-100">{cashHandoverSelectionError}</p> : null}
+                        {!cashHandoverPlan && !cashLoading && !cashHandoverSelectionError ? <p className="mt-3 text-xs text-amber-100">Nem érhető el a napi bontás. Frissítsd az oldalt.</p> : null}
                       </div>
-
                       <div className={`rounded-[22px] border p-4 shadow-[0_12px_28px_rgba(254,215,0,0.15)] ${
-                        selectedCashHandoverDay
-                          ? "border-[#ffe66b]/55 bg-[#fed700] text-[#243044]"
-                          : "border-[#ffe66b]/26 bg-[#4a4527] text-white"
+                        cashSelectedDaysValid ? "border-[#ffe66b]/55 bg-[#fed700] text-[#243044]" : "border-[#ffe66b]/26 bg-[#4a4527] text-white"
                       }`}>
-                        <p className={`text-[10px] uppercase tracking-[0.13em] ${selectedCashHandoverDay ? "opacity-65" : "text-white/45"}`}>Átadandó készpénz</p>
-                        <p className="mt-2 text-4xl tracking-tight">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
-                        {selectedCashHandoverDay ? (
-                          <>
-                            <p className="mt-2 text-sm">
-                              {formatDate(selectedCashHandoverDay.date)} napi állapot
-                            </p>
-                            <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
-                              <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
-                                {selectedCashHandoverDay.closed ? "Napzárással ellenőrizve" : "Rendszer szerinti érték"}
-                              </span>
-                              {selectedCashHandoverDay.closingCash != null ? (
-                                <span className="rounded-full border border-[#243044]/18 bg-white/30 px-2 py-1">
-                                  Záró kassza: {formatMoney(selectedCashHandoverDay.closingCash)}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[#243044]/18 pt-3 text-[10px]">
-                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Bruttó érték</p><p className="mt-1 text-[12px] font-medium">{formatMoney(selectedCashHandoverDay.grossSales || 0)}</p></div>
-                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény</p><p className="mt-1 text-[12px] font-medium">{formatMoney(selectedCashHandoverDay.discountTotal || 0)}</p></div>
-                              <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény %</p><p className="mt-1 text-[12px] font-medium">{(numberValue(selectedCashHandoverDay.grossSales) > 0.005 ? numberValue(selectedCashHandoverDay.discountTotal) / numberValue(selectedCashHandoverDay.grossSales) * 100 : 0).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</p></div>
-                            </div>
-                          </>
-                        ) : (
-                          <p className="mt-3 text-xs leading-relaxed text-white/55">A naptárban kattints egy sárga karikás napra. Az adott nap záró készpénze azonnal itt jelenik meg.</p>
-                        )}
+                        <p className={`text-[10px] uppercase tracking-[0.13em] ${cashSelectedDaysValid ? "opacity-65" : "text-white/45"}`}>Átadandó készpénz • kijelölt napok</p>
+                        <p className="mt-2 text-4xl tracking-tight">{formatMoney(cashSelectedAmount)}</p>
+                        <p className="mt-2 text-sm">{cashSelectedDates.length} nap • nem halmozott napi összegek</p>
+                        {cashSelectedDaysValid ? (
+                          <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[#243044]/18 pt-3 text-[10px]">
+                            <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Bruttó érték</p><p className="mt-1 text-[12px] font-medium">{formatMoney(cashSelectedGross)}</p></div>
+                            <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény</p><p className="mt-1 text-[12px] font-medium">{formatMoney(cashSelectedDiscount)}</p></div>
+                            <div className="rounded-xl bg-white/30 px-2.5 py-2"><p className="opacity-65">Kedvezmény %</p><p className="mt-1 text-[12px] font-medium">{(cashSelectedGross > 0.005 ? cashSelectedDiscount / cashSelectedGross * 100 : 0).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</p></div>
+                          </div>
+                        ) : <p className="mt-3 text-xs leading-relaxed opacity-65">Kattints a naptárra, majd külön jelöld ki az átadandó napokat.</p>}
+                        {cashSelectedExceedsFreeCash ? (
+                          <p className="mt-3 rounded-lg border border-red-300/45 bg-red-700 px-3 py-2 text-xs text-white">A kijelölt összeg több, mint a szabad kassza: {formatMoney(availableCashForNewHandover)}.</p>
+                        ) : null}
                       </div>
                     </div>
                     <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
@@ -4856,7 +4811,7 @@ export default function AllInShopOperations({
                     <div className="flex items-start gap-3 rounded-2xl border border-[#ffe66b]/26 bg-[#fed700]/[0.07] px-4 py-3">
                       <TriangleAlert className="mt-0.5 shrink-0 text-[#ffe66b]" size={18} />
                       <p className="text-xs leading-relaxed text-white/68">
-                        A rendszer számolja az összeget a kiválasztott napig, kézzel nem írható át. A rögzítéskor az összeg azonnal zárolt lesz, a szabad kasszából kikerül, és a nap ettől még lezárható. Véglegesen átvettnek csak a főnök visszaigazolása után számít.
+                        A rendszer kizárólag a külön kijelölt napok napi készpénzösszegét adja össze, kézzel nem írható át. A rögzítéskor az összeg azonnal zárolt lesz, a szabad kasszából kikerül, és a nap ettől még lezárható. Véglegesen átvettnek csak a főnök visszaigazolása után számít.
                       </p>
                     </div>
                   </div>
@@ -4866,7 +4821,7 @@ export default function AllInShopOperations({
                       <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
                         <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Befizetett összeg</span>
                         <input value={cashMoveAmount} onChange={(event) => setCashMoveAmount(event.target.value)} inputMode="decimal" autoFocus className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]" placeholder="0,00" />
-                        <button type="button" onClick={() => setCashMoveAmount(currentCashBalance.toFixed(2).replace(".", ","))} className="mt-2 text-[11px] text-[#bdf8f5]">Teljes kassza: {formatMoney(currentCashBalance)}</button>
+                        <button type="button" onClick={() => setCashMoveAmount(availableCashForNewHandover.toFixed(2).replace(".", ","))} className="mt-2 text-[11px] text-[#bdf8f5]">Szabad kassza: {formatMoney(availableCashForNewHandover)}</button>
                       </label>
                       <label className="rounded-[22px] border border-[#9be9e5]/20 bg-[#374357] p-4">
                         <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Referencia / bizonylatszám • kötelező</span>
@@ -4894,7 +4849,7 @@ export default function AllInShopOperations({
                   disabled={
                     cashMoveSaving ||
                     (cashMoveType === "manager_handover"
-                      ? !cashHandoverAfterDate || !selectedCashHandoverDay || numberValue(selectedCashHandoverDay.amount) <= 0
+                      ? !cashSelectionSubmitEnabled
                       : !cashMoveAmount.trim() || !cashMoveReference.trim())
                   }
                   onClick={() => void createCashMovement()}
@@ -4917,151 +4872,81 @@ export default function AllInShopOperations({
         {cashCalendarMode ? createPortal(
           <div
             className="fixed inset-0 z-[520] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md sm:p-5"
-            onMouseDown={(event) => {
-              if (event.currentTarget === event.target) setCashCalendarMode(null);
-            }}
+            onMouseDown={(event) => { if (event.currentTarget === event.target) setCashCalendarMode(null); }}
           >
-            <section className="w-full max-w-[720px] overflow-hidden rounded-[28px] border border-[#fed700]/50 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.72)]">
-              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#2b3749] px-5 py-4">
+            <section role="dialog" aria-modal="true" aria-label="Átadandó készpénzes napok kijelölése"
+              className="flex max-h-[92vh] w-full max-w-[720px] flex-col overflow-hidden rounded-[28px] border border-[#fed700]/50 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.72)]">
+              <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/12 bg-[#2b3749] px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#fed700]/55 bg-[#fed700] text-[#243044]">
-                    <CalendarDays size={23} />
-                  </span>
+                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#fed700]/55 bg-[#fed700] text-[#243044]"><CalendarDays size={23} /></span>
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.15em] text-white/42">Készpénzátadás dátuma</p>
-                    <h3 className="mt-1 text-xl text-white">
-                      {cashCalendarMode === "anchor" ? "Átadási kezdőnap javítása" : "Meddig adod át a készpénzt?"}
-                    </h3>
-                    <p className="mt-1 text-xs text-white/48">
-                      {cashCalendarMode === "anchor"
-                        ? "Ezt csak akkor módosítsd, ha a régi átadási előzmény hibás."
-                        : "Piros: átvéve • narancs: zárolva • sárga: átadható"}
-                    </p>
+                    <p className="text-[10px] uppercase tracking-[0.15em] text-white/42">Készpénzátadás • külön napok</p>
+                    <h3 className="mt-1 text-xl text-white">Jelöld ki az átadandó napokat</h3>
+                    <p className="mt-1 text-xs text-white/48">Egy kattintás: kijelölés. Újabb kattintás: kijelölés törlése. A köztes napok érintetlenek.</p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setCashCalendarMode(null)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1]"
-                  aria-label="Naptár bezárása"
-                >
-                  <X size={18} />
-                </button>
+                <button type="button" onClick={() => setCashCalendarMode(null)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] hover:bg-white/[0.1]"
+                  aria-label="Naptár bezárása"><X size={18} /></button>
               </header>
-
-              <div className="p-4 sm:p-5">
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#293548] px-3 py-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current, -1))}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10"
-                    aria-label="Előző hónap"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <div className="text-center">
-                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Hónap</p>
-                    <p className="mt-1 text-base text-white">{cashCalendarMonthLabel(cashCalendarMonth)}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current, 1))}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10"
-                    aria-label="Következő hónap"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
+                  <button type="button" onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current,-1))}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10" aria-label="Előző hónap"><ChevronLeft size={18} /></button>
+                  <div className="text-center"><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Hónap</p><p className="mt-1 text-base text-white">{cashCalendarMonthLabel(cashCalendarMonth)}</p></div>
+                  <button type="button" onClick={() => setCashCalendarMonth((current) => shiftCashCalendarMonth(current,1))}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] hover:border-[#fed700]/45 hover:bg-[#fed700]/10" aria-label="Következő hónap"><ChevronRight size={18} /></button>
                 </div>
-
                 <div className="mt-4 grid grid-cols-7 gap-1.5">
                   {CASH_CALENDAR_WEEKDAYS.map((weekday) => (
-                    <div key={weekday} className="py-1.5 text-center text-[10px] uppercase tracking-[0.08em] text-white/38">
-                      {weekday}
-                    </div>
+                    <div key={weekday} className="py-1.5 text-center text-[10px] uppercase tracking-[0.08em] text-white/38">{weekday}</div>
                   ))}
-
                   {cashCalendarGrid(cashCalendarMonth).map((cell) => {
-                    const earliest = cashHandoverPlan?.earliestActivityDate || "";
-                    const anchor = cashHandoverAfterDate || "";
                     const dayData = cashHandoverDayMap.get(cell.iso) || null;
-                    const beforeActivity = Boolean(earliest && cell.iso < earliest);
-                    const future = cell.iso > todayIso();
-                    // A kezdőnap lehet az utolsó FÜGGŐ időszak vége is.
-                    // Ettől a nap még nem "átvéve": piros csak confirmed alapján.
-                    const handedOver = Boolean(cashHandoverConfirmedTo && cell.iso <= cashHandoverConfirmedTo && !beforeActivity);
-                    const pending = !handedOver && (
-                      cashHandoverPendingPeriods.some((period) => period.from && period.to && period.from <= cell.iso && cell.iso <= period.to)
-                      || dayData?.status === "pending"
-                    );
-                    const available = Boolean(dayData && !handedOver && !pending && cell.iso > anchor && !future);
-                    const selected = cell.iso === cashHandoverToDate;
-                    const anchorSelected = cashCalendarMode === "anchor" && cell.iso === anchor;
-                    const disabled = cashCalendarMode === "anchor"
-                      ? (future || cell.iso >= todayIso() || beforeActivity)
-                      : (!available);
-
+                    const handedOver = cashHandoverConfirmedDates.has(cell.iso) || dayData?.status === "confirmed";
+                    const pending = cashHandoverPendingDates.has(cell.iso) || dayData?.status === "pending";
+                    const available = Boolean(dayData && dayData.status === "available" && dayData.selectable !== false && cell.iso <= todayIso());
+                    const selected = available && cashSelectedDates.includes(cell.iso);
                     return (
-                      <button
-                        key={cell.iso}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => void chooseCashCalendarDate(cell.iso)}
-                        title={
-                          handedOver
-                            ? `${formatDate(cell.iso)} • főnök által átvéve`
-                            : available
-                              ? `${formatDate(cell.iso)} • ${formatMoney(dayData?.amount || 0)}`
-                              : pending
-                                ? `${formatDate(cell.iso)} • zárolva, átvételre vár`
-                                : formatDate(cell.iso)
-                        }
+                      <button key={cell.iso} type="button" disabled={!cell.inMonth || !available}
+                        aria-pressed={selected} aria-label={`${formatDate(cell.iso)} • ${selected ? "kijelölve" : handedOver ? "átvéve" : pending ? "zárolva" : available ? "átadható" : "nem elérhető"}`}
+                        onClick={() => chooseCashCalendarDate(cell.iso)}
+                        title={handedOver ? `${formatDate(cell.iso)} • főnök átvette` : pending ? `${formatDate(cell.iso)} • zárolva` : available ? `${formatDate(cell.iso)} • ${formatMoney(dayData?.amount || 0)} napi készpénz` : formatDate(cell.iso)}
                         className={`relative flex h-[62px] flex-col items-center justify-center rounded-2xl border text-sm transition ${
-                          !cell.inMonth
-                            ? "border-transparent bg-transparent text-white/20"
-                            : selected
-                              ? "border-[#fff0a0] bg-[#fed700] text-[#243044] shadow-[0_8px_20px_rgba(254,215,0,0.20)]"
-                              : handedOver
-                                ? "border-red-400/70 bg-red-600/78 text-white"
-                                : pending
-                                  ? `border-orange-300/45 bg-orange-500/16 text-orange-50 ${anchorSelected ? "ring-2 ring-[#fed700]/50" : ""}`
-                                  : anchorSelected
-                                    ? "border-[#fed700] bg-[#695826] text-white ring-2 ring-[#fed700]/50"
-                                    : available
-                                      ? "border-2 border-[#fed700] bg-[#293548] text-white hover:bg-[#3a4557] hover:shadow-[0_7px_18px_rgba(254,215,0,0.12)]"
-                                      : "border-white/6 bg-white/[0.02] text-white/24"
-                        } ${disabled ? "cursor-default" : "active:scale-[0.97]"}`}
-                      >
+                          !cell.inMonth ? "border-transparent bg-transparent text-white/20" :
+                          handedOver ? "border-red-400/70 bg-red-600/78 text-white" :
+                          pending ? "border-orange-300/45 bg-orange-500/16 text-orange-50" :
+                          selected ? "border-[#bff8f5] bg-[#2a8d8b] text-white ring-2 ring-[#bff8f5]/50 shadow-[0_8px_20px_rgba(42,141,139,0.26)]" :
+                          available ? "border-2 border-[#fed700] bg-[#293548] text-white hover:bg-[#3a4557] hover:shadow-[0_7px_18px_rgba(254,215,0,0.12)]" :
+                          "border-white/6 bg-white/[0.02] text-white/24"
+                        } ${!available ? "cursor-default" : "active:scale-[0.97]"}`}>
+                        {selected ? <Check size={13} className="absolute right-1.5 top-1.5 text-[#d7fffd]" /> : null}
                         <span className="text-base tabular-nums">{cell.day}</span>
                         {cell.inMonth && handedOver ? <span className="mt-0.5 text-[8px] uppercase tracking-[0.04em] text-red-50/85">átvéve</span> : null}
+                        {cell.inMonth && pending && !handedOver ? <span className="mt-0.5 text-[8px] text-orange-100/85">zárolva</span> : null}
                         {cell.inMonth && available ? (
-                          <span className={`mt-0.5 max-w-full truncate px-1 text-[8px] ${selected ? "text-[#243044]/65" : "text-[#fff3a3]/72"}`}>
-                            {formatMoney(dayData?.amount || 0)}
-                          </span>
+                          <span className={`mt-0.5 max-w-full truncate px-1 text-[8px] ${selected ? "text-[#d7fffd]" : "text-[#fff3a3]/72"}`}>{formatMoney(dayData?.amount || 0)}</span>
                         ) : null}
-                        {cell.inMonth && pending ? <span className="mt-0.5 text-[8px] text-orange-100/85">zárolva</span> : null}
                       </button>
                     );
                   })}
                 </div>
-
                 <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                  <div className="rounded-xl border border-red-300/24 bg-red-600/10 px-3 py-2">
-                    <p className="text-[9px] uppercase tracking-[0.1em] text-red-100/60">Főnök által átvéve</p>
-                    <p className="mt-1 text-sm text-white">{cashHandoverConfirmedTo ? `eddig: ${formatDate(cashHandoverConfirmedTo)}` : "még nincs igazolt átvétel"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#fed700]/28 bg-[#fed700]/[0.07] px-3 py-2">
-                    <p className="text-[9px] uppercase tracking-[0.1em] text-[#fff2a5]/60">Kijelölve</p>
-                    <p className="mt-1 text-sm text-white">{cashHandoverToDate ? formatDate(cashHandoverToDate) : "nincs"}</p>
-                  </div>
-                  <div className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2">
-                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Összeg</p>
-                    <p className="mt-1 text-sm text-white">{formatMoney(selectedCashHandoverDay?.amount || 0)}</p>
-                  </div>
+                  <div className="rounded-xl border border-red-300/24 bg-red-600/10 px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-red-100/60">Legutolsó átvett nap</p><p className="mt-1 text-sm text-white">{cashHandoverPlan?.lastConfirmedTo ? formatDate(cashHandoverPlan.lastConfirmedTo) : "nincs"}</p></div>
+                  <div className="rounded-xl border border-[#fed700]/28 bg-[#fed700]/[0.07] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-[#fff2a5]/60">Kijelölve</p><p className="mt-1 text-sm text-white">{cashSelectedDates.length} külön nap</p></div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Összeg</p><p className="mt-1 text-sm text-white">{formatMoney(cashSelectedAmount)}</p></div>
                 </div>
+                {cashSelectedDates.length ? <p className="mt-3 break-words text-[11px] text-white/68">Kijelölt dátumok: {cashSelectedDates.join(" • ")}</p> : null}
+                {cashSelectedExceedsFreeCash ? <p className="mt-2 text-xs text-red-100">A kijelölt összeg meghaladja a szabad kasszát: {formatMoney(availableCashForNewHandover)}.</p> : null}
               </div>
+              <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-5 py-3.5">
+                <button type="button" onClick={() => setCashSelectedDates([])} disabled={!cashSelectedDates.length}
+                  className="h-10 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-xs text-white/74 hover:bg-white/[0.09] disabled:opacity-45">Kijelölések törlése</button>
+                <button type="button" onClick={() => setCashCalendarMode(null)}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#fed700] bg-[#fed700] px-5 text-sm text-[#243044] transition hover:bg-[#eac600]"><Check size={17} /> Kész • {cashSelectedDates.length} nap</button>
+              </footer>
             </section>
-          </div>,
-          document.body,
+          </div>,document.body,
         ) : null}
 
         {handoverOpen ? createPortal(
