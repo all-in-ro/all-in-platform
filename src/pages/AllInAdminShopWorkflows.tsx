@@ -32,6 +32,8 @@ import {
   apiAifConfirmShopCashMovement,
   apiAifRejectShopCashMovement,
   apiAifShopCashOverview,
+  apiAifShopDailySummary,
+  apiAifShopFinancialNotes,
   apiAifShopReservations,
   apiAifReleaseShopReservation,
   apiAifUpdateShopReservationExpiry,
@@ -39,6 +41,8 @@ import {
   apiAifShopReturnHistory,
   apiAifShopShiftDayOverview,
   type AifShopCashOverview,
+  type AifShopDailySummaryResponse,
+  type AifFinancialNoteItem,
   type AifShopExchangeHistoryItem,
   type AifShopReservation,
   type AifShopReturnAuthorizationInboxItem,
@@ -576,30 +580,90 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   popup.document.write("<!doctype html><html><meta charset='utf-8'><body style='font:16px Arial;padding:30px'>A pénztári jegyzőkönyv adatainak betöltése…</body></html>");
   popup.document.close();
 
-  // The six numbered values are read from EACH selected day's audited totals.
-  // Do not substitute cash-only handover gross for all-sales daily gross.
-  const dayReports: Array<AifShopShiftDayOverview | null> = [];
+  // The numbered report contains exactly what was marked on the annotated PDF:
+  // 1 gross, 2 collected, 3 cash, 4 card, 5 shift+cash details, 6 daily/cash notes.
+  // Each requested day is queried separately. Never include intervening days.
+  type CashReceiptAuditDay = {
+    date: string;
+    summary: AifShopDailySummaryResponse | null;
+    shifts: AifShopShiftDayOverview | null;
+    notes: AifFinancialNoteItem[] | null;
+  };
+  const dayReports: CashReceiptAuditDay[] = [];
   for (let start = 0; start < receiptDates.length; start += 4) {
     const days = receiptDates.slice(start, start + 4);
-    const batch = await Promise.all(days.map((date) =>
-      apiAifShopShiftDayOverview({ location: store.code, date }).catch(() => null)
-    ));
+    const batch = await Promise.all(days.map(async (date): Promise<CashReceiptAuditDay> => {
+      const [summary, shifts, notes] = await Promise.all([
+        apiAifShopDailySummary({ location: store.code, date, employee: requestedBy }).catch(() => null),
+        apiAifShopShiftDayOverview({ location: store.code, date }).catch(() => null),
+        apiAifShopFinancialNotes({ location: store.code, date }).catch(() => null),
+      ]);
+      return {
+        date,
+        summary: summary?.date === date && summary.location?.code === store.code ? summary : null,
+        shifts: shifts?.date === date && shifts.location?.code === store.code ? shifts : null,
+        notes: notes?.date === date ? (notes.items || []) : null,
+      };
+    }));
     dayReports.push(...batch);
   }
-  const complete = Boolean(receiptDates.length && receiptDates.length === dayReports.length && dayReports.every(Boolean));
-  const totalOf = (key: "salesBeforeDiscount" | "collectedTotal" | "discountTotal") => complete
-    ? dayReports.reduce((sum, report) => sum + Number((report?.totals as (AifShopShiftDayOverview["totals"] & {collectedTotal?: number}) | undefined)?.[key] ?? 0), 0)
+  const complete = dayReports.length === receiptDates.length && dayReports.length > 0
+    && dayReports.every((r) => r.summary !== null);
+  const total = (value: (r: AifShopDailySummaryResponse) => number) => complete
+    ? Math.round(dayReports.reduce((sum, day) => sum + value(day.summary!), 0) * 100) / 100
     : null;
-  const totalGross = totalOf("salesBeforeDiscount");
-  const totalDiscount = totalOf("discountTotal");
-  const totalCollected = totalOf("collectedTotal");
-  const firstOpening = dayReports.length && dayReports[0]?.totals.openingCash != null
-    ? Number(dayReports[0].totals.openingCash) : null;
-  const lastReport = dayReports[dayReports.length - 1] || null;
-  const lastClosing = lastReport?.dayClosure?.countedCash != null
-    ? Number(lastReport.dayClosure.countedCash) : null;
+  const totalGross = total((r) => numberValue(r.summary.grossCollectedTotal ?? r.summary.salesBeforeDiscount));
+  const totalCollected = total((r) => numberValue(r.summary.collectedTotal ?? r.summary.revenue));
+  const totalCash = total((r) => numberValue((r.payments || []).find((p) => p.method === "cash")?.amount));
+  const totalCard = total((r) => numberValue((r.payments || []).find((p) => p.method === "card")?.amount));
   const metricText = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : money(value);
   const multipleDays = receiptDates.length > 1;
+  const cashAndShiftRows: string[] = [];
+  for (const report of dayReports) {
+    const prefix = multipleDays ? `${report.date.replace(/-/g, ".")} • ` : "";
+    const shift = report.shifts;
+    const employee = (shift?.employees || []).find((person) =>
+      String(person.name || "").trim().toLocaleLowerCase("hu-HU") === requestedBy.toLocaleLowerCase("hu-HU")) || null;
+    const openingCash = employee?.openingCash ?? shift?.totals.openingCash ?? null;
+    const openingName = employee?.name || requestedBy;
+    const openingText = openingCash === null
+      ? "Nincs rögzített nyitó kassza"
+      : `${openingName} • ${money(openingCash)} • Nyitó összeg`;
+    cashAndShiftRows.push(`<div class="audit-list-row"><span class="audit-row-name">${escapePrintHtml(prefix)}Nyitó kassza</span><span>${escapePrintHtml(openingText)}</span></div>`);
+    const closure = shift?.dayClosure;
+    const closureText = closure
+      ? `${formatDateTime(closure.closedAt)} • ${closure.actor || "–"} • ${money(closure.countedCash)} • Eltérés: ${money(closure.cashDifference)}`
+      : "Nincs rögzített napzárás";
+    cashAndShiftRows.push(`<div class="audit-list-row"><span class="audit-row-name">${escapePrintHtml(prefix)}Napzárás</span><span>${escapePrintHtml(closureText)}</span></div>`);
+  }
+  if (!cashAndShiftRows.length) cashAndShiftRows.push('<div class="audit-list-row">Nincs megjeleníthető műszakadat.</div>');
+  const notesRows: string[] = [];
+  const shownNotes = new Set<string>();
+  for (const report of dayReports) {
+    if (report.notes === null) {
+      notesRows.push(`<div class="audit-note">${escapePrintHtml(report.date)}: A napi megjegyzések nem tölthetők be.</div>`);
+      continue;
+    }
+    for (const note of report.notes) {
+      const value = String(note.note || "").trim();
+      if (!value) continue;
+      if (note.actor && String(note.actor).trim().toLocaleLowerCase("hu-HU") !== requestedBy.toLocaleLowerCase("hu-HU")) continue;
+      // Do not duplicate a source note. No invented notes or values.
+      const key = `${report.date}:${note.kind}:${note.id}`;
+      if (shownNotes.has(key)) continue;
+      shownNotes.add(key);
+      const kind = note.kind === 'day_close' ? 'Napzárási megjegyzés'
+        : note.kind === 'daily_note' ? 'Napi megjegyzés'
+        : note.kind === 'cash_movement' ? 'Készpénzmozgás megjegyzés'
+        : note.kind === 'shift_handover' ? 'Műszakátadási megjegyzés'
+        : note.kind === 'shift_acceptance' ? 'Műszakátvételi megjegyzés'
+        : note.kind === 'customer_payment' ? 'Tartozásrendezési megjegyzés' : 'Pénzügyi megjegyzés';
+      const prefix = multipleDays ? `${report.date.replace(/-/g, '.')} • ` : '';
+      const meta = `${prefix}${note.happenedAt ? formatDateTime(note.happenedAt) : report.date} • ${note.actor || '–'} • ${kind}`;
+      notesRows.push(`<div class="audit-note"><strong>${escapePrintHtml(meta)}</strong><div class="audit-note-body">${escapePrintHtml(value)}</div></div>`);
+    }
+  }
+  if (!notesRows.length) notesRows.push('<div class="audit-note">Nincs rögzített napi vagy kasszamegjegyzés.</div>');
 
   if (popup.closed) return;
   popup.document.open();
@@ -613,34 +677,42 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #fff; color: #17202d; font-family: Arial, Helvetica, sans-serif; }
   body { font-size: 11px; }
-  .sheet { width: 100%; border: 1px solid #9aa4b2; padding: 8mm; }
-  .top { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 5mm; border-bottom: 2px solid #354153; }
+  .sheet { width: 100%; border: 1px solid #9aa4b2; padding: 6mm; }
+  .top { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 3mm; border-bottom: 2px solid #354153; }
   .brand { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
   .sub { margin-top: 3px; font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: #697586; }
   .docid { text-align: right; font-size: 9px; color: #586476; line-height: 1.5; }
-  h1 { margin: 7mm 0 1.5mm; text-align: center; font-size: 19px; letter-spacing: .03em; }
-  .lead { margin: 0 0 6mm; text-align: center; color: #5f6b7a; font-size: 10px; }
+  h1 { margin: 5mm 0 1.5mm; text-align: center; font-size: 19px; letter-spacing: .03em; }
+  .lead { margin: 0 0 4mm; text-align: center; color: #5f6b7a; font-size: 10px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
-  .box { border: 1px solid #c3cad4; min-height: 17mm; padding: 3mm; border-radius: 2mm; }
+  .box { border: 1px solid #c3cad4; min-height: 15mm; padding: 3mm; border-radius: 2mm; }
   .label { font-size: 8px; text-transform: uppercase; letter-spacing: .10em; color: #778292; margin-bottom: 1.5mm; }
   .value { font-size: 12px; line-height: 1.35; }
-   .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5mm; }
-   .audit-value { min-height: 15mm; border: 1px solid #c3cad4; border-radius: 2mm; padding: 2.3mm 2.6mm; break-inside: avoid; }
-   .audit-head { display: flex; align-items: center; gap: 5px; color: #5e6978; font-size: 8px; text-transform: uppercase; }
-   .audit-number { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #354153; align-items: center; justify-content: center; font-size: 9px; color: #354153; font-weight: 700; }
-   .audit-money { margin-top: 1.5mm; font-size: 15px; font-weight: 700; color: #17202d; white-space: nowrap; }
-   .audit-help { margin: 1mm 0 0; font-size: 8px; color: #6a7786; line-height: 1.4; }
-   .amount { margin: 5mm 0; border: 2px solid #354153; padding: 4mm; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+  .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; }
+  .audit-value { min-height: 14mm; border: 1px solid #c3cad4; border-radius: 2mm; padding: 2mm; break-inside: avoid; }
+  .audit-head { display: flex; align-items: center; gap: 4px; color: #5e6978; font-size: 8px; text-transform: uppercase; }
+  .audit-number { display: inline-flex; flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #354153; align-items: center; justify-content: center; font-size: 9px; color: #354153; font-weight: 700; }
+  .audit-money { margin-top: 1.5mm; font-size: 13px; font-weight: 700; color: #17202d; white-space: nowrap; }
+  .audit-section { margin-top: 3mm; padding: 2.5mm 3mm; border: 1px solid #c3cad4; border-radius: 2mm; break-inside: avoid; }
+  .audit-section-title { display: flex; align-items: center; gap: 6px; margin-bottom: 1.5mm; font-size: 10px; font-weight: 700; }
+  .audit-list-row { display: grid; grid-template-columns: 22mm 1fr; gap: 2mm; padding: 1.2mm 0; font-size: 9px; line-height: 1.35; border-bottom: 1px solid #e7ebef; }
+  .audit-list-row:last-child { border-bottom: none; }
+  .audit-row-name { font-weight: 600; }
+  .audit-note { font-size: 9px; line-height: 1.4; padding: 1.5mm 0; border-bottom: 1px solid #e7ebef; }
+  .audit-note:last-child { border-bottom: none; }
+  .audit-note-body { margin-top: .5mm; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .audit-warning { margin-top: 2mm; font-size: 8px; color: #8a3434; }
+   .amount { margin: 3mm 0; border: 2px solid #354153; padding: 4mm; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
   .amount .value { font-size: 24px; font-weight: 700; white-space: nowrap; }
-  .statement { margin-top: 6mm; border-top: 1px solid #c3cad4; border-bottom: 1px solid #c3cad4; padding: 4mm 0; line-height: 1.65; font-size: 10px; }
-  .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 17mm; }
+  .statement { margin-top: 3mm; border-top: 1px solid #c3cad4; border-bottom: 1px solid #c3cad4; padding: 3mm 0; line-height: 1.55; font-size: 10px; }
+  .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 8mm; }
   .sig { text-align: center; }
   .sigline { border-top: 1px solid #354153; padding-top: 2mm; font-size: 9px; }
-  .signame { margin-bottom: 13mm; min-height: 5mm; font-size: 11px; }
-  .footer { margin-top: 9mm; padding-top: 3mm; border-top: 1px solid #d5dbe3; display: flex; justify-content: space-between; gap: 20px; font-size: 8px; color: #7b8593; }
+  .signame { margin-bottom: 8mm; min-height: 5mm; font-size: 11px; }
+  .footer { margin-top: 4mm; padding-top: 3mm; border-top: 1px solid #d5dbe3; display: flex; justify-content: space-between; gap: 20px; font-size: 8px; color: #7b8593; }
   .status { font-weight: 700; letter-spacing: .08em; }
   @media print {
-    .sheet { break-inside: avoid; }
+    .audit-value, .audit-list-row, .audit-note { break-inside: avoid; }
   }
 </style>
 </head>
@@ -679,16 +751,23 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
       </div>
     </section>
 
-    <section class="audit-values" aria-label="A készpénzátadás hat pénzügyi mutatója">
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó napi forgalom</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Befolyt napi összeg</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Kedvezmény</div><div class="audit-money">${escapePrintHtml(metricText(totalDiscount))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">4</span> Készpénz átadás</div><div class="audit-money">${escapePrintHtml(amountText)}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">5</span> ${multipleDays ? "Első nap kezdő kasszája" : "Napi kezdő kassza"}</div><div class="audit-money">${escapePrintHtml(metricText(firstOpening))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">6</span> ${multipleDays ? "Utolsó nap záró kasszája" : "Új eladó kezdő kassza / zárás"}</div><div class="audit-money">${escapePrintHtml(metricText(lastClosing))}</div></div>
+    <section class="audit-values" aria-label="A készpénzátadás 1-4. pénzügyi mutatói">
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Befolyt</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Készpénz</div><div class="audit-money">${escapePrintHtml(metricText(totalCash))}</div></div>
+      <div class="audit-value"><div class="audit-head"><span class="audit-number">4</span> Bankkártya</div><div class="audit-money">${escapePrintHtml(metricText(totalCard))}</div></div>
     </section>
-    ${multipleDays ? `<p class="audit-help">Több napos átadás: az 1–3. érték a kijelölt napok összege, az 5–6. érték az első/utolsó nap kasszaállapota; ezeket nem szabad összeadni.</p>` : ""}
-    ${!complete ? `<p class="audit-help">A napi forgalmi adatok egy része nem érhető el. A hiányzó mezők nem becsült értékek.</p>` : ""}
+
+    <section class="audit-section">
+      <div class="audit-section-title"><span class="audit-number">5</span> Kassza és műszak</div>
+      ${cashAndShiftRows.join('')}
+    </section>
+
+    <section class="audit-section">
+      <div class="audit-section-title"><span class="audit-number">6</span> Napi és kasszamegjegyzések</div>
+      ${notesRows.join('')}
+    </section>
+    ${!complete ? `<p class="audit-warning">A kijelölt napok egy részének adatai nem érhetők el. A hiányzó összegeket nem becsültük meg.</p>` : ""}
 
     <section class="amount">
       <div>

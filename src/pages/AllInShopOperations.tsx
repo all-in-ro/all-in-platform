@@ -55,6 +55,7 @@ import {
   apiAifShopCashOverview,
   apiAifShopFinancialNotes,
   apiAifShopDailyAuditPdfUrl,
+  apiAifDownloadShopDailyAuditExcel,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
   apiAifShopSaleDetail,
@@ -111,6 +112,7 @@ const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string
 };
 
 const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
+const AIF_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg";
 
 // AIF_SELLER_DAILY_DISCOUNT_TILE_20261023
 // Presentation tiles only. Bank transfers remain booked in payment totals.
@@ -1585,6 +1587,7 @@ export default function AllInShopOperations({
   const browsingOtherLocation = browsingInventory && String(browseLocationCode) !== String(locationCode);
   const displayLocationName = browsingInventory ? browseLocationName : locationName;
 
+  const [excelDownloadBusy, setExcelDownloadBusy] = useState(false);
   const [pdfChoice, setPdfChoice] = useState<{date:string;handoverId?:string} | null>(null);
   const [summaryDate, setSummaryDate] = useState(todayIso());
   // The cashier can switch which audited total is prominent; figures never change.
