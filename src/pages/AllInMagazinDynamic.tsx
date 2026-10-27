@@ -18,6 +18,7 @@ import {
   UserPlus,
   UserRound,
   Users,
+  LockKeyhole,
 } from "lucide-react";
 import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
@@ -28,6 +29,8 @@ import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
 import AllInShopIncoming from "./AllInShopIncoming";
 import AllInShopDocuments from "./AllInShopDocuments";
+import AllInShopifyWarehousePanel from "./AllInShopifyWarehousePanel";
+import AllInShopifyCustomers from "./AllInShopifyCustomers";
 import {
   apiAifShopReservations,
   type AifShopReservation,
@@ -64,6 +67,12 @@ type ReservationDeadlineAlert = {
   date: string | null;
   label: "LEJÁRT" | "MA LEJÁR" | null;
 };
+
+const SHOPIFY_WAREHOUSE_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
+const SHOP_MODULE_KEYS = ["search", "stock", "reserved", "transfers", "returns", "receipts", "summary", "vacations", "clients"] as const;
+function initialShopModules(shopId: string) {
+  return SHOP_MODULE_KEYS.filter((key) => !(key === "vacations" && /^(shopify|raktar)$/i.test(shopId)));
+}
 
 const EMPTY_RESERVATION_DEADLINE_ALERT: ReservationDeadlineAlert = {
   count: 0,
@@ -167,6 +176,39 @@ export default function AllInMagazinDynamic({
   saleHash = "shopsale",
   onLogout,
 }: Props) {
+  const isShopifyWarehouse = /shopify/i.test(`${shopId} ${locationCode} ${locationName}`);
+  const [enabledShopModules, setEnabledShopModules] = useState<string[]>(() => initialShopModules(shopId));
+  const [shopModulesBusy, setShopModulesBusy] = useState(true);
+  const [shopModulesError, setShopModulesError] = useState("");
+  const [shopifyPanelMode, setShopifyPanelMode] = useState<"reserved" | "documents" | null>(null);
+  const [shopifyCustomersOpen, setShopifyCustomersOpen] = useState(false);
+  const moduleIsEnabled = (key: string) => enabledShopModules.includes(key);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await fetch(`${apiBase.replace(/\/+$/, "")}/aif/shop-modules/me?shopId=${encodeURIComponent(shopId)}`, {
+          credentials: "include", cache: "no-store", headers: { Accept: "application/json" },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        if (!Array.isArray(data.modules)) throw new Error("Hiányzó modulbeállítás.");
+        if (cancelled) return;
+        setEnabledShopModules(data.modules.filter((key: unknown): key is string => typeof key === "string"));
+        setShopModulesError(data.ambiguous ? "Ehhez a névhez több belépőkód van. Az admin ellenőrizze a jogosultságokat." : "");
+      } catch (error) {
+        if (!cancelled) setShopModulesError(error instanceof Error ? `A modulbeállítás nem frissült: ${error.message}` : "A modulbeállítás nem frissült.");
+      } finally { if (!cancelled) setShopModulesBusy(false); }
+    }
+    setEnabledShopModules(initialShopModules(shopId));
+    setShopModulesBusy(true);
+    void load();
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
+  }, [apiBase, shopId]);
+
   const actions = useMemo<ActionCard[]>(() => [
     {
       key: "search",
@@ -184,15 +226,15 @@ export default function AllInMagazinDynamic({
     },
     {
       key: "reserved",
-      title: "Félretett termékek",
-      description: "Klienshez kötött foglalások, lejáratok és átvételek.",
+      title: isShopifyWarehouse ? "Shopify foglalások" : "Félretett termékek",
+      description: isShopifyWarehouse ? "Online rendeléshez lefoglalt csomagok és vevők." : "Klienshez kötött foglalások, lejáratok és átvételek.",
       icon: PackageSearch,
       primary: true,
     },
     {
       key: "transfers",
-      title: "Beérkező áru",
-      description: "Lezárt Avizok tételes átvétele és havi beérkezési előzmény.",
+      title: isShopifyWarehouse ? "Shopify Avizok" : "Beérkező áru",
+      description: isShopifyWarehouse ? "Automatikus Shopify Avizok, csomagok és előzmények." : "Lezárt Avizok tételes átvétele és havi beérkezési előzmény.",
       icon: Truck,
       primary: true,
     },
@@ -206,7 +248,7 @@ export default function AllInMagazinDynamic({
     {
       key: "receipts",
       title: "Bizonylatok",
-      description: "Saját eladások, pénzátadások, műszakok, áruátvételek és kérelmek.",
+      description: isShopifyWarehouse ? "Shopify belső Avizok megnyitása és nyomtatása." : "Saját eladások, pénzátadások, műszakok, áruátvételek és kérelmek.",
       icon: Receipt,
       primary: true,
     },
@@ -224,7 +266,7 @@ export default function AllInMagazinDynamic({
       icon: CalendarDays,
       primary: true,
     },
-  ], [locationName]);
+  ], [locationName, isShopifyWarehouse]);
 
   const [now, setNow] = useState(() => new Date());
   const [notice, setNotice] = useState("");
@@ -356,6 +398,12 @@ export default function AllInMagazinDynamic({
   }
 
   function openClients(mode: "search" | "new") {
+    if (!moduleIsEnabled("clients")) return;
+    if (isShopifyWarehouse) {
+      setShopifyCustomersOpen(true);
+      setNotice("");
+      return;
+    }
     setClientsInitialMode(mode);
     setClientsOpen(true);
     setNotice("");
@@ -372,6 +420,12 @@ export default function AllInMagazinDynamic({
   }
 
   function openModule(action: ActionCard) {
+    if (!moduleIsEnabled(action.key)) return;
+    if (isShopifyWarehouse && ["reserved", "transfers", "receipts"].includes(action.key)) {
+      setShopifyPanelMode(action.key === "reserved" ? "reserved" : "documents");
+      setNotice("");
+      return;
+    }
     if (action.key === "vacations") {
       setNotice("");
       setVacationsOpen(true);
@@ -423,7 +477,9 @@ export default function AllInMagazinDynamic({
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-center">
             <div className="flex min-w-0 items-center gap-4">
               <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/22 text-[#cffffd]">
-                <Store size={28} strokeWidth={1.8} />
+                {isShopifyWarehouse
+                  ? <img src={SHOPIFY_WAREHOUSE_ICON} alt="Shopify" className="h-10 w-10 object-contain" />
+                  : <Store size={28} strokeWidth={1.8} />}
               </span>
               <div className="min-w-[240px] border-l-4 border-[#2a8d8b] pl-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/65">AllInFashion • értékesítés</p>
@@ -500,6 +556,9 @@ export default function AllInMagazinDynamic({
           </div>
         </section>
 
+        {shopModulesError ? (
+          <div role="status" className="rounded-2xl border border-amber-200/24 bg-amber-500/10 px-4 py-2 text-xs text-amber-50">{shopModulesError}</div>
+        ) : null}
         {notice ? (
           <div className="rounded-2xl border border-amber-200/28 bg-amber-500/12 px-4 py-3 text-sm text-amber-50">
             {notice}
@@ -518,21 +577,27 @@ export default function AllInMagazinDynamic({
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {actions.map((action) => {
               const Icon = action.icon;
+              const moduleActive = moduleIsEnabled(action.key);
               const reservationIsDanger =
-                action.key === "reserved" && reservationDeadlineAlert.count > 0;
+                moduleActive && action.key === "reserved" && reservationDeadlineAlert.count > 0;
               const alertBadgeText = reservationIsDanger
                 ? reservationDeadlineAlert.count > 1
                   ? `${reservationDeadlineAlert.count} SÜRGŐS`
                   : reservationDeadlineAlert.label
-                : "Aktív modul";
+                : moduleActive ? "Aktív modul" : "Inaktív";
 
               return (
                 <button
                   key={action.key}
                   type="button"
                   onClick={() => openModule(action)}
+                  disabled={!moduleActive || shopModulesBusy}
+                  aria-disabled={!moduleActive || shopModulesBusy}
+                  title={!moduleActive ? "Ezt a modult az admin letiltotta ennél a belépőkódnál." : action.title}
                   className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
-                    reservationIsDanger
+                    !moduleActive || shopModulesBusy
+                      ? "cursor-not-allowed border-white/16 bg-[#344153] text-white/45 opacity-55 grayscale-[0.4] shadow-none"
+                      : reservationIsDanger
                       ? "border-[#ffbac2]/85 bg-gradient-to-br from-[#e0182f] via-[#c30d1c] to-[#8f0714] shadow-[0_18px_38px_rgba(134,7,20,0.42)] ring-2 ring-[#ffccd2]/28 hover:brightness-110"
                       : "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
                   }`}
@@ -550,7 +615,7 @@ export default function AllInMagazinDynamic({
                         ? "border-white/48 bg-white/18 font-semibold text-white shadow-[0_6px_16px_rgba(80,0,12,0.25)]"
                         : "border-white/14 bg-black/10 text-white/55"
                     }`}>
-                      {reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
+                      {!moduleActive ? <LockKeyhole size={12} /> : reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
                       {alertBadgeText}
                     </span>
                   </div>
@@ -579,31 +644,35 @@ export default function AllInMagazinDynamic({
             <button
               type="button"
               onClick={() => openClients("search")}
-              className="flex min-h-14 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl px-2 text-left text-white transition hover:bg-white/[0.05] active:scale-[0.995]"
+              disabled={!moduleIsEnabled("clients") || shopModulesBusy}
+              className="flex min-h-14 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl px-2 text-left text-white transition hover:bg-white/[0.05] active:scale-[0.995] disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
                 <Users size={21} />
               </span>
               <span className="min-w-0">
                 <span className="block text-[10px] uppercase tracking-[0.14em] text-white/42">Vevői nyilvántartás</span>
-                <span className="mt-1 block text-lg text-white">Kliensek</span>
+                                  <span className="mt-1 block text-lg text-white">{isShopifyWarehouse ? "Shopify kliensek" : "Kliensek"}{!moduleIsEnabled("clients") ? " · Inaktív" : ""}</span>
               </span>
             </button>
 
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => openClients("search")}
-                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-sm text-white transition hover:bg-[#465366] active:scale-[0.98]"
+                  onClick={() => openClients("search")}
+                  disabled={!moduleIsEnabled("clients") || shopModulesBusy}
+                  className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-sm text-white transition hover:bg-[#465366] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Search size={17} /> Lista
               </button>
               <button
                 type="button"
-                onClick={() => openClients("new")}
-                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98]"
+                  onClick={() => openClients("new")}
+                  disabled={isShopifyWarehouse || !moduleIsEnabled("clients") || shopModulesBusy}
+                  title={isShopifyWarehouse ? "A Shopify kliensek az online rendelésekből jelennek meg, kézi rögzítés nélkül." : "Új kliens"}
+                  className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45"
               >
-                <UserPlus size={17} /> Új kliens
+                  <UserPlus size={17} /> {isShopifyWarehouse ? "Automatikus" : "Új kliens"}
               </button>
             </div>
           </div>
@@ -611,13 +680,15 @@ export default function AllInMagazinDynamic({
       </div>
 
       <AllInMagazinClients
-        open={clientsOpen}
+        open={!isShopifyWarehouse && clientsOpen}
         initialMode={clientsInitialMode}
         role={role}
         locationCode={locationCode}
         locationName={locationName}
         onClose={() => setClientsOpen(false)}
       />
+      <AllInShopifyCustomers open={isShopifyWarehouse && shopifyCustomersOpen} apiBase={apiBase} onClose={() => setShopifyCustomersOpen(false)} />
+      <AllInShopifyWarehousePanel open={isShopifyWarehouse && shopifyPanelMode !== null} mode={shopifyPanelMode || "documents"} apiBase={apiBase} onClose={() => setShopifyPanelMode(null)} />
       <AllInShopVacations
         open={vacationsOpen}
         actor={actor}
@@ -634,21 +705,21 @@ export default function AllInMagazinDynamic({
         onClose={() => setShopOperationMode(null)}
       />
       <AllInShopReservations
-        open={reservationsOpen}
+        open={!isShopifyWarehouse && reservationsOpen}
         actor={actor}
         locationCode={locationCode}
         locationName={locationName}
         onClose={closeReservations}
       />
       <AllInShopIncoming
-        open={incomingOpen}
+        open={!isShopifyWarehouse && incomingOpen}
         actor={actor}
         locationCode={locationCode}
         locationName={locationName}
         onClose={() => setIncomingOpen(false)}
       />
       <AllInShopDocuments
-        open={documentsOpen}
+        open={!isShopifyWarehouse && documentsOpen}
         actor={actor}
         locationCode={locationCode}
         locationName={locationName}

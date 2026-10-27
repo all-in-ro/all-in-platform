@@ -113,6 +113,7 @@ const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string
 
 const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 const AIF_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg";
+const AIF_SHOPIFY_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
 
 // AIF_SELLER_DAILY_DISCOUNT_TILE_20261023
 // Presentation tiles only. Bank transfers remain booked in payment totals.
@@ -1558,6 +1559,7 @@ export default function AllInShopOperations({
 }: Props) {
   const meta = MODE_META[mode];
   const HeaderIcon = meta.icon;
+  const isShopifyWarehouse = /shopify/i.test(`${locationCode} ${locationName}`);
   const [error, setError] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -2861,7 +2863,9 @@ export default function AllInShopOperations({
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#1e4f54] via-[#247b79] to-[#2a8d8b] px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/12 text-white">
-              <HeaderIcon size={24} />
+              {isShopifyWarehouse
+                ? <img src={AIF_SHOPIFY_ICON} alt="Shopify" className="h-8 w-8 object-contain" />
+                : <HeaderIcon size={24} />}
             </span>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.16em] text-white/62">{meta.eyebrow}</p>
@@ -3022,7 +3026,7 @@ export default function AllInShopOperations({
                       {filteredStockItems.length !== stockItems.length ? ` • ${stockItems.length} betöltött találatból` : ""}
                     </span>
                     <span>
-                      Teljes eladható készlet • {browseLocationName}: <strong className="font-normal text-white">{stockSummary.variantCount} variáns</strong>
+                      {String(browseLocationCode).toLowerCase() === "shopify" ? "Fizikai készlet" : "Teljes eladható készlet"} • {browseLocationName}: <strong className="font-normal text-white">{stockSummary.variantCount} variáns</strong>
                     </span>
                   </div>
                   {!stockQuery.trim() && stockData?.complete === true && stockItems.length !== numberValue(stockSummary.variantCount) ? (
@@ -3039,7 +3043,11 @@ export default function AllInShopOperations({
                     <article key={item.variantId} className={`grid grid-cols-[80px_1fr_auto] items-center gap-3 rounded-[20px] border p-3 ${item.lowStock ? "border-red-300/48 bg-red-950/18" : "border-white/13 bg-[#374357]"}`}>
                       <ProductImage src={item.imageUrl} title={item.title} />
                       <div className="min-w-0"><h3 className="truncate text-base">{item.title}</h3><p className="mt-1 truncate text-xs text-white/50">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p><p className="mt-2 text-[11px] text-white/48">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p><p className="mt-2 text-sm text-[#d7fffd]">{formatMoney(item.sellPrice)}</p></div>
-                      <div className="text-right"><span className={`inline-flex min-w-[78px] justify-center rounded-xl border px-3 py-2 text-lg ${item.lowStock ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{item.availableQty} db</span>{item.reservedQty > 0 ? <p className="mt-2 text-[10px] text-white/45">Foglalt: {item.reservedQty}</p> : null}</div>
+                      <div className="min-w-[88px] text-right">
+                         <span className={`inline-flex min-w-[78px] justify-center rounded-xl border px-3 py-2 text-lg ${item.availableQty === 0 && item.reservedQty > 0 ? "border-amber-200/42 bg-amber-500/13 text-amber-50" : item.lowStock ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{item.availableQty} db szabad</span>
+                         <p className="mt-1 text-[11px] text-white/65">Fizikai: {item.qty} db</p>
+                         {item.reservedQty > 0 ? <p className="mt-1 text-[11px] text-amber-100">Foglalt: {item.reservedQty} db</p> : null}
+                       </div>
                     </article>
                   ))}
                   {!stockLoading && !stockItems.length ? <div className="col-span-full flex min-h-[260px] items-center justify-center rounded-[22px] border border-dashed border-white/14 text-white/45">Nincs találat.</div> : null}

@@ -12,6 +12,7 @@ import {
   Home,
   KeyRound,
   MapPin,
+  SlidersHorizontal,
   Plus,
   Power,
   Printer,
@@ -23,6 +24,40 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+
+const MODULES = [
+  { key: "search", title: "Termék keresése" },
+  { key: "stock", title: "Üzleti készlet" },
+  { key: "reserved", title: "Félretett termékek / Shopify foglalások" },
+  { key: "transfers", title: "Beérkező áru / Shopify Avizok" },
+  { key: "returns", title: "Visszáru" },
+  { key: "receipts", title: "Bizonylatok" },
+  { key: "summary", title: "Napi összesítés" },
+  { key: "vacations", title: "Szabadságok" },
+  { key: "clients", title: "Kliensek / Shopify kliensek" },
+] as const;
+type ModuleKey = typeof MODULES[number]["key"];
+const allModuleKeys: ModuleKey[] = MODULES.map(item => item.key);
+function initialModules(shopId: string): ModuleKey[] {
+  return allModuleKeys.filter(key => !(key === "vacations" && /^(shopify|raktar)$/i.test(shopId)));
+}
+function parsedModules(modules: unknown, shopId: string): ModuleKey[] {
+  if (!Array.isArray(modules)) return initialModules(shopId);
+  return allModuleKeys.filter(key => modules.includes(key));
+}
+function ModuleChecklist({value,onChange,disabled = false}: {
+  value: ModuleKey[]; onChange:(value:ModuleKey[])=>void; disabled?:boolean;
+}) {
+  return <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    {MODULES.map((item) => {
+      const checked=value.includes(item.key);
+      return <label key={item.key} className={`flex min-h-11 cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[12px] transition ${checked ? "border-[#8ce7e2]/34 bg-[#2a8d8b]/15 text-white" : "border-white/12 bg-[#293548] text-white/50"} ${disabled ? "cursor-wait opacity-55" : "hover:border-[#9be9e5]/45"}`}>
+        <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked ? allModuleKeys.filter(key => key === item.key || value.includes(key)) : value.filter(key => key !== item.key))} className="h-4 w-4 shrink-0 accent-[#2a8d8b]" />
+        <span className="min-w-0 leading-4">{item.title}</span>
+      </label>;
+    })}
+  </div>;
+}
 
 type Shop = { id: string; name: string };
 
@@ -368,6 +403,19 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [newUserModules, setNewUserModules] = useState<ModuleKey[]>(() => initialModules("csikszereda"));
+  const [newUserModuleBusy, setNewUserModuleBusy] = useState(false);
+  const [userModuleItem, setUserModuleItem] = useState<CodeItem | null>(null);
+  const [userModuleSelection, setUserModuleSelection] = useState<ModuleKey[]>([]);
+  const [userModuleBusy, setUserModuleBusy] = useState(false);
+  const [userModuleSaving, setUserModuleSaving] = useState(false);
+  const [userModuleError, setUserModuleError] = useState("");
+  const [placeCreateModules, setPlaceCreateModules] = useState<ModuleKey[]>(allModuleKeys);
+  const [defaultModuleShop, setDefaultModuleShop] = useState<Shop | null>(null);
+  const [defaultModuleSelection, setDefaultModuleSelection] = useState<ModuleKey[]>([]);
+  const [defaultModuleBusy, setDefaultModuleBusy] = useState(false);
+  const [defaultModuleError, setDefaultModuleError] = useState("");
+  const [defaultModuleSaving, setDefaultModuleSaving] = useState(false);
   const [items, setItems] = useState<CodeItem[]>([]);
   const [listBusy, setListBusy] = useState(false);
   const [listErr, setListErr] = useState("");
@@ -392,6 +440,79 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
   const shopName = (id: string) => shops.find((shop) => shop.id === id)?.name || id;
   const shopLabel = shopName(shopId);
+
+  useEffect(() => {
+    if (!shopId) return;
+    let cancelled = false;
+    setNewUserModules(initialModules(shopId));
+    setNewUserModuleBusy(true);
+    void fetch(`${apiBase}/aif/shop-modules/defaults?shopId=${encodeURIComponent(shopId)}`, {credentials:"include",cache:"no-store"})
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        if (!cancelled) setNewUserModules(parsedModules(data.modules,shopId));
+      }).catch(() => { /* Az új belépőkódnál a biztonságos helyszín-alapbeállítás látszik. */ })
+      .finally(() => { if (!cancelled) setNewUserModuleBusy(false); });
+    return () => { cancelled = true; };
+  }, [apiBase, shopId]);
+
+  async function openUserModuleEditor(item: CodeItem) {
+    setUserModuleItem(item);
+    setUserModuleBusy(true);
+    setUserModuleError("");
+    setUserModuleSelection(initialModules(item.shopId));
+    try {
+      const response=await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(item.id)}`, {credentials:"include",cache:"no-store"});
+      const data=await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setUserModuleSelection(parsedModules(data.modules,item.shopId));
+    } catch(e) {setUserModuleError(e instanceof Error ? e.message : "Nem tölthető be.");}
+    finally {setUserModuleBusy(false);}
+  }
+
+  async function saveUserModules() {
+    if (!userModuleItem || userModuleSaving) return;
+    setUserModuleSaving(true); setUserModuleError("");
+    try {
+      const response=await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(userModuleItem.id)}`, {
+        method:"PUT",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify({modules:userModuleSelection}),
+      });
+      const data=await response.json().catch(()=>({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setPageNotice(`${userModuleItem.name || "A dolgozó"} kártyái elmentve.`);
+      setUserModuleItem(null);
+    }catch(e){setUserModuleError(e instanceof Error?e.message:"A mentés nem sikerült.");}
+    finally{setUserModuleSaving(false);}
+  }
+
+  async function openDefaultModuleEditor(shop: Shop) {
+    setDefaultModuleShop(shop); setDefaultModuleSelection(initialModules(shop.id));
+    setDefaultModuleBusy(true);setDefaultModuleError("");
+    try {
+      const response=await fetch(`${apiBase}/aif/shop-modules/defaults?shopId=${encodeURIComponent(shop.id)}`,{credentials:"include",cache:"no-store"});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error || `HTTP ${response.status}`);
+      setDefaultModuleSelection(parsedModules(data.modules,shop.id));
+    }catch(e){setDefaultModuleError(e instanceof Error?e.message:"Nem tölthető be.");}
+    finally{setDefaultModuleBusy(false);}
+  }
+
+  async function saveDefaultModules() {
+    if(!defaultModuleShop || defaultModuleSaving)return;
+    setDefaultModuleSaving(true);setDefaultModuleError("");
+    try {
+      const response=await fetch(`${apiBase}/aif/shop-modules/defaults`,{
+        method:"PUT",credentials:"include",headers:{"content-type":"application/json"},
+        body:JSON.stringify({shopId:defaultModuleShop.id,modules:defaultModuleSelection}),
+      });
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error || `HTTP ${response.status}`);
+      setPageNotice(`${defaultModuleShop.name}: helyszíni alapbeállítás mentve.`);
+      if(shopId===defaultModuleShop.id)setNewUserModules([...defaultModuleSelection]);
+      setDefaultModuleShop(null);
+    }catch(e){setDefaultModuleError(e instanceof Error?e.message:"Nem sikerült elmenteni.");}
+    finally{setDefaultModuleSaving(false);}
+  }
 
   const activeCount = useMemo(() => items.filter((item) => !item.revokedAt).length, [items]);
   const inactiveCount = useMemo(() => items.filter((item) => Boolean(item.revokedAt)).length, [items]);
@@ -425,10 +546,13 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       const response = await fetch(url, { credentials: "include", cache: "no-store" });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
-      setItems(Array.isArray(body?.items) ? body.items : []);
+      const list = Array.isArray(body?.items) ? body.items : [];
+      setItems(list);
+      return list as CodeItem[];
     } catch (error: any) {
       setListErr(String(error?.message || error || "A felhasználói kódok nem tölthetők be."));
       setItems([]);
+      return [] as CodeItem[];
     } finally {
       setListBusy(false);
     }
@@ -466,8 +590,20 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
       setOutText(text);
       setName("");
-      setPageNotice("Az új belépési kód elkészült.");
-      await fetchList();
+      const newCodes = await fetchList();
+      const generatedCode = text.match(/Kód:\s*([^\s]+)/i)?.[1] || "";
+      const created = newCodes.find(item => item.shopId === shopId && item.code === generatedCode);
+      if (!created) {
+        setErr("A belépési kód elkészült, de nem sikerült megtalálni az új kódot a modulbeállítás mentéséhez. A Modulok gombbal pótolható.");
+      } else {
+        const configResponse = await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(created.id)}`, {
+          method: "PUT", credentials: "include", headers: {"content-type":"application/json"},
+          body: JSON.stringify({ modules: newUserModules }),
+        });
+        const data = await configResponse.json().catch(() => ({}));
+        if (!configResponse.ok) throw new Error(`A belépőkód elkészült, de a modulbeállítás mentése nem sikerült: ${data.error || `HTTP ${configResponse.status}`}. A Modulok gombbal újrapróbálható.`);
+        setPageNotice("A belépőkód és az engedélyezett kártyák elmentve.");
+      }
     } catch (error: any) {
       setErr(String(error?.message || error || "A kód generálása nem sikerült."));
     } finally {
@@ -603,6 +739,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     setPlaceErr("");
     setPlaceName("");
     setPlaceId("");
+    setPlaceCreateModules(allModuleKeys);
     setPlaceOpen(true);
   };
 
@@ -632,9 +769,17 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
 
       setPlaceOpen(false);
-      setPageNotice("Az új helyszín létrehozva.");
       await fetchShops();
       setShopId(normalizedId);
+      const defaultsResponse = await fetch(`${apiBase}/aif/shop-modules/defaults`, {
+        method:"PUT",credentials:"include",headers:{"content-type":"application/json"},
+        body:JSON.stringify({shopId:normalizedId,modules:placeCreateModules}),
+      });
+      const data=await defaultsResponse.json().catch(()=>({}));
+      if (!defaultsResponse.ok) {
+        setPageNotice("A helyszín elkészült, de a kártyabeállítás mentése nem sikerült. A Helyszíneknél pótolható.");
+        setPlaceErr(data.error || `HTTP ${defaultsResponse.status}`);
+      } else setPageNotice("Az új helyszín és a kártyák alapbeállítása elmentve.");
     } catch (error: any) {
       setPlaceErr(String(error?.message || error || "A helyszín létrehozása nem sikerült."));
     } finally {
@@ -918,10 +1063,18 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 />
               </label>
 
-              <Button type="button" className={`${btnPrimary} col-span-2 w-full lg:col-span-1 lg:w-auto`} disabled={busy || !shopId} onClick={createCode}>
+              <Button type="button" className={`${btnPrimary} col-span-2 w-full lg:col-span-1 lg:w-auto`} disabled={busy || !shopId || newUserModuleBusy} onClick={createCode}>
                 {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                 {busy ? "Generálás…" : "Kód generálása"}
               </Button>
+            </div>
+
+            <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#263548]/65 p-3 sm:p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div><p className="flex items-center gap-2 text-sm text-white"><SlidersHorizontal className="h-4 w-4 text-[#8ee6e2]"/> Új dolgozó engedélyezett kártyái</p><p className="mt-1 text-[11px] text-white/47">A nem pipált kártyák megmaradnak a felületen, de inaktívak. Helyszínenként eltérő beállítás.</p></div>
+                <div className="flex gap-2"><button type="button" className={btnSoft} onClick={()=>setNewUserModules([...allModuleKeys])}>Mind</button><button type="button" className={btnSoft} onClick={()=>setNewUserModules([])}>Egyik sem</button></div>
+              </div>
+              <ModuleChecklist value={newUserModules} onChange={setNewUserModules} disabled={newUserModuleBusy || busy}/>
             </div>
 
             {err ? (
@@ -1002,7 +1155,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           {item.code ? <CopyButton value={item.code} copyKey={item.id} compact /> : null}
                         </div>
 
-                        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,.72fr)_38px] gap-2">
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
                           <button
                             type="button"
                             className={`inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 text-[10px] transition disabled:opacity-45 ${inactive ? "border-[#7bd7d4]/35 bg-[#2a8d8b] text-white hover:bg-[#319c99]" : "border-white/16 bg-[#354153] text-white hover:bg-[#3e4d63]"}`}
@@ -1012,6 +1165,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                             <Power className="h-4 w-4" />
                             {inactive ? "Aktiválás" : "Inaktiválás"}
                           </button>
+                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-white/18 bg-[#354153] px-2 text-[10px] text-white"><SlidersHorizontal className="h-3.5 w-3.5"/> Modulok</button>
                           <button
                             type="button"
                             className="inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2 text-[10px] text-white transition hover:bg-[#319c99] disabled:opacity-45"
@@ -1039,7 +1193,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </div>
 
                 <div className="hidden overflow-hidden rounded-2xl border border-white/12 md:block">
-                  <div className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_330px] items-center bg-[#303a4c] px-3 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/48">
+                  <div className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_420px] items-center bg-[#303a4c] px-3 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/48">
                     <div>Felhasználó</div>
                     <div>Helyszín</div>
                     <div>Belépési kód</div>
@@ -1053,7 +1207,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                     return (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_330px] items-center border-t border-white/10 px-3 py-3"
+                        className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_420px] items-center border-t border-white/10 px-3 py-3"
                       >
                         <div className="flex min-w-0 items-center gap-2.5">
                           <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/13 text-[11px] text-[#d7fffd]">
@@ -1073,6 +1227,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                         </div>
                         <div className="text-xs text-white/52">{fmt(item.createdAt)}</div>
                         <div className="flex items-center justify-end gap-2">
+                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-xs text-white hover:bg-[#3e4d63]"><SlidersHorizontal className="h-4 w-4"/> Modulok</button>
                           <button
                             type="button"
                             className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2.5 text-xs text-white transition hover:bg-[#319c99] disabled:opacity-45"
@@ -1178,6 +1333,24 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
         </div>
       ) : null}
 
+      {userModuleItem ? (
+        <div className="fixed inset-0 z-[185] grid place-items-center bg-[#0f172a]/85 p-3 backdrop-blur-md" onMouseDown={event=>{if(event.currentTarget===event.target && !userModuleSaving)setUserModuleItem(null);}}>
+          <section role="dialog" aria-modal="true" className="w-full max-w-[900px] overflow-hidden rounded-[26px] border border-[#9be9e5]/36 bg-[#303a4c] shadow-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-white/13 bg-[#285c60] p-4"><div><p className="text-[10px] uppercase tracking-[.12em] text-white/53">Belépőkódhoz tartozó jogosultságok</p><h2 className="mt-1 text-lg">{userModuleItem.name || "Dolgozó"} • {shopName(userModuleItem.shopId)}</h2></div><button className={iconBtn} onClick={()=>setUserModuleItem(null)} disabled={userModuleSaving} aria-label="Bezárás"><X size={17}/></button></header>
+            <div className="space-y-3 p-4"><p className="text-xs text-white/55">A kikapcsolt modul kártyája szürke és nem nyitható meg. A többi eladót nem érinti.</p><ModuleChecklist value={userModuleSelection} onChange={setUserModuleSelection} disabled={userModuleBusy || userModuleSaving}/>{userModuleBusy?<p className="text-xs text-white/53">Beállítások betöltése...</p>:null}{userModuleError?<p className="rounded-xl border border-red-300/40 bg-red-600/14 p-3 text-xs text-red-100">{userModuleError}</p>:null}</div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 p-4"><button type="button" className={btnSoft} onClick={()=>setUserModuleItem(null)} disabled={userModuleSaving}>Mégse</button><button type="button" className={btnPrimary} disabled={userModuleBusy || userModuleSaving || Boolean(userModuleError)} onClick={()=>void saveUserModules()}>{userModuleSaving?"Mentés...":"Mentés"}</button></footer>
+          </section>
+        </div>
+      ) : null}
+      {defaultModuleShop ? (
+        <div className="fixed inset-0 z-[190] grid place-items-center bg-[#0f172a]/85 p-3 backdrop-blur-md" onMouseDown={event=>{if(event.currentTarget===event.target && !defaultModuleSaving)setDefaultModuleShop(null);}}>
+          <section role="dialog" aria-modal="true" className="w-full max-w-[900px] overflow-hidden rounded-[26px] border border-[#9be9e5]/36 bg-[#303a4c] shadow-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-white/13 bg-[#285c60] p-4"><div><p className="text-[10px] uppercase tracking-[.12em] text-white/53">Helyszín alapértelmezése</p><h2 className="mt-1 text-lg">{defaultModuleShop.name}</h2></div><button className={iconBtn} onClick={()=>setDefaultModuleShop(null)} disabled={defaultModuleSaving} aria-label="Bezárás"><X size={17}/></button></header>
+            <div className="space-y-3 p-4"><p className="text-xs text-white/55">Az új belépőkódok automatikusan ezeket a kártyákat kapják. A már külön beállított dolgozók személyes kártyái megmaradnak.</p><ModuleChecklist value={defaultModuleSelection} onChange={setDefaultModuleSelection} disabled={defaultModuleBusy || defaultModuleSaving}/>{defaultModuleError?<p className="rounded-xl border border-red-300/40 bg-red-600/14 p-3 text-xs text-red-100">{defaultModuleError}</p>:null}</div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 p-4"><button type="button" className={btnSoft} onClick={()=>setDefaultModuleShop(null)} disabled={defaultModuleSaving}>Mégse</button><button type="button" className={btnPrimary} disabled={defaultModuleBusy || defaultModuleSaving || Boolean(defaultModuleError)} onClick={()=>void saveDefaultModules()}>{defaultModuleSaving?"Mentés...":"Mentés"}</button></footer>
+          </section>
+        </div>
+      ) : null}
       {confirmOpen ? (
         <div
           className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/78 px-3 backdrop-blur-sm"
@@ -1272,6 +1445,10 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </div>
               </div>
 
+              <div className="rounded-2xl border border-[#7bd7d4]/23 bg-[#293548] p-3">
+                <p className="mb-2 flex items-center gap-2 text-sm text-white"><SlidersHorizontal className="h-4 w-4 text-[#8ee6e2]"/> Új helyszín alapértelmezett kártyái</p>
+                <ModuleChecklist value={placeCreateModules} onChange={setPlaceCreateModules} disabled={placeBusy}/>
+              </div>
               {placeErr ? (
                 <div className="rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">
                   {placeErr}
@@ -1290,9 +1467,11 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                         <div className="truncate text-sm text-white">{shop.name}</div>
                         <div className="mt-0.5 font-mono text-[10px] text-white/42">{shop.id}</div>
                       </div>
-                      <button
-                        type="button"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522]"
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button type="button" onClick={() => void openDefaultModuleEditor(shop)} className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/14 px-2.5 text-[11px] text-[#d7fffd]"><SlidersHorizontal size={14}/> Modulok</button>
+                        <button
+                          type="button"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/75 bg-[#E21C2A] text-white shadow-[0_8px_18px_rgba(226,28,42,.24)] transition hover:bg-[#C91522]"
                         onClick={() => {
                           setConfirmTitle("Helyszín végleges törlése");
                           setConfirmMsg(`Biztosan véglegesen törlöd ezt a helyszínt: ${shop.name}?`);
@@ -1304,6 +1483,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
+                      </div>
                     </div>
                   ))}
                   {!shops.length ? <div className="px-3 py-6 text-center text-sm text-white/48">Nincs létrehozott helyszín.</div> : null}
