@@ -4,7 +4,7 @@
  * Enable explicitly with SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED=true after the
  * one-time legacy audit. All mutations occur in one DB transaction per order.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const clean = x => String(x ?? '').trim();
 const qty = x => Math.max(0, Math.trunc(Number(x) || 0));
@@ -45,6 +45,7 @@ export async function ensureAifShopifyWarehouseSchema(db) {
     fulfilled_at timestamptz NULL, cancelled_at timestamptz NULL,
     raw jsonb NOT NULL DEFAULT '{}'::jsonb
   )`);
+  // Existing AIF stock-movement IDs are numeric; store legacy references as text.
   await db.query(`CREATE TABLE IF NOT EXISTS aif_shopify_warehouse_lines (
     shopify_line_item_id text PRIMARY KEY,
     shopify_order_id text NOT NULL REFERENCES aif_shopify_warehouse_orders(shopify_order_id) ON DELETE RESTRICT,
@@ -53,7 +54,6 @@ export async function ensureAifShopifyWarehouseSchema(db) {
     allocated_qty integer NOT NULL CHECK(allocated_qty>0),
     shipped_qty integer NOT NULL DEFAULT 0 CHECK(shipped_qty>=0),
     released_qty integer NOT NULL DEFAULT 0 CHECK(released_qty>=0),
-    // AIF movement ids are numeric (e.g. 11508), NOT UUIDs. Keep the exact id as text.
     legacy_movement_id text NULL,
     raw jsonb NOT NULL DEFAULT '{}'::jsonb,
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -133,10 +133,15 @@ async function writeMovement(db, {variantId,locationId,delta,before,after,actor,
     toLocationId:document.target_location_id,toLocationName:document.to_location_summary,
     ...extra,
   };
+  // Some older AIF databases restrict movement source_id to 40/64 characters.
+  // A stable short key prevents overlength inserts; full trace is stored in raw.
+  const sourceId = 'shp:' + createHash('sha256')
+    .update(`${document.id}:${lineNo}:${side}:${kind}`)
+    .digest('hex').slice(0, 24);
   await db.query(`INSERT INTO aif_stock_movements
     (movement_type,source_type,source_id,location_id,variant_id,qty_delta,qty_before,qty_after,actor,raw)
     VALUES ($1,'shopify_transfer',$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [
-      delta>0?'incoming':'manual_adjustment',`${document.id}:${lineNo}:${side}:${kind}`,
+      delta>0?'incoming':'manual_adjustment',sourceId,
       locationId,variantId,delta,before,after,actor,JSON.stringify(raw)]);
 }
 
