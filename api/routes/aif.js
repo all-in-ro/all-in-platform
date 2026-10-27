@@ -9,6 +9,8 @@ import createAifOpeningInventoryRouter from "./aif/openingInventory.js";
 import createAifShopSaleLineNotesRouter from "./aif/shopSaleLineNotes.js";
 import createAifShopDailyAuditPdfRouter from "./aif/shopDailyAuditPdf.js";
 import createAifShopDailyAuditExcelRouter from "./aif/shopDailyAuditExcel.js";
+import createAifShopModulesRouter from "./aif/shopModules.js";
+import createAifShopifyWarehouseReadRouter from "./aif/shopifyWarehouseRead.js";
 import createAifLegacyExportRouter from "./aif/legacyExport.js";
 import { createHash } from "node:crypto";
 import { aifImageGallery, aifImageUrl, aifValidatedGallery, aifGalleryFamilyKey } from "../lib/aifImageGallery.js";
@@ -29999,10 +30001,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const search = text(req.query.q || req.query.search);
       const full = ["1", "true", "yes", "all"].includes(text(req.query.full || req.query.all).toLowerCase());
       const limit = Math.min(10000, Math.max(1, Number(req.query.limit || 600)));
+      const shopifyStock = String(location.code || "").toLowerCase() === "shopify";
       const args = [location.id];
       const where = [
         `s.location_id=$1`,
-        `COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0`,
+        shopifyStock ? `COALESCE(s.qty,0) > 0` : `COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0`,
         `COALESCE(v.status,'active')='active'`,
         `COALESCE(m.status,'active')='active'`,
       ];
@@ -30040,12 +30043,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const [summaryResult, itemResult] = await Promise.all([
         pool.query(
           `SELECT
-             count(*) FILTER (WHERE COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0)::int AS variant_count,
+             count(*) FILTER (WHERE COALESCE(s.qty,0) ${shopifyStock ? '> 0' : '- COALESCE(s.reserved_qty,0) > 0'})::int AS variant_count,
              COALESCE(sum(s.qty),0)::numeric AS total_qty,
              COALESCE(sum(s.reserved_qty),0)::numeric AS reserved_qty,
              COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0)::numeric AS available_qty,
              COALESCE(sum(
-               GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) *
+               ${shopifyStock ? 'GREATEST(COALESCE(s.qty,0),0)' : 'GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)'} *
                CASE
                  WHEN COALESCE(rb.qty,0) > 0 THEN COALESCE(rb.book_value,0) / rb.qty
                  ELSE COALESCE(v.sell_price,0)
@@ -30057,7 +30060,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_stock_retail_book rb ON rb.location_id=s.location_id AND rb.variant_id=s.variant_id
            WHERE s.location_id=$1
-             AND COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) > 0
+             AND ${shopifyStock ? 'COALESCE(s.qty,0) > 0' : 'COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) > 0'}
              AND COALESCE(v.status,'active')='active'
              AND COALESCE(m.status,'active')='active'`,
           [location.id]
@@ -34443,6 +34446,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifNumber,
     insertStockMovementSafe,
   }));
+
+  // Admin által, belépőkódonként állítható üzleti modulok.
+  router.use("/shop-modules", createAifShopModulesRouter({ pool, requireAuthed }));
+
+  // Shopify üzlet: csak olvasható Aviz- és online kliensnapló.
+  router.use("/shopify/warehouse/shop", createAifShopifyWarehouseReadRouter({ pool, requireAuthed }));
 
   // Napi, szerkeszthető Excel audit: pontos terméksorok, befizetések,
   // cserék. Csak SELECT műveletek; a PDF jogosultsági szabályaival egyezően.
