@@ -35,6 +35,9 @@ import {
   apiAifGetShopifyOrder,
   apiAifListShopifyOrderEvents,
   apiAifListShopifyOrders,
+  apiAifGetShopifyWarehouseStatus,
+  apiAifGetShopifyWarehouseAviz,
+  type AifShopifyWarehouseAviz,
   type AifShopifyOrderDetail,
   type AifShopifyOrderEvent,
   type AifShopifyOrderLine,
@@ -553,6 +556,13 @@ export default function AllInShopifyOrders({ role }: Props) {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [notice, setNotice] = useState("");
+  const [warehouseDocs, setWarehouseDocs] = useState<AifShopifyWarehouseAviz[]>([]);
+  const [warehouseErrors, setWarehouseErrors] = useState<Array<Record<string,any>>>([]);
+  const [warehouseEnabled, setWarehouseEnabled] = useState(false);
+  const [avizDetail, setAvizDetail] = useState<{document:Record<string,any>;lines:Array<Record<string,any>>}|null>(null);
+  const [avizBusy, setAvizBusy] = useState(false);
+  const [avizError, setAvizError] = useState("");
+
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -616,6 +626,53 @@ export default function AllInShopifyOrders({ role }: Props) {
       })
       .finally(() => setEventsLoading(false));
   }, [diagnosticsOpen, events.length, eventsLoading, role]);
+
+  useEffect(() => {
+    let active=true;
+    apiAifGetShopifyWarehouseStatus(200)
+      .then((data)=>{
+        if(!active)return;
+        setWarehouseDocs(Array.isArray(data?.items)?data.items:[]);
+        setWarehouseErrors(Array.isArray(data?.errors)?data.errors:[]);
+        setWarehouseEnabled(data?.enabled===true);
+      })
+      .catch(()=>{if(active){setWarehouseDocs([]);setWarehouseErrors([]);}});
+    return ()=>{active=false;};
+  },[refreshToken]);
+
+  const warehouseByOrder = useMemo(() => new Map(warehouseDocs.map(doc=>[doc.shopify_order_id,doc])),[warehouseDocs]);
+  const failedByOrder = useMemo(() => new Map(warehouseErrors.map(row=>[String(row.shopify_order_id),row])),[warehouseErrors]);
+
+  async function openAviz(orderId:string) {
+    const entry=warehouseByOrder.get(orderId);
+    if(!entry)return;
+    setAvizBusy(true);
+    setAvizError("");
+    try {
+      const data=await apiAifGetShopifyWarehouseAviz(entry.aviz_number);
+      setAvizDetail({document:data.document,lines:data.lines});
+    } catch(e) {setAvizError(e instanceof Error?e.message:"Nem tölthető be a Shopify Aviz.");}
+    finally {setAvizBusy(false);}
+  }
+
+  function printAviz() {
+    if(!avizDetail)return;
+    const doc=avizDetail.document;
+    const esc=(input:unknown)=>String(input??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    const fmt=(n:unknown)=>Number(n||0).toLocaleString("ro-RO",{minimumFractionDigits:2,maximumFractionDigits:2});
+    const lines=avizDetail.lines.map((line,index)=>`<tr><td>${index+1}</td><td>${esc(line.product_title)}<small>${esc(line.brand_name||"")} • ${esc(line.color_name||"")} / ${esc(line.size||"")}</small></td><td>${esc(line.product_code||"")}</td><td>${esc(line.barcode||"")}</td><td class="right">${esc(line.qty)}</td><td class="right">${fmt(line.unit_price)}</td><td class="right">${fmt(line.line_total)}</td></tr>`).join("");
+    const address=doc.shipping_address&&typeof doc.shipping_address==='object'?doc.shipping_address:{};
+    const displayAddress=[address.address1,address.address2,address.zip,address.city].filter(Boolean).map(esc).join(', ');
+    const html=`<!DOCTYPE html><html lang="ro"><head><meta charset="utf-8"><title>${esc(doc.document_number)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:11px;color:#1f2937;margin:0}header{border-bottom:2px solid #168c80;padding-bottom:12px;display:flex;justify-content:space-between;gap:20px}h1{font-size:21px;margin:7px 0}h2{font-size:15px;margin:6px 0}section{margin:18px 0}p{margin:4px 0}table{width:100%;border-collapse:collapse;margin-top:14px}th{background:#334155;color:white;text-align:left}th,td{padding:8px 5px;border:1px solid #cbd5e1;vertical-align:top}small{display:block;color:#64748b;margin-top:3px}.right{text-align:right;white-space:nowrap}.tag{padding:7px 12px;background:#eff7f5;border:1px solid #a8d6cc;display:inline-block}.sign{margin-top:48px;display:flex;justify-content:space-between;gap:30px}.sign div{flex:1;border-top:1px solid #94a3b8;padding-top:6px;text-align:center}</style></head><body>
+    <header><div><small>TITAN EURO-COM SRL • ALLINFASHION</small><h1>AVIZ INTERN SHOPIFY</h1><h2>${esc(doc.document_number)}</h2><p>Transfer intern catre gestiunea Shopify</p></div><div><p><b>Data:</b> ${esc(String(doc.document_date||doc.created_at||'').slice(0,10))}</p><p><b>Comanda Shopify:</b> ${esc(doc.order_name)}</p><p><b>Status:</b> ${esc(doc.state==='allocated'?'In asteptare ambalare':doc.state==='fulfilled'?'Expediata':'Anulata')}</p></div></header>
+    <section><p class="tag"><b>RENDELÉS / COMANDA: ${esc(doc.order_name)}</b></p><p><b>Client / Pentru:</b> ${esc(doc.customer_name||'-')}</p><p><b>Destinatar:</b> ${displayAddress||'-'}</p><p><b>De la:</b> ${esc(doc.from_location_summary)} <b>La:</b> ${esc(doc.to_location_summary)}</p></section>
+    <table><thead><tr><th>Nr</th><th>Produs</th><th>Cod produs</th><th>Cod bare</th><th class="right">Cant.</th><th class="right">Pret RON</th><th class="right">Valoare</th></tr></thead><tbody>${lines}</tbody><tfoot><tr><td colspan="4">TOTAL</td><td class="right">${esc(doc.total_qty)}</td><td></td><td class="right">${fmt(doc.total_value)}</td></tr></tfoot></table>
+    <section><p><b>Referinta Shopify:</b> ${esc(doc.order_name)} • ${esc(doc.document_number)}</p><p>Document intern de evidenta si separare a produselor pentru ambalare. Nu este factura fiscala si nu confirma expedierea.</p></section><div class="sign"><div>Predat / Gestionar</div><div>Preluat pentru ambalare</div></div></body></html>`;
+    const w=window.open("","_blank","width=980,height=790");
+    if(!w){setAvizError("A böngésző blokkolta a nyomtatási ablakot.");return;}
+    w.document.open();w.document.write(html);w.document.close();w.focus();
+    w.setTimeout(()=>w.print(),350);
+  }
 
   const normalizedOrders = useMemo(() => orders.map(normalizeOrder), [orders]);
 
@@ -1186,6 +1243,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium text-slate-900">{order.number}</span>
                             {order.isTest && <TestBadge />}
+                            {warehouseByOrder.get(order.id) && <span className="rounded-full border border-[#95bf47]/45 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{warehouseByOrder.get(order.id)?.aviz_number}</span>}
                             <Badge value={order.status} />
                           </div>
                           <div className="mt-1 truncate text-xs text-slate-400">{order.sourceName || order.paymentMethod || "Shopify"}</div>
@@ -1289,6 +1347,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium text-slate-900">{order.number}</span>
                             {order.isTest && <TestBadge />}
+                            {warehouseByOrder.get(order.id) && <span className="rounded-full border border-[#95bf47]/45 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{warehouseByOrder.get(order.id)?.aviz_number}</span>}
                             <Badge value={order.status} />
                           </div>
                           <div className="mt-1 truncate text-sm text-slate-700">{order.customer}</div>
@@ -1441,6 +1500,23 @@ export default function AllInShopifyOrders({ role }: Props) {
                       )}
                     </DetailCard>
                   </div>
+
+                   <section className="rounded-xl border border-emerald-200 bg-[#f3faf8] p-4 shadow-sm">
+                     <div className="flex flex-wrap items-center justify-between gap-3">
+                       <div className="flex items-center gap-3">
+                         <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className="h-10 w-10 object-contain" />
+                         <div>
+                           <div className="text-[10px] uppercase tracking-[0.12em] text-emerald-700">Shopify Raktár • külön belső Aviz</div>
+                           <div className="mt-0.5 text-base text-slate-900">{warehouseByOrder.get(detailOrder.id)?.aviz_number || "Aviz még nem készült"}</div>
+                           <div className="mt-1 text-xs text-slate-600">Rendelés: {detailOrder.number} • Vevő: {detailOrder.customer} • {warehouseByOrder.get(detailOrder.id)?.state === "fulfilled" ? "Feladva" : warehouseByOrder.get(detailOrder.id)?.state === "cancelled" ? "Visszavezetve" : warehouseByOrder.get(detailOrder.id) ? "Csomagolásra vár" : warehouseEnabled ? "Feldolgozásra vár" : "Automatizmus nincs bekapcsolva"}</div>
+                           {failedByOrder.get(detailOrder.id) && <div className="mt-1 text-xs text-rose-700">Ellenőrzendő: {String(failedByOrder.get(detailOrder.id)?.error||"")}</div>}
+                         </div>
+                       </div>
+                       <button type="button" className={primaryButtonClass} disabled={!warehouseByOrder.get(detailOrder.id) || avizBusy} onClick={() => void openAviz(detailOrder.id)}>
+                         <FileText className="h-4 w-4" />{avizBusy?"Betöltés...":"Aviz megnyitása / nyomtatása"}
+                       </button>
+                     </div>
+                   </section>
 
                   <div className="grid gap-4 xl:grid-cols-3">
                     <DetailCard icon={<CreditCard className="h-4 w-4" />} title="Pénzügyi bontás">
@@ -1668,6 +1744,21 @@ export default function AllInShopifyOrders({ role }: Props) {
           </div>
         </div>
       )}
+
+       {avizError && <div className="fixed bottom-4 right-4 z-[120] rounded-xl border border-rose-200 bg-white p-4 text-sm text-rose-700 shadow-2xl">{avizError}<button className="ml-3" onClick={()=>setAvizError("")}>Bezárás</button></div>}
+       {avizDetail && (
+         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-4" onMouseDown={(event)=>{if(event.currentTarget===event.target)setAvizDetail(null);}}>
+           <section className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+             <header className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4">
+               <div className="flex items-center gap-3"><img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" className="h-10 w-10 object-contain" alt="" /><div><h2 className="text-xl text-slate-900">{String(avizDetail.document.document_number||"")}</h2><p className="text-xs text-slate-500">Shopify rendelés: {String(avizDetail.document.order_name||"")} • Vevő: {String(avizDetail.document.customer_name||"")}</p></div></div>
+               <div className="flex gap-2"><button className={primaryButtonClass} onClick={printAviz}><FileText className="h-4 w-4"/> Nyomtatás / PDF</button><button className={buttonClass} onClick={()=>setAvizDetail(null)}><X className="h-4 w-4"/> Bezárás</button></div>
+             </header>
+             <div className="overflow-y-auto p-4"><div className="mb-4 grid gap-2 sm:grid-cols-2"><DataLine label="Aviz" value={String(avizDetail.document.document_number||"")}/><DataLine label="Rendelés" value={String(avizDetail.document.order_name||"")}/><DataLine label="Vevő" value={String(avizDetail.document.customer_name||"")}/><DataLine label="Állapot" value={avizDetail.document.state==='allocated'?"Csomagolásra vár":avizDetail.document.state==='fulfilled'?"Feladva":"Visszavezetve"}/><DataLine label="Honnan" value={String(avizDetail.document.from_location_summary||"")}/><DataLine label="Hová" value={String(avizDetail.document.to_location_summary||"")}/></div>
+               <div className="overflow-x-auto"><table className="min-w-[560px] w-full text-left text-sm"><thead className="bg-slate-100"><tr><th className="p-2 font-normal">Termék</th><th className="p-2 font-normal">Kód / Vonalkód</th><th className="p-2 text-right font-normal">Darab</th><th className="p-2 text-right font-normal">Félretéve</th></tr></thead><tbody>{avizDetail.lines.map((line)=><tr key={String(line.id)} className="border-b border-slate-100"><td className="p-2">{String(line.product_title||"")}<div className="text-xs text-slate-400">{String(line.color_name||"")} / {String(line.size||"")}</div></td><td className="p-2 text-xs">{String(line.product_code||"")}<div>{String(line.barcode||"")}</div></td><td className="p-2 text-right">{String(line.qty||0)}</td><td className="p-2 text-right">{String(Number(line.allocated_qty||0)-Number(line.shipped_qty||0)-Number(line.released_qty||0))}</td></tr>)}</tbody></table></div>
+             </div>
+           </section>
+         </div>
+       )}
 
       {deleteTarget && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/55 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) closeDeleteDialog(); }}>

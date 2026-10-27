@@ -119,6 +119,14 @@ function ShopifyBrandMark({
   );
 }
 
+const AIF_SHOPIFY_STOCK_MOVEMENT_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
+function warehouseIsShopifyMovement(event: VariantHistoryEvent) {
+  const raw=event.raw||{};
+  return String(raw.shopifyAvizNumber||raw.documentNumber||"").startsWith("SHOPIFY-")
+    || String(raw.documentType||"")==="shopify_transfer"
+    || String(event.source_type||"").startsWith("shopify_transfer");
+}
+
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
@@ -5425,6 +5433,7 @@ function historyIsTransferEvent(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
+  if (warehouseIsShopifyMovement(event)) return reason !== "shopify_order_fulfilled";
   return type === "transfer" || source.includes("stock_transfer") || reason === "stock_transfer";
 }
 
@@ -5564,6 +5573,18 @@ function historyEventMeta(event: VariantHistoryEvent) {
   const isIncoming = type === "incoming" || direction === "in";
   const isOutgoing = type === "outgoing" || direction === "out";
 
+  if (warehouseIsShopifyMovement(event)) {
+    if (reason === "shopify_order_fulfilled") return {
+      label:"Shopify eladás",cls:"border-rose-300/70 bg-rose-100 text-rose-800",
+      dot:"bg-rose-500",stripe:"bg-rose-400",card:"bg-rose-50/90 border-rose-200",
+    };
+    return {
+      label: reason === "shopify_cancel_return" ? "Shopify visszavezetés" : "Shopify Aviz",
+      cls:"border-emerald-300/75 bg-emerald-100 text-emerald-800",
+      dot:"bg-emerald-500",stripe:"bg-emerald-400",card:"bg-emerald-50/90 border-emerald-200",
+    };
+  }
+
   if (isPrice) {
     return {
       label: "Árváltozás",
@@ -5624,6 +5645,10 @@ function historySourceLabel(event: VariantHistoryEvent) {
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
   const movement = String(event.movement_type || "").toLowerCase();
+  if (warehouseIsShopifyMovement(event)) {
+    return String(event.raw?.reason||"")==="shopify_order_fulfilled" ? "Shopify rendelés teljesítve" :
+      `Shopify rendelés: ${firstWarehouseText(event.raw?.shopifyOrderNumber,event.raw?.documentNumber)}`;
+  }
   if (historyIsPriceEvent(event)) return "Ár módosítása";
   if (type === "transfer" || source.includes("transfer") || reason.includes("transfer")) return "Üzletek közti átvitel";
   if (source.includes("manual_stock_redistribution")) return "Készlet átrendezés";
@@ -5859,6 +5884,10 @@ function VariantHistoryPanel({
                 const supplier = event.supplier_name ? `Beszállító: ${event.supplier_name}` : "";
                 const file = event.source_file_name ? `Forrás: ${event.source_file_name}` : "";
                 const note = historyEventNote(event);
+                const isShopifyEvent = warehouseIsShopifyMovement(event);
+                const shopifyOrderNumber = firstWarehouseText(event.raw?.shopifyOrderNumber);
+                const shopifyAvizNumber = firstWarehouseText(event.raw?.shopifyAvizNumber,event.raw?.documentNumber);
+                const shopifyCustomer = firstWarehouseText(event.raw?.shopifyCustomerName);
                 const isPriceEvent = historyIsPriceEvent(event);
                 const isTransferEvent = historyIsTransferEvent(event);
                 const priceChangedFields = priceChangeRowsForHistory(event).map((row) => row.label).join(", ");
@@ -5872,7 +5901,9 @@ function VariantHistoryPanel({
                       </div>
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}>
+                            {isShopifyEvent ? <img src={AIF_SHOPIFY_STOCK_MOVEMENT_ICON} alt="" className="h-4 w-4 object-contain" /> : <span className={`h-2 w-2 rounded-full ${meta.dot}`} />}{meta.label}
+                          </span>
                           <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, !isTransferEvent)}</span>
                           <span className="rounded-full border border-slate-200 bg-white/100 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
@@ -5893,6 +5924,15 @@ function VariantHistoryPanel({
                               <div className="rounded-xl bg-white px-3 py-2">Előtte / utána: <span className="text-slate-800">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
                             </>
                           )}
+                          {isShopifyEvent && shopifyAvizNumber ? (
+                            <div className="rounded-xl bg-white px-3 py-2 text-slate-800"><span className="text-slate-500">Shopify Aviz: </span>{shopifyAvizNumber}</div>
+                          ) : null}
+                          {isShopifyEvent && shopifyOrderNumber ? (
+                            <div className="rounded-xl bg-white px-3 py-2 text-slate-800"><span className="text-slate-500">Rendelés: </span>{shopifyOrderNumber}</div>
+                          ) : null}
+                          {isShopifyEvent && shopifyCustomer ? (
+                            <div className="rounded-xl bg-white px-3 py-2 text-slate-800"><span className="text-slate-500">Félretéve: </span>{shopifyCustomer}</div>
+                          ) : null}
                           {supplier ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{supplier}</div> : null}
                           {invoice ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{invoice}</div> : null}
                           {event.reception_date ? <div className="rounded-xl bg-white px-3 py-2">Receptió: <span className="text-slate-800">{dateShort(event.reception_date)}</span></div> : null}

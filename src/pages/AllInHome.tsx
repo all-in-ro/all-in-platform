@@ -27,6 +27,8 @@ import AllInLegacyExport from "./AllInLegacyExport";
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
+const ShopifyMenuIcon = ({className}:{className?:string}) => <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className={`${className||""} object-contain`} />;
+
 const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
 
@@ -553,7 +555,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
           <MainMenuButton
             label="Shopify rendelések"
             hash="#allinshopifyorders"
-            icon={ShoppingBag}
+            icon={ShopifyMenuIcon}
           />
           <MainMenuButton
             label="Szabadságok"
