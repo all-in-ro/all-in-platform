@@ -53,11 +53,17 @@ export async function ensureAifShopifyWarehouseSchema(db) {
     allocated_qty integer NOT NULL CHECK(allocated_qty>0),
     shipped_qty integer NOT NULL DEFAULT 0 CHECK(shipped_qty>=0),
     released_qty integer NOT NULL DEFAULT 0 CHECK(released_qty>=0),
-    legacy_movement_id uuid NULL,
+    // AIF movement ids are numeric (e.g. 11508), NOT UUIDs. Keep the exact id as text.
+    legacy_movement_id text NULL,
     raw jsonb NOT NULL DEFAULT '{}'::jsonb,
     updated_at timestamptz NOT NULL DEFAULT now(),
     CHECK(shipped_qty+released_qty<=allocated_qty)
   )`);
+  // A previous release created legacy_movement_id as UUID. Its empty table
+  // survives a rolled-back allocation attempt because schema setup was earlier.
+  // Upgrade the existing column too, without deleting or rewriting event history.
+  await db.query(`ALTER TABLE aif_shopify_warehouse_lines
+    ALTER COLUMN legacy_movement_id TYPE text USING legacy_movement_id::text`);
   await db.query(`CREATE INDEX IF NOT EXISTS aif_shopify_warehouse_lines_order_idx
     ON aif_shopify_warehouse_lines (shopify_order_id)`);
   await db.query(`CREATE TABLE IF NOT EXISTS aif_shopify_warehouse_failures (
@@ -334,7 +340,7 @@ async function allocate(db, order, lines, source, target, {allowLegacy=false}={}
     await db.query(`INSERT INTO aif_shopify_warehouse_lines
       (shopify_line_item_id,shopify_order_id,document_line_id,variant_id,allocated_qty,legacy_movement_id,raw)
       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,[p.line.shopify_line_item_id,order.shopify_order_id,detail.rows[0].id,p.product.id,p.count,
-        historical?.id||null,JSON.stringify({shopifySku:p.line.sku,productTitle:p.product.title_ro})]);
+        historical?.id != null ? String(historical.id) : null,JSON.stringify({shopifySku:p.line.sku,productTitle:p.product.title_ro})]);
   }
   return {created:true,documentNumber:seq.number,shopifyOrder:order.order_name,lines:prepared.length,legacyRelink:allowLegacy};
 }
