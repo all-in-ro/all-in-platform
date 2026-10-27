@@ -2838,6 +2838,29 @@ export type AifShopifyAddress = {
   [key: string]: unknown;
 };
 
+export type AifShopifyWarehouseAviz = {
+  shopify_order_id: string;
+  document_id: string;
+  aviz_number: string;
+  state: "allocated" | "fulfilled" | "cancelled";
+  order_name: string;
+  customer_name?: string | null;
+  created_at: string;
+  fulfilled_at?: string | null;
+  cancelled_at?: string | null;
+  items?: number;
+  pending_qty?: number;
+};
+export function apiAifGetShopifyWarehouseStatus(limit=100) {
+  return fetchAifJSON<{ok:true;enabled:boolean;items:AifShopifyWarehouseAviz[];errors:any[]}>(`/shopify/warehouse/status?limit=${encodeURIComponent(String(limit))}`);
+}
+export function apiAifGetShopifyWarehouseAviz(id:string) {
+  return fetchAifJSON<{ok:true;document:Record<string,any>;lines:Array<Record<string,any>>}>(`/shopify/warehouse/aviz/${encodeURIComponent(id)}`);
+}
+export function apiAifPreviewShopifyWarehouseOrder(id:string) {
+  return fetchAifJSON<{ok:true;orderNumber:string;avizNumber?:string|null;state:string;lines:Array<Record<string,any>>}>(`/shopify/warehouse/preview/${encodeURIComponent(id)}`);
+}
+
 export type AifShopifyOrderSummary = {
   id: string;
   shopify_order_id?: string | number | null;
