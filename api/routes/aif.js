@@ -18,6 +18,13 @@ import os from "node:os";
 import path from "node:path";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
+  getAifShopifyWarehouseStatus,
+  getAifShopifyAviz,
+  previewAifShopifyWarehouseOrder,
+  reconcileAifShopifyWarehouseOrder,
+  processAifShopifyWarehouseBatch,
+} from "../lib/aifShopifyWarehouse.js";
+import {
   listAifShopifyInboundEvents,
   processAifShopifyInboundBatch,
   receiveAifShopifyInventoryWebhook,
@@ -18154,7 +18161,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   WHERE dl.document_id=d.id
                 ), '') AS line_search
          FROM aif_stock_transfer_documents d
-         WHERE NOT EXISTS (
+         WHERE d.document_type <> 'shopify_transfer'
+           AND NOT EXISTS (
            SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
          )
          ORDER BY created_at DESC
@@ -22265,8 +22273,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  // Shopify rendelési webhooks. Ezek csak rendelési adatot mentenek, készletet nem vonnak le.
-  // A készletet továbbra is kizárólag az inventory_levels/update webhook tartja szinkronban.
+  // Shopify rendelési webhooks. A rendelést mentik; külön worker generálja
+  // a SHOPIFY- Avizt és kezeli a belső Shopify Raktárat. Az inventory webhook
+  // aktív warehouse-módban csak megfigyelés, nem fizikai készletmozgás.
   router.post("/shopify/webhooks/orders", async (req, res) => {
     try {
       const result = await receiveAifShopifyOrderWebhook(pool, {
@@ -22292,6 +22301,52 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       console.error("AIF Shopify order process failed", e);
       res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify rendelések feldolgozása nem sikerült.", code: e?.code || null });
     }
+  });
+
+  // Independent Shopify-only packing AVIZ, never shares the PV/RET counters.
+  router.get("/shopify/warehouse/status", requireAdminOrSecret, async (req,res) => {
+    const db=await pool.connect();
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      res.json({ok:true,...await getAifShopifyWarehouseStatus(db,{limit:req.query.limit})});
+    } catch(e) {res.status(500).json({error:e?.message||"Shopify Aviz állapot nem elérhető."});}
+    finally {db.release();}
+  });
+
+  router.get("/shopify/warehouse/aviz/:id", requireAdminOrSecret, async (req,res) => {
+    const db=await pool.connect();
+    try {
+      const result=await getAifShopifyAviz(db,req.params.id);
+      res.setHeader('Cache-Control','no-store');
+      res.json({ok:true,...result});
+    } catch(e) {res.status(/nem található/.test(e?.message||'')?404:500).json({error:e?.message||"Shopify Aviz nem elérhető."});}
+    finally {db.release();}
+  });
+
+  router.get("/shopify/warehouse/preview/:id", requireAdminOrSecret, async (req,res) => {
+    const db=await pool.connect();
+    try {res.json({ok:true,...await previewAifShopifyWarehouseOrder(db,req.params.id)});}
+    catch(e) {res.status(400).json({error:e?.message||"Előnézet nem készíthető."});}
+    finally {db.release();}
+  });
+
+  // Idempotent, guarded legacy repair of the single 2026-10-27 checkout.
+  // It RE-LINKS the historic -1 Shopify movement; never subtracts it again.
+  router.post("/shopify/warehouse/reconcile", requireAdminOrSecret, async (req,res) => {
+    try {
+      const reference=text(req.body?.order||'AIF-1003');
+      const apply=req.body?.apply===true;
+      if(apply && (reference!=='AIF-1003' || text(req.body?.confirmation)!=='SHOPIFY-000001')) {
+        return res.status(400).json({error:'A történeti helyesbítéshez AIF-1003 és SHOPIFY-000001 megerősítés szükséges.'});
+      }
+      const result=await reconcileAifShopifyWarehouseOrder(pool,reference,{apply,legacy:apply});
+      res.json({ok:true,...result});
+    } catch(e) {res.status(409).json({error:e?.message||'A helyesbítés leállt.',code:e?.code||null});}
+  });
+
+  router.post("/shopify/warehouse/process", requireAdminOrSecret, async (req,res) => {
+    try {res.json({ok:true,...await processAifShopifyWarehouseBatch(pool,{limit:Number(req.body?.limit||5)})});}
+    catch(e) {res.status(500).json({error:e?.message||'Shopify Aviz feldolgozási hiba.'});}
   });
 
   router.get("/shopify/orders", requireAdminOrSecret, async (req, res) => {
