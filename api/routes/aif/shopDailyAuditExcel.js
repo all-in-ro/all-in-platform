@@ -46,6 +46,28 @@ const EMPLOYEE_SQL = ` AND ($3::text IS NULL OR lower(regexp_replace(btrim(COALE
 const who = (field) => EMPLOYEE_SQL.replace('%ACTOR%',field);
 const dayFilter = (field) => `${field} >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest') AND ${field} < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')`;
 
+// AIF_AUDIT_PRODUCT_CODE_SOURCE_20261027_V2
+// Keep product-code selection in the data layer. legacyProductCode and
+// internal_sku are full legacy variant identifiers, NOT product-code fallbacks.
+// The warehouse displays the model key without its technical namespace when
+// there is no actual supplier product code. S/N is a separate field.
+export function aifAuditProductCode({ supplierProductCode, modelCode, saleProductCode, brand } = {}) {
+  const supplier = text(supplierProductCode);
+  if (supplier) return supplier;
+  const model = text(modelCode);
+  if (model) {
+    const suffix = model.includes(':') ? model.split(':').pop() : model;
+    return text(suffix || model);
+  }
+  // A removed/unlinked variant can still have a valid saved sale-line code.
+  // Only a namespace that matches this line's brand is removed here.
+  const saved = text(saleProductCode);
+  const match = /^([a-z0-9_]+):([^:]+)$/i.exec(saved);
+  const brandKey = text(brand).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return match && brandKey && brandKey === match[1].toLowerCase() ? match[2] : saved;
+}
+
 async function loadDay(client, args) {
   const locationId = args[0];
   const salesQuery = `
@@ -55,7 +77,8 @@ async function loadDay(client, args) {
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
-      COALESCE(NULLIF(btrim(stock_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),''),NULLIF(btrim(m.model_code),'')) AS export_product_code,
+      stock_code.supplier_product_code AS export_supplier_product_code,
+      m.model_code AS export_model_code,sl.product_code AS export_product_code,
       COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS export_barcode
     FROM aif_shop_sales s
     JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
@@ -64,7 +87,7 @@ async function loadDay(client, args) {
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
-      WHERE sc.variant_id=v.id
+      WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
         AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
       ORDER BY COALESCE(sc.is_active,true) DESC,
         sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
@@ -96,7 +119,8 @@ async function loadDay(client, args) {
       sl.quantity AS original_quantity,sl.list_price,sl.line_total,sl.discount_percent,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
-      COALESCE(NULLIF(btrim(stock_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),''),NULLIF(btrim(m.model_code),'')) AS export_product_code,
+      stock_code.supplier_product_code AS export_supplier_product_code,
+      m.model_code AS export_model_code,sl.product_code AS export_product_code,
       COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS export_barcode,
       s.customer_name
     FROM aif_shop_customer_payment_line_allocations la
@@ -108,7 +132,7 @@ async function loadDay(client, args) {
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
-      WHERE sc.variant_id=v.id
+      WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
         AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
       ORDER BY COALESCE(sc.is_active,true) DESC,
         sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
@@ -121,7 +145,9 @@ async function loadDay(client, args) {
       e.returned_qty,e.return_credit,e.replacement_total,e.difference,
       e.settlement_direction,e.settlement_method,e.settlement_amount,e.note,
       sl.product_title AS returned_product_title,
-      COALESCE(NULLIF(btrim(return_code.supplier_product_code),''),NULLIF(btrim(v.attributes->>'legacyProductCode'),''),NULLIF(btrim(v.internal_sku),''),NULLIF(btrim(sl.product_code),'')) AS returned_product_code,
+      sl.product_code AS returned_product_code,
+      return_code.supplier_product_code AS returned_supplier_product_code,
+      rm.model_code AS returned_model_code,
       sl.barcode AS returned_barcode,sl.brand_name AS returned_brand,sl.color_name AS returned_color,
       sl.size AS returned_size,sl.list_price AS returned_list_price,
       sl.unit_price AS returned_unit_price,
@@ -129,16 +155,18 @@ async function loadDay(client, args) {
       (SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'id',el.id,'quantity',el.quantity,'unit_price',el.unit_price,'line_total',el.line_total,
         'product_title',el.product_title,
-        'product_code',COALESCE(NULLIF(btrim(new_code.supplier_product_code),''),NULLIF(btrim(nv.attributes->>'legacyProductCode'),''),NULLIF(btrim(nv.internal_sku),''),NULLIF(btrim(el.product_code),'')),
+        'product_code',el.product_code,
+        'supplier_product_code',new_code.supplier_product_code,'model_code',nm.model_code,
         'barcode',el.barcode,
         'brand_name',el.brand_name,'color_name',el.color_name,'size',el.size,
         'sn_cod',COALESCE(NULLIF(nv.sn_cod,''),NULLIF(el.raw->>'snCod','')))
         ORDER BY el.line_no), '[]'::jsonb)
         FROM aif_shop_exchange_lines el
         LEFT JOIN aif_product_variants nv ON nv.id=el.variant_id
+        LEFT JOIN aif_product_models nm ON nm.id=nv.model_id
         LEFT JOIN LATERAL (
           SELECT sc.supplier_product_code FROM aif_variant_supplier_codes sc
-          WHERE sc.variant_id=nv.id AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
+          WHERE sc.variant_id=nv.id AND COALESCE(sc.is_active,true)=true AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
           ORDER BY COALESCE(sc.is_active,true) DESC,
             sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
           LIMIT 1
@@ -150,10 +178,11 @@ async function loadDay(client, args) {
     FROM aif_shop_exchanges e
     LEFT JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
     LEFT JOIN aif_product_variants v ON v.id=e.source_variant_id
+    LEFT JOIN aif_product_models rm ON rm.id=v.model_id
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
-      WHERE sc.variant_id=v.id
+      WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
         AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
       ORDER BY COALESCE(sc.is_active,true) DESC,
         sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
@@ -212,7 +241,10 @@ function excelEntries(data) {
       const collected=amounts[i]||0;
       const credit=text(r.sale_type)==='credit';
       add({id:`sale:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
-        brand:r.brand_name,sn:r.sn_code,productCode:r.export_product_code,barcode:r.export_barcode,
+        brand:r.brand_name,sn:r.sn_code,
+        productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
+          modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name}),
+        barcode:r.export_barcode,
         color:r.color_name,size:r.size,customer:r.customer_name,qty,
         listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
         lineTotal,method:methods || (credit?'Utólag fizet':'Nincs fizetési adat'),
@@ -255,7 +287,10 @@ function excelEntries(data) {
       const discount=round(Math.max(0,regular-net)*portion);
       totals.discount+=discount;
       add({id:`customer-payment:${cp.id}:${r.id}`,at:cp.paid_at,dateTime:bookDateTime(cp.paid_at),
-        brand:r.brand_name,sn:r.sn_code,productCode:r.export_product_code,barcode:r.export_barcode,
+        brand:r.brand_name,sn:r.sn_code,
+        productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
+          modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name}),
+        barcode:r.export_barcode,
         color:r.color_name,size:r.size,customer:r.customer_name||cp.customer_name,qty,
         listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
         lineTotal:round(r.amount),method:methodName(cp.method),document:r.sale_number,actor:cp.actor,
@@ -276,7 +311,9 @@ function excelEntries(data) {
   for(const e of data.exchanges) {
     if(Number(e.returned_qty||0)>0) {
       add({id:`exchange-return:${e.id}`,at:e.created_at,dateTime:bookDateTime(e.created_at),
-        brand:e.returned_brand,sn:e.returned_sn,productCode:e.returned_product_code,
+        brand:e.returned_brand,sn:e.returned_sn,
+        productCode:aifAuditProductCode({supplierProductCode:e.returned_supplier_product_code,
+          modelCode:e.returned_model_code,saleProductCode:e.returned_product_code,brand:e.returned_brand}),
         barcode:e.returned_barcode,color:e.returned_color,size:e.returned_size,
         customer:e.customer_name,qty:-Number(e.returned_qty),listPrice:round(e.returned_list_price),
         discountPercent:0,discount:0,lineTotal:-round(e.return_credit),method:'Csere / visszáru',
@@ -285,7 +322,10 @@ function excelEntries(data) {
     }
     for (const line of Array.isArray(e.new_lines)?e.new_lines:[]) {
       add({id:`exchange-new:${line.id}`,at:e.created_at,dateTime:bookDateTime(e.created_at),
-        brand:line.brand_name,sn:line.sn_cod,productCode:line.product_code,barcode:line.barcode,
+        brand:line.brand_name,sn:line.sn_cod,
+        productCode:aifAuditProductCode({supplierProductCode:line.supplier_product_code,
+          modelCode:line.model_code,saleProductCode:line.product_code,brand:line.brand_name}),
+        barcode:line.barcode,
         color:line.color_name,size:line.size,customer:e.customer_name,qty:Number(line.quantity||0),
         listPrice:round(line.unit_price),discountPercent:0,discount:0,lineTotal:round(line.line_total),
         method:'Csere',document:e.exchange_number,actor:e.actor,kind:'Csere: új termék',
