@@ -7,6 +7,7 @@ import {
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
 import { processAifShopifyImageOutboxBatch, enqueueAifShopifyImageBacklog } from "./aifShopifyImages.js";
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
+import { processAifShopifyWarehouseBatch } from "./aifShopifyWarehouse.js";
 
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
 
@@ -91,6 +92,19 @@ async function tick(state) {
 
     if (orders.lockSkipped) {
       schedule(state, state.idleDelayMs);
+      return;
+    }
+
+    // Shopify ordered products go to the internal Shopify Raktár once, with a
+    // completely independent SHOPIFY-xxxxxx Aviz before outgoing stock sync.
+    const warehouse = await processAifShopifyWarehouseBatch(state.pool, {limit:state.limit});
+    if (warehouse.processed || warehouse.errors) {
+      console.log("AIF Shopify warehouse Aviz batch",JSON.stringify({instanceId:state.instanceId,...warehouse}));
+    }
+    // If any warehouse transfer failed, do not overwrite the just-reduced
+    // Shopify available stock with a stale outbox value in this tick.
+    if (warehouse.errors) {
+      schedule(state,state.errorDelayMs);
       return;
     }
 
@@ -191,6 +205,7 @@ async function tick(state) {
         inbound.claimed ||
         orders.claimed ||
         outbound.processed ||
+        warehouse.processed ||
         images.processed ||
         newness?.added ||
         newness?.removed ||

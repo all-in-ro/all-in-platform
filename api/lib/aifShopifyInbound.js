@@ -262,6 +262,23 @@ async function processInboundEvent(pool, event, config) {
     return { status: "ignored", reason: "unmanaged_shopify_location" };
   }
 
+  // In managed Shopify-warehouse mode the order processor, not an
+  // inventory-level echo, is the owner of physical AIF stock movements.
+  // Shopify's `available` decreases when a customer checks out while
+  // `on_hand` stays unchanged until fulfillment. It is NOT a physical sale.
+  if (bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false)) {
+    const client=await pool.connect();
+    try {
+      await markEvent(client,event.shopify_webhook_id,"processed",{
+        reason:"shopify_warehouse_inventory_observed_no_stock_write",
+        inventoryItemId,shopifyLocationId,locationCode,
+        webhookAvailable:payload.available,
+        stockChangedByInventoryWebhook:false
+      });
+    } finally {client.release();}
+    return {status:"processed",reason:"shopify_warehouse_inventory_observed_no_stock_write",changed:false};
+  }
+
   const level = await fetchCurrentAvailable(inventoryItemId, shopifyLocationId);
   const client = await pool.connect();
   try {
