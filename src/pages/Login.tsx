@@ -12,6 +12,15 @@ import {
   Store,
 } from "lucide-react";
 
+// Csak a Shopify Raktár belépési ikonja változik; a belépési logikához nem nyúlunk.
+const SHOPIFY_WAREHOUSE_ICON_URL =
+  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
+
+function isShopifyWarehouse(shop: { id?: string | null; name?: string | null; locationCode?: string | null; locationName?: string | null } | null): boolean {
+  if (!shop) return false;
+  return /shopify/i.test([shop.id, shop.name, shop.locationCode, shop.locationName].filter(Boolean).join(" "));
+}
+
 type ShopId = string;
 type ShopOption = {
   id: string;
@@ -280,6 +289,7 @@ export default function Login({
     };
   }, [mode, selectedShop]);
   const SelectedIcon = selectedMeta?.icon || Store;
+  const selectedShopIsShopify = isShopifyWarehouse(selectedShop);
 
   const requestSession = useCallback(async (body: Record<string, unknown>) => {
     const response = await fetch(`${api}/auth/login`, {
@@ -506,7 +516,11 @@ export default function Login({
               </div>
 
               <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#2a8d8b]/20 bg-[#2a8d8b]/10 text-[#267f7d]">
-                {mode ? <SelectedIcon size={23} strokeWidth={1.8} /> : <Sparkles size={23} strokeWidth={1.8} />}
+                {mode ? (
+                  selectedShopIsShopify
+                    ? <img src={SHOPIFY_WAREHOUSE_ICON_URL} alt="Shopify" className="h-7 w-7 object-contain" />
+                    : <SelectedIcon size={23} strokeWidth={1.8} />
+                ) : <Sparkles size={23} strokeWidth={1.8} />}
               </span>
             </div>
 
@@ -565,7 +579,9 @@ export default function Login({
                     onClick={() => chooseMode(shopMode(shop.id))}
                   >
                     <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#8de2de]">
-                      <Store size={20} strokeWidth={1.8} />
+                      {isShopifyWarehouse(shop)
+                        ? <img src={SHOPIFY_WAREHOUSE_ICON_URL} alt="Shopify" className="h-7 w-7 object-contain" />
+                        : <Store size={20} strokeWidth={1.8} />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-normal">ÜZLET – {shop.name}</span>
