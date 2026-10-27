@@ -1,5 +1,8 @@
 // ALLINFASHION_DAILY_AUDIT_EXCEL_20261026
 // Read-only, role-scoped, date-scoped XLSX export. No inventory/cash writes.
+// AIF_AUDIT_SUBCATEGORY_20261027: a saved subcategory is preferred; otherwise
+// use the linked product's actual subcategory (Hungarian, then Romanian).
+// Missing subcategories remain blank; no inference from title, code or brand.
 import express from 'express';
 import { buildAifDailyAuditXlsx } from './shopAuditXlsxWriter.js';
 
@@ -76,6 +79,8 @@ async function loadDay(client, args) {
       sl.id::text AS line_id,sl.line_no,sl.variant_id::text AS variant_id,sl.quantity,
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
+      COALESCE(NULLIF(btrim(sl.subcategory_name),''),
+        NULLIF(btrim(subc.name_hu),''),NULLIF(btrim(subc.name_ro),'')) AS export_subcategory,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
       stock_code.supplier_product_code AS export_supplier_product_code,
       m.model_code AS export_model_code,sl.product_code AS export_product_code,
@@ -84,6 +89,7 @@ async function loadDay(client, args) {
     JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
@@ -118,6 +124,8 @@ async function loadDay(client, args) {
       s.id::text AS sale_id,s.sale_number,s.sold_at AS original_sold_at,
       sl.quantity AS original_quantity,sl.list_price,sl.line_total,sl.discount_percent,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
+      COALESCE(NULLIF(btrim(sl.subcategory_name),''),
+        NULLIF(btrim(subc.name_hu),''),NULLIF(btrim(subc.name_ro),'')) AS export_subcategory,
       COALESCE(NULLIF(v.sn_cod,''),NULLIF(sl.raw->>'snCod',''),NULLIF(sl.raw->>'sn_cod','')) AS sn_code,
       stock_code.supplier_product_code AS export_supplier_product_code,
       m.model_code AS export_model_code,sl.product_code AS export_product_code,
@@ -129,6 +137,7 @@ async function loadDay(client, args) {
     JOIN aif_shop_sales s ON s.id=la.sale_id
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
+    LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
@@ -146,6 +155,8 @@ async function loadDay(client, args) {
       e.settlement_direction,e.settlement_method,e.settlement_amount,e.note,
       sl.product_title AS returned_product_title,
       sl.product_code AS returned_product_code,
+      COALESCE(NULLIF(btrim(sl.subcategory_name),''),
+        NULLIF(btrim(return_subc.name_hu),''),NULLIF(btrim(return_subc.name_ro),'')) AS returned_subcategory,
       return_code.supplier_product_code AS returned_supplier_product_code,
       rm.model_code AS returned_model_code,
       sl.barcode AS returned_barcode,sl.brand_name AS returned_brand,sl.color_name AS returned_color,
@@ -156,6 +167,9 @@ async function loadDay(client, args) {
         'id',el.id,'quantity',el.quantity,'unit_price',el.unit_price,'line_total',el.line_total,
         'product_title',el.product_title,
         'product_code',el.product_code,
+        'subcategory',COALESCE(NULLIF(btrim(el.raw->>'subcategoryName'),''),
+          NULLIF(btrim(el.raw->>'subcategory_name'),''),
+          NULLIF(btrim(new_subc.name_hu),''),NULLIF(btrim(new_subc.name_ro),'')),
         'supplier_product_code',new_code.supplier_product_code,'model_code',nm.model_code,
         'barcode',el.barcode,
         'brand_name',el.brand_name,'color_name',el.color_name,'size',el.size,
@@ -164,6 +178,7 @@ async function loadDay(client, args) {
         FROM aif_shop_exchange_lines el
         LEFT JOIN aif_product_variants nv ON nv.id=el.variant_id
         LEFT JOIN aif_product_models nm ON nm.id=nv.model_id
+        LEFT JOIN aif_categories new_subc ON new_subc.id=nm.subcategory_id
         LEFT JOIN LATERAL (
           SELECT sc.supplier_product_code FROM aif_variant_supplier_codes sc
           WHERE sc.variant_id=nv.id AND COALESCE(sc.is_active,true)=true AND NULLIF(btrim(sc.supplier_product_code),'') IS NOT NULL
@@ -179,6 +194,7 @@ async function loadDay(client, args) {
     LEFT JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
     LEFT JOIN aif_product_variants v ON v.id=e.source_variant_id
     LEFT JOIN aif_product_models rm ON rm.id=v.model_id
+    LEFT JOIN aif_categories return_subc ON return_subc.id=rm.subcategory_id
     LEFT JOIN LATERAL (
       SELECT sc.supplier_product_code
       FROM aif_variant_supplier_codes sc
@@ -244,7 +260,7 @@ function excelEntries(data) {
         brand:r.brand_name,sn:r.sn_code,
         productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
           modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name}),
-        barcode:r.export_barcode,
+        barcode:r.export_barcode,subcategory:r.export_subcategory,
         color:r.color_name,size:r.size,customer:r.customer_name,qty,
         listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
         lineTotal,method:methods || (credit?'Utólag fizet':'Nincs fizetési adat'),
@@ -290,7 +306,7 @@ function excelEntries(data) {
         brand:r.brand_name,sn:r.sn_code,
         productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
           modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name}),
-        barcode:r.export_barcode,
+        barcode:r.export_barcode,subcategory:r.export_subcategory,
         color:r.color_name,size:r.size,customer:r.customer_name||cp.customer_name,qty,
         listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
         lineTotal:round(r.amount),method:methodName(cp.method),document:r.sale_number,actor:cp.actor,
@@ -314,7 +330,8 @@ function excelEntries(data) {
         brand:e.returned_brand,sn:e.returned_sn,
         productCode:aifAuditProductCode({supplierProductCode:e.returned_supplier_product_code,
           modelCode:e.returned_model_code,saleProductCode:e.returned_product_code,brand:e.returned_brand}),
-        barcode:e.returned_barcode,color:e.returned_color,size:e.returned_size,
+        barcode:e.returned_barcode,subcategory:e.returned_subcategory,
+        color:e.returned_color,size:e.returned_size,
         customer:e.customer_name,qty:-Number(e.returned_qty),listPrice:round(e.returned_list_price),
         discountPercent:0,discount:0,lineTotal:-round(e.return_credit),method:'Csere / visszáru',
         document:e.exchange_number,actor:e.actor,kind:'Csere: visszahozott',collected:0,
@@ -325,7 +342,7 @@ function excelEntries(data) {
         brand:line.brand_name,sn:line.sn_cod,
         productCode:aifAuditProductCode({supplierProductCode:line.supplier_product_code,
           modelCode:line.model_code,saleProductCode:line.product_code,brand:line.brand_name}),
-        barcode:line.barcode,
+        barcode:line.barcode,subcategory:line.subcategory,
         color:line.color_name,size:line.size,customer:e.customer_name,qty:Number(line.quantity||0),
         listPrice:round(line.unit_price),discountPercent:0,discount:0,lineTotal:round(line.line_total),
         method:'Csere',document:e.exchange_number,actor:e.actor,kind:'Csere: új termék',

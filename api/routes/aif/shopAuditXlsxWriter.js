@@ -1,17 +1,18 @@
 // ALLINFASHION_AUDIT_TEMPLATE_EXACT_20261027
 // The client's original AUDITNAPLO ADATOK MINTA.xlsx is the specification:
-// one worksheet, yellow row-2 headers A:O, 15 columns in identical order,
+// Updated client template: subcategory in G, between barcode and color.
+// One worksheet, yellow row-2 headers A:P, 16 columns in the requested order,
 // Calibri 10pt everywhere. NO extra design sheets, titles or totals.
 // Uses only node:zlib, and NEVER writes to the database.
 import { deflateRawSync } from 'node:zlib';
 
 const HEADERS = [
   'NR.', 'DATUM / ORA', 'BRAND', 'S/N KOD', 'TERMEK KOD', 'BARCOD',
-  'SZIN', 'MERET', 'VASARLO', 'DB', 'RENDES AR', 'KEDVEZMENY %',
+  'TERMEK / ALKATEGORIA', 'SZIN', 'MERET', 'VASARLO', 'DB', 'RENDES AR', 'KEDVEZMENY %',
   'KEDVEZMENY ERTEK', 'FIZETENDO', 'PENZ / KARTYA ',
 ];
 // Column widths are limited for daily use, not enlarged to fit giant notes.
-const WIDTHS = [7, 21, 18, 24, 26, 20, 17, 11, 24, 7, 15, 17, 21, 16, 24];
+const WIDTHS = [7, 21, 18, 24, 26, 20, 24, 17, 11, 24, 7, 15, 17, 21, 16, 24];
 const number = (value) => {
   const v = Number(value);
   return Number.isFinite(v) ? v : 0;
@@ -82,6 +83,7 @@ function sheetXml(entries) {
       str(item.sn || ''),
       str(item.productCode || ''),
       str(item.barcode || ''),
+      str(item.subcategory || ''),
       str(item.color || ''),
       str(item.size || ''),
       str(item.customer || ''),
@@ -92,17 +94,18 @@ function sheetXml(entries) {
       money(item.lineTotal),
       str(item.method || ''),
     ];
-    const format = [2,0,0,5,5,5,0,0,0,2,3,4,3,3,0];
+    const format = [2,0,0,5,5,5,0,0,0,0,2,3,4,3,3,0];
     rows.push(`<row r="${rowNumber}" ht="18" customHeight="1">`+
       values.map((value,j)=>cell(j+1,rowNumber,value,format[j])).join('')+'</row>');
   }
   const last = Math.max(2, sorted.length + 2);
+  const lastCol = colName(HEADERS.length);
   const cols = WIDTHS.map((width,i)=>`<col min="${i+1}" max="${i+1}" width="${width}" customWidth="1"/>`).join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<dimension ref="A1:O${last}"/><sheetViews><sheetView workbookViewId="0" showGridLines="1"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<dimension ref="A1:${lastCol}${last}"/><sheetViews><sheetView workbookViewId="0" showGridLines="1"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
 <sheetFormatPr defaultRowHeight="15"/><cols>${cols}</cols><sheetData>${rows.join('')}</sheetData>
-<autoFilter ref="A2:O${last}"/>
+<autoFilter ref="A2:${lastCol}${last}"/>
 <pageMargins left="0.35" right="0.35" top="0.5" bottom="0.5" header="0.25" footer="0.25"/>
 <pageSetup orientation="landscape" paperSize="9"/>
 </worksheet>`;
