@@ -5871,3 +5871,37 @@ export function apiAifShopProofPdfUrl(
   return `${AIF_BASE}/shop-documents/proof/${encodeURIComponent(kind)}/${encodeURIComponent(id)}.pdf?${q.toString()}`;
 }
 
+
+// Shopify physical lifecycle, isolated from POS cash and financial refunds.
+export type AifShopifyLifecycleLine = {
+  shopify_line_item_id: string; variant_id: string; product_title: string; barcode: string; size: string;
+  allocated_qty: number; shipped_qty: number; released_qty: number; returned_qty: number;
+  pending_qty: number; returnable_qty: number; valuation_known: boolean;
+};
+export type AifShopifyReturnReceiptInput = {
+  idempotencyKey: string; physicallyReceived: true; locationId: string; note: string; replacementOrder?: string;
+  lines: Array<{lineId: string; quantity: number; condition: 'restock' | 'quarantine'}>;
+};
+export type AifShopifyLifecycle = {
+  enabled: boolean; canReceive: boolean; canResolveQuarantine: boolean;
+  order: {shopify_order_id: string; order_name: string; document_number: string; source_location_id: string;
+    source_name: string; source_code: string; target_name: string; state: string; raw?: Record<string,any>; refunded_amount: number};
+  lines: AifShopifyLifecycleLine[];
+  documents: Array<{id: string; document_number: string; created_at: string; total_qty: number; total_value: number; title: string; raw?: Record<string,any>}>;
+  returns: Array<{shopify_return_id: string; status: string; topic: string; updated_at: string}>;
+  events: Array<{id: string; event_key: string; kind: string; actor: string; created_at: string; payload: Record<string,any>}>;
+  quarantine: Array<{id: string; shopify_line_item_id: string; qty: number; resolved_qty: number; location_name: string; note: string}>;
+  errors: Array<{error: string; updated_at: string}>;
+  locations: Array<{id: string; code: string; name: string}>;
+};
+export function apiAifShopifyLifecycle(order: string, location?: string) {
+  const query = location ? `?location=${encodeURIComponent(location)}` : '';
+  return fetchAifJSON<AifShopifyLifecycle>(`/shopify/warehouse/shop/source/lifecycle/${encodeURIComponent(order)}${query}`,{cache:'no-store'});
+}
+export function apiAifReceiveShopifyReturn(order: string, body: AifShopifyReturnReceiptInput, location?: string) {
+  const query = location ? `?location=${encodeURIComponent(location)}` : '';
+  return fetchAifJSON<{ok:true;duplicate:boolean;documentNumber:string}>(`/shopify/warehouse/shop/source/lifecycle/${encodeURIComponent(order)}/receive-return${query}`,{method:'POST',body:JSON.stringify(body)});
+}
+export function apiAifResolveShopifyQuarantine(id: string, body: {idempotencyKey:string;quantity:number;action:'restock'|'writeoff';note:string}) {
+  return fetchAifJSON<{ok:true;duplicate:boolean;documentNumber:string}>(`/shopify/warehouse/shop/source/quarantine/${encodeURIComponent(id)}/resolve`,{method:'POST',body:JSON.stringify(body)});
+}
