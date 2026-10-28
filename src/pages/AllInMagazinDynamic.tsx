@@ -185,6 +185,7 @@ export default function AllInMagazinDynamic({
   const [shopifyCustomersOpen, setShopifyCustomersOpen] = useState(false);
   const [shopifySourceOpen, setShopifySourceOpen] = useState(false);
   const [shopifySourceSummary, setShopifySourceSummary] = useState<ShopifySourceSummary>({total:0,pending:0,fulfilled:0,cancelled:0});
+  const [shopifySourceError, setShopifySourceError] = useState("");
   const moduleIsEnabled = (key: string) => enabledShopModules.includes(key);
 
   useEffect(() => {
@@ -212,10 +213,11 @@ export default function AllInMagazinDynamic({
     return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
   }, [apiBase, shopId]);
 
-  // Ez nem alkalmazottankénti pénzügyi rekord: minden dolgozónak látnia kell,
-  // ha az adott üzlet saját készletéből Shopify-rendelésre átadás történt.
+  // Az adott üzlet KÉSZLETFELELŐSSÉGÉNEK Avizai, nem az eladó pénztári rekordjai.
+  // API-hiba esetén a hibát megmutatjuk; tilos úgy viselkedni, mintha 0 átadás lenne.
   useEffect(() => {
     setShopifySourceSummary({total:0,pending:0,fulfilled:0,cancelled:0});
+    setShopifySourceError("");
     if (isShopifyWarehouse) return;
     let cancelled = false;
     const refresh = async () => {
@@ -223,13 +225,27 @@ export default function AllInMagazinDynamic({
         const response = await fetch(`/api/aif/shopify/warehouse/shop/source/documents?location=${encodeURIComponent(locationCode)}`, {
           credentials: "include", cache: "no-store", headers: { Accept: "application/json" },
         });
-        if (!response.ok) return;
         const data = await response.json().catch(() => null);
-        if (!cancelled && data?.summary) setShopifySourceSummary(data.summary);
-      } catch { /* Az üzleti felület nem állhat le opcionális jelzés miatt. */ }
+        if (!response.ok || data?.ok === false) {
+          throw new Error(String(data?.error || `HTTP ${response.status}`));
+        }
+        if (!Array.isArray(data?.items) || !data?.summary) throw new Error("Hiányos Shopify Aviz-válasz.");
+        if (cancelled) return;
+        const summary = data.summary;
+        setShopifySourceSummary({
+          total: Number(summary.total || 0),
+          pending: Number(summary.pending || 0),
+          fulfilled: Number(summary.fulfilled || 0),
+          cancelled: Number(summary.cancelled || 0),
+        });
+        setShopifySourceError("");
+      } catch (error) {
+        if (cancelled) return;
+        setShopifySourceError(error instanceof Error ? error.message : "A Shopify Avizok nem ellenőrizhetők.");
+      }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 45000);
+    const timer = window.setInterval(() => void refresh(), 30000);
     window.addEventListener("focus", refresh);
     return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
   }, [isShopifyWarehouse, locationCode]);
@@ -474,7 +490,7 @@ export default function AllInMagazinDynamic({
     }
     if (action.key === "receipts") {
       setNotice("");
-      if (!isShopifyWarehouse && shopifySourceSummary.total > 0) setShopifySourceOpen(true);
+      if (!isShopifyWarehouse && (shopifySourceSummary.total > 0 || shopifySourceError)) setShopifySourceOpen(true);
       else setDocumentsOpen(true);
       return;
     }
@@ -607,21 +623,22 @@ export default function AllInMagazinDynamic({
               const reservationIsDanger =
                 moduleActive && action.key === "reserved" && reservationDeadlineAlert.count > 0;
               const shopifyReceiptAlert = moduleActive && !isShopifyWarehouse && action.key === "receipts" && shopifySourceSummary.pending > 0;
+              const shopifyReceiptFailed = moduleActive && !isShopifyWarehouse && action.key === "receipts" && Boolean(shopifySourceError);
               const alertBadgeText = reservationIsDanger
                 ? reservationDeadlineAlert.count > 1
                   ? `${reservationDeadlineAlert.count} SÜRGŐS`
                   : reservationDeadlineAlert.label
-                : shopifyReceiptAlert ? `${shopifySourceSummary.pending} SHOPIFY` : moduleActive ? "Aktív modul" : "Inaktív";
+                : shopifyReceiptAlert ? `${shopifySourceSummary.pending} SHOPIFY` : shopifyReceiptFailed ? "SHOPIFY HIBA" : moduleActive ? "Aktív modul" : "Inaktív";
 
               return (
+                <div key={action.key} className="relative h-full">
                 <button
-                  key={action.key}
                   type="button"
                   onClick={() => openModule(action)}
                   disabled={!moduleActive || shopModulesBusy}
                   aria-disabled={!moduleActive || shopModulesBusy}
                   title={!moduleActive ? "Ezt a modult az admin letiltotta ennél a belépőkódnál." : action.title}
-                  className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
+                  className={`group min-h-[154px] h-full w-full touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
                     !moduleActive || shopModulesBusy
                       ? "cursor-not-allowed border-white/16 bg-[#344153] text-white/45 opacity-55 grayscale-[0.4] shadow-none"
                       : reservationIsDanger
@@ -651,9 +668,14 @@ export default function AllInMagazinDynamic({
                   <h3 className={`mt-4 text-lg text-white ${reservationIsDanger ? "font-semibold" : ""}`}>
                     {action.title}
                   </h3>
-                  <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
+                  <p className={`mt-1.5 text-sm leading-snug ${action.key === "receipts" && !isShopifyWarehouse && !shopifyReceiptAlert ? "pb-10 " : ""}${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
                     {action.description}
                   </p>
+                  {shopifyReceiptFailed ? (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-100" title={shopifySourceError}>
+                      <AlertTriangle size={14} /> Shopify Aviz ellenőrzési hiba
+                    </div>
+                  ) : null}
                   {shopifyReceiptAlert ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/35 bg-black/15 px-3 py-2 text-xs text-white">
                       <img src={SHOPIFY_WAREHOUSE_ICON} alt="" className="h-4 w-4 object-contain" />
@@ -669,6 +691,18 @@ export default function AllInMagazinDynamic({
                     </div>
                   ) : null}
                 </button>
+                {action.key === "receipts" && !isShopifyWarehouse && !shopifyReceiptAlert && moduleActive && !shopModulesBusy ? (
+                  <button
+                    type="button"
+                    onClick={() => { setNotice(""); setDocumentsOpen(false); setShopifySourceOpen(true); }}
+                    className="absolute bottom-3 right-3 inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/30 bg-[#293548]/65 px-2.5 text-[11px] text-white shadow-sm transition hover:border-white/60 hover:bg-[#364558]"
+                    title="Az üzletből Shopify Raktárba kivezetett termékek bizonylatai"
+                  >
+                    <img src={SHOPIFY_WAREHOUSE_ICON} alt="" className="h-4 w-4 object-contain" />
+                    Shopify bizonylatok
+                  </button>
+                ) : null}
+                </div>
               );
             })}
           </div>

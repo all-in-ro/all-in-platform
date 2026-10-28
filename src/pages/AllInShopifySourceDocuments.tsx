@@ -54,9 +54,15 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
         credentials: "include", cache: "no-store", headers: { Accept: "application/json" },
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-      setDocuments(Array.isArray(data?.items) ? data.items : []);
-      setSummary(data?.summary || { total: 0, pending: 0, fulfilled: 0, cancelled: 0 });
+      if (!response.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${response.status}`);
+      if (!Array.isArray(data?.items) || !data?.summary) throw new Error("Hiányos Shopify Aviz-válasz érkezett a szervertől.");
+      setDocuments(data.items);
+      setSummary({
+        total: Number(data.summary.total || 0),
+        pending: Number(data.summary.pending || 0),
+        fulfilled: Number(data.summary.fulfilled || 0),
+        cancelled: Number(data.summary.cancelled || 0),
+      });
     } catch (e) { setError(e instanceof Error ? e.message : "A Shopify átadások nem tölthetők be."); }
     finally { setLoading(false); }
   }
@@ -65,6 +71,10 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
     if (!open) return;
     setQuery(""); setFilter("all"); setDetail(null); setDetailError("");
     void load();
+    const timer = window.setInterval(() => void load(), 30000);
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [open, locationCode]);
 
   useEffect(() => {
@@ -118,12 +128,19 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
             <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.13em] text-white/78">Készletfelelősség • {locationName}</p><h2 className="mt-1 truncate text-xl">Shopify kimenő Avizok</h2></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={onOpenRegularDocuments} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/25 bg-black/15 px-3 text-xs hover:bg-black/25"><FileText size={16} /> Saját bizonylatok</button>
             <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/25 bg-black/15 px-3 text-xs disabled:opacity-50"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
             <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl border border-white/25 bg-black/15" aria-label="Bezárás"><X size={18}/></button>
           </div>
         </header>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3.5 sm:p-5">
+          <nav aria-label="Bizonylatok típusai" className="flex flex-wrap items-center gap-2 rounded-[17px] border border-white/12 bg-[#283448] p-2">
+            <button type="button" aria-current="page" className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#96BF48]/65 bg-[#96BF48]/24 px-4 text-[12px] text-white">
+              <img src={SHOPIFY_ICON} alt="" className="h-5 w-5 object-contain" /> Shopify bizonylatok
+              <span className="ml-1 rounded-md bg-black/15 px-1.5 py-0.5 text-[10px]">{summary.total}</span>
+            </button>
+            <button type="button" onClick={onOpenRegularDocuments} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-[#354153] px-4 text-[12px] text-white/78 transition hover:border-white/40 hover:bg-[#405064]"><FileText size={16} /> Saját bizonylatok</button>
+            {summary.pending > 0 && !error ? <span className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[#96BF48]/45 bg-[#96BF48]/12 px-3 py-2 text-[11px] text-[#e8ffce]"><CheckCircle2 size={14} /> {summary.pending} feladásra vár</span> : null}
+          </nav>
           <p className="text-xs leading-relaxed text-white/65">Ezek a dokumentumok bizonyítják, hogy a megjelölt termékek kikerültek a <span className="text-white">{locationName}</span> készletfelelősségi köréből a Shopify Raktárba. Az Aviz nem helyi kasszabevétel és nem újabb készletlevonás.</p>
           <div className="grid gap-2 sm:grid-cols-4">
             {([{ key: "all", label: "Összes", value: summary.total }, { key: "allocated", label: "Feladásra vár", value: summary.pending }, { key: "fulfilled", label: "Elküldve", value: summary.fulfilled }, { key: "cancelled", label: "Visszavonva", value: summary.cancelled }] as const).map(f => (
@@ -131,7 +148,7 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
             ))}
           </div>
           <label className="relative block"><Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#b3df77]" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Aviz, AIF-rendelés, vevő vagy vonalkód…" className="h-12 w-full rounded-xl border border-white/16 bg-[#253244] pl-11 pr-4 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#96BF48]" /></label>
-          {error ? <div className="rounded-xl border border-red-300/35 bg-red-500/12 px-4 py-3 text-sm text-rose-100">{error}</div> : null}
+          {error ? <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-500/12 px-4 py-3 text-sm text-amber-50"><span>Shopify bizonylatok ellenőrzése sikertelen: {error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-amber-200/40 px-3 py-1.5 text-xs hover:bg-amber-500/20">Újrapróbálás</button></div> : null}
           <div className="grid gap-2 lg:grid-cols-2">
             {visible.map(item => {
               const pending = item.state === "allocated";
@@ -145,7 +162,7 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
             })}
           </div>
           {loading && !documents.length ? <p className="py-14 text-center text-white/50"><Loader2 size={18} className="mr-2 inline animate-spin" />Adatok betöltése…</p> : null}
-          {!loading && !visible.length ? <p className="rounded-xl border border-dashed border-white/15 px-4 py-12 text-center text-sm text-white/48">Nincs a szűrésnek megfelelő Shopify Aviz ennél az üzletnél.</p> : null}
+          {!loading && !error && !visible.length ? <p className="rounded-xl border border-dashed border-white/15 px-4 py-12 text-center text-sm text-white/48">Nincs a szűrésnek megfelelő Shopify Aviz ennél az üzletnél.</p> : null}
           {detailLoading ? <p className="flex items-center gap-2 rounded-xl border border-white/12 p-4 text-xs text-white/60"><Loader2 size={16} className="animate-spin"/>Bizonylat betöltése…</p> : null}
           {detailError ? <p className="rounded-xl border border-rose-300/35 bg-rose-500/10 p-3 text-xs text-rose-100">{detailError}</p> : null}
           {detail ? <section className="rounded-[19px] border border-[#96BF48]/42 bg-[#283c41] p-4">
