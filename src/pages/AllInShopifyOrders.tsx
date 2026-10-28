@@ -998,7 +998,6 @@ export default function AllInShopifyOrders({ role }: Props) {
               <div className="min-w-0">
                 <div className="text-[11px] uppercase tracking-[0.13em] text-[#b5d5d7]">AllInFashion • Shopify</div>
                 <h1 className="truncate text-lg font-normal tracking-wide text-white sm:text-xl">RENDELÉSKEZELŐ</h1>
-                <p className="mt-0.5 text-xs text-[#d0dde4]">Vevők, tételek, fizetések, feladások, visszatérítések és készletkapcsolatok</p>
               </div>
             </div>
 
@@ -1064,22 +1063,18 @@ export default function AllInShopifyOrders({ role }: Props) {
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Megjelenítve</div>
             <div className="mt-1 text-2xl font-normal text-slate-900">{visibleOrders.length}</div>
-            <div className="mt-1 text-xs text-slate-400">Betöltve: {normalizedOrders.length}</div>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Fizetve</div>
             <div className="mt-1 text-2xl font-normal text-emerald-700">{overview.paid}</div>
-            <div className="mt-1 text-xs text-slate-400">Nyitott: {overview.open}</div>
           </div>
           <div className="rounded-xl border border-sky-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Teljesítésre vár</div>
             <div className="mt-1 text-2xl font-normal text-sky-700">{overview.unfulfilled}</div>
-            <div className="mt-1 text-xs text-slate-400">Rendelési sor</div>
           </div>
           <div className="rounded-xl border border-amber-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Párosítási hiba</div>
             <div className="mt-1 text-2xl font-normal text-amber-700">{overview.problem}</div>
-            <div className="mt-1 text-xs text-slate-400">AllIn termékkapcsolat</div>
           </div>
           <div className="rounded-xl border border-rose-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Visszatérítés / teszt</div>
@@ -1087,12 +1082,10 @@ export default function AllInShopifyOrders({ role }: Props) {
               <span>{overview.refund}</span>
               <span className="text-sm text-slate-400">/ {overview.test}</span>
             </div>
-            <div className="mt-1 text-xs text-slate-400">Visszatérítés / tesztadat</div>
           </div>
           <div className="rounded-xl border border-[#b8ded5] bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Forgalom</div>
             <div className="mt-1 text-xl font-normal text-[#176b5b]">{money(overview.ronTotal, "RON")}</div>
-            <div className="mt-1 text-xs text-slate-400">Látható RON rendelések</div>
           </div>
         </section>
 
@@ -1234,7 +1227,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                   <Bug className="h-4 w-4 text-amber-600" />
                   Shopify rendelési webhook diagnosztika
                 </div>
-                <div className="mt-1 text-xs text-slate-500">Az utolsó 80 rendelési esemény és feldolgozási eredmény</div>
               </div>
               <div className="flex gap-2 text-xs">
                 <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">Hiba: {diagnostics.failed}</span>
@@ -1517,7 +1509,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                     <div className="rounded-xl border border-[#b8ded5] bg-[#f3fbf8] p-4 shadow-sm">
                       <div className="text-[11px] uppercase tracking-[0.1em] text-[#4d8075]">Készletkezelés</div>
                       <div className="mt-2 flex items-center gap-2 text-sm text-[#155c50]"><ShieldCheck className="h-4 w-4" /> Raktári készletszinkron</div>
-                      <div className="mt-2 text-xs text-[#4d8075]">Készletmódosítást csak az ellenőrzött Shopify-raktári feldolgozás végez.</div>
                     </div>
                   </section>
 
@@ -1629,7 +1620,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
                       <div>
                         <div className="flex items-center gap-2 text-sm font-normal text-slate-800"><Package className="h-4 w-4 text-[#176b5b]" /> Terméksorok és aktuális AllIn készlet</div>
-                        <div className="mt-1 text-xs text-slate-400">A készletadat valós idejű AllIn állapot, nem a rendelési rekordból számolt érték.</div>
                       </div>
                       <div className="text-xs text-slate-500">{detailLines.length} sor, {detailLines.filter((line) => !line.mapped).length} párosítatlan</div>
                     </div>
@@ -1775,7 +1765,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-2 text-sm text-slate-800"><ShieldCheck className="h-4 w-4 text-[#176b5b]" /> Adat- és készletbiztonság</div>
-                        <div className="mt-1 text-xs text-slate-500">A rendelésadatok Shopify-webhookból érkeznek. A fizikai készletet és az Avizokat az AllIn Shopify-raktár kezeli; az online készletfrissítési webhook csak megfigyelésre szolgál.</div>
                       </div>
                       <button type="button" className={buttonClass} onClick={() => void copyText(detailOrder.id)}><Copy className="h-4 w-4" /> Rendelés ID másolása</button>
                     </div>
@@ -1798,8 +1787,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                   <BellRing className="h-5 w-5" />
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[10px] uppercase tracking-[0.13em] text-[#b9d8da]">Shopify • vezetői értesítés</div>
-                  <h2 className="mt-1 text-base font-normal">Értesítések beállítása</h2>
+                  <h2 className="text-base font-normal">Értesítések beállítása</h2>
                 </div>
               </div>
               <button type="button" aria-label="Bezárás" disabled={smsSaving}
@@ -1815,9 +1803,8 @@ export default function AllInShopifyOrders({ role }: Props) {
                 <>
                   <div className="rounded-xl border border-[#d5e1e7] bg-white px-4 py-3">
                     <label className="flex cursor-pointer items-start justify-between gap-4">
-                      <span className="flex min-w-0 flex-col gap-1">
+                      <span className="flex min-w-0 flex-col">
                         <span className="text-sm text-[#354153]">SMS az új Shopify-rendelésekről</span>
-                        <span className="text-xs leading-5 text-slate-500">Rendelésszám és rendelési végösszeg a vezető telefonjára. Csak új rendelésről, legfeljebb egyszer.</span>
                       </span>
                       <input type="checkbox" checked={smsEnabled} onChange={e => setSmsEnabled(e.target.checked)}
                         className="mt-1 h-5 w-5 shrink-0 accent-[#108D8B]" />
@@ -1830,7 +1817,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                       <input type="tel" className={`${fieldClass} w-full pl-9`} value={smsPhone} onChange={e => setSmsPhone(e.target.value)}
                         placeholder="+407XXXXXXXX" autoComplete="tel" />
                     </div>
-                    <p className="mt-1.5 text-xs leading-5 text-slate-500">A címzettet csak az adminisztrátor állíthatja. A telefonszámot a szerver menti.</p>
                   </label>
                   <div className="rounded-xl border border-[#dbe5eb] bg-white px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1838,10 +1824,6 @@ export default function AllInShopifyOrders({ role }: Props) {
                       <Badge value={smsInfo?.provider?.configured && smsInfo?.provider?.liveAllowed ? "processed" : "disabled"}
                         children={smsInfo?.provider?.configured && smsInfo?.provider?.liveAllowed ? "Éles küldés elérhető" : "Éles küldés nem elérhető"} />
                     </div>
-                    <p className="mt-2 text-xs leading-5 text-slate-500">A küldést a meglévő SMSLink szolgáltatás végzi. Nem használja a vásárlói SMS-kampányok címzettlistáját. Az aktiválás előtt a szolgáltatói kapcsolatnak éles módban működnie kell.</p>
-                  </div>
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-900">
-                    <span className="text-amber-800">Biztonság:</span> régi rendelésekre nem küld utólag SMS-t. Az ismételten beérkező Shopify-webhook nem indít második küldést. Bizonytalan SMSLink-válasz után kézi ellenőrzés szükséges, nincs automatikus újraküldés.
                   </div>
                   {smsError && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{smsError}</div>}
                   {smsFeedback && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{smsFeedback}</div>}
