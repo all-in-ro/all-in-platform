@@ -1023,6 +1023,39 @@ function variantOptionCombinationKey(row) {
   return `${normalizeKey(row.color_name)}::${normalizeKey(row.size)}`;
 }
 
+// A beszállító külön színkóddal jelöli a valóban különböző csomagokat.
+// A kód csak megkülönböztető azonosító; nem találunk ki belőle színnevet.
+function exportColorIdentityCode(row) {
+  const code = text(row?.supplier_color_code || row?.color_code);
+  return /^[a-z0-9][a-z0-9._-]{0,39}$/i.test(code) ? code : "";
+}
+
+// Csak akkor választunk szét egy product_code csoportot, ha az azonos
+// szín+méret kombinációkat különböző, megbízható színkódok oldják fel.
+// Ha ez nem bizonyítható, marad a meglévő validációs hiba (fail closed).
+function canSeparateAmbiguousColorways(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return false;
+  const combinations = new Map();
+  const codes = new Set();
+  const uniqueCodeSizes = new Set();
+  for (const row of rows) {
+    const code = exportColorIdentityCode(row);
+    if (!code || !text(row.size)) return false;
+    const normalizedCode = normalizeKey(code);
+    codes.add(normalizedCode);
+    const codeSizeKey = `${normalizedCode}::${normalizeKey(row.size)}`;
+    if (uniqueCodeSizes.has(codeSizeKey)) return false;
+    uniqueCodeSizes.add(codeSizeKey);
+    const optionKey = `${normalizeKey(row.color_name)}::${normalizeKey(row.size)}`;
+    const bucket = combinations.get(optionKey) || [];
+    bucket.push(normalizedCode);
+    combinations.set(optionKey, bucket);
+  }
+  if (codes.size < 2) return false;
+  const collisions = Array.from(combinations.values()).filter((bucket) => bucket.length > 1);
+  return collisions.length > 0 && collisions.every((bucket) => new Set(bucket).size === bucket.length);
+}
+
 
 function canonicalHumanColorName(value) {
   const raw = text(value);
@@ -1093,19 +1126,39 @@ function normalizeExportRowsForOptions(rows, groupingMode = "product_code") {
 
     const singleKnownColor = groupColors.length === 1 ? groupColors[0] : "";
     const colorRequired = groupColors.length > 0;
+    const separateByCode = canSeparateAmbiguousColorways(groupRows);
+    const mode = cleanGroupingMode(groupingMode);
 
     for (const row of groupRows) {
       const directColor = resolvedRowColorName(row);
       const inheritedColor = !directColor && singleKnownColor ? singleKnownColor : "";
-      const finalColor = directColor || inheritedColor;
+      const colorCode = exportColorIdentityCode(row);
+      const plainColor = directColor || inheritedColor;
+      // Ugyanazon "multicolor / S" és "multicolor / M" érték nem szerepelhet
+      // kétszer. A beszállítói 968 / 376 kóddal megkülönböztethető, valódi
+      // színösszeállítások: a szöveg román címke marad, a kód ellenőrizhető.
+      const finalColor = separateByCode
+        ? `${plainColor || "Multicolor"} (${colorCode})`
+        : plainColor;
+      const originalGroupCode = productGroupCode(row, mode);
+      const splitGroupCode = separateByCode && mode === "product_code"
+        ? (normalizeKey(originalGroupCode).endsWith(`-${normalizeKey(colorCode)}`)
+          ? originalGroupCode
+          : `${originalGroupCode}-${colorCode}`)
+        : originalGroupCode;
+      const finalGroupKey = separateByCode && mode === "product_code"
+        ? `${text(row.model_id)}::${normalizeKey(splitGroupCode)}`
+        : groupKey;
 
       normalized.push({
         ...row,
         color_name: finalColor,
-        color_required: colorRequired,
+        color_required: separateByCode || colorRequired,
         color_inherited_from_group: Boolean(inheritedColor),
-        shopify_option_mode: colorRequired ? "color_size" : "size_only",
-        product_group_key: groupKey,
+        shopify_option_mode: (separateByCode || colorRequired) ? "color_size" : "size_only",
+        product_group_code: splitGroupCode,
+        product_group_key: finalGroupKey,
+        shopify_colorway_disambiguated: separateByCode,
       });
     }
   }
@@ -1418,7 +1471,7 @@ async function prepareExport(client, options = {}) {
       ...row,
       grouping_mode: groupingMode,
       product_group_key: groupKey,
-      product_group_code: productGroupCode(row, groupingMode),
+      product_group_code: text(row.product_group_code) || productGroupCode(row, groupingMode),
       image_url: imageFromRow(row) || productImageByGroup.get(groupKey) || "",
     };
   });
@@ -1446,6 +1499,12 @@ async function prepareExport(client, options = {}) {
     if (sku && (skuCounts.get(normalizeKey(sku)) || 0) > 1) {
       validation.errors.push("A kijelölt exportban ez a Shopify SKU többször szerepel.");
     }
+    // A Shopifyhoz már párosított variáns CSV-s újbóli létrehozása másik
+    // handle alatt duplikált SKU-t és hibás készletszinkront eredményezhet.
+    // A régi includeMapped kapcsoló ettől nem válhat veszélyes megkerülő úttá.
+    if (row.shopify_mapped && includeMapped) {
+      validation.errors.push("Már Shopifyhoz párosított SKU. Új CSV-import tiltva; a meglévő Shopify-variánst kell frissíteni a változatlan variánsazonosítóval.");
+    }
 
     const optionKey = `${row.product_group_key}::${variantOptionCombinationKey(row)}`;
     if ((optionCombinationCounts.get(optionKey) || 0) > 1) {
@@ -1453,14 +1512,8 @@ async function prepareExport(client, options = {}) {
     }
 
     const mappingState = groupMappingState.get(row.product_group_key) || { mapped: 0, unmapped: 0 };
-    if (
-      groupingMode === "model_colors" &&
-      !includeMapped &&
-      !row.shopify_mapped &&
-      mappingState.mapped > 0 &&
-      mappingState.unmapped > 0
-    ) {
-      validation.errors.push("A modell egyik színe már Shopifyhoz van kapcsolva. A teljes színválaszték újraépítéséhez kapcsold be a „Már összekötötteket is exportálja” opciót.");
+    if (!row.shopify_mapped && mappingState.mapped > 0 && mappingState.unmapped > 0) {
+      validation.errors.push("A Shopify-termékcsoport egy része már párosított. A meglévő termék variánsait Shopify API-n keresztül kell bővíteni, külön CSV újraimport nem biztonságos.");
     }
 
     const skippedMapped = Boolean(row.shopify_mapped && !includeMapped);
@@ -1495,6 +1548,9 @@ async function prepareExport(client, options = {}) {
     });
   }
 
+  // A termékkategóriát a Shopify élő taxonómiája validálja még export előtt.
+  // A CSV kizárólag bizonyított, rövid Taxonomy UID-t tartalmazhat.
+  items = await assignVerifiedShopifyCategories(items);
   const validItems = items.filter((item) => item.export_state === "valid");
   const invalidItems = items.filter((item) => item.export_state === "invalid");
   const skippedItems = items.filter((item) => item.export_state === "skipped_mapped");
@@ -1533,6 +1589,68 @@ async function prepareExport(client, options = {}) {
   };
 }
 
+
+
+// A CSV Product category mezője nem használhat kitalált / elavult útvonalat.
+// A GraphQL TaxonomyCategory ID végét (pl. aa-1-8-3-2) fogadja el a CSV.
+// Egy alkalommal ellenőrizzük a pontos fullName egyezést, majd rövid ideig cache-eljük.
+const verifiedCategoryUidCache = new Map();
+async function verifiedShopifyCategoryUid(path) {
+  const value = text(path);
+  if (!value) return "";
+  const key = normalizedCategoryPath(value);
+  const cached = verifiedCategoryUidCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.uid;
+
+  const isUid = /^[a-z]{1,4}-\d+(?:-\d+)*$/i.test(value);
+  let resolved;
+  if (isUid) {
+    const response = await shopifyGraphql(`query AifVerifyTaxonomyCategory($id: ID!) {
+      node(id: $id) {
+        ... on TaxonomyCategory { id name fullName isArchived }
+      }
+    }`, { id: `gid://shopify/TaxonomyCategory/${value}` });
+    resolved = response.data?.node || null;
+  } else {
+    resolved = await taxonomyCategoryByPath(value, new Map());
+  }
+  const gid = text(resolved?.id);
+  const uid = gid.startsWith("gid://shopify/TaxonomyCategory/")
+    ? gid.slice("gid://shopify/TaxonomyCategory/".length) : "";
+  const exact = isUid ? uid === value : normalizedCategoryPath(resolved?.fullName) === key;
+  const safeUid = exact && !resolved?.isArchived && /^[a-z]{1,4}-\d+(?:-\d+)*$/i.test(uid)
+    ? uid : "";
+  verifiedCategoryUidCache.set(key, { uid: safeUid, expires: Date.now() + 15 * 60 * 1000 });
+  return safeUid;
+}
+
+async function assignVerifiedShopifyCategories(rows) {
+  const paths = unique(rows
+    .filter((item) => item.export_state === "valid")
+    .map((item) => productCategory(item))
+    .filter(Boolean));
+  const ids = new Map();
+  for (const path of paths) {
+    try {
+      ids.set(normalizedCategoryPath(path), await verifiedShopifyCategoryUid(path));
+    } catch {
+      // Shopify ideiglenes hiba esetén sem küldünk hibás kategóriát a CSV-be.
+      ids.set(normalizedCategoryPath(path), "");
+    }
+  }
+  return rows.map((item) => {
+    const path = productCategory(item);
+    const uid = path ? ids.get(normalizedCategoryPath(path)) || "" : "";
+    return {
+      ...item,
+      shopify_category_uid: uid,
+      validation_warnings: path && !uid && item.export_state === "valid"
+        ? [...item.validation_warnings,
+            `A Shopify nem igazolta a termékkategóriát: ${path}. A CSV-be üres kategória kerül, nem érvénytelen érték.`]
+        : item.validation_warnings,
+    };
+  });
+}
 
 function googleProductCategoryForShopifyCategory(category) {
   const key = normalizedCategoryPath(category);
@@ -1600,7 +1718,7 @@ function productRowsForItems(items, productStatus) {
         "URL handle": item.handle,
         "Description": first ? description : "",
         "Vendor": first ? text(item.brand_name) : "",
-        "Product category": first ? category : "",
+        "Product category": first ? text(item.shopify_category_uid) : "",
         "Type": first ? type : "",
         "Tags": first ? buildTags(item) : "",
         "Published on online store": first ? (productStatus === "active" ? "TRUE" : "FALSE") : "",
@@ -1792,6 +1910,44 @@ export async function createAifShopifyProductExport(client, options = {}) {
     });
   }
 
+  // Kötelező élő SKU-előellenőrzés még az export létrehozása ELŐTT.
+  // A CSV-import másik handle alatt ugyanazzal az SKU-val új Shopify-variánst
+  // készíthet, akkor is, ha az AllIn DB-ben még nincs párosítása.
+  const remoteVariants = await loadAllShopifyVariants();
+  const remoteBySku = indexShopifyVariantsBySku(remoteVariants);
+  const remoteByHandle = new Map();
+  for (const variant of remoteVariants) {
+    const handle = normalizeKey(variant?.product?.handle);
+    const productId = text(variant?.product?.id);
+    if (handle && productId) remoteByHandle.set(handle, productId);
+  }
+  const existingRemoteHandles = unique(prepared.validItems.map((item) => item.handle))
+    .map((handle) => ({ handle, productId: remoteByHandle.get(normalizeKey(handle)) || "" }))
+    .filter((row) => row.productId);
+  if (existingRemoteHandles.length) {
+    throw Object.assign(
+      new Error(`A tervezett CSV ${existingRemoteHandles.length} Shopify-handle-je már foglalt. Meglévő terméket nem írunk felül CSV-vel; válassz másik biztonságos csoportosítást vagy Shopify API-frissítést.`),
+      { code: "shopify_export_existing_remote_handles", conflicts: existingRemoteHandles },
+    );
+  }
+  const existingRemoteSkus = prepared.validItems
+    .map((item) => ({ sku: item.sku, variants: remoteBySku.get(normalizeKey(item.sku)) || [] }))
+    .filter((row) => row.variants.length)
+    .map((row) => ({
+      sku: row.sku,
+      matches: row.variants.map((variant) => ({
+        variantId: text(variant.id),
+        productId: text(variant.product?.id),
+        handle: text(variant.product?.handle),
+      })),
+    }));
+  if (existingRemoteSkus.length) {
+    throw Object.assign(
+      new Error(`A kijelölt export ${existingRemoteSkus.length} SKU-ja már létezik a Shopifyban. Új CSV-import helyett a meglévő termékpárosítást kell ellenőrizni.`),
+      { code: "shopify_export_existing_remote_skus", duplicates: existingRemoteSkus },
+    );
+  }
+
   const { productRows, byVariant: productByVariant } = productRowsForItems(prepared.validItems, prepared.productStatus);
   const reportRows = reportRowsForItems(prepared.items);
   const exportId = randomUUID();
@@ -1918,6 +2074,21 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   // kijavítjuk letöltéskor.
   const exportableItems = items.rows
     .filter((row) => ["exported_pending", "mapped", "error"].includes(String(row.item_status)) && row.product_row);
+  // Régi export újraletöltése már Shopifyhoz párosított SKU-val új terméket
+  // hozhatna létre. A kapcsolatot soha nem bontjuk fel automatikusan.
+  const mappedVariants = exportableItems.length
+    ? (await client.query(
+      `SELECT variant_id::text AS variant_id FROM aif_shopify_variant_map
+       WHERE variant_id::text = ANY($1::text[])`,
+      [exportableItems.map((row) => text(row.variant_id))],
+    )).rows
+    : [];
+  if (mappedVariants.length || exportableItems.some((row) => row.snapshot?.mapped)) {
+    throw Object.assign(
+      new Error("A mentett export már Shopifyhoz párosított termékeket tartalmaz. Újraimportálása duplikált SKU-t hozna létre. A meglévő variánsokat kell frissíteni, ne töltsd fel újra a régi CSV-t."),
+      { code: "shopify_existing_mapped_csv_reimport_blocked" },
+    );
+  }
   // Régen elmentett exportoknál a snapshotban is maradhatott hibás URL-cím.
   // A javított élő modellneveket egyszer, tömbösítve olvassuk.
   const modelIds = unique(exportableItems.map((r) => text(r.model_id)).filter(Boolean));
@@ -1964,6 +2135,13 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
         safeTitle = fallbacks[0];
       }
       first["Title"] = safeTitle;
+      if (text(first["Product category"])) {
+        try {
+          first["Product category"] = await verifiedShopifyCategoryUid(first["Product category"]);
+        } catch {
+          first["Product category"] = "";
+        }
+      }
       if (text(first["SEO title"]) && !aifShopifyHumanExportTitle(first["SEO title"])) {
         first["SEO title"] = safeTitle.slice(0, 70);
       }
