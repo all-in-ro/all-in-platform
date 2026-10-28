@@ -43,6 +43,7 @@ type Props = {
   locationCode: "main_warehouse" | "magazin_targu_secuiesc";
   locationName: string;
   onClose: () => void;
+  onOpenShopify?: () => void;
 };
 
 type ReplacementLine = AifShopSaleCatalogItem & { quantity: number };
@@ -118,7 +119,7 @@ function SaleProductImage({ item }: { item: AifShopReturnSaleMatch }) {
   );
 }
 
-export default function AllInShopReturns({ open, actor, locationCode, locationName, onClose }: Props) {
+export default function AllInShopReturns({ open, actor, locationCode, locationName, onClose, onOpenShopify }: Props) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -501,6 +502,8 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {onOpenShopify ? <button type="button" onClick={onOpenShopify} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#96BF48]/55 bg-[#96BF48]/20 px-3 text-sm">
+              <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className="h-5 w-5 object-contain" /> Shopify visszáru</button> : null}
             <button
               type="button"
               onClick={() => setHistoryOpen((value) => !value)}

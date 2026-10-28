@@ -767,6 +767,7 @@ export default function AllInMagazinCiuc({
       />
       <AllInShopReturns
         open={returnsOpen}
+        onOpenShopify={() => { setReturnsOpen(false); setDocumentsOpen(false); setShopifySourceOpen(true); }}
         actor={actor}
         locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"

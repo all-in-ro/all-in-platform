@@ -1,3 +1,4 @@
+import AllInShopifyLifecycle from './AllInShopifyLifecycle';
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, CheckCircle2, FileText, Loader2, PackageCheck, Printer, RefreshCw, Search, X } from "lucide-react";
@@ -14,7 +15,7 @@ export type ShopifySourceDocument = {
   order_name: string; customer_name?: string | null; state: string;
   created_at: string; fulfilled_at?: string | null; total_qty: number | string;
   total_value: number | string; from_location_summary: string; to_location_summary: string;
-  lines: ShopifyTransferLine[];
+  lines: ShopifyTransferLine[]; kind?: string; lifecycle_state?: string; pending_qty?: number; original_aviz?: string;
 };
 export type ShopifySourceSummary = { total: number; pending: number; fulfilled: number; cancelled: number };
 type Props = {
@@ -22,7 +23,7 @@ type Props = {
   onOpenRegularDocuments: () => void;
 };
 type Detail = { document: Record<string, any>; lines: Array<Record<string, any>> };
-type Filter = "all" | "allocated" | "fulfilled" | "cancelled";
+type Filter = "all" | "allocated" | "fulfilled" | "cancelled" | "recorded";
 
 const fmt = (value: unknown) => {
   const date = new Date(String(value || ""));
@@ -31,7 +32,7 @@ const fmt = (value: unknown) => {
   });
 };
 const money = (value: unknown) => `${Number(value || 0).toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON`;
-const labelFor = (state: string) => state === "allocated" ? "Feladásra vár" : state === "fulfilled" ? "Elküldve" : state === "cancelled" ? "Visszavonva" : state;
+const labelFor = (state: string) => state === "allocated" ? "Feladásra vár" : state === "fulfilled" ? "Elküldve" : state === "cancelled" ? "Visszavonva" : state === "recorded" ? "Rögzített bizonylat" : state;
 
 /** Ugyanazokat a Shopify Avizokat mutatja, amelyek a főnöki készletbizonylati archívumban is szerepelnek. */
 export default function AllInShopifySourceDocuments({ open, locationCode, locationName, onClose, onOpenRegularDocuments }: Props) {
@@ -125,7 +126,7 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#365b35] via-[#59873d] to-[#96BF48] px-4 py-4 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
             <img src={SHOPIFY_ICON} alt="Shopify" className="h-11 w-11 shrink-0 rounded-xl border border-white/25 bg-white/15 p-1.5 object-contain" />
-            <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.13em] text-white/78">Készletfelelősség • {locationName}</p><h2 className="mt-1 truncate text-xl">Shopify kimenő Avizok</h2></div>
+            <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.13em] text-white/78">Készletfelelősség • {locationName}</p><h2 className="mt-1 truncate text-xl">Shopify Avizok és visszárubizonylatok</h2></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/25 bg-black/15 px-3 text-xs disabled:opacity-50"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
@@ -141,9 +142,9 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
             <button type="button" onClick={onOpenRegularDocuments} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-[#354153] px-4 text-[12px] text-white/78 transition hover:border-white/40 hover:bg-[#405064]"><FileText size={16} /> Saját bizonylatok</button>
             {summary.pending > 0 && !error ? <span className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[#96BF48]/45 bg-[#96BF48]/12 px-3 py-2 text-[11px] text-[#e8ffce]"><CheckCircle2 size={14} /> {summary.pending} feladásra vár</span> : null}
           </nav>
-          <p className="text-xs leading-relaxed text-white/65">Ezek a dokumentumok bizonyítják, hogy a megjelölt termékek kikerültek a <span className="text-white">{locationName}</span> készletfelelősségi köréből a Shopify Raktárba. Az Aviz nem helyi kasszabevétel és nem újabb készletlevonás.</p>
-          <div className="grid gap-2 sm:grid-cols-4">
-            {([{ key: "all", label: "Összes", value: summary.total }, { key: "allocated", label: "Feladásra vár", value: summary.pending }, { key: "fulfilled", label: "Elküldve", value: summary.fulfilled }, { key: "cancelled", label: "Visszavonva", value: summary.cancelled }] as const).map(f => (
+          <p className="text-xs leading-relaxed text-white/65">A <span className="text-white">{locationName}</span> üzlet Shopify-átadásai, feladásai, lemondásai és igazolt visszavételei. A bizonylat megnyitása vagy nyomtatása nem módosít készletet és kasszát.</p>
+          <div className="grid gap-2 sm:grid-cols-5">
+            {([{ key: "all", label: "Összes", value: summary.total }, { key: "allocated", label: "Feladásra vár", value: summary.pending }, { key: "fulfilled", label: "Elküldve", value: summary.fulfilled }, { key: "cancelled", label: "Visszavonva", value: summary.cancelled }, {key: "recorded",label: "Kapcsolódó bizonylatok",value: documents.filter(d=>d.state==="recorded").length}] as const).map(f => (
               <button key={f.key} type="button" onClick={() => setFilter(f.key)} className={`flex h-12 items-center justify-between gap-2 rounded-xl border px-3 text-left text-sm transition ${filter === f.key ? "border-[#b3df77] bg-[#96BF48]/23 text-white" : "border-white/14 bg-[#354153] text-white/72 hover:bg-white/10"}`}><span>{f.label}</span><span className="tabular-nums">{f.value}</span></button>
             ))}
           </div>
@@ -156,7 +157,7 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
                 <div className="flex items-start justify-between gap-2"><div className="flex items-center gap-2"><img src={SHOPIFY_ICON} alt="" className="h-7 w-7 object-contain"/><span className="text-base text-white">{item.document_number}</span></div><span className={`rounded-lg border px-2.5 py-1 text-[10px] ${pending ? "border-[#96BF48]/55 bg-[#96BF48]/23 text-[#eaffd5]" : "border-white/16 bg-black/10 text-white/70"}`}>{labelFor(item.state)}</span></div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-white/73"><span className="text-[#ddf9bc]">{item.order_name}</span><span>• {item.customer_name || "Vevő"}</span></div>
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-white/47"><span>{fmt(item.created_at)}</span><span>•</span><span>{item.total_qty} db</span><span>•</span><span>{money(item.total_value)}</span></div>
-                <div className="mt-2 flex items-center gap-2 text-[11px] text-white/53"><span className="truncate">{item.from_location_summary}</span><ArrowRight size={13} /><span className="truncate">{item.to_location_summary}</span></div>
+                <div className="mt-2 flex items-center gap-2 text-[11px] text-white/53"><span className="truncate">{item.from_location_summary}</span><ArrowRight size={13} /><span className="truncate">{item.to_location_summary}</span></div>{item.original_aviz ? <p className="mt-1 text-[10px] text-white/55">Előzmény: {item.original_aviz}</p> : null}
                 {(item.lines || []).slice(0, 3).map((line,i) => <div key={line.id || i} className="mt-2 flex items-center gap-2 rounded-lg border border-white/9 bg-black/10 p-2 text-[11px] text-white/75">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-9 w-9 shrink-0 rounded-lg bg-white object-contain" /> : <PackageCheck size={18} className="shrink-0 text-[#b3df77]" />}<span className="min-w-0 flex-1 truncate">{line.title} • {line.size} • {line.barcode}</span><span className="shrink-0">{line.qty} db</span></div>)}
               </button>;
             })}
@@ -169,7 +170,10 @@ export default function AllInShopifySourceDocuments({ open, locationCode, locati
             <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[9px] uppercase tracking-[0.12em] text-white/47">Aviz részletei</p><h3 className="mt-1 text-lg text-white">{String(detail.document.document_number || "")}</h3><p className="mt-1 text-xs text-white/60">{String(detail.document.order_name || detail.document.external_reference || "")} • {String(detail.document.customer_name || detail.document.raw?.customerName || "")}</p></div>
             <div className="flex items-center gap-2"><button type="button" onClick={() => void print()} disabled={printBusy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#96BF48]/50 bg-[#96BF48]/25 px-4 text-sm text-white hover:bg-[#96BF48]/35 disabled:opacity-50"><Printer size={16} /> {printBusy ? "Nyomtatás…" : "Hivatalos formátum / PDF"}</button><button type="button" onClick={() => setDetail(null)} className="h-10 rounded-xl border border-white/18 px-3 text-sm">Bezárás</button></div></div>
             <div className="mt-3 space-y-2">{detail.lines.map((line,i) => <div key={String(line.id || i)} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#354153] px-3 py-2.5 text-xs"><span>{String(line.product_title || "")} • {String(line.size || "")} • {String(line.barcode || "")}</span><span>{Number(line.qty)} db • {money(line.line_total)}</span></div>)}</div>
-            <p className="mt-3 text-[11px] text-white/45">Belső készletátadási dokumentum, nem számla és nem bolti pénztári nyugta. Nem indít készletmozgást.</p>
+            <p className="mt-3 text-[11px] text-white/45">Belső készletbizonylat, nem számla és nem bolti pénztári nyugta. A megtekintés nem indít készletmozgást.</p>
+            <div className="mt-4"><AllInShopifyLifecycle key={String(detail.document.shopify_order_id || detail.document.raw?.shopifyOrderId)}
+              orderId={String(detail.document.shopify_order_id || detail.document.raw?.shopifyOrderId || detail.document.external_reference)}
+              locationCode={locationCode} onChanged={() => void load()} /></div>
           </section> : null}
         </div>
       </section>

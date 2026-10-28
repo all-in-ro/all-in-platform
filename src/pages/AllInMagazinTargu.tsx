@@ -767,6 +767,7 @@ export default function AllInMagazinTargu({
       />
       <AllInShopReturns
         open={returnsOpen}
+        onOpenShopify={() => { setReturnsOpen(false); setDocumentsOpen(false); setShopifySourceOpen(true); }}
         actor={actor}
         locationCode="magazin_targu_secuiesc"
         locationName="Magazin - Târgu Secuiesc"

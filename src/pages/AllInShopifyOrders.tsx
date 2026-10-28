@@ -1,3 +1,4 @@
+import AllInShopifyLifecycle from './AllInShopifyLifecycle';
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -655,23 +656,10 @@ export default function AllInShopifyOrders({ role }: Props) {
     finally {setAvizBusy(false);}
   }
 
-  function printAviz() {
+  async function printAviz() {
     if(!avizDetail)return;
-    const doc=avizDetail.document;
-    const esc=(input:unknown)=>String(input??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-    const fmt=(n:unknown)=>Number(n||0).toLocaleString("ro-RO",{minimumFractionDigits:2,maximumFractionDigits:2});
-    const lines=avizDetail.lines.map((line,index)=>`<tr><td>${index+1}</td><td>${esc(line.product_title)}<small>${esc(line.brand_name||"")} • ${esc(line.color_name||"")} / ${esc(line.size||"")}</small></td><td>${esc(line.product_code||"")}</td><td>${esc(line.barcode||"")}</td><td class="right">${esc(line.qty)}</td><td class="right">${fmt(line.unit_price)}</td><td class="right">${fmt(line.line_total)}</td></tr>`).join("");
-    const address=doc.shipping_address&&typeof doc.shipping_address==='object'?doc.shipping_address:{};
-    const displayAddress=[address.address1,address.address2,address.zip,address.city].filter(Boolean).map(esc).join(', ');
-    const html=`<!DOCTYPE html><html lang="ro"><head><meta charset="utf-8"><title>${esc(doc.document_number)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:11px;color:#1f2937;margin:0}header{border-bottom:2px solid #168c80;padding-bottom:12px;display:flex;justify-content:space-between;gap:20px}h1{font-size:21px;margin:7px 0}h2{font-size:15px;margin:6px 0}section{margin:18px 0}p{margin:4px 0}table{width:100%;border-collapse:collapse;margin-top:14px}th{background:#334155;color:white;text-align:left}th,td{padding:8px 5px;border:1px solid #cbd5e1;vertical-align:top}small{display:block;color:#64748b;margin-top:3px}.right{text-align:right;white-space:nowrap}.tag{padding:7px 12px;background:#eff7f5;border:1px solid #a8d6cc;display:inline-block}.sign{margin-top:48px;display:flex;justify-content:space-between;gap:30px}.sign div{flex:1;border-top:1px solid #94a3b8;padding-top:6px;text-align:center}</style></head><body>
-    <header><div><small>TITAN EURO-COM SRL • ALLINFASHION</small><h1>AVIZ INTERN SHOPIFY</h1><h2>${esc(doc.document_number)}</h2><p>Transfer intern catre gestiunea Shopify</p></div><div><p><b>Data:</b> ${esc(String(doc.document_date||doc.created_at||'').slice(0,10))}</p><p><b>Comanda Shopify:</b> ${esc(doc.order_name)}</p><p><b>Status:</b> ${esc(doc.state==='allocated'?'In asteptare ambalare':doc.state==='fulfilled'?'Expediata':'Anulata')}</p></div></header>
-    <section><p class="tag"><b>RENDELÉS / COMANDA: ${esc(doc.order_name)}</b></p><p><b>Client / Pentru:</b> ${esc(doc.customer_name||'-')}</p><p><b>Destinatar:</b> ${displayAddress||'-'}</p><p><b>De la:</b> ${esc(doc.from_location_summary)} <b>La:</b> ${esc(doc.to_location_summary)}</p></section>
-    <table><thead><tr><th>Nr</th><th>Produs</th><th>Cod produs</th><th>Cod bare</th><th class="right">Cant.</th><th class="right">Pret RON</th><th class="right">Valoare</th></tr></thead><tbody>${lines}</tbody><tfoot><tr><td colspan="4">TOTAL</td><td class="right">${esc(doc.total_qty)}</td><td></td><td class="right">${fmt(doc.total_value)}</td></tr></tfoot></table>
-    <section><p><b>Referinta Shopify:</b> ${esc(doc.order_name)} • ${esc(doc.document_number)}</p><p>Document intern de evidenta si separare a produselor pentru ambalare. Nu este factura fiscala si nu confirma expedierea.</p></section><div class="sign"><div>Predat / Gestionar</div><div>Preluat pentru ambalare</div></div></body></html>`;
-    const w=window.open("","_blank","width=980,height=790");
-    if(!w){setAvizError("A böngésző blokkolta a nyomtatási ablakot.");return;}
-    w.document.open();w.document.write(html);w.document.close();w.focus();
-    w.setTimeout(()=>w.print(),350);
+    try {const {printShopifyStockDocument}=await import('./AllInProductMoves');printShopifyStockDocument(avizDetail);}
+    catch(e){setAvizError(e instanceof Error?e.message:'A nyomtatás nem sikerült.');}
   }
 
   const normalizedOrders = useMemo(() => orders.map(normalizeOrder), [orders]);
@@ -1517,6 +1505,10 @@ export default function AllInShopifyOrders({ role }: Props) {
                        </button>
                      </div>
                    </section>
+
+                  {warehouseByOrder.has(detailOrder.id) ? <AllInShopifyLifecycle
+                    key={detailOrder.id} orderId={detailOrder.id}
+                    onChanged={() => setRefreshToken(value => value + 1)} /> : null}
 
                   <div className="grid gap-4 xl:grid-cols-3">
                     <DetailCard icon={<CreditCard className="h-4 w-4" />} title="Pénzügyi bontás">

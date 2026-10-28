@@ -541,9 +541,19 @@ function shopifyStockDocumentState(item?: Partial<DocumentListItem> | null) {
 
 function shopifyStockDocumentStatus(item?: Partial<DocumentListItem> | null) {
   const state = shopifyStockDocumentState(item);
+  if (state === "recorded") return shopifyOperationLabel(item);
+  const life=String(item?.raw?.shopifyLifecycleState || "");
+  if(life === "returned") return "Visszaérkezett";
+  if(life === "partially_returned") return "Részben visszaérkezett";
+  if(life === "partial") return "Részben feladva";
   if (state === "fulfilled") return "Elküldve";
   if (state === "cancelled") return "Visszavonva";
   return "Feladásra vár";
+}
+
+function shopifyOperationLabel(item?: Partial<DocumentListItem> | null) {
+  const kind=String(item?.raw?.shopifyOperation || "transfer");
+  return ({transfer:"Shopify átadás",addition:"Kiegészítő Aviz",cancel_release:"Lemondás / visszaadás",shipment:"Shopify feladás",return_received:"Visszáru átvéve",quarantine_release:"Elkülönítés feloldva",quarantine_writeoff:"Sérült termék kivezetve"} as Record<string,string>)[kind] || "Shopify bizonylat";
 }
 
 function documentMeta(type: DocumentType) {
@@ -1518,6 +1528,7 @@ function shopifyAvizPrintFileStem(item?: Partial<DocumentListItem> | null): stri
   const orderCode = referenceMatch
     ? `AIF${referenceMatch[1]}`
     : reference.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  if (!match) return `${documentNumber.replace(/[^A-Z0-9-]/gi, "")}-${orderCode || "Rendeles"}`;
   return `Aviz-Shopify${sequence || "00000"}-${orderCode || "Rendeles"}`;
 }
 
@@ -1526,11 +1537,20 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   const lines = detail.lines || [];
   const type = documentTypeOf(doc);
   const isShopify = isShopifyStockDocument(doc);
+  const operation=String(doc.raw?.shopifyOperation || "transfer");
   const meta = isShopify ? {
     ...documentPrintMeta("internal_transfer", doc),
-    operation: "Transfer intern de stoc • comandă Shopify",
-    declaration: "Prin prezentul proces-verbal se constată transferul produselor din gestiunea indicată către gestiunea Shopify, pentru pregătirea comenzii online. Transferul este înregistrat în evidența stocurilor. Expedierea către client se confirmă separat, la finalizarea comenzii.",
-    signatures: ["Gestionar predător", "Responsabil Shopify", "Verificat de", "Aprobat de"],
+    operation: ({transfer:"Transfer intern de stoc • comanda Shopify",addition:"Transfer suplimentar Shopify",cancel_release:"Retransfer produse neexpediate",shipment:"Iesire produse pentru expediere",return_received:"Receptie fizica retur client",quarantine_release:"Eliberare produse din carantina",quarantine_writeoff:"Scoatere din gestiune produse deteriorate"} as Record<string,string>)[operation] || "Operatiune Shopify",
+    declaration: ({
+      transfer:"Se confirma transferul intern al produselor pentru pregatirea comenzii online. Expedierea se confirma separat.",
+      addition:"Se confirma transferul suplimentar pentru comanda online, fara modificarea Avizului initial.",
+      cancel_release:"Se confirma restituirea produselor neexpediate catre gestiunea de origine, ca urmare a anularii sau reducerii comenzii.",
+      shipment:"Se confirma iesirea produselor din gestiunea Shopify pe baza confirmarii de fulfillment Shopify. Documentul nu reprezinta dovada livrarii la client.",
+      return_received:"Se confirma receptia fizica a produselor returnate si verificarea cantitatii si starii. Rambursarea banilor se gestioneaza separat.",
+      quarantine_release:"Se confirma verificarea produselor si eliberarea cantitatilor indicate din carantina. Cantitatea fizica totala nu se modifica.",
+      quarantine_writeoff:"Se confirma scoaterea din gestiune a produselor returnate, deteriorate si necomercializabile, conform motivului consemnat."
+    } as Record<string,string>)[operation] || "Operatiune de gestiune Shopify.",
+    signatures: operation === "return_received" ? ["Predat de", "Gestionar primitor", "Verificat de", "Aprobat de"] : ["Gestionar predător", "Responsabil Shopify", "Verificat de", "Aprobat de"],
   } : documentPrintMeta(type, doc);
   const totalQty = lines.reduce((sum, line) => sum + n(line.qty), 0);
   const totalValue = detailTotalValue(lines);
@@ -1564,6 +1584,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
                 <span><b>Culoare:</b> ${escapeHtml(color)}</span>
               </div>
               <div class="productMetaSize"><span><b>Mărime:</b> ${escapeHtml(size)}</span></div>
+              ${isShopify && line.raw?.condition ? `<div class="productMetaSize"><b>Stare:</b> ${escapeHtml(line.raw.condition === "quarantine" ? "CARANTINA / NU SE VINDE" : "Verificat, comercializabil")}</div>` : ""}
             </div>
           </div>
         </div>
@@ -1600,7 +1621,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   const shopifyCustomer = isShopify ? firstText((doc.raw as any)?.shopifyCustomerName, (doc.raw as any)?.customerName) : "";
   const indexedLines = lines.map((line, index) => ({ line, index }));
   const sectionsHtml = isShopify
-    ? renderSection(indexedLines, "outgoing", "PRODUSE PREDATE", `Comanda online ${reference || ""} • ${doc.from_location_summary || ""} → ${doc.to_location_summary || ""}`)
+    ? renderSection(indexedLines, operation === "return_received" || operation === "cancel_release" ? "incoming" : operation === "quarantine_release" ? "neutral" : "outgoing", operation === "return_received" ? "PRODUSE RETURNATE / RECEPTIONATE" : operation === "cancel_release" ? "PRODUSE RESTITUITE GESTIUNII" : operation === "quarantine_release" ? "PRODUSE VERIFICATE / ELIBERATE" : operation === "quarantine_writeoff" ? "PRODUSE SCOASE DIN GESTIUNE" : "PRODUSE PREDATE", `Comanda online ${reference || ""} • ${doc.from_location_summary || ""} → ${doc.to_location_summary || ""}`)
     : type === "internal_transfer"
     ? [
         renderSection(flow.incoming, "incoming", "PRODUSE INTRATE", `Destinație: ${flow.focusLocationName}`),
@@ -1653,7 +1674,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   <div><div class="company">TITAN EURO-COM SRL</div><div class="companyMeta"><div><strong>CUI:</strong> RO17495362</div><div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div><div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div></div></div>
   <div class="docBox"><h3>Datele documentului</h3><div class="docBoxBody"><div class="docLine"><span>Nr. document</span><strong>${escapeHtml(doc.document_number)}</strong></div><div class="docLine"><span>Data emiterii</span><strong>${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</strong></div><div class="docLine"><span>Tip operațiune</span><strong>${escapeHtml(meta.operation)}</strong></div>${isShopify && shopifyCustomer ? `<div class="docLine"><span>Client online</span><strong>${escapeHtml(shopifyCustomer)}</strong></div>` : ""}${reference ? `<div class="docLine"><span>Referință</span><strong>${escapeHtml(reference)}</strong></div>` : ""}</div></div>
 </div>
-<div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(isShopify ? "PROCES-VERBAL DE PREDARE-PRIMIRE" : (doc.title || documentMeta(type).label))}</h1><div class="subtitle">${escapeHtml(isShopify ? `Transfer Shopify • ${reference || "Comandă online"} • ${shopifyStockDocumentState(doc) === "fulfilled" ? "Expediată" : shopifyStockDocumentState(doc) === "cancelled" ? "Anulată" : "În pregătire"}` : (doc.subtitle || meta.operation))}</div>${legacyMark}</div>
+<div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(isShopify ? (operation === "transfer" || operation === "addition" ? "PROCES-VERBAL DE PREDARE-PRIMIRE" : doc.title || "DOCUMENT SHOPIFY") : (doc.title || documentMeta(type).label))}</h1><div class="subtitle">${escapeHtml(isShopify ? `Shopify • ${reference || "Comanda online"}${doc.raw?.originalAviz ? ` • Referinta: ${String(doc.raw.originalAviz)}` : ""} • ${shopifyStockDocumentState(doc) === "recorded" ? "Inregistrat" : shopifyStockDocumentState(doc) === "fulfilled" ? "Expediata" : shopifyStockDocumentState(doc) === "cancelled" ? "Anulata" : "In pregatire"}` : (doc.subtitle || meta.operation))}</div>${legacyMark}</div>
 <div class="route"><div class="${routeLeftClass}"><span>${escapeHtml(type === "internal_transfer" ? "Ieșire / gestiune sursă" : meta.leftLabel)}</span><strong>${escapeHtml(meta.leftValue)}</strong></div><div class="${routeRightClass}"><span>${escapeHtml(type === "internal_transfer" ? "Intrare / gestiune destinație" : meta.rightLabel)}</span><strong>${escapeHtml(meta.rightValue)}</strong></div></div>
 <div class="declaration">${escapeHtml(meta.declaration)}</div>
 ${uitRequired || uitCode ? `<div class="uitWarning ${uitCode ? "recorded" : ""}">${uitCode ? "Cod UIT înregistrat:" : "ATENȚIE: valoarea transferului depășește 10.000 RON. Pentru expediere este necesar cod UIT. Cod UIT:"}${uitCode ? `<span class="uitValue">${escapeHtml(uitCode)}</span>` : `<span class="uitCode">&nbsp;</span>`}</div>` : ""}
@@ -1741,7 +1762,7 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
   }).format(new Date());
 
   const rows = items.map((item, index) => {
-    const typeLabel = isShopifyStockDocument(item) ? "Shopify átadás" : documentMeta(documentTypeOf(item)).shortLabel;
+    const typeLabel = isShopifyStockDocument(item) ? shopifyOperationLabel(item) : documentMeta(documentTypeOf(item)).shortLabel;
     const incoming = item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text);
     return `<tr>
       <td class="nr">${index + 1}</td>
@@ -3495,7 +3516,7 @@ export default function AllInProductMoves() {
                   return (
                     <tr key={item.id} className={`border-t border-white/10 align-middle text-[12px] leading-tight transition ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "bg-[#96BF48]/[0.09] hover:bg-[#96BF48]/[0.15]" : "hover:bg-white/[0.035]"}`}>
                       <td className="px-3 py-2"><div className="flex items-center gap-2"><span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${isShopifyStockDocument(item) ? "border-[#96BF48]/50 bg-[#96BF48]/18" : "border-white/12 bg-white/[0.06]"}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-6 w-6 object-contain" /> : <FileText size={16} />}</span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><div className="mt-0.5 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/55 bg-[#96BF48]/23 text-[#eaffd5]" : badge.cls}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-3 w-3 object-contain" /> : <BadgeIcon size={10} />} {isShopifyStockDocument(item) ? shopifyStockDocumentStatus(item) : badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-1.5 py-0.5 text-[9px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={10} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-1.5 py-0.5 text-[9px] text-white"><CheckCircle2 size={10} /> UIT rögzítve</span> : null}</div></div></div></td>
-                      <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd2]" : typeMeta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={12} />} {isShopifyStockDocument(item) ? "Shopify átadás" : typeMeta.shortLabel}</span></td>
+                      <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd2]" : typeMeta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={12} />} {isShopifyStockDocument(item) ? shopifyOperationLabel(item) : typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateOnlyHu(documentDateKey(item))}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">{isShopifyStockDocument(item) ? "Shopify rendelés" : "Hivatkozás"}: {item.external_reference}{isShopifyStockDocument(item) ? ` • ${String(item.raw?.customerName || "")}` : ""}</span> : null}</div></td>
                       <td className="px-3 py-2 text-center">
@@ -3531,7 +3552,7 @@ export default function AllInProductMoves() {
               return (
                 <article key={item.id} className={`rounded-2xl border p-3 ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/45 bg-[#96BF48]/12" : "border-white/12 bg-white/[0.05]"}`}>
                   <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/55 bg-[#96BF48]/23 text-[#eaffd5]" : badge.cls}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-3.5 w-3.5 object-contain" /> : <BadgeIcon size={11} />} {isShopifyStockDocument(item) ? shopifyStockDocumentStatus(item) : badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd5]" : meta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={13} />} {isShopifyStockDocument(item) ? "Shopify átadás" : meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd5]" : meta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={13} />} {isShopifyStockDocument(item) ? shopifyOperationLabel(item) : meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
                   <div className="mt-3 border-t border-white/10 pt-2.5"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-[9px] uppercase tracking-[0.08em] text-white/34">Rögzítette</span><span className="truncate text-[10px] text-white/56">{displayActorName(item.actor)}</span></div>{documentActionButtons(item, true)}</div>
                 </article>
@@ -3659,7 +3680,7 @@ export default function AllInProductMoves() {
                   </div>
                   <div className="rounded-2xl border border-[#5eead4]/16 bg-[#2a8d8b]/[0.08] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Típus / rögzítette</p>
-                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{isShopifyStockDocument(doc) ? `Shopify átadás • ${shopifyStockDocumentStatus(doc)}` : meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{displayActorName(doc.actor)}</p>
+                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{isShopifyStockDocument(doc) ? `${shopifyOperationLabel(doc)} • ${shopifyStockDocumentStatus(doc)}` : meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{displayActorName(doc.actor)}</p>
                   </div>
                   <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Tartalom</p>
