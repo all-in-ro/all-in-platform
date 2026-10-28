@@ -3044,6 +3044,38 @@ export const apiAifShopifyOrders = apiAifListShopifyOrders;
 export const apiAifShopifyOrder = apiAifGetShopifyOrder;
 export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
 
+// Shopify-rendelések: vezetői SMS-értesítés (admin beállítás, SMSLink).
+export type AifShopifyOrderAlertSettings = {
+  enabled: boolean;
+  phone: string;
+  updated_at?: string | null;
+  updated_by?: string | null;
+};
+export type AifShopifyOrderAlertHistoryItem = {
+  order_number: string;
+  amount: string | number | null;
+  currency_code: string;
+  status: 'pending' | 'sending' | 'accepted' | 'failed' | 'unknown' | 'skipped';
+  error?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
+export type AifShopifyOrderAlertSettingsResponse = {
+  ok: true;
+  settings: AifShopifyOrderAlertSettings;
+  provider: { configured: boolean; liveAllowed: boolean };
+  history?: AifShopifyOrderAlertHistoryItem[];
+};
+export function apiAifGetShopifyOrderAlertSettings() {
+  return fetchAifJSON<AifShopifyOrderAlertSettingsResponse>('/shopify/order-alerts/settings');
+}
+export function apiAifSaveShopifyOrderAlertSettings(settings: Pick<AifShopifyOrderAlertSettings,'enabled'|'phone'>) {
+  return fetchAifJSON<AifShopifyOrderAlertSettingsResponse>('/shopify/order-alerts/settings', {
+    method: 'PUT', body: JSON.stringify(settings),
+  });
+}
+
+
 
 export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
 
