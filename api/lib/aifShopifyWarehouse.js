@@ -646,9 +646,18 @@ export async function processAifShopifyWarehouseBatch(pool,{limit=6}={}) {
             AND (o.cancelled_at IS NULL AND o.status<>'cancelled' OR EXISTS(SELECT 1 FROM aif_shopify_fulfillments f WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success'))
             AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false) AND (l.current_quantity>0 OR EXISTS(SELECT 1 FROM aif_shopify_fulfillments f WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success')))
             AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
-          OR (w.shopify_order_id IS NOT NULL AND ($3::boolean AND
-            (w.raw->>'lifecycleVersion' IS DISTINCT FROM '2' OR COALESCE((w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,'epoch'::timestamptz)<o.updated_at)
-            OR NOT $3::boolean AND w.state='allocated' AND (o.cancelled_at IS NOT NULL OR o.status='cancelled' OR o.fulfillment_status='fulfilled')))
+          -- A pre-v2 AVIZ may have no lifecycleVersion or lastSeen timestamp.
+          -- Missing metadata alone must never replay an already allocated order.
+          -- For such AVIZ documents, use the creation time as the baseline;
+          -- a later Shopify order update can still trigger shipment/cancellation.
+          OR (w.shopify_order_id IS NOT NULL AND (
+            ($3::boolean AND o.updated_at > COALESCE(
+              (w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,
+              w.created_at
+            ))
+            OR (NOT $3::boolean AND w.state='allocated' AND
+              (o.cancelled_at IS NOT NULL OR o.status='cancelled' OR o.fulfillment_status='fulfilled'))
+          ))
         ) ORDER BY o.updated_at,o.shopify_order_id LIMIT $1`,[Math.min(25,Math.max(1,Number(limit)||6)),legacyOrder,aifShopifyLifecycleEnabled()]);
       ids=r.rows.map(r=>r.shopify_order_id);
     } finally {db.release();}
