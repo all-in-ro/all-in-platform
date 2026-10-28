@@ -20,6 +20,11 @@ import os from "node:os";
 import path from "node:path";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
+  createAifShopifyOrderAlertsRouter,
+  queueAifShopifyOrderAlert,
+  startAifShopifyOrderAlertWorker,
+} from "../lib/aifShopifyOrderAlerts.js";
+import {
   getAifShopifyWarehouseStatus,
   getAifShopifyAviz,
   previewAifShopifyWarehouseOrder,
@@ -344,6 +349,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   const router = express.Router();
 
   startAifShopifyEmbeddedWorker(pool);
+  startAifShopifyOrderAlertWorker(pool);
 
   const AIF_JSON_BODY_LIMIT = "80mb";
   let aifShopifyInventorySchemaPromise = null;
@@ -22310,12 +22316,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!result.accepted) {
         return res.status(Number(result.statusCode || 400)).json({ ok: false, error: result.error, topic: result.topic || null });
       }
+      // HMAC-verified orders/create only. One durable SMS record per Shopify order.
+      // If saving the alert fails, Shopify retries the webhook; the receiver and
+      // the SMS queue are both idempotent. SMS sending never blocks the request.
+      if (String(result.topic || '').toLowerCase() === 'orders/create') {
+        await queueAifShopifyOrderAlert(pool, req.body);
+      }
       return res.status(200).json({ ok: true, duplicate: result.duplicate, webhookId: result.webhookId, topic: result.topic });
     } catch (e) {
       console.error("AIF Shopify order webhook receive failed", e);
       return res.status(500).json({ ok: false, error: e?.message || "A Shopify rendelési webhook mentése nem sikerült." });
     }
   });
+
+  // Separate admin-only, opt-in Shopify new-order SMS alert settings.
+  // The manager SMS is not a customer campaign and cannot change order/stock.
+  router.use("/shopify/order-alerts", createAifShopifyOrderAlertsRouter({
+    pool, requireAdminOrSecret, actorFrom,
+  }));
 
   router.post("/shopify/orders/process", requireAdminOrSecret, async (req, res) => {
     try {
