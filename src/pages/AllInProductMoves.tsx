@@ -1496,6 +1496,31 @@ function documentPrintMeta(type: DocumentType, doc: DocumentListItem) {
   };
 }
 
+/**
+ * A Shopify Aviz rövid, rendezett PDF-neve.
+ * SHOPIFY-000001 + AIF-1003 -> Aviz-Shopify00001-AIF1003.pdf
+ * A név nem módosítja az eredeti Aviz-sorszámot.
+ */
+function shopifyAvizPrintFileStem(item?: Partial<DocumentListItem> | null): string | null {
+  if (!isShopifyStockDocument(item)) return null;
+  const documentNumber = String(item?.document_number || "");
+  const match = documentNumber.match(/^SHOPIFY-(\d+)$/i);
+  const sequence = match ? match[1].replace(/^0+(?=\d)/, "").padStart(5, "0") : "";
+  const raw = (item?.raw && typeof item.raw === "object") ? item.raw : {};
+  const reference = firstText(
+    item?.external_reference,
+    (item as any)?.order_name,
+    (raw as any).shopifyOrderNumber,
+    (raw as any).shopify_order_number,
+    (raw as any).orderName,
+  );
+  const referenceMatch = reference.match(/AIF[-\s]*(\d+)/i);
+  const orderCode = referenceMatch
+    ? `AIF${referenceMatch[1]}`
+    : reference.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  return `Aviz-Shopify${sequence || "00000"}-${orderCode || "Rendeles"}`;
+}
+
 function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] = []) {
   const doc = detail.document;
   const lines = detail.lines || [];
@@ -1592,7 +1617,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
 <html lang="ro">
 <head>
 <meta charset="utf-8" />
-<title>${escapeHtml(`${doc.title || "Document de gestiune"} ${doc.document_number}`)}</title>
+<title>${escapeHtml(shopifyAvizPrintFileStem(doc) || `${doc.title || "Document de gestiune"} ${doc.document_number}`)}</title>
 <style>
   @page { size:A4 portrait; margin:12mm; }
   * { box-sizing:border-box; }
@@ -1660,22 +1685,38 @@ function printDetail(detail: DocumentDetail, inventoryItems: InventoryItem[] = [
     iframe.remove();
     throw new Error("A böngésző nem engedte megnyitni a nyomtatási keretet.");
   }
+  const pdfTitle = shopifyAvizPrintFileStem(detail.document);
+  const previousPageTitle = document.title;
   let cleaned = false;
   let timer: number | undefined;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     if (timer) window.clearTimeout(timer);
+    // Chrome/Brave az iframe helyett néha a főoldal címéből készíti a PDF fájlnevét.
+    // A nyomtatási ablak lezárásakor állítsuk vissza az eredeti oldalcímet.
+    if (pdfTitle && document.title === pdfTitle) document.title = previousPageTitle;
     iframe.remove();
   };
   win.addEventListener("afterprint", cleanup, { once: true });
   doc.open();
   doc.write(makePrintHtml(detail, inventoryItems));
   doc.close();
+  if (pdfTitle) {
+    // A .pdf kiterjesztést a böngésző illeszti hozzá Save as PDF közben.
+    doc.title = pdfTitle;
+    iframe.title = pdfTitle;
+    document.title = pdfTitle;
+  }
   win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
-    win.focus();
-    win.print();
-    timer = window.setTimeout(cleanup, 60000);
+    try {
+      win.focus();
+      win.print();
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+    if (!cleaned) timer = window.setTimeout(cleanup, 60000);
   }));
 }
 

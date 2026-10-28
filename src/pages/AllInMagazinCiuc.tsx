@@ -28,6 +28,7 @@ import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
 import AllInShopIncoming from "./AllInShopIncoming";
 import AllInShopDocuments from "./AllInShopDocuments";
+import AllInShopDocumentsReturnSwitch from "./AllInShopDocumentsReturnSwitch";
 import AllInShopifySourceDocuments, { type ShopifySourceSummary } from "./AllInShopifySourceDocuments";
 import {
   apiAifShopReservations,
@@ -753,6 +754,16 @@ export default function AllInMagazinCiuc({
         locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"
         onClose={() => setDocumentsOpen(false)}
+      />
+      <AllInShopDocumentsReturnSwitch
+        open={documentsOpen}
+        count={shopifySourceSummary.total}
+        pending={shopifySourceSummary.pending}
+        onOpenShopify={() => {
+          setDocumentsOpen(false);
+          setShopifySourceOpen(true);
+          void refreshShopifySourceDocuments();
+        }}
       />
       <AllInShopReturns
         open={returnsOpen}
