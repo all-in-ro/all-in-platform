@@ -1836,6 +1836,11 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
     if (bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false)) {
       const ready=await pool.query("SELECT to_regclass('public.aif_shopify_warehouse_orders') AS w");
       if(!ready.rows[0]?.w)return {enabled:true,processed:0,errors:0,blocked:'warehouse_schema_pending'};
+      // The outbox must wait for exactly the orders that the warehouse worker
+      // would process. An existing pre-v2 AVIZ can lack lifecycleVersion and
+      // lastSeenOrderUpdatedAt: use its creation time as the baseline, never
+      // the Unix epoch. Missing legacy metadata alone is not pending work.
+      // Real updates after that baseline still block premature inventory sync.
       const pending=await pool.query(`SELECT EXISTS(
         SELECT 1 FROM aif_shopify_webhook_events WHERE
           (topic LIKE 'orders/%' OR topic LIKE 'fulfillments/%' OR topic LIKE 'returns/%' OR topic='refunds/create')
@@ -1843,12 +1848,33 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
         UNION ALL SELECT 1 FROM aif_shopify_warehouse_failures
         UNION ALL SELECT 1 FROM aif_shopify_orders o
           LEFT JOIN aif_shopify_warehouse_orders w ON w.shopify_order_id=o.shopify_order_id
-          WHERE (w.shopify_order_id IS NOT NULL AND $1::boolean AND
-            (w.raw->>'lifecycleVersion' IS DISTINCT FROM '2' OR COALESCE((w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,'epoch'::timestamptz)<o.updated_at))
-          OR (w.shopify_order_id IS NULL AND o.cancelled_at IS NULL AND o.status<>'cancelled'
-            AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false) AND l.current_quantity>0)
-            AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
-        ) AS pending`,[bool(process.env.SHOPIFY_WAREHOUSE_LIFECYCLE_ENABLED,false)]);
+          WHERE (
+            (w.shopify_order_id IS NULL
+              AND o.shopify_order_legacy_id IS DISTINCT FROM $2
+              AND (o.cancelled_at IS NULL AND o.status<>'cancelled' OR EXISTS(
+                SELECT 1 FROM aif_shopify_fulfillments f
+                WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success'))
+              AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l
+                WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active
+                AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false)
+                AND (l.current_quantity>0 OR EXISTS(
+                  SELECT 1 FROM aif_shopify_fulfillments f
+                  WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success')))
+              AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a
+                WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
+            OR (w.shopify_order_id IS NOT NULL AND (
+              ($1::boolean AND o.updated_at > COALESCE(
+                (w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,
+                w.created_at
+              ))
+              OR (NOT $1::boolean AND w.state='allocated' AND
+                (o.cancelled_at IS NOT NULL OR o.status='cancelled' OR o.fulfillment_status='fulfilled'))
+            ))
+          )
+        ) AS pending`,[
+          bool(process.env.SHOPIFY_WAREHOUSE_LIFECYCLE_ENABLED,false),
+          '8294369788231', // AIF-1003: already audited historical AVIZ.
+        ]);
       if(pending.rows[0]?.pending)return {enabled:true,processed:0,errors:0,blocked:'order_lifecycle_pending'};
     }
     const rows = await claimOutboxRows(pool, options.limit || 20);
