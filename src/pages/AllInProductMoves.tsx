@@ -61,6 +61,7 @@ const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const UIT_WARNING_THRESHOLD_RON = 10000;
 const FILTERED_PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
+const SHOPIFY_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
 
 function notifyStockMovesChanged() {
   if (typeof window === "undefined") return;
@@ -69,7 +70,7 @@ function notifyStockMovesChanged() {
 }
 
 type DocumentType = "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
-type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | DocumentType;
+type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | "shopify_transfer" | DocumentType;
 type CorrectionDirection = "increase" | "decrease";
 type DeleteMode = "restore_stock" | "permanent";
 
@@ -233,6 +234,8 @@ type ListTotals = {
   supplierReturn?: number;
   damagedWriteoff?: number;
   stockCorrection?: number;
+  shopifyTransfer?: number;
+  shopifyPending?: number;
 };
 
 type ListResponse = {
@@ -525,6 +528,22 @@ function lineLocationName(
 function documentTypeOf(item?: Partial<DocumentListItem> | null): DocumentType {
   const raw = String(item?.document_type || item?.raw?.documentType || item?.raw?.document_type || "").trim();
   return DOCUMENT_TYPES.some((row) => row.type === raw) ? raw as DocumentType : "internal_transfer";
+}
+
+function isShopifyStockDocument(item?: Partial<DocumentListItem> | null) {
+  return String(item?.document_type || "") === "shopify_transfer" || /^SHOPIFY-\d+$/i.test(String(item?.document_number || ""));
+}
+
+function shopifyStockDocumentState(item?: Partial<DocumentListItem> | null) {
+  const raw = item?.raw && typeof item.raw === "object" ? item.raw : {};
+  return String(raw.shopifyWarehouseState || raw.shopify_state || "allocated").toLowerCase();
+}
+
+function shopifyStockDocumentStatus(item?: Partial<DocumentListItem> | null) {
+  const state = shopifyStockDocumentState(item);
+  if (state === "fulfilled") return "Elküldve";
+  if (state === "cancelled") return "Visszavonva";
+  return "Feladásra vár";
 }
 
 function documentMeta(type: DocumentType) {
@@ -1428,7 +1447,7 @@ function internalTransferNeedsUit(type: DocumentType, totalValue: unknown) {
 }
 
 function internalTransferMissingUit(item?: Partial<DocumentListItem> | null) {
-  return internalTransferNeedsUit(documentTypeOf(item), item?.total_value) && !documentUitCode(item);
+  return !isShopifyStockDocument(item) && internalTransferNeedsUit(documentTypeOf(item), item?.total_value) && !documentUitCode(item);
 }
 
 function documentPrintMeta(type: DocumentType, doc: DocumentListItem) {
@@ -1481,7 +1500,13 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   const doc = detail.document;
   const lines = detail.lines || [];
   const type = documentTypeOf(doc);
-  const meta = documentPrintMeta(type, doc);
+  const isShopify = isShopifyStockDocument(doc);
+  const meta = isShopify ? {
+    ...documentPrintMeta("internal_transfer", doc),
+    operation: "Transfer intern de stoc • comandă Shopify",
+    declaration: "Prin prezentul proces-verbal se constată transferul produselor din gestiunea indicată către gestiunea Shopify, pentru pregătirea comenzii online. Transferul este înregistrat în evidența stocurilor. Expedierea către client se confirmă separat, la finalizarea comenzii.",
+    signatures: ["Gestionar predător", "Responsabil Shopify", "Verificat de", "Aprobat de"],
+  } : documentPrintMeta(type, doc);
   const totalQty = lines.reduce((sum, line) => sum + n(line.qty), 0);
   const totalValue = detailTotalValue(lines);
   const missingPrices = lines.filter((line) => lineUnitPrice(line) === null).length;
@@ -1490,7 +1515,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
     : "";
   const flow = documentFlowGroups(detail);
   const variants = inventoryVariantMap(inventoryItems);
-  const uitRequired = internalTransferNeedsUit(type, totalValue);
+  const uitRequired = !isShopify && internalTransferNeedsUit(type, totalValue);
   const uitCode = documentUitCode(doc);
 
   const renderRows = (rows: IndexedDocumentLine[]) => rows.map(({ line, index }) => {
@@ -1546,8 +1571,12 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
     </section>`;
   };
 
+  const reference = firstText(doc.external_reference, (doc.raw as any)?.shopifyOrderNumber, (doc.raw as any)?.receptionInvoiceNumber);
+  const shopifyCustomer = isShopify ? firstText((doc.raw as any)?.shopifyCustomerName, (doc.raw as any)?.customerName) : "";
   const indexedLines = lines.map((line, index) => ({ line, index }));
-  const sectionsHtml = type === "internal_transfer"
+  const sectionsHtml = isShopify
+    ? renderSection(indexedLines, "outgoing", "PRODUSE PREDATE", `Comanda online ${reference || ""} • ${doc.from_location_summary || ""} → ${doc.to_location_summary || ""}`)
+    : type === "internal_transfer"
     ? [
         renderSection(flow.incoming, "incoming", "PRODUSE INTRATE", `Destinație: ${flow.focusLocationName}`),
         renderSection(flow.outgoing, "outgoing", "PRODUSE IEȘITE", `Gestiune sursă: ${flow.focusLocationName}`),
@@ -1556,7 +1585,6 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
     : renderSection(indexedLines, type === "damaged_writeoff" || type === "supplier_return" ? "outgoing" : "neutral", "PRODUSELE DOCUMENTULUI", meta.operation);
 
   const reason = type === "internal_transfer" ? "" : reasonLabel(type, doc.reason_code, doc.reason_text, true);
-  const reference = firstText(doc.external_reference, (doc.raw as any)?.receptionInvoiceNumber);
   const routeLeftClass = type === "internal_transfer" ? "routeCard routeOutgoing" : "routeCard";
   const routeRightClass = type === "internal_transfer" ? "routeCard routeIncoming" : "routeCard";
 
@@ -1598,9 +1626,9 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
 <body>
 <div class="top">
   <div><div class="company">TITAN EURO-COM SRL</div><div class="companyMeta"><div><strong>CUI:</strong> RO17495362</div><div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div><div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div></div></div>
-  <div class="docBox"><h3>Datele documentului</h3><div class="docBoxBody"><div class="docLine"><span>Nr. document</span><strong>${escapeHtml(doc.document_number)}</strong></div><div class="docLine"><span>Data emiterii</span><strong>${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</strong></div><div class="docLine"><span>Tip operațiune</span><strong>${escapeHtml(meta.operation)}</strong></div>${reference ? `<div class="docLine"><span>Referință</span><strong>${escapeHtml(reference)}</strong></div>` : ""}</div></div>
+  <div class="docBox"><h3>Datele documentului</h3><div class="docBoxBody"><div class="docLine"><span>Nr. document</span><strong>${escapeHtml(doc.document_number)}</strong></div><div class="docLine"><span>Data emiterii</span><strong>${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</strong></div><div class="docLine"><span>Tip operațiune</span><strong>${escapeHtml(meta.operation)}</strong></div>${isShopify && shopifyCustomer ? `<div class="docLine"><span>Client online</span><strong>${escapeHtml(shopifyCustomer)}</strong></div>` : ""}${reference ? `<div class="docLine"><span>Referință</span><strong>${escapeHtml(reference)}</strong></div>` : ""}</div></div>
 </div>
-<div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(doc.title || documentMeta(type).label)}</h1><div class="subtitle">${escapeHtml(doc.subtitle || meta.operation)}</div>${legacyMark}</div>
+<div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(isShopify ? "PROCES-VERBAL DE PREDARE-PRIMIRE" : (doc.title || documentMeta(type).label))}</h1><div class="subtitle">${escapeHtml(isShopify ? `Transfer Shopify • ${reference || "Comandă online"} • ${shopifyStockDocumentState(doc) === "fulfilled" ? "Expediată" : shopifyStockDocumentState(doc) === "cancelled" ? "Anulată" : "În pregătire"}` : (doc.subtitle || meta.operation))}</div>${legacyMark}</div>
 <div class="route"><div class="${routeLeftClass}"><span>${escapeHtml(type === "internal_transfer" ? "Ieșire / gestiune sursă" : meta.leftLabel)}</span><strong>${escapeHtml(meta.leftValue)}</strong></div><div class="${routeRightClass}"><span>${escapeHtml(type === "internal_transfer" ? "Intrare / gestiune destinație" : meta.rightLabel)}</span><strong>${escapeHtml(meta.rightValue)}</strong></div></div>
 <div class="declaration">${escapeHtml(meta.declaration)}</div>
 ${uitRequired || uitCode ? `<div class="uitWarning ${uitCode ? "recorded" : ""}">${uitCode ? "Cod UIT înregistrat:" : "ATENȚIE: valoarea transferului depășește 10.000 RON. Pentru expediere este necesar cod UIT. Cod UIT:"}${uitCode ? `<span class="uitValue">${escapeHtml(uitCode)}</span>` : `<span class="uitCode">&nbsp;</span>`}</div>` : ""}
@@ -1610,7 +1638,7 @@ ${sectionsHtml}
 <div class="total"><span>Total produse: ${lines.length} poziții • ${quantity(totalQty)} buc.</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
 ${missingPrices ? `<div class="valuationNote">Atenție: ${missingPrices} poziții nu au preț disponibil; totalul valoric include numai pozițiile evaluate.</div>` : ""}
 <div class="signatures">${meta.signatures.map((title) => `<div class="signature"><div class="signatureTitle">${escapeHtml(title)}</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>`).join("")}</div>
-<div class="footer"><span>Document generat din sistemul AllInFashion.</span><span>${escapeHtml(doc.document_number)} • ${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</span></div>
+<div class="footer"><span>${isShopify ? "Document intern de gestiune. Nu constituie factură sau bon fiscal. Taxa de transport nu este inclusă în valoarea stocului." : "Document generat din sistemul AllInFashion."}</span><span>${escapeHtml(doc.document_number)} • ${escapeHtml(dateOnlyRo(documentDateKey(doc)))}</span></div>
 </body></html>`;
 }
 
@@ -1652,6 +1680,12 @@ function printDetail(detail: DocumentDetail, inventoryItems: InventoryItem[] = [
 }
 
 
+// Nyomtatási sablon azonos az Admin hivatalos Avizával; üzleti oldalról is használható.
+// Kizárólag böngészős nyomtatás, készletet/adatbázist nem módosít.
+export function printShopifyStockDocument(detail: unknown) {
+  printDetail(detail as DocumentDetail, []);
+}
+
 function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: string[]) {
   const totalLines = items.reduce((sum, item) => sum + n(item.line_count), 0);
   const totalQty = items.reduce((sum, item) => sum + n(item.total_qty), 0);
@@ -1666,11 +1700,11 @@ function filteredArchivePrintHtml(items: DocumentListItem[], filterSummary: stri
   }).format(new Date());
 
   const rows = items.map((item, index) => {
-    const typeLabel = documentMeta(documentTypeOf(item)).shortLabel;
+    const typeLabel = isShopifyStockDocument(item) ? "Shopify átadás" : documentMeta(documentTypeOf(item)).shortLabel;
     const incoming = item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text);
     return `<tr>
       <td class="nr">${index + 1}</td>
-      <td class="doc"><strong>${escapeHtml(displayDocumentNumber(item))}</strong><span>${escapeHtml(documentBadge(item).label)}</span></td>
+      <td class="doc"><strong>${escapeHtml(displayDocumentNumber(item))}</strong><span>${escapeHtml(isShopifyStockDocument(item) ? shopifyStockDocumentStatus(item) : documentBadge(item).label)}</span></td>
       <td class="nowrap">${escapeHtml(typeLabel)}</td>
       <td class="date nowrap">${escapeHtml(dateOnlyHu(documentDateKey(item)))}</td>
       <td class="routeCell">${escapeHtml(item.from_location_summary || "-")}</td>
@@ -3207,6 +3241,17 @@ export default function AllInProductMoves() {
   const detailMissingPrices = useMemo(() => (detail?.lines || []).filter((line) => lineUnitPrice(line) === null).length, [detail]);
 
   function documentActionButtons(item: DocumentListItem, compact = false) {
+    if (isShopifyStockDocument(item)) return (
+      <div className={`flex gap-1.5 ${compact ? "w-full" : "justify-end"}`}>
+        <button type="button" onClick={() => void openDetailById(item.id)} className={rowPrimaryBtn}><PackageCheck size={13} /> Részletek</button>
+        <button type="button" className={rowIconBtn} title="Shopify Aviz nyomtatása" onClick={async () => {
+          try {
+            const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`);
+            printDetail(current, inventory);
+          } catch (err: any) { setError(err?.message || "A PDF nem nyitható meg."); }
+        }}><Printer size={14} /></button>
+      </div>
+    );
     const isPreparation = item.status === "preparation";
     const isDraft = item.status === "draft";
     const canReopen = item.status === "issued" && ["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(item));
@@ -3263,7 +3308,7 @@ export default function AllInProductMoves() {
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</p>
                 <h1 className="mt-0.5 text-xl leading-tight">Készletbizonylatok</h1>
-                <p className="mt-0.5 text-[11px] text-white/48">Aviz, retur, sérült termék és készletkorrekció • minden átadási irány külön PV-ben</p>
+                <p className="mt-0.5 text-[11px] text-white/48">Aviz, Shopify átadás, retur és készletkorrekció • önálló sorszámok</p>
               </div>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
@@ -3282,7 +3327,7 @@ export default function AllInProductMoves() {
         <section className="grid grid-cols-2 gap-2 lg:hidden">
           <button type="button" onClick={() => applyTypeFilter("all")} className={`col-span-2 flex items-center justify-between gap-3 rounded-[20px] border px-3.5 py-3 text-left shadow-[0_12px_28px_rgba(15,23,42,.14)] ${type === "all" ? "border-[#8ce7e2]/42 bg-[#2a8d8b]/18" : "border-white/14 bg-[#344154]"}`}>
             <div><p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Összes bizonylat</p><p className="mt-1 text-[22px] leading-none text-white">{quantity(totals.all ?? totals.total)}</p><p className="mt-1 text-[9px] text-white/38">{quantity(totals.totalQty)} db összesen</p></div>
-            <div className="text-right"><p className="text-[8px] uppercase tracking-[0.12em] text-[#bff8f5]/48">Összérték</p><p className="mt-1 text-[16px] text-white">{moneyRon(totals.totalValue || 0)}</p></div>
+            <div className="text-right"><p className="text-[9px] text-white/48">{quantity(totals.totalQty)} db</p></div>
           </button>
           {([
             ["preparation", "Előkészítés", totals.preparation || 0, "bg-[#E21C2A]", Edit3],
@@ -3290,10 +3335,11 @@ export default function AllInProductMoves() {
             ["supplier_return", "Beszállítói retur", totals.supplierReturn || 0, "bg-sky-500/18", Undo2],
             ["damaged_writeoff", "Sérült termék", totals.damagedWriteoff || 0, "bg-[#E21C2A]/22", PackageX],
             ["stock_correction", "Korrekció", totals.stockCorrection || 0, "bg-amber-500/18", SlidersHorizontal],
+            ["shopify_transfer", "Shopify átadás", totals.shopifyTransfer || 0, "bg-[#96BF48]/18", PackageCheck],
             ["legacy", "Régi archívum", totals.legacy || 0, "bg-white/[0.05]", Archive],
           ] as const).map(([key, labelText, value, toneClass, Icon]) => (
             <button key={key} type="button" onClick={() => applyTypeFilter(key as ArchiveFilter)} className={`min-w-0 rounded-[18px] border p-3 text-left transition active:scale-[0.98] ${type === key ? "border-[#8ce7e2]/48 ring-1 ring-[#7bd7d4]/18" : "border-white/12"} ${toneClass}`}>
-              <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-[9px] text-white/60">{labelText}</p><p className="mt-1 text-[18px] leading-none text-white">{quantity(value)}</p></div><Icon size={15} className="shrink-0 text-white/72" /></div>
+              <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-[9px] text-white/60">{labelText}</p><p className="mt-1 text-[18px] leading-none text-white">{quantity(value)}</p></div>{key === "shopify_transfer" ? <img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-6 w-6 shrink-0 object-contain" /> : <Icon size={15} className="shrink-0 text-white/72" />}</div>
             </button>
           ))}
         </section>
@@ -3305,7 +3351,17 @@ export default function AllInProductMoves() {
           <SummaryCard labelText="Beszállítói retur" value={quantity(totals.supplierReturn || 0)} hint="Készletből kivezetve" tone="blue" active={type === "supplier_return"} onClick={() => applyTypeFilter("supplier_return")} />
           <SummaryCard labelText="Sérült termék" value={quantity(totals.damagedWriteoff || 0)} hint="Scoatere din gestiune" tone="red" active={type === "damaged_writeoff"} onClick={() => applyTypeFilter("damaged_writeoff")} />
           <SummaryCard labelText="Korrekció" value={quantity(totals.stockCorrection || 0)} hint="Indokolt plusz / mínusz" tone="amber" active={type === "stock_correction"} onClick={() => applyTypeFilter("stock_correction")} />
-          <SummaryCard labelText="Összérték" value={moneyRon(totals.totalValue || 0)} hint={`${quantity(totals.totalQty)} db összesen`} tone="green" />
+          <button type="button" onClick={() => applyTypeFilter("shopify_transfer")}
+            className={`w-full rounded-2xl border bg-[#96BF48]/16 p-3 text-left transition hover:bg-[#96BF48]/25 ${type === "shopify_transfer" ? "border-[#96BF48] ring-1 ring-[#96BF48]/50" : "border-[#96BF48]/38"}`}>
+            <div className="flex items-center justify-between gap-2"><p className="text-[10px] uppercase tracking-[0.12em] text-[#d5f3a4]">Shopify átadás</p><img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-6 w-6 object-contain" /></div>
+            <p className="mt-1 text-[24px] leading-none text-white">{quantity(totals.shopifyTransfer || 0)}</p>
+            <p className="mt-1.5 text-[11px] text-[#d5f3a4]/76">{totals.shopifyPending ? `${totals.shopifyPending} feladásra vár` : "Avizok és előzmények"}</p>
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border border-white/12 bg-[#303b4d]/85 px-3.5 py-2 text-[11px] text-white/52">
+          <span>Nyilvántartott készletbizonylatok értéke • {quantity(totals.totalQty)} db</span>
+          <span className="tabular-nums text-[14px] text-white/85">{moneyRon(totals.totalValue || 0)}</span>
         </div>
 
         <section className="rounded-[22px] border border-white/14 bg-[#344154] p-3 shadow-[0_14px_34px_rgba(15,23,42,.16)] lg:hidden">
@@ -3313,7 +3369,7 @@ export default function AllInProductMoves() {
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#8ce7e2]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><SlidersHorizontal size={16} /></span>
             <div className="min-w-0 flex-1">
               <p className="text-[8px] uppercase tracking-[0.14em] text-white/40">Aktív szűrés</p>
-              <p className="mt-0.5 truncate text-[12px] text-white">{type === "all" ? "Minden bizonylat" : type === "preparation" ? "Előkészítés" : documentMeta((type === "legacy" || type === "cancelled" || type === "official" || type === "draft") ? "internal_transfer" : type as DocumentType).shortLabel}{from || to ? ` • ${from ? dateOnlyHu(from) : "…"} – ${to ? dateOnlyHu(to) : "…"}` : ""}</p>
+              <p className="mt-0.5 truncate text-[12px] text-white">{type === "all" ? "Minden bizonylat" : type === "preparation" ? "Előkészítés" : type === "shopify_transfer" ? "Shopify átadás" : documentMeta((type === "legacy" || type === "cancelled" || type === "official" || type === "draft") ? "internal_transfer" : type as DocumentType).shortLabel}{from || to ? ` • ${from ? dateOnlyHu(from) : "…"} – ${to ? dateOnlyHu(to) : "…"}` : ""}</p>
             </div>
             <button type="button" onClick={() => setMobileFiltersOpen(true)} className="relative inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-3 text-[10px] text-white shadow-[0_8px_18px_rgba(42,141,139,.18)] active:scale-[0.98]"><SlidersHorizontal size={14} /> Szűrők{activeFilterCount ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-black/14 px-1 text-[8px]">{activeFilterCount}</span> : null}</button>
           </div>
@@ -3331,7 +3387,7 @@ export default function AllInProductMoves() {
             <label className={label}>Eddig<AllInDatePicker value={to} allowClear onChange={(next) => { setTo(next); setPageNo(1); }} placeholder="Záró dátum" /></label>
             <label className={label}>Forrás<CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
             <label className={label}>Cél / partner<CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} /></label>
-            <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
+            <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "shopify_transfer", label: "Shopify átadás" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
             <div className="flex items-end gap-2 lg:col-span-4 xl:col-span-7"><button type="button" className={primaryBtn} onClick={applySearch}><Search size={15} /> Keresés</button><button type="button" className={btnSoft} onClick={clearFilters}><X size={15} /> Szűrők törlése</button></div>
           </div>
         </section>
@@ -3394,13 +3450,13 @@ export default function AllInProductMoves() {
                   const typeMeta = documentMeta(documentTypeOf(item));
                   const TypeIcon = typeMeta.icon;
                   const itemUitCode = documentUitCode(item);
-                  const itemNeedsUit = !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
+                  const itemNeedsUit = !isShopifyStockDocument(item) && !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
                   return (
-                    <tr key={item.id} className="border-t border-white/10 align-middle text-[12px] leading-tight transition hover:bg-white/[0.035]">
-                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><div className="mt-0.5 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-1.5 py-0.5 text-[9px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={10} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-1.5 py-0.5 text-[9px] text-white"><CheckCircle2 size={10} /> UIT rögzítve</span> : null}</div></div></div></td>
-                      <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
+                    <tr key={item.id} className={`border-t border-white/10 align-middle text-[12px] leading-tight transition ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "bg-[#96BF48]/[0.09] hover:bg-[#96BF48]/[0.15]" : "hover:bg-white/[0.035]"}`}>
+                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${isShopifyStockDocument(item) ? "border-[#96BF48]/50 bg-[#96BF48]/18" : "border-white/12 bg-white/[0.06]"}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-6 w-6 object-contain" /> : <FileText size={16} />}</span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><div className="mt-0.5 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/55 bg-[#96BF48]/23 text-[#eaffd5]" : badge.cls}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-3 w-3 object-contain" /> : <BadgeIcon size={10} />} {isShopifyStockDocument(item) ? shopifyStockDocumentStatus(item) : badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-1.5 py-0.5 text-[9px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={10} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-1.5 py-0.5 text-[9px] text-white"><CheckCircle2 size={10} /> UIT rögzítve</span> : null}</div></div></div></td>
+                      <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd2]" : typeMeta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={12} />} {isShopifyStockDocument(item) ? "Shopify átadás" : typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateOnlyHu(documentDateKey(item))}</td>
-                      <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
+                      <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">{isShopifyStockDocument(item) ? "Shopify rendelés" : "Hivatkozás"}: {item.external_reference}{isShopifyStockDocument(item) ? ` • ${String(item.raw?.customerName || "")}` : ""}</span> : null}</div></td>
                       <td className="px-3 py-2 text-center">
                         <div className="mx-auto w-[150px] rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 px-2.5 py-2 text-[#d7fffd] shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
                           <div className="flex items-center justify-center gap-1.5 whitespace-nowrap text-[11px]">
@@ -3430,11 +3486,11 @@ export default function AllInProductMoves() {
               const meta = documentMeta(documentTypeOf(item));
               const TypeIcon = meta.icon;
               const itemUitCode = documentUitCode(item);
-              const itemNeedsUit = !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
+              const itemNeedsUit = !isShopifyStockDocument(item) && !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
               return (
-                <article key={item.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
+                <article key={item.id} className={`rounded-2xl border p-3 ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/45 bg-[#96BF48]/12" : "border-white/12 bg-white/[0.05]"}`}>
+                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateOnlyHu(documentDateKey(item))}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${isShopifyStockDocument(item) && shopifyStockDocumentState(item) === "allocated" ? "border-[#96BF48]/55 bg-[#96BF48]/23 text-[#eaffd5]" : badge.cls}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-3.5 w-3.5 object-contain" /> : <BadgeIcon size={11} />} {isShopifyStockDocument(item) ? shopifyStockDocumentStatus(item) : badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${isShopifyStockDocument(item) ? "border-[#96BF48]/45 bg-[#96BF48]/20 text-[#eaffd5]" : meta.tone}`}>{isShopifyStockDocument(item) ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : <TypeIcon size={13} />} {isShopifyStockDocument(item) ? "Shopify átadás" : meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
                   <div className="mt-3 border-t border-white/10 pt-2.5"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-[9px] uppercase tracking-[0.08em] text-white/34">Rögzítette</span><span className="truncate text-[10px] text-white/56">{displayActorName(item.actor)}</span></div>{documentActionButtons(item, true)}</div>
                 </article>
@@ -3475,7 +3531,7 @@ export default function AllInProductMoves() {
               </div>
 
               <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Típus
-                <CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} />
+                <CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "shopify_transfer", label: "Shopify átadás" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} />
               </label>
 
               <label className="grid min-w-0 gap-1 text-[8px] uppercase tracking-[0.09em] text-white/46">Forrás
@@ -3540,14 +3596,14 @@ export default function AllInProductMoves() {
             <div className="flex max-h-[92dvh] w-[calc(100%-8px)] max-w-[390px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)] lg:max-h-[95vh] lg:max-w-[1420px]">
               <div className="border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-3.5 py-3 lg:px-4 lg:py-3.5">
                 <div className="flex items-start gap-3">
-                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] lg:h-11 lg:w-11"><TypeIcon size={20} /></span>
+                  <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border lg:h-11 lg:w-11 ${isShopifyStockDocument(doc) ? "border-[#96BF48]/55 bg-[#96BF48]/16" : "border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{isShopifyStockDocument(doc) ? <img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-7 w-7 object-contain" /> : <TypeIcon size={20} />}</span>
                   <div className="min-w-0 flex-1"><p className="text-[8px] uppercase tracking-[0.16em] text-[#cffffd]/58 lg:text-[10px]">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[17px] text-white lg:text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-0.5 truncate text-[10px] text-white/48 lg:mt-1 lg:text-xs lg:text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div>
                   <button type="button" onClick={() => setDetail(null)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] lg:hidden" aria-label="Bezárás"><X size={16} /></button>
-                  <div className="hidden flex-wrap gap-2 lg:flex">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+                  <div className="hidden flex-wrap gap-2 lg:flex">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{!isShopifyStockDocument(doc) && ["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}{!isShopifyStockDocument(doc) ? <button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Törlés</button> : null}<button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-1.5 lg:hidden">
-                  {doc.status === "preparation" ? <><button type="button" onClick={() => void openDraftForEdit(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Folytatás</button><button type="button" onClick={() => void closePreparationById(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/18 px-2 text-[10px] text-[#d7fffd]"><CheckCircle2 size={13} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" onClick={() => void openDraftForEdit(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Előkészítés folytatása</button> : <><button type="button" onClick={() => printDetail(detail, inventory)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Printer size={13} /> PDF</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" onClick={() => void reopenAsPreparation(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white"><RotateCcw size={13} /> Előkészítésre</button> : <span />}</>}
-                  <button type="button" onClick={() => setDeleteTarget(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-2 text-[10px] text-white"><Trash2 size={13} /> Törlés</button>
+                  {doc.status === "preparation" ? <><button type="button" onClick={() => void openDraftForEdit(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Folytatás</button><button type="button" onClick={() => void closePreparationById(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b]/18 px-2 text-[10px] text-[#d7fffd]"><CheckCircle2 size={13} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" onClick={() => void openDraftForEdit(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Edit3 size={13} /> Előkészítés folytatása</button> : <><button type="button" onClick={() => printDetail(detail, inventory)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#8ce7e2]/34 bg-[#2a8d8b] px-2 text-[10px] text-white"><Printer size={13} /> PDF</button>{!isShopifyStockDocument(doc) && ["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" onClick={() => void reopenAsPreparation(doc)} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.055] px-2 text-[10px] text-white"><RotateCcw size={13} /> Előkészítésre</button> : <span />}</>}
+                  {!isShopifyStockDocument(doc) ? <button type="button" onClick={() => setDeleteTarget(doc)} className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/75 bg-[#E21C2A] px-2 text-[10px] text-white"><Trash2 size={13} /> Törlés</button> : null}
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-2.5 lg:p-3.5">
@@ -3562,7 +3618,7 @@ export default function AllInProductMoves() {
                   </div>
                   <div className="rounded-2xl border border-[#5eead4]/16 bg-[#2a8d8b]/[0.08] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Típus / rögzítette</p>
-                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{displayActorName(doc.actor)}</p>
+                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{isShopifyStockDocument(doc) ? `Shopify átadás • ${shopifyStockDocumentStatus(doc)}` : meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{displayActorName(doc.actor)}</p>
                   </div>
                   <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
                     <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Tartalom</p>
@@ -3573,7 +3629,7 @@ export default function AllInProductMoves() {
                     <p className="mt-2 text-[18px] text-white">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/65">{detailMissingPrices} sor ár nélkül</p> : <p className="mt-0.5 text-[9px] text-white/35">RON összérték</p>}
                   </div>
                 </div>
-                {documentTypeOf(doc) === "internal_transfer" && !doc.isLegacy && doc.status !== "legacy" ? <div className={`mt-3 rounded-2xl border-2 px-4 py-3 shadow-[0_10px_28px_rgba(0,0,0,.12)] ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "border-red-300/75 bg-red-600/24" : "border-[#7bd7d4]/45 bg-[#174c55]/60"}`}><div className="flex flex-wrap items-end gap-3"><div className="flex min-w-[250px] flex-1 items-start gap-3"><AlertTriangle size={20} className={`mt-0.5 shrink-0 ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "text-red-300" : "text-[#7bd7d4]"}`} /><div><p className="text-sm text-white">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "UIT kód szükséges" : documentUitCode(doc) ? "UIT kód rögzítve" : "UIT kód"}</p><p className="mt-1 text-xs leading-relaxed text-white/65">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) ? `Az átadás értéke meghaladja a 10.000 RON-t (${moneyRon(detailValue)}). A szállítás előtt rögzítsétek az UIT kódot.` : "Ehhez az átadáshoz szükség esetén itt rögzíthető az UIT kód."}</p></div></div><label className="grid min-w-[260px] flex-1 gap-1 text-xs text-white/70">UIT kód<input className={`${input} ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !detailUitCode ? "border-red-300/80 bg-red-950/30" : ""}`} value={detailUitCode} onChange={(event) => setDetailUitCode(normalizedUitCode(event.target.value))} placeholder="Írd be az UIT kódot" /></label><button type="button" className={primaryBtn} onClick={() => void saveDetailUitCode()} disabled={detailUitSaving}>{detailUitSaving ? <RefreshCw size={15} className="animate-spin" /> : <Save size={15} />} {detailUitSaving ? "Mentés..." : "UIT mentése"}</button></div>{detailUitError ? <p className="mt-2 text-xs text-red-100">{detailUitError}</p> : null}</div> : null}
+                {documentTypeOf(doc) === "internal_transfer" && !isShopifyStockDocument(doc) && !doc.isLegacy && doc.status !== "legacy" ? <div className={`mt-3 rounded-2xl border-2 px-4 py-3 shadow-[0_10px_28px_rgba(0,0,0,.12)] ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "border-red-300/75 bg-red-600/24" : "border-[#7bd7d4]/45 bg-[#174c55]/60"}`}><div className="flex flex-wrap items-end gap-3"><div className="flex min-w-[250px] flex-1 items-start gap-3"><AlertTriangle size={20} className={`mt-0.5 shrink-0 ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "text-red-300" : "text-[#7bd7d4]"}`} /><div><p className="text-sm text-white">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "UIT kód szükséges" : documentUitCode(doc) ? "UIT kód rögzítve" : "UIT kód"}</p><p className="mt-1 text-xs leading-relaxed text-white/65">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) ? `Az átadás értéke meghaladja a 10.000 RON-t (${moneyRon(detailValue)}). A szállítás előtt rögzítsétek az UIT kódot.` : "Ehhez az átadáshoz szükség esetén itt rögzíthető az UIT kód."}</p></div></div><label className="grid min-w-[260px] flex-1 gap-1 text-xs text-white/70">UIT kód<input className={`${input} ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !detailUitCode ? "border-red-300/80 bg-red-950/30" : ""}`} value={detailUitCode} onChange={(event) => setDetailUitCode(normalizedUitCode(event.target.value))} placeholder="Írd be az UIT kódot" /></label><button type="button" className={primaryBtn} onClick={() => void saveDetailUitCode()} disabled={detailUitSaving}>{detailUitSaving ? <RefreshCw size={15} className="animate-spin" /> : <Save size={15} />} {detailUitSaving ? "Mentés..." : "UIT mentése"}</button></div>{detailUitError ? <p className="mt-2 text-xs text-red-100">{detailUitError}</p> : null}</div> : null}
                 {(doc.reason_code || doc.reason_text || doc.external_reference || doc.note) ? <div className="mt-3 grid gap-2 md:grid-cols-3"><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Ok</p><p className="mt-1 text-xs text-white/78">{reasonLabel(documentTypeOf(doc), doc.reason_code, doc.reason_text)}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Hivatkozás</p><p className="mt-1 text-xs text-white/78">{doc.external_reference || "-"}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Megjegyzés</p><p className="mt-1 text-xs text-white/78">{doc.note || "-"}</p></div></div> : null}
 
                 <div className="mt-3 space-y-3">

@@ -31,6 +31,7 @@ import AllInShopIncoming from "./AllInShopIncoming";
 import AllInShopDocuments from "./AllInShopDocuments";
 import AllInShopifyWarehousePanel from "./AllInShopifyWarehousePanel";
 import AllInShopifyCustomers from "./AllInShopifyCustomers";
+import AllInShopifySourceDocuments, { type ShopifySourceSummary } from "./AllInShopifySourceDocuments";
 import {
   apiAifShopReservations,
   type AifShopReservation,
@@ -182,6 +183,8 @@ export default function AllInMagazinDynamic({
   const [shopModulesError, setShopModulesError] = useState("");
   const [shopifyPanelMode, setShopifyPanelMode] = useState<"reserved" | "documents" | null>(null);
   const [shopifyCustomersOpen, setShopifyCustomersOpen] = useState(false);
+  const [shopifySourceOpen, setShopifySourceOpen] = useState(false);
+  const [shopifySourceSummary, setShopifySourceSummary] = useState<ShopifySourceSummary>({total:0,pending:0,fulfilled:0,cancelled:0});
   const moduleIsEnabled = (key: string) => enabledShopModules.includes(key);
 
   useEffect(() => {
@@ -208,6 +211,28 @@ export default function AllInMagazinDynamic({
     window.addEventListener("focus", onFocus);
     return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
   }, [apiBase, shopId]);
+
+  // Ez nem alkalmazottankénti pénzügyi rekord: minden dolgozónak látnia kell,
+  // ha az adott üzlet saját készletéből Shopify-rendelésre átadás történt.
+  useEffect(() => {
+    setShopifySourceSummary({total:0,pending:0,fulfilled:0,cancelled:0});
+    if (isShopifyWarehouse) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/aif/shopify/warehouse/shop/source/documents?location=${encodeURIComponent(locationCode)}`, {
+          credentials: "include", cache: "no-store", headers: { Accept: "application/json" },
+        });
+        if (!response.ok) return;
+        const data = await response.json().catch(() => null);
+        if (!cancelled && data?.summary) setShopifySourceSummary(data.summary);
+      } catch { /* Az üzleti felület nem állhat le opcionális jelzés miatt. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 45000);
+    window.addEventListener("focus", refresh);
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [isShopifyWarehouse, locationCode]);
 
   const actions = useMemo<ActionCard[]>(() => [
     {
@@ -449,7 +474,8 @@ export default function AllInMagazinDynamic({
     }
     if (action.key === "receipts") {
       setNotice("");
-      setDocumentsOpen(true);
+      if (!isShopifyWarehouse && shopifySourceSummary.total > 0) setShopifySourceOpen(true);
+      else setDocumentsOpen(true);
       return;
     }
     if (action.key === "search" || action.key === "stock" || action.key === "summary") {
@@ -580,11 +606,12 @@ export default function AllInMagazinDynamic({
               const moduleActive = moduleIsEnabled(action.key);
               const reservationIsDanger =
                 moduleActive && action.key === "reserved" && reservationDeadlineAlert.count > 0;
+              const shopifyReceiptAlert = moduleActive && !isShopifyWarehouse && action.key === "receipts" && shopifySourceSummary.pending > 0;
               const alertBadgeText = reservationIsDanger
                 ? reservationDeadlineAlert.count > 1
                   ? `${reservationDeadlineAlert.count} SÜRGŐS`
                   : reservationDeadlineAlert.label
-                : moduleActive ? "Aktív modul" : "Inaktív";
+                : shopifyReceiptAlert ? `${shopifySourceSummary.pending} SHOPIFY` : moduleActive ? "Aktív modul" : "Inaktív";
 
               return (
                 <button
@@ -599,6 +626,8 @@ export default function AllInMagazinDynamic({
                       ? "cursor-not-allowed border-white/16 bg-[#344153] text-white/45 opacity-55 grayscale-[0.4] shadow-none"
                       : reservationIsDanger
                       ? "border-[#ffbac2]/85 bg-gradient-to-br from-[#e0182f] via-[#c30d1c] to-[#8f0714] shadow-[0_18px_38px_rgba(134,7,20,0.42)] ring-2 ring-[#ffccd2]/28 hover:brightness-110"
+                      : shopifyReceiptAlert
+                        ? "border-[#bce88b]/65 bg-gradient-to-br from-[#719e31] via-[#96BF48] to-[#547e2c] shadow-[0_14px_34px_rgba(57,86,26,0.25)] hover:brightness-110"
                       : "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
                   }`}
                 >
@@ -608,14 +637,14 @@ export default function AllInMagazinDynamic({
                         ? "border-white/38 bg-black/15 text-white shadow-[0_8px_20px_rgba(82,0,12,0.30)]"
                         : "border-white/25 bg-white/14 text-white"
                     }`}>
-                      <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />
+                      {shopifyReceiptAlert ? <img src={SHOPIFY_WAREHOUSE_ICON} alt="Shopify" className="h-8 w-8 object-contain" /> : <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />}
                     </span>
                     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] ${
                       reservationIsDanger
                         ? "border-white/48 bg-white/18 font-semibold text-white shadow-[0_6px_16px_rgba(80,0,12,0.25)]"
                         : "border-white/14 bg-black/10 text-white/55"
                     }`}>
-                      {!moduleActive ? <LockKeyhole size={12} /> : reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
+                      {!moduleActive ? <LockKeyhole size={12} /> : shopifyReceiptAlert ? <img src={SHOPIFY_WAREHOUSE_ICON} alt="" className="h-4 w-4 object-contain" /> : reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
                       {alertBadgeText}
                     </span>
                   </div>
@@ -625,6 +654,12 @@ export default function AllInMagazinDynamic({
                   <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
                     {action.description}
                   </p>
+                  {shopifyReceiptAlert ? (
+                    <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/35 bg-black/15 px-3 py-2 text-xs text-white">
+                      <img src={SHOPIFY_WAREHOUSE_ICON} alt="" className="h-4 w-4 object-contain" />
+                      {shopifySourceSummary.pending} Shopify Aviz • feladásra vár
+                    </div>
+                  ) : null}
                   {reservationIsDanger && reservationDeadlineAlert.date ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 bg-black/20 px-3 py-2 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(74,0,10,0.24)]">
                       <Clock3 size={17} strokeWidth={2.3} />
@@ -689,6 +724,13 @@ export default function AllInMagazinDynamic({
       />
       <AllInShopifyCustomers open={isShopifyWarehouse && shopifyCustomersOpen} apiBase={apiBase} onClose={() => setShopifyCustomersOpen(false)} />
       <AllInShopifyWarehousePanel open={isShopifyWarehouse && shopifyPanelMode !== null} mode={shopifyPanelMode || "documents"} apiBase={apiBase} onClose={() => setShopifyPanelMode(null)} />
+      <AllInShopifySourceDocuments
+        open={!isShopifyWarehouse && shopifySourceOpen}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setShopifySourceOpen(false)}
+        onOpenRegularDocuments={() => { setShopifySourceOpen(false); setDocumentsOpen(true); }}
+      />
       <AllInShopVacations
         open={vacationsOpen}
         actor={actor}

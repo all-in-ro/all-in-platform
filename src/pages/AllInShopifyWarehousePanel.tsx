@@ -9,7 +9,6 @@ const date = (value: unknown) => {
   const d = new Date(clean(value));
   return Number.isNaN(d.getTime()) ? "–" : d.toLocaleString("hu-HU", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 };
-const escaped = (value: unknown) => clean(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 type DocumentLine = { title?: string; qty?: number; size?: string | null; barcode?: string | null; imageUrl?: string | null; shipped?: number; released?: number };
 type ShopifyDocument = {
@@ -84,15 +83,17 @@ export default function AllInShopifyWarehousePanel({ open, mode, apiBase = "/api
     finally { setDetailBusy(false); }
   }
 
-  function print() {
+  async function print() {
     if (!detail) return;
-    const d = detail.document;
-    const rows = detail.lines.map((line, i) => `<tr><td>${i + 1}</td><td>${escaped(line.product_title)}<div class="small">${escaped(line.brand_name)} • ${escaped(line.barcode)} • ${escaped(line.size)}</div></td><td>${Number(line.qty || 0)} db</td><td>${escaped(money(line.unit_price))}</td><td>${escaped(money(line.line_total))}</td></tr>`).join("");
-    const win = window.open("", "_blank", "width=980,height=800");
-    if (!win) { setDetailError("A böngésző blokkolja a nyomtatási ablakot."); return; }
-    win.document.open();
-    win.document.write(`<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>${escaped(d.document_number)} - Shopify Aviz</title><style>@page{size:A4 portrait;margin:14mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#182334;font-size:12px}header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #168e88;padding-bottom:16px}.title{font-size:23px;letter-spacing:.5px}.sub{color:#697788;font-size:11px;margin-top:5px}.mark{font-size:11px;border:1px solid #b8dbd8;border-radius:8px;padding:9px 12px;color:#22645e}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:22px 0}.box{border:1px solid #dae2e5;padding:13px;border-radius:10px}.label{font-size:10px;color:#6a7b89;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:16px}th{background:#e8f4f1;color:#236e68;text-align:left;font-size:10px;text-transform:uppercase;padding:12px 8px}td{border-bottom:1px solid #e2e6ea;padding:12px 8px;vertical-align:top}td:nth-child(n+3){white-space:nowrap;text-align:right}.small{font-size:10px;color:#7a8793;margin-top:6px}.totals{text-align:right;margin-top:18px;line-height:1.9}footer{margin-top:30px;border-top:1px solid #dce5e7;padding-top:15px;font-size:10px;color:#8593a0}@media print{button{display:none}}</style></head><body><header><div><div class="title">BELSŐ SHOPIFY AVIZ</div><div class="sub">AllInFashion · Automatikus belső készletátvezetés</div></div><div class="mark">${escaped(d.document_number)}</div></header><div class="grid"><div class="box"><div class="label">Shopify rendelés</div>${escaped(d.order_name)}<br><div class="small">Vevő: ${escaped(d.customer_name)}</div></div><div class="box"><div class="label">Kelt</div>${escaped(date(d.created_at))}<br><div class="small">Állapot: ${escaped(d.state)}</div></div><div class="box"><div class="label">Honnan</div>${escaped(d.from_location_summary || "Csíkszereda")}</div><div class="box"><div class="label">Hová</div>${escaped(d.to_location_summary || "Shopify Raktár")}</div></div><table><thead><tr><th>#</th><th>Termék / vonalkód</th><th>Db</th><th>Egységár</th><th>Összesen</th></tr></thead><tbody>${rows}</tbody></table><div class="totals">Átvett darabszám: <strong>${escaped(d.total_qty)} db</strong><br>Termékérték: <strong>${escaped(money(d.total_value))}</strong><br><span class="small">A szállítási díj külön szerepel a Shopify rendelésen.</span></div><footer>BELSŐ BIZONYLAT · Nem számla és nem készpénzes eladási nyugta. A foglalt készlet az online rendelés teljesítéséig a Shopify Raktárban marad.</footer><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));<\/script></body></html>`);
-    win.document.close();
+    setDetailError("");
+    try {
+      // Pontosan ugyanaz a román, A4-es proces-verbal sablon mint az Admin bizonylatainál.
+      // A függvény kizárólag nyomtat, sem készletet, sem rendelést nem módosít.
+      const { printShopifyStockDocument } = await import("./AllInProductMoves");
+      printShopifyStockDocument(detail);
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : "A PDF / nyomtatás nem indítható.");
+    }
   }
 
   if (!open || typeof document === "undefined") return null;
