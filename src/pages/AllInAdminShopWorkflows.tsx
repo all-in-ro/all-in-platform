@@ -32,7 +32,6 @@ import {
   apiAifConfirmShopCashMovement,
   apiAifRejectShopCashMovement,
   apiAifShopCashOverview,
-  apiAifShopDailySummary,
   apiAifShopFinancialNotes,
   apiAifShopReservations,
   apiAifReleaseShopReservation,
@@ -41,7 +40,6 @@ import {
   apiAifShopReturnHistory,
   apiAifShopShiftDayOverview,
   type AifShopCashOverview,
-  type AifShopDailySummaryResponse,
   type AifFinancialNoteItem,
   type AifShopExchangeHistoryItem,
   type AifShopReservation,
@@ -580,12 +578,15 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   popup.document.write("<!doctype html><html><meta charset='utf-8'><body style='font:16px Arial;padding:30px'>A pénztári jegyzőkönyv adatainak betöltése…</body></html>");
   popup.document.close();
 
-  // The numbered report contains exactly what was marked on the annotated PDF:
-  // 1 gross, 2 collected, 3 cash, 4 card, 5 shift+cash details, 6 daily/cash notes.
-  // Each requested day is queried separately. Never include intervening days.
+  // All four numbered financial figures belong to the ENTIRE store/day.
+  // /shop-operations/daily-summary is employee-scoped even if `employee` is omitted
+  // (the server then uses the logged-in actor). It must NEVER feed this receipt:
+  // that silently excluded the other cashier on 2026-10-20/21/22/23.
+  // /shop-shifts/day-overview.totals is computed without an actor filter and
+  // already powers the correct "Teljes üzleti nap / Minden dolgozó együtt" UI.
+  // Each requested day is queried separately; never include intervening days.
   type CashReceiptAuditDay = {
     date: string;
-    summary: AifShopDailySummaryResponse | null;
     shifts: AifShopShiftDayOverview | null;
     notes: AifFinancialNoteItem[] | null;
   };
@@ -593,29 +594,40 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   for (let start = 0; start < receiptDates.length; start += 4) {
     const days = receiptDates.slice(start, start + 4);
     const batch = await Promise.all(days.map(async (date): Promise<CashReceiptAuditDay> => {
-      const [summary, shifts, notes] = await Promise.all([
-        apiAifShopDailySummary({ location: store.code, date, employee: requestedBy }).catch(() => null),
+      const [shifts, notes] = await Promise.all([
         apiAifShopShiftDayOverview({ location: store.code, date }).catch(() => null),
         apiAifShopFinancialNotes({ location: store.code, date }).catch(() => null),
       ]);
       return {
         date,
-        summary: summary?.date === date && summary.location?.code === store.code ? summary : null,
         shifts: shifts?.date === date && shifts.location?.code === store.code ? shifts : null,
         notes: notes?.date === date ? (notes.items || []) : null,
       };
     }));
     dayReports.push(...batch);
   }
+  // Fail closed: if a day is missing, or an actor-filtered snapshot is somehow
+  // returned in place of store totals, never print a plausible but wrong 0 RON.
   const complete = dayReports.length === receiptDates.length && dayReports.length > 0
-    && dayReports.every((r) => r.summary !== null);
-  const total = (value: (r: AifShopDailySummaryResponse) => number) => complete
-    ? Math.round(dayReports.reduce((sum, day) => sum + value(day.summary!), 0) * 100) / 100
+    && dayReports.every(({ shifts }) => {
+      const snapshot = shifts?.totals;
+      return Boolean(snapshot && !snapshot.actor
+        && snapshot.salesBeforeDiscount != null
+        && Number.isFinite(Number(snapshot.salesBeforeDiscount))
+        && Array.isArray(snapshot.payments));
+    });
+  const total = (value: (snapshot: AifShopShiftDayOverview["totals"]) => number) => complete
+    ? Math.round(dayReports.reduce((sum, day) => sum + value(day.shifts!.totals), 0) * 100) / 100
     : null;
-  const totalGross = total((r) => numberValue(r.summary.grossCollectedTotal ?? r.summary.salesBeforeDiscount));
-  const totalCollected = total((r) => numberValue(r.summary.collectedTotal ?? r.summary.revenue));
-  const totalCash = total((r) => numberValue((r.payments || []).find((p) => p.method === "cash")?.amount));
-  const totalCard = total((r) => numberValue((r.payments || []).find((p) => p.method === "card")?.amount));
+  const paidBy = (snapshot: AifShopShiftDayOverview["totals"], method: string) =>
+    numberValue(snapshot.payments.find((payment) => payment.method === method)?.amount);
+  // The server's `salesBeforeDiscount` includes the gross value of older
+  // credits paid on this day, exactly like the daily store dashboard.
+  const totalGross = total((snapshot) => numberValue(snapshot.salesBeforeDiscount));
+  const totalCollected = total((snapshot) => ["cash", "card", "bank_transfer"]
+    .reduce((sum, method) => sum + paidBy(snapshot, method), 0));
+  const totalCash = total((snapshot) => paidBy(snapshot, "cash"));
+  const totalCard = total((snapshot) => paidBy(snapshot, "card"));
   const metricText = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : money(value);
   const multipleDays = receiptDates.length > 1;
   const cashAndShiftRows: string[] = [];
@@ -688,6 +700,7 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   .box { border: 1px solid #c3cad4; min-height: 15mm; padding: 3mm; border-radius: 2mm; }
   .label { font-size: 8px; text-transform: uppercase; letter-spacing: .10em; color: #778292; margin-bottom: 1.5mm; }
   .value { font-size: 12px; line-height: 1.35; }
+  .audit-scope { margin: 3mm 0 -2mm; font-size: 8px; letter-spacing: .04em; color: #586476; }
   .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; }
   .audit-value { min-height: 14mm; border: 1px solid #c3cad4; border-radius: 2mm; padding: 2mm; break-inside: avoid; }
   .audit-head { display: flex; align-items: center; gap: 4px; color: #5e6978; font-size: 8px; text-transform: uppercase; }
@@ -751,7 +764,8 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
       </div>
     </section>
 
-    <section class="audit-values" aria-label="A készpénzátadás 1-4. pénzügyi mutatói">
+    <p class="audit-scope">Teljes üzleti forgalom • minden eladó együtt</p>
+    <section class="audit-values" aria-label="A teljes üzleti forgalom 1-4. pénzügyi mutatói">
       <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
       <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Napi bevétel</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
       <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Készpénz</div><div class="audit-money">${escapePrintHtml(metricText(totalCash))}</div></div>
