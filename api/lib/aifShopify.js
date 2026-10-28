@@ -568,7 +568,7 @@ export async function enqueueAifShopifyVariant(client, variantId, reason = "stoc
   const config = envConfig();
   const missing = missingConfig(config);
   if (missing.length) return { queued: false, reason: "config_missing", missing };
-  await ensureAifShopifyTables(client);
+  if (!_options.schemaReady) await ensureAifShopifyTables(client);
 
   const mapping = await client.query(`SELECT 1 FROM aif_shopify_variant_map WHERE variant_id::text=$1 LIMIT 1`, [text(variantId)]);
   if (!mapping.rowCount) return { queued: false, reason: "mapping_missing" };
@@ -1831,6 +1831,26 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
   }
 
   try {
+    // Fail closed while known order/return changes have not been accounted for.
+    // Never push a stale pre-checkout quantity over Shopify's current reservation.
+    if (bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false)) {
+      const ready=await pool.query("SELECT to_regclass('public.aif_shopify_warehouse_orders') AS w");
+      if(!ready.rows[0]?.w)return {enabled:true,processed:0,errors:0,blocked:'warehouse_schema_pending'};
+      const pending=await pool.query(`SELECT EXISTS(
+        SELECT 1 FROM aif_shopify_webhook_events WHERE
+          (topic LIKE 'orders/%' OR topic LIKE 'fulfillments/%' OR topic LIKE 'returns/%' OR topic='refunds/create')
+          AND status IN ('received','processing','error')
+        UNION ALL SELECT 1 FROM aif_shopify_warehouse_failures
+        UNION ALL SELECT 1 FROM aif_shopify_orders o
+          LEFT JOIN aif_shopify_warehouse_orders w ON w.shopify_order_id=o.shopify_order_id
+          WHERE (w.shopify_order_id IS NOT NULL AND $1::boolean AND
+            (w.raw->>'lifecycleVersion' IS DISTINCT FROM '2' OR COALESCE((w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,'epoch'::timestamptz)<o.updated_at))
+          OR (w.shopify_order_id IS NULL AND o.cancelled_at IS NULL AND o.status<>'cancelled'
+            AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false) AND l.current_quantity>0)
+            AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
+        ) AS pending`,[bool(process.env.SHOPIFY_WAREHOUSE_LIFECYCLE_ENABLED,false)]);
+      if(pending.rows[0]?.pending)return {enabled:true,processed:0,errors:0,blocked:'order_lifecycle_pending'};
+    }
     const rows = await claimOutboxRows(pool, options.limit || 20);
     let success = 0;
     let superseded = 0;

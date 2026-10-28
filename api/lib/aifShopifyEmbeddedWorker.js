@@ -103,7 +103,7 @@ async function tick(state) {
     }
     // If any warehouse transfer failed, do not overwrite the just-reduced
     // Shopify available stock with a stale outbox value in this tick.
-    if (warehouse.errors) {
+    if (warehouse.errors || warehouse.blocked || warehouse.lockSkipped || orders.errors) {
       schedule(state,state.errorDelayMs);
       return;
     }

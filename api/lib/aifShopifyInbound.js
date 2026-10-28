@@ -266,7 +266,18 @@ async function processInboundEvent(pool, event, config) {
   // inventory-level echo, is the owner of physical AIF stock movements.
   // Shopify's `available` decreases when a customer checks out while
   // `on_hand` stays unchanged until fulfillment. It is NOT a physical sale.
-  if (bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false)) {
+  let managed = bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false);
+  if (!managed) {
+    const tables=await pool.query("SELECT to_regclass('public.aif_shopify_warehouse_lines') AS t");
+    if(tables.rows[0]?.t) {
+      const result=await pool.query(`SELECT 1 FROM aif_shopify_warehouse_lines wl
+        JOIN aif_shopify_warehouse_orders wo ON wo.shopify_order_id=wl.shopify_order_id
+        JOIN aif_shopify_variant_map vm ON vm.variant_id=wl.variant_id
+        WHERE vm.shopify_inventory_item_id=$1 AND wo.source_location_id::text=$2 LIMIT 1`,[inventoryItemId,aifLocationId]);
+      managed=result.rowCount>0;
+    }
+  }
+  if (managed) {
     const client=await pool.connect();
     try {
       await markEvent(client,event.shopify_webhook_id,"processed",{

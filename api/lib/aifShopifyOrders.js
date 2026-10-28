@@ -15,6 +15,17 @@ const ORDER_TOPICS = new Set([
   "orders/fulfilled",
   "orders/partially_fulfilled",
   "refunds/create",
+  "fulfillments/create",
+  "fulfillments/update",
+  "returns/request",
+  "returns/approve",
+  "returns/decline",
+  "returns/cancel",
+  "returns/close",
+  "returns/reopen",
+  "returns/update",
+  "returns/process",
+
 ]);
 
 function text(value) {
@@ -265,6 +276,19 @@ export async function ensureAifShopifyOrderSchema(client) {
   await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_refund_lines_refund_idx
     ON aif_shopify_refund_lines (shopify_refund_id)`);
 
+  await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_fulfillments (
+    shopify_fulfillment_id text PRIMARY KEY,
+    shopify_order_id text NOT NULL REFERENCES aif_shopify_orders(shopify_order_id) ON DELETE CASCADE,
+    status text NOT NULL, shopify_updated_at timestamptz NULL,
+    raw jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now())`);
+  await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_fulfillments_order_idx ON aif_shopify_fulfillments(shopify_order_id)`);
+  await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_returns (
+    shopify_return_id text PRIMARY KEY,
+    shopify_order_id text NOT NULL REFERENCES aif_shopify_orders(shopify_order_id) ON DELETE CASCADE,
+    status text NOT NULL, topic text NOT NULL, shopify_updated_at timestamptz NULL,
+    raw jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now())`);
+  await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_returns_order_idx ON aif_shopify_returns(shopify_order_id)`);
+
   // Minimális törlési napló. Nem tárol kliens- vagy rendelési adatot, csak azt akadályozza meg,
   // hogy egy később beérkező Shopify webhook újra létrehozza a végleg törölt AllIn rekordot.
   await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_order_deletions (
@@ -285,7 +309,7 @@ export async function ensureAifShopifyOrderSchema(client) {
     ON aif_shopify_webhook_events (status, next_attempt_at, received_at)
     WHERE topic IN (
       'orders/create','orders/updated','orders/cancelled','orders/paid',
-      'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+      'orders/fulfilled','orders/partially_fulfilled','refunds/create','fulfillments/create','fulfillments/update','returns/request','returns/approve','returns/decline','returns/cancel','returns/close','returns/reopen','returns/update','returns/process'
     )`);
 }
 
@@ -343,7 +367,7 @@ async function claimOrderEvents(pool, limit) {
          FROM aif_shopify_webhook_events
          WHERE topic IN (
            'orders/create','orders/updated','orders/cancelled','orders/paid',
-           'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+           'orders/fulfilled','orders/partially_fulfilled','refunds/create','fulfillments/create','fulfillments/update','returns/request','returns/approve','returns/decline','returns/cancel','returns/close','returns/reopen','returns/update','returns/process'
          )
            AND (
              (status IN ('received','error') AND next_attempt_at <= now())
@@ -454,6 +478,24 @@ async function upsertOrder(client, event) {
     return { status: "ignored", ...result };
   }
 
+  const existing = await client.query('SELECT shopify_updated_at,raw FROM aif_shopify_orders WHERE shopify_order_id=$1 FOR UPDATE',[shopifyOrderId]);
+  const incomingAt = isoOrNull(payload.updated_at);
+  const savedAt = existing.rows[0]?.shopify_updated_at;
+  if (savedAt && (!incomingAt || new Date(incomingAt).getTime() < new Date(savedAt).getTime())) {
+    const result={reason:'stale_order_snapshot',orderId:shopifyOrderId,stockChangedByOrderProcessor:false};
+    await markEvent(client,event.shopify_webhook_id,'ignored',result);
+    return {status:'ignored',...result};
+  }
+  if (!Array.isArray(payload.line_items)) {
+    throw Object.assign(new Error('Hiányos rendelési webhook: nincs line_items. A korábbi sorokat nem töröltem.'), {code:'incomplete_order_snapshot'});
+  }
+  if (savedAt && incomingAt && new Date(incomingAt).getTime() === new Date(savedAt).getTime() && Array.isArray(existing.rows[0]?.raw?.line_items)) {
+    const quantities=items=>JSON.stringify(items.map(l=>[lineGid(l),variantGid(l),l.quantity,l.current_quantity??l.quantity]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+    if(quantities(payload.line_items)!==quantities(existing.rows[0].raw.line_items)) {
+      throw Object.assign(new Error('Azonos Shopify időbélyeggel eltérő tételmennyiségek érkeztek. Automatikus felülírás helyett ellenőrzés szükséges.'),{code:'ambiguous_order_snapshot'});
+    }
+  }
+
   const currency = text(payload.currency || payload.presentment_currency)
     || currencyFromSet(payload.current_total_price_set || payload.total_price_set)
     || null;
@@ -482,9 +524,9 @@ async function upsertOrder(client, event) {
        order_name=COALESCE(EXCLUDED.order_name, aif_shopify_orders.order_name),
        order_number=COALESCE(EXCLUDED.order_number, aif_shopify_orders.order_number),
        confirmation_number=COALESCE(EXCLUDED.confirmation_number, aif_shopify_orders.confirmation_number),
-       status=EXCLUDED.status,
+       status=CASE WHEN aif_shopify_orders.cancelled_at IS NOT NULL THEN 'cancelled' ELSE EXCLUDED.status END,
        financial_status=COALESCE(EXCLUDED.financial_status, aif_shopify_orders.financial_status),
-       fulfillment_status=COALESCE(EXCLUDED.fulfillment_status, aif_shopify_orders.fulfillment_status),
+       fulfillment_status=EXCLUDED.fulfillment_status,
        currency_code=COALESCE(EXCLUDED.currency_code, aif_shopify_orders.currency_code),
        subtotal_price=COALESCE(EXCLUDED.subtotal_price, aif_shopify_orders.subtotal_price),
        total_price=COALESCE(EXCLUDED.total_price, aif_shopify_orders.total_price),
@@ -623,6 +665,12 @@ async function upsertOrder(client, event) {
     );
   }
 
+  for (const fulfillment of Array.isArray(payload.fulfillments) ? payload.fulfillments : []) {
+    await saveFulfillment(client,shopifyOrderId,fulfillment);
+  }
+  for (const refund of Array.isArray(payload.refunds) ? payload.refunds : []) {
+    await upsertRefund(client,{...event,topic:'refunds/create',payload:{...refund,order_id:legacyId}},false);
+  }
   const result = {
     orderId: shopifyOrderId,
     orderLegacyId: legacyId,
@@ -641,25 +689,67 @@ async function upsertOrder(client, event) {
 }
 
 function refundAmount(payload) {
+  // Only posted refund transactions count as refunded money. A failed or pending
+  // transaction, or the requested line value, is not proof of reimbursement.
   const transactions = Array.isArray(payload?.transactions) ? payload.transactions : [];
-  if (transactions.length) {
-    return transactions.reduce((sum, row) => sum + Math.abs(decimal(row?.amount, 0)), 0);
-  }
-  const lines = Array.isArray(payload?.refund_line_items) ? payload.refund_line_items : [];
-  return lines.reduce((sum, row) => {
-    const subtotal = moneyFromSet(row?.subtotal_set, row?.subtotal) || 0;
-    const tax = moneyFromSet(row?.total_tax_set, row?.total_tax) || 0;
-    return sum + subtotal + tax;
-  }, 0);
+  return transactions.filter(t => text(t.kind).toLowerCase()==='refund' && text(t.status).toLowerCase()==='success')
+    .reduce((sum,t) => sum + Math.abs(decimal(t.amount,0)),0);
 }
 
-async function upsertRefund(client, event) {
+async function saveFulfillment(client, orderId, payload) {
+  const id=gid('Fulfillment',payload.admin_graphql_api_id || payload.id);
+  if(!id) throw new Error('Teljesítésazonosító hiányzik.');
+  if(!Array.isArray(payload.line_items)) throw new Error('A teljesítés tételes listája hiányzik.');
+  const time=isoOrNull(payload.updated_at || payload.created_at);
+  await client.query(`INSERT INTO aif_shopify_fulfillments(shopify_fulfillment_id,shopify_order_id,status,shopify_updated_at,raw)
+    VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(shopify_fulfillment_id) DO UPDATE SET
+    status=EXCLUDED.status,shopify_updated_at=EXCLUDED.shopify_updated_at,raw=EXCLUDED.raw,updated_at=now()
+    WHERE aif_shopify_fulfillments.shopify_order_id=EXCLUDED.shopify_order_id AND
+      (aif_shopify_fulfillments.shopify_updated_at IS NULL OR EXCLUDED.shopify_updated_at>=aif_shopify_fulfillments.shopify_updated_at)`,
+    [id,orderId,text(payload.status),time,JSON.stringify(payload)]);
+}
+async function upsertRelatedEvent(client,event) {
+  const p=event.payload||{};
+  const returnPayload=event.topic.startsWith('returns/') && p.return && typeof p.return==='object' ? p.return : p;
+  let orderId=gid('Order',p.order?.admin_graphql_api_id || p.order_id || p.order?.id || returnPayload.order_id || returnPayload.order?.id);
+  // returns/update can contain only the Return GID, not an Order ID.
+  if(!orderId && event.topic.startsWith('returns/')) {
+    const returnId=gid('Return',returnPayload.admin_graphql_api_id || returnPayload.id);
+    if(returnId) orderId=(await client.query('SELECT shopify_order_id FROM aif_shopify_returns WHERE shopify_return_id=$1',[returnId])).rows[0]?.shopify_order_id || null;
+  }
+  if(!orderId)throw new Error('Az esemény rendelése még nem azonosítható. A korábbi visszáru-esemény vagy ellenőrzés szükséges.');
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('shopify_warehouse'),hashtext($1))",[orderId]);
+  if(await findDeletedOrder(client,{orderId})) {
+    await markEvent(client,event.shopify_webhook_id,'ignored',{reason:'order_permanently_deleted_in_allin',orderId});
+    return {status:'ignored',orderId};
+  }
+  await ensureOrderPlaceholder(client,orderId,text(p.order_id || p.order?.id)||null,event);
+  if(event.topic.startsWith('fulfillments/')) await saveFulfillment(client,orderId,p);
+  else {
+    const id=gid('Return',returnPayload.admin_graphql_api_id || returnPayload.id);
+    if(!id)throw new Error('Visszáruazonosító hiányzik.');
+    const fallback={request:'requested',approve:'open',decline:'declined',cancel:'canceled',close:'closed',reopen:'open',process:'processed',update:'updated'}[event.topic.split('/')[1]];
+    await client.query(`INSERT INTO aif_shopify_returns(shopify_return_id,shopify_order_id,status,topic,shopify_updated_at,raw)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(shopify_return_id) DO UPDATE SET
+      status=CASE WHEN EXCLUDED.status IN ('updated','processed') THEN aif_shopify_returns.status ELSE EXCLUDED.status END,topic=EXCLUDED.topic,shopify_updated_at=EXCLUDED.shopify_updated_at,
+      raw=aif_shopify_returns.raw||EXCLUDED.raw,updated_at=now()
+      WHERE aif_shopify_returns.shopify_order_id=EXCLUDED.shopify_order_id AND
+        (aif_shopify_returns.shopify_updated_at IS NULL OR EXCLUDED.shopify_updated_at>=aif_shopify_returns.shopify_updated_at)`,
+      [id,orderId,text(returnPayload.status)||fallback,event.topic,isoOrNull(p.updated_at || returnPayload.updated_at || p.created_at || event.received_at),JSON.stringify(p)]);
+  }
+  await client.query('UPDATE aif_shopify_orders SET updated_at=now() WHERE shopify_order_id=$1',[orderId]);
+  const result={orderId,topic:event.topic,stockChangedByOrderProcessor:false};
+  await markEvent(client,event.shopify_webhook_id,'processed',result);
+  return {status:'processed',...result};
+}
+
+async function upsertRefund(client, event, mark = true) {
   const payload = json(event.payload, {});
   const shopifyRefundId = gid("Refund", payload.admin_graphql_api_id || payload.id);
   const shopifyOrderId = refundOrderGid(payload);
   const orderLegacyId = refundOrderLegacyId(payload);
   if (!shopifyRefundId || !shopifyOrderId) {
-    await markEvent(client, event.shopify_webhook_id, "ignored", { reason: "refund_ids_missing", topic: event.topic });
+    if (mark) await markEvent(client, event.shopify_webhook_id, "ignored", { reason: "refund_ids_missing", topic: event.topic });
     return { status: "ignored", reason: "refund_ids_missing" };
   }
 
@@ -678,7 +768,7 @@ async function upsertRefund(client, event) {
       deletedAt: deletedOrder.deleted_at || null,
       stockChangedByOrderProcessor: false,
     };
-    await markEvent(client, event.shopify_webhook_id, "ignored", result);
+    if (mark) await markEvent(client, event.shopify_webhook_id, "ignored", result);
     return { status: "ignored", ...result };
   }
 
@@ -698,7 +788,7 @@ async function upsertRefund(client, event) {
      ON CONFLICT (shopify_refund_id) DO UPDATE SET
        shopify_order_id=EXCLUDED.shopify_order_id,
        shopify_refund_legacy_id=COALESCE(EXCLUDED.shopify_refund_legacy_id, aif_shopify_refunds.shopify_refund_legacy_id),
-       amount=EXCLUDED.amount,
+       amount=GREATEST(aif_shopify_refunds.amount,EXCLUDED.amount),
        currency_code=COALESCE(EXCLUDED.currency_code, aif_shopify_refunds.currency_code),
        note=EXCLUDED.note,
        restock=EXCLUDED.restock,
@@ -721,7 +811,7 @@ async function upsertRefund(client, event) {
   const refundLines = Array.isArray(payload.refund_line_items) ? payload.refund_line_items : [];
   for (const row of refundLines) {
     const refundLineId = gid("RefundLineItem", row.admin_graphql_api_id || row.id)
-      || `${shopifyRefundId}:line:${text(row.line_item_id || row.line_item?.id || Math.random())}`;
+      || `${shopifyRefundId}:line:${text(row.line_item_id || row.line_item?.id || createHash("sha256").update(JSON.stringify(row)).digest("hex").slice(0,20))}`;
     await client.query(
       `INSERT INTO aif_shopify_refund_lines (
          shopify_refund_line_id, shopify_refund_id, shopify_line_item_id,
@@ -734,7 +824,7 @@ async function upsertRefund(client, event) {
          quantity=EXCLUDED.quantity,
          subtotal=EXCLUDED.subtotal,
          total_tax=EXCLUDED.total_tax,
-         restock_type=EXCLUDED.restock_type,
+         restock_type=COALESCE(EXCLUDED.restock_type,aif_shopify_refund_lines.restock_type),
          shopify_location_id=EXCLUDED.shopify_location_id,
          raw=EXCLUDED.raw,
          updated_at=now()`,
@@ -774,7 +864,7 @@ async function upsertRefund(client, event) {
     refundLineCount: refundLines.length,
     stockChangedByOrderProcessor: false,
   };
-  await markEvent(client, event.shopify_webhook_id, "processed", result);
+  if (mark) await markEvent(client, event.shopify_webhook_id, "processed", result);
   return { status: "processed", ...result };
 }
 
@@ -784,7 +874,12 @@ async function processOrderEvent(pool, event) {
     await ensureAifShopifyOrderSchema(client);
     await client.query("BEGIN");
     await client.query(`SET LOCAL lock_timeout = '8s'`);
-    const result = event.topic === "refunds/create"
+    const p=event.payload||{};
+    const orderId=event.topic.startsWith('orders/')?orderGid(p):gid('Order',p.order?.admin_graphql_api_id||p.order_id||p.order?.id);
+    if(orderId) await client.query("SELECT pg_advisory_xact_lock(hashtext('shopify_warehouse'),hashtext($1))",[orderId]);
+    const result = event.topic.startsWith('returns/') || event.topic.startsWith('fulfillments/')
+      ? await upsertRelatedEvent(client,event)
+      : event.topic === "refunds/create"
       ? await upsertRefund(client, event)
       : await upsertOrder(client, event);
     await client.query("COMMIT");
@@ -1081,7 +1176,7 @@ export async function getAifShopifyOrder(client, id) {
        FROM aif_shopify_webhook_events
        WHERE topic IN (
          'orders/create','orders/updated','orders/cancelled','orders/paid',
-         'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+         'orders/fulfilled','orders/partially_fulfilled','refunds/create','fulfillments/create','fulfillments/update','returns/request','returns/approve','returns/decline','returns/cancel','returns/close','returns/reopen','returns/update','returns/process'
        )
          AND (
            result->>'orderId'=$1
@@ -1145,6 +1240,11 @@ export async function deleteAifShopifyOrder(client, id, options = {}) {
   );
 
   // Csak ellenőrző összesítés. A rendelés törlése egyetlen készletsort vagy készletmozgást sem módosít.
+  const hasWarehouse=await client.query("SELECT to_regclass('public.aif_shopify_warehouse_orders') AS t");
+  if(hasWarehouse.rows[0]?.t) {
+    const issued=await client.query('SELECT document_number FROM aif_shopify_warehouse_orders WHERE shopify_order_id=$1',[order.shopify_order_id]);
+    if(issued.rowCount) throw Object.assign(new Error(`A ${issued.rows[0].document_number} készletbizonylathoz tartozó rendelés nem törölhető. Lemondás/visszáru szükséges.`),{code:'shopify_order_has_stock_documents',statusCode:409});
+  }
   const stockSnapshot = await client.query(
     `WITH variants AS (
        SELECT DISTINCT aif_variant_id AS variant_id
@@ -1188,7 +1288,7 @@ export async function deleteAifShopifyOrder(client, id, options = {}) {
     `DELETE FROM aif_shopify_webhook_events
      WHERE topic IN (
        'orders/create','orders/updated','orders/cancelled','orders/paid',
-       'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+       'orders/fulfilled','orders/partially_fulfilled','refunds/create','fulfillments/create','fulfillments/update','returns/request','returns/approve','returns/decline','returns/cancel','returns/close','returns/reopen','returns/update','returns/process'
      )
        AND (
          result->>'orderId'=$1
@@ -1258,7 +1358,7 @@ export async function listAifShopifyOrderEvents(client, options = {}) {
      FROM aif_shopify_webhook_events
      WHERE topic IN (
        'orders/create','orders/updated','orders/cancelled','orders/paid',
-       'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+       'orders/fulfilled','orders/partially_fulfilled','refunds/create','fulfillments/create','fulfillments/update','returns/request','returns/approve','returns/decline','returns/cancel','returns/close','returns/reopen','returns/update','returns/process'
      )
      ORDER BY received_at DESC
      LIMIT $1`,
