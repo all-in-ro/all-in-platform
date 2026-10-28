@@ -6348,11 +6348,15 @@ function supplierMatches(it: InventoryItem, selected: string) {
 }
 
 function itemMatchesSearch(it: InventoryItem, query: string) {
-  const q = normalizeSearch(query);
-  if (!q) return true;
+  // A szavak sorrendje nem számít: "under boxer" megtalálja a
+  // "Set 3 Boxeri ... Under Armour" nevet is. A vonalkód/SKU részszavas
+  // keresés továbbra is működik; az ékezetek a normalizeSearch-ben eltűnnek.
+  const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
   const haystack = [
     it.title_ro,
     it.title_hu,
+    it.shopify_title,
     it.brand_name,
     it.brand_code,
     itemSupplierText(it),
@@ -6369,13 +6373,18 @@ function itemMatchesSearch(it: InventoryItem, query: string) {
     it.snCod,
     itemCustomsTariffCode(it),
     it.model_code,
+    it.category_code,
     it.category_name_ro,
     it.category_name_hu,
+    it.subcategory_code,
+    it.subcategory_name_ro,
+    it.subcategory_name_hu,
+    it.product_type,
     it.color_name,
     it.color_code,
     it.size,
   ].map(normalizeSearch).join(" ");
-  return haystack.includes(q);
+  return terms.every((term) => haystack.includes(term));
 }
 
 type WarehouseMetaResponse = {
@@ -7912,8 +7921,12 @@ export default function AllInWarehouse() {
   const inventoryDisplayItems = useMemo(() => {
     const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
     const catalogItems = catalogSearchItems.filter((item) => !isArchivedInventoryItem(item));
+    // FONTOS: a 600 soros mergeInventoryItems csak a KIJELÖLTEK kisebb
+    // munkalistáihoz használható. A raktári főlistát nem vághatjuk le miatta.
+    // Egyetlen vonalkódos vagy szerveres találat után különben a teljes (pl. 3511
+    // soros) terméktörzsből csak az utolsó 600 maradt, a többi eltűnt a szűrőkből.
     const baseWithCatalog = catalogItems.length
-      ? mergeInventoryItems(baseItems, catalogItems).filter((item) => !isArchivedInventoryItem(item))
+      ? mergeInventoryItemsComplete(baseItems, catalogItems).filter((item) => !isArchivedInventoryItem(item))
       : baseItems;
 
     // Az Inaktív termékek szűrő saját, teljes szerveres munkalistája külön kerül
@@ -7926,9 +7939,10 @@ export default function AllInWarehouse() {
       ? mergeInventoryItemsComplete(inactiveItems, baseWithCatalog).filter((item) => !isArchivedInventoryItem(item))
       : baseWithCatalog;
 
+    // A legutóbbi bevételezés fókusztalálatai se tüntethessék el a főlistát.
     const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
     return focusedItems.length
-      ? mergeInventoryItems(baseWithInactive, focusedItems).filter((item) => !isArchivedInventoryItem(item))
+      ? mergeInventoryItemsComplete(baseWithInactive, focusedItems).filter((item) => !isArchivedInventoryItem(item))
       : baseWithInactive;
   }, [items, catalogSearchItems, inactiveProductsItems, stockFilter, incomingFocusItems]);
 
@@ -10279,7 +10293,20 @@ export default function AllInWarehouse() {
     setListOpen(true);
 
     if (!searchText && !snText) {
-      setMessage("Adj meg nevet, termékkódot, vonalkódot vagy S/N/COD értéket a teljes törzsadat kereséséhez.");
+      // A legördülő szűrők a helyi raktárlistán AZONNAL dolgoznak. A Keresés
+      // gomb nem állíthatja azt, hogy nincs keresés, amikor már szűrők aktívak.
+      const filtersActive = supplier !== "all" || brand !== "all" || category !== "all" ||
+        subCategory !== "all" || seasonFilter !== "all" || genderFilters.length > 0 ||
+        sizeFilters.length > 0 || color !== "all" || location !== "all" ||
+        stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" ||
+        invoiceFilter !== "all";
+      if (filtersActive) {
+        setMessage(inventoryLoading
+          ? "A szűrők aktívak, a terméklista betöltése még folyamatban van. A további találatok automatikusan megjelennek."
+          : "A szűrők aktívak; a találatok a raktári listában láthatók.");
+      } else {
+        setMessage("Adj meg nevet, termékkódot, vonalkódot vagy S/N/COD értéket a teljes törzsadat kereséséhez.");
+      }
       return;
     }
 
@@ -10321,7 +10348,18 @@ export default function AllInWarehouse() {
         mergeWarehouseCatalogSearchItems(rows);
         setMessage(`Teljes terméktörzs: ${rows.length} találat. A 0 készletes és inaktív variánsok is benne vannak.`);
       } else {
-        setMessage("A teljes terméktörzsben sincs találat erre az azonosítóra / keresésre.");
+        // A szerver hagyományos szöveges keresése kezelheti egyetlen kifejezésként
+        // az "under boxer" szöveget, miközben a helyi, szavankénti keresés talál.
+        // Ne írjuk ki tévesen, hogy a teljes terméktörzsben sincs ilyen termék.
+        const localMatches = inventoryDisplayItems.filter((item) =>
+          (!searchText || itemMatchesSearch(item, searchText)) &&
+          (!snText || normalizeSearch(item.sn_cod || item.snCod || "").includes(normalizeSearch(snText)))
+        ).length;
+        setMessage(localMatches > 0
+          ? `A betöltött raktári listában ${localMatches.toLocaleString("hu-HU")} találat van. A szűrők a listán működnek.`
+          : inventoryLoading
+            ? "A háttérben még töltődik a terméktörzs. A szűrés találatai a betöltéssel együtt frissülnek."
+            : "A teljes terméktörzsben sincs találat erre az azonosítóra / keresésre.");
       }
     } catch (error: any) {
       if (controller.signal.aborted || error?.name === "AbortError") return;
@@ -10426,7 +10464,8 @@ export default function AllInWarehouse() {
       out = out.filter((x) => normalizeSearch(x.sn_cod || x.snCod || "").includes(snNeedle));
     }
     if (supplier !== "all") out = out.filter((x) => supplierMatches(x, supplier));
-    if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
+    // Márkanév, márkakód és régi ID alapú mentett szűrők ugyanarra a márkára mutassanak.
+    if (brand !== "all") out = out.filter((x) => itemMatchesMetaSelection([x.brand_code, x.brand_name], brand, brands));
     if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
     if (seasonFilter !== "all") out = out.filter((x) => warehouseSeasonFilterBucket(x.season) === seasonFilter);
