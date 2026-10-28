@@ -18163,8 +18163,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   WHERE dl.document_id=d.id
                 ), '') AS line_search
          FROM aif_stock_transfer_documents d
-         WHERE d.document_type <> 'shopify_transfer'
-           AND NOT EXISTS (
+         WHERE NOT EXISTS (
            SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
          )
          ORDER BY created_at DESC
@@ -18203,11 +18202,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LIMIT 4000`
       );
 
-      const officialItems = official.rows.map((row) => ({
-        ...row,
-        source: 'official',
-        isLegacy: false,
-      }));
+      // A Shopify automatikus Aviz ugyanabban a hivatalos bizonylattáblában van.
+      // Csak a forráshely üzleti munkamenete láthatja, az admin minden helyet.
+      const shopDocViewer = normCode(req.session?.role) === 'shop'
+        ? await aifResolveShopLocation(req, pool, req.query?.location)
+        : null;
+      const officialItems = official.rows
+        .filter((row) => row.document_type !== 'shopify_transfer'
+          || !shopDocViewer
+          || String(row.source_location_id) === String(shopDocViewer.id))
+        .map((row) => ({
+          ...row,
+          source: 'official',
+          isLegacy: false,
+        }));
       const legacyItems = legacy.rows.map((row) => ({
         id: `legacy:${row.transfer_id}`,
         transfer_id: row.transfer_id,
@@ -18292,9 +18300,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       else if (type === 'draft') items = items.filter((item) => item.status === 'draft');
       else if (type === 'preparation') items = items.filter((item) => item.status === 'preparation' || item.status === 'draft');
       else if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
+      else if (type === 'shopify_transfer') items = items.filter((item) => item.document_type === 'shopify_transfer');
       else {
         const requestedDocumentType = cleanAifStockDocumentType(type, null);
-        if (requestedDocumentType) items = items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
+        if (requestedDocumentType) items = items.filter((item) =>
+          item.document_type !== 'shopify_transfer' &&
+          cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
       }
       items.sort((a, b) => {
         const dateCompare = String(aifDocumentDateFromRow(b) || '').localeCompare(String(aifDocumentDateFromRow(a) || ''));
@@ -18315,7 +18326,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         cancelled: facetItems.filter((item) => item.status === 'cancelled').length,
         totalQty: items.reduce((sum, item) => sum + Number(item.total_qty || 0), 0),
         totalValue: Math.round((items.reduce((sum, item) => sum + Number(item.total_value || 0), 0) + Number.EPSILON) * 100) / 100,
-        internalTransfer: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
+        internalTransfer: facetItems.filter((item) => item.document_type !== 'shopify_transfer' && cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
+        shopifyTransfer: facetItems.filter((item) => item.document_type === 'shopify_transfer').length,
+        shopifyPending: facetItems.filter((item) => item.document_type === 'shopify_transfer' && !['fulfilled', 'cancelled'].includes(String(item.raw?.shopifyWarehouseState || 'allocated'))).length,
         supplierReturn: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'supplier_return').length,
         damagedWriteoff: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'damaged_writeoff').length,
         stockCorrection: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'stock_correction').length,
@@ -18499,6 +18512,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.status(404).json({ error: 'A készletátadási bizonylat nem található.' });
       }
       const item = document.rows[0];
+      // A Shopify automatikus készletátadás a rendelés auditnyoma.
+      // Sem bizonylattörlés, sem készlet-visszaállítás nem végezhető innen.
+      if (item.document_type === 'shopify_transfer') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: 'Shopify Aviz nem törölhető. A rendelés törlését / visszaküldését a Shopify-folyamat kezeli.',
+          code: 'shopify_document_protected',
+        });
+      }
       if (item.status === 'preparation') {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Az előkészítést a készlet-visszaállító törlés gombbal kell törölni.', code: 'preparation_restore_delete_required' });
@@ -34451,7 +34473,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.use("/shop-modules", createAifShopModulesRouter({ pool, requireAuthed }));
 
   // Shopify üzlet: csak olvasható Aviz- és online kliensnapló.
-  router.use("/shopify/warehouse/shop", createAifShopifyWarehouseReadRouter({ pool, requireAuthed }));
+  router.use("/shopify/warehouse/shop", createAifShopifyWarehouseReadRouter({ pool, requireAuthed, aifResolveShopLocation }));
 
   // Napi, szerkeszthető Excel audit: pontos terméksorok, befizetések,
   // cserék. Csak SELECT műveletek; a PDF jogosultsági szabályaival egyezően.
