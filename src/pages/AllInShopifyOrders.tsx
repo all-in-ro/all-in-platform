@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
+  Settings2,
   Box,
   Bug,
   Building2,
@@ -38,6 +40,9 @@ import {
   apiAifListShopifyOrders,
   apiAifGetShopifyWarehouseStatus,
   apiAifGetShopifyWarehouseAviz,
+  apiAifGetShopifyOrderAlertSettings,
+  apiAifSaveShopifyOrderAlertSettings,
+  type AifShopifyOrderAlertSettingsResponse,
   type AifShopifyWarehouseAviz,
   type AifShopifyOrderDetail,
   type AifShopifyOrderEvent,
@@ -100,13 +105,13 @@ type DeleteTarget = {
 };
 
 const fieldClass =
-  "h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#278674] focus:ring-2 focus:ring-[#278674]/15 font-normal";
+  "h-10 min-w-0 rounded-lg border border-[#c7d4dc] bg-white px-3 text-sm text-[#354153] outline-none transition placeholder:text-slate-400 focus:border-[#108D8B] focus:ring-2 focus:ring-[#108D8B]/15 font-normal";
 
 const buttonClass =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#cad6df] bg-white px-3 text-sm text-[#354153] transition hover:border-[#108D8B]/50 hover:bg-[#f2f8f8] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 
 const primaryButtonClass =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#176b5b] bg-[#176b5b] px-3 text-sm text-white transition hover:bg-[#12594d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#108D8B] bg-[#108D8B] px-3 text-sm text-white transition hover:bg-[#087a78] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 
 const dangerButtonClass =
   "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-600 bg-rose-600 px-3 text-sm text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -392,12 +397,33 @@ function money(value: number | string | null | undefined, currency = "RON"): str
   }
 }
 
+const SHOPIFY_EVENT_TRANSLATIONS: Record<string, string> = {
+  "orders/create": "Új rendelés érkezett",
+  "orders/updated": "Rendelés módosítva",
+  "orders/cancelled": "Rendelés lemondva",
+  "orders/paid": "Rendelés kifizetve",
+  "orders/fulfilled": "Rendelés teljesítve",
+  "orders/partially_fulfilled": "Részleges teljesítés",
+  "refunds/create": "Visszatérítés rögzítve",
+  "fulfillments/create": "Csomagfeladás létrehozva",
+  "fulfillments/update": "Csomagfeladás módosítva",
+  "returns/request": "Visszáruigény érkezett",
+  "returns/approve": "Visszáru jóváhagyva",
+  "returns/decline": "Visszáru elutasítva",
+  "returns/cancel": "Visszáru visszavonva",
+  "returns/close": "Visszáru lezárva",
+  "returns/reopen": "Visszáru újranyitva",
+  "returns/update": "Visszáru módosítva",
+  "returns/process": "Visszáru feldolgozva",
+  "inventory_levels/update": "Online készlet változott",
+};
+
 function statusLabel(value?: string | null): string {
   const normalized = textValue(value).toLowerCase();
   const labels: Record<string, string> = {
     open: "Nyitott",
     closed: "Lezárt",
-    cancelled: "Törölve",
+    cancelled: "Lemondva",
     paid: "Fizetve",
     pending: "Függőben",
     authorized: "Engedélyezve",
@@ -416,19 +442,41 @@ function statusLabel(value?: string | null): string {
     error: "Hiba",
     failed: "Sikertelen",
     unknown: "Ismeretlen",
+    shopify_payments: "Shopify Payments",
+    customer: "A vásárló kérésére",
+    inventory: "Készletkezelés",
+    disabled: "Kikapcsolva",
+    enabled: "Bekapcsolva",
+    cancel: "Lemondás miatti visszatöltés",
+    return: "Visszáru miatti visszatöltés",
+    no_restock: "Nincs készlet-visszatöltés",
+    refund: "Visszatérítés",
+    success: "Sikeres",
+    accepted: "Szolgáltatónak átadva",
+    sending: "Küldés alatt",
+    skipped: "Kihagyva",
+    unverified: "Nem ellenőrzött",
+    shop: "Webáruház",
+    numeric: "Alapértelmezett feladó",
   };
-  return labels[normalized] || normalized.replace(/_/g, " ") || "-";
+  return SHOPIFY_EVENT_TRANSLATIONS[normalized] || labels[normalized] || normalized.replace(/_/g, " ") || "-";
 }
 
 function badgeClass(value?: string | null): string {
   const normalized = textValue(value).toLowerCase();
-  if (["paid", "fulfilled", "processed", "closed", "restocked"].includes(normalized)) {
+  if (["paid", "fulfilled", "processed", "closed", "restocked", "success", "accepted", "returns/approve", "returns/close", "returns/process", "orders/paid", "orders/fulfilled"].includes(normalized)) {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
-  if (["cancelled", "refunded", "voided", "error", "failed"].includes(normalized)) {
+  if (["cancelled", "refunded", "voided", "error", "failed", "orders/cancelled", "returns/decline", "returns/cancel"].includes(normalized)) {
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
-  if (["partial", "partially_fulfilled", "partially_paid", "partially_refunded", "pending", "authorized", "received"].includes(normalized)) {
+  if (normalized.startsWith("refunds/") || normalized.startsWith("returns/")) {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+  if (normalized.startsWith("orders/") || normalized.startsWith("fulfillments/") || normalized.startsWith("inventory_")) {
+    return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+  if (["partial", "partially_fulfilled", "partially_paid", "partially_refunded", "pending", "authorized", "received", "sending", "unknown"].includes(normalized)) {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
   if (["open", "unfulfilled"].includes(normalized)) {
@@ -476,7 +524,7 @@ function DetailCard({
   className?: string;
 }) {
   return (
-    <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${className}`}>
+    <section className={`min-w-0 rounded-xl border border-[#d7e0e7] bg-white/95 p-4 shadow-sm ${className}`}>
       <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.11em] text-slate-500">
         {icon}
         <span>{title}</span>
@@ -490,7 +538,7 @@ function DataLine({ label, value, valueClass = "" }: { label: string; value: Rea
   return (
     <div className="flex min-h-7 items-start justify-between gap-4 border-b border-slate-100 py-1 last:border-b-0">
       <span className="shrink-0 text-slate-500">{label}</span>
-      <span className={`min-w-0 text-right text-slate-800 ${valueClass}`}>{value || "-"}</span>
+      <span className={`min-w-0 break-words text-right text-slate-800 ${valueClass}`}>{value || "-"}</span>
     </div>
   );
 }
@@ -563,6 +611,54 @@ export default function AllInShopifyOrders({ role }: Props) {
   const [avizDetail, setAvizDetail] = useState<{document:Record<string,any>;lines:Array<Record<string,any>>}|null>(null);
   const [avizBusy, setAvizBusy] = useState(false);
   const [avizError, setAvizError] = useState("");
+  const [smsOpen, setSmsOpen] = useState(false);
+  const [smsLoading, setSmsLoading] = useState(false);
+  const [smsSaving, setSmsSaving] = useState(false);
+  const [smsError, setSmsError] = useState("");
+  const [smsFeedback, setSmsFeedback] = useState("");
+  const [smsInfo, setSmsInfo] = useState<AifShopifyOrderAlertSettingsResponse | null>(null);
+  const [smsPhone, setSmsPhone] = useState("");
+  const [smsEnabled, setSmsEnabled] = useState(false);
+
+  async function openSmsSettings() {
+    if (role !== "admin") return;
+    setSmsOpen(true);
+    setSmsLoading(true);
+    setSmsError("");
+    setSmsFeedback("");
+    setSmsInfo(null);
+    try {
+      const data = await apiAifGetShopifyOrderAlertSettings();
+      setSmsInfo(data);
+      setSmsPhone(data.settings.phone || "");
+      setSmsEnabled(data.settings.enabled === true);
+    } catch (e) {
+      setSmsError(e instanceof Error ? e.message : "Az értesítési beállításokat nem sikerült betölteni.");
+    } finally {
+      setSmsLoading(false);
+    }
+  }
+
+  async function saveSmsSettings() {
+    if (role !== "admin" || smsSaving) return;
+    setSmsSaving(true);
+    setSmsError("");
+    setSmsFeedback("");
+    try {
+      const saved = await apiAifSaveShopifyOrderAlertSettings({enabled:smsEnabled,phone:smsPhone.trim()});
+      setSmsInfo(previous => ({
+        ...saved,
+        history: previous?.history || [],
+      }));
+      setSmsPhone(saved.settings.phone);
+      setSmsEnabled(saved.settings.enabled);
+      setSmsFeedback("Az értesítési beállításokat elmentettük.");
+    } catch (e) {
+      setSmsError(e instanceof Error ? e.message : "A beállításokat nem sikerült menteni.");
+    } finally {
+      setSmsSaving(false);
+    }
+  }
 
 
   const loadOrders = useCallback(async () => {
@@ -591,7 +687,7 @@ export default function AllInShopifyOrders({ role }: Props) {
   }, [loadOrders, refreshToken]);
 
   useEffect(() => {
-    if (!selected && !deleteTarget) return;
+    if (!selected && !deleteTarget && !smsOpen) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
@@ -601,6 +697,10 @@ export default function AllInShopifyOrders({ role }: Props) {
         closeDeleteDialog();
         return;
       }
+      if (smsOpen && !smsSaving) {
+        setSmsOpen(false);
+        return;
+      }
       if (selected) closeDetail();
     };
     window.addEventListener("keydown", onKey, true);
@@ -608,7 +708,7 @@ export default function AllInShopifyOrders({ role }: Props) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKey, true);
     };
-  }, [selected, deleteTarget, deleteLoading]);
+  }, [selected, deleteTarget, deleteLoading, smsOpen, smsSaving]);
 
   useEffect(() => {
     if (!notice) return;
@@ -823,7 +923,7 @@ export default function AllInShopifyOrders({ role }: Props) {
       "Tételek",
       "Darab",
       "Párosítatlan",
-      "Refund",
+      "Visszatérítés",
       "Teszt",
     ];
     const lines = visibleOrders.map((order) => [
@@ -887,25 +987,31 @@ export default function AllInShopifyOrders({ role }: Props) {
   const selectedLabels = normalizedOrders.filter((order) => selectedIds.has(order.id)).map((order) => order.number);
 
   return (
-    <div className="min-h-screen bg-[#eef2f5] px-3 py-4 text-slate-800 sm:px-5 lg:px-7">
-      <div className="mx-auto max-w-[1680px] space-y-4">
-        <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5">
+    <div className="min-h-screen min-w-0 overflow-x-hidden bg-[#e8edf1] px-3 py-4 text-[#354153] sm:px-5 lg:px-7">
+      <div className="mx-auto w-full max-w-[1450px] min-w-0 space-y-4">
+        <header className="rounded-2xl border border-[#506071] bg-gradient-to-r from-[#354153] via-[#405366] to-[#354153] px-4 py-3 text-white shadow-md sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#e5f4f0] text-[#176b5b]">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-[#108D8B]/25 text-[#b7f6f2]">
                 <ShoppingBag className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.13em] text-slate-400">AllInFashion • Shopify</div>
-                <h1 className="truncate text-lg font-medium tracking-wide text-slate-900 sm:text-xl">RENDELÉSKEZELŐ</h1>
-                <p className="mt-0.5 text-xs text-slate-500">Vevők, tételek, fizetések, teljesítések, refundok és készletkapcsolatok</p>
+                <div className="text-[11px] uppercase tracking-[0.13em] text-[#b5d5d7]">AllInFashion • Shopify</div>
+                <h1 className="truncate text-lg font-normal tracking-wide text-white sm:text-xl">RENDELÉSKEZELŐ</h1>
+                <p className="mt-0.5 text-xs text-[#d0dde4]">Vevők, tételek, fizetések, feladások, visszatérítések és készletkapcsolatok</p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {role === "admin" && (
+                <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#81c9c7]/70 bg-[#108D8B]/20 px-3 text-sm text-white transition hover:bg-[#108D8B]/35"
+                  onClick={() => void openSmsSettings()} title="Új Shopify-rendelés SMS-értesítése">
+                  <BellRing className="h-4 w-4" /> Értesítések
+                </button>
+              )}
               <button type="button" className={buttonClass} onClick={exportVisibleCsv} disabled={!visibleOrders.length}>
                 <Download className="h-4 w-4" />
-                Export
+                Exportálás
               </button>
               {role === "admin" && (
                 <button
@@ -957,27 +1063,27 @@ export default function AllInShopifyOrders({ role }: Props) {
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Megjelenítve</div>
-            <div className="mt-1 text-2xl font-medium text-slate-900">{visibleOrders.length}</div>
+            <div className="mt-1 text-2xl font-normal text-slate-900">{visibleOrders.length}</div>
             <div className="mt-1 text-xs text-slate-400">Betöltve: {normalizedOrders.length}</div>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Fizetve</div>
-            <div className="mt-1 text-2xl font-medium text-emerald-700">{overview.paid}</div>
+            <div className="mt-1 text-2xl font-normal text-emerald-700">{overview.paid}</div>
             <div className="mt-1 text-xs text-slate-400">Nyitott: {overview.open}</div>
           </div>
           <div className="rounded-xl border border-sky-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Teljesítésre vár</div>
-            <div className="mt-1 text-2xl font-medium text-sky-700">{overview.unfulfilled}</div>
+            <div className="mt-1 text-2xl font-normal text-sky-700">{overview.unfulfilled}</div>
             <div className="mt-1 text-xs text-slate-400">Rendelési sor</div>
           </div>
           <div className="rounded-xl border border-amber-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Párosítási hiba</div>
-            <div className="mt-1 text-2xl font-medium text-amber-700">{overview.problem}</div>
+            <div className="mt-1 text-2xl font-normal text-amber-700">{overview.problem}</div>
             <div className="mt-1 text-xs text-slate-400">AllIn termékkapcsolat</div>
           </div>
           <div className="rounded-xl border border-rose-200 bg-white px-4 py-3 shadow-sm">
-            <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Refund / teszt</div>
-            <div className="mt-1 flex items-baseline gap-2 text-2xl font-medium text-rose-700">
+            <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Visszatérítés / teszt</div>
+            <div className="mt-1 flex items-baseline gap-2 text-2xl font-normal text-rose-700">
               <span>{overview.refund}</span>
               <span className="text-sm text-slate-400">/ {overview.test}</span>
             </div>
@@ -985,14 +1091,14 @@ export default function AllInShopifyOrders({ role }: Props) {
           </div>
           <div className="rounded-xl border border-[#b8ded5] bg-white px-4 py-3 shadow-sm">
             <div className="text-[11px] uppercase tracking-[0.11em] text-slate-400">Forgalom</div>
-            <div className="mt-1 text-xl font-medium text-[#176b5b]">{money(overview.ronTotal, "RON")}</div>
+            <div className="mt-1 text-xl font-normal text-[#176b5b]">{money(overview.ronTotal, "RON")}</div>
             <div className="mt-1 text-xs text-slate-400">Látható RON rendelések</div>
           </div>
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_145px_155px_170px_130px_130px_110px_auto] xl:items-end">
-            <label className="relative block md:col-span-2 xl:col-span-1">
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:items-end">
+            <label className="relative block min-w-0 sm:col-span-2 lg:col-span-2">
               <span className="mb-1 block text-[10px] uppercase tracking-[0.09em] text-slate-400">Keresés</span>
               <Search className="pointer-events-none absolute bottom-3 left-3 h-4 w-4 text-slate-400" />
               <input
@@ -1009,7 +1115,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                 <option value="">Minden</option>
                 <option value="open">Nyitott</option>
                 <option value="closed">Lezárt</option>
-                <option value="cancelled">Törölt</option>
+                <option value="cancelled">Lemondva</option>
               </select>
             </label>
 
@@ -1057,8 +1163,8 @@ export default function AllInShopifyOrders({ role }: Props) {
               </select>
             </label>
 
-            <div className="flex items-end gap-2">
-              <label className="min-w-[95px] flex-1">
+            <div className="flex min-w-0 items-end gap-2">
+              <label className="min-w-0 flex-1">
                 <span className="mb-1 block text-[10px] uppercase tracking-[0.09em] text-slate-400">Limit</span>
                 <select className={`${fieldClass} w-full`} value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
                   <option value={100}>100</option>
@@ -1124,7 +1230,7 @@ export default function AllInShopifyOrders({ role }: Props) {
           <section className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                <div className="flex items-center gap-2 text-sm font-normal text-slate-800">
                   <Bug className="h-4 w-4 text-amber-600" />
                   Shopify rendelési webhook diagnosztika
                 </div>
@@ -1150,9 +1256,9 @@ export default function AllInShopifyOrders({ role }: Props) {
                   const item = asRecord(event);
                   const eventStatus = textValue(item.status, "unknown");
                   return (
-                    <div key={textValue(item.id, item.webhook_id, item.shopify_webhook_id, index)} className={`grid gap-2 rounded-lg border px-3 py-2 text-xs md:grid-cols-[230px_125px_85px_1fr] ${eventStatusClass(eventStatus)}`}>
+                    <div key={textValue(item.id, item.webhook_id, item.shopify_webhook_id, index)} className={`grid gap-2 rounded-lg border px-3 py-2 text-xs sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1.5fr)_110px_90px_minmax(0,1fr)] ${eventStatusClass(eventStatus)}`}>
                       <div>
-                        <div className="text-slate-800">{textValue(item.topic, "ismeretlen téma")}</div>
+                        <div title={textValue(item.topic)}><Badge value={textValue(item.topic, "ismeretlen téma")} /></div>
                         <div className="mt-0.5 text-slate-400">{dateTime(textValue(item.received_at, item.created_at))}</div>
                       </div>
                       <div><Badge value={eventStatus} /></div>
@@ -1186,124 +1292,94 @@ export default function AllInShopifyOrders({ role }: Props) {
             </div>
           ) : (
             <>
-              <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[1440px] border-collapse text-left text-sm">
-                  <thead className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.08em] text-slate-500">
+              <div className="hidden min-w-0 lg:block">
+                <table className="w-full table-fixed border-collapse text-left text-sm">
+                  <colgroup>
+                    <col style={{ width: "4%" }} />
+                    <col style={{ width: "21%" }} />
+                    <col style={{ width: "24%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "17%" }} />
+                  </colgroup>
+                  <thead className="border-b border-[#d8e0e7] bg-[#f2f6f8] text-[10px] uppercase tracking-[0.07em] text-slate-500">
                     <tr>
-                      <th className="w-12 px-4 py-3 font-normal">
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleAllVisible}
-                          className="h-4 w-4 rounded border-slate-300 accent-[#176b5b]"
-                          aria-label="Minden látható rendelés kijelölése"
-                        />
+                      <th className="px-2 py-3 font-normal">
+                        <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible}
+                          className="h-4 w-4 accent-[#108D8B]" aria-label="Minden látható rendelés kijelölése" />
                       </th>
-                      <th className="px-2 py-3 font-normal">Rendelés</th>
-                      <th className="px-3 py-3 font-normal">Dátum</th>
-                      <th className="px-3 py-3 font-normal">Vevő / kapcsolat</th>
-                      <th className="px-3 py-3 font-normal">Hely</th>
-                      <th className="px-3 py-3 text-right font-normal">Összeg</th>
-                      <th className="px-3 py-3 font-normal">Fizetés</th>
-                      <th className="px-3 py-3 font-normal">Teljesítés</th>
-                      <th className="px-3 py-3 text-center font-normal">Tételek</th>
-                      <th className="px-3 py-3 font-normal">AllIn kapcsolat</th>
-                      <th className="w-28 px-3 py-3 text-right font-normal">Művelet</th>
+                      <th className="px-2 py-3 font-normal">Rendelés / dátum</th>
+                      <th className="px-2 py-3 font-normal">Vevő / helyszín</th>
+                      <th className="px-2 py-3 font-normal">Összeg / fizetés</th>
+                      <th className="px-2 py-3 font-normal">Teljesítés</th>
+                      <th className="px-2 py-3 font-normal">AllIn / műveletek</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {visibleOrders.map((order) => (
-                      <tr
-                        key={order.id}
-                        className={`group cursor-pointer transition hover:bg-[#f5faf8] ${selectedIds.has(order.id) ? "bg-[#edf8f5]" : "bg-white"}`}
-                        onClick={() => void openOrder(order)}
-                      >
-                        <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(order.id)}
-                            onChange={() => toggleSelected(order.id)}
-                            className="h-4 w-4 rounded border-slate-300 accent-[#176b5b]"
-                            aria-label={`${order.number} kijelölése`}
-                          />
+                  <tbody className="divide-y divide-[#e0e7ec]">
+                    {visibleOrders.map(order => (
+                      <tr key={order.id}
+                        className={`group cursor-pointer align-top transition hover:bg-[#f1faf9] ${selectedIds.has(order.id) ? "bg-[#e6f4f2]" : "bg-white"}`}
+                        onClick={() => void openOrder(order)}>
+                        <td className="px-2 py-3" onClick={event => event.stopPropagation()}>
+                          <input type="checkbox" checked={selectedIds.has(order.id)}
+                            onChange={() => toggleSelected(order.id)} className="h-4 w-4 accent-[#108D8B]"
+                            aria-label={`${order.number} kijelölése`} />
                         </td>
-                        <td className="px-2 py-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-slate-900">{order.number}</span>
-                            {order.isTest && <TestBadge />}
-                            {warehouseByOrder.get(order.id) && <span className="rounded-full border border-[#95bf47]/45 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{warehouseByOrder.get(order.id)?.aviz_number}</span>}
+                        <td className="min-w-0 px-2 py-3">
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className="text-[#354153]">{order.number}</span>
                             <Badge value={order.status} />
+                            {order.isTest && <TestBadge />}
                           </div>
-                          <div className="mt-1 truncate text-xs text-slate-400">{order.sourceName || order.paymentMethod || "Shopify"}</div>
+                          {warehouseByOrder.get(order.id) && (
+                            <div className="mt-1 inline-flex max-w-full truncate rounded-md border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-800">
+                              {warehouseByOrder.get(order.id)?.aviz_number}
+                            </div>
+                          )}
+                          <div className="mt-1 text-xs text-slate-500">{dateTime(order.createdAt)}</div>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3">
-                          <div className="text-slate-700">{dateOnly(order.createdAt)}</div>
-                          <div className="mt-0.5 text-xs text-slate-400">{order.createdAt ? dateTime(order.createdAt).split(" ").slice(-1)[0] : "-"}</div>
+                        <td className="min-w-0 px-2 py-3">
+                          <div className="break-words text-[#354153]">{order.customer}</div>
+                          {order.company && <div className="mt-0.5 break-words text-xs text-slate-500">{order.company}</div>}
+                          <div className="mt-0.5 truncate text-xs text-slate-500" title={order.email || order.phone}>
+                            {order.email || order.phone || "Nincs kapcsolati adat"}
+                          </div>
+                          <div className="mt-1 break-words text-[11px] text-slate-400">{[order.city,order.country].filter(Boolean).join(" · ") || "-"}</div>
                         </td>
-                        <td className="max-w-[275px] px-3 py-3">
-                          <div className="truncate text-slate-800">{order.customer}</div>
-                          {order.company && <div className="truncate text-xs text-slate-500">{order.company}</div>}
-                          <div className="mt-0.5 truncate text-xs text-slate-400">{order.email || order.phone || "Nincs kapcsolati adat"}</div>
+                        <td className="min-w-0 px-2 py-3">
+                          <div className="break-words text-[#354153]">{money(order.amount,order.currency)}</div>
+                          <div className="mt-1"><Badge value={order.financialStatus} /></div>
+                          {order.paymentMethod && <div className="mt-1 break-words text-[11px] text-slate-500">{order.paymentMethod.split(",").map(part => statusLabel(part.trim())).join(", ")}</div>}
+                          {order.refundedAmount > 0 && <div className="mt-1 break-words text-[11px] text-rose-600">Visszatérítve: {money(order.refundedAmount,order.currency)}</div>}
                         </td>
-                        <td className="max-w-[180px] px-3 py-3">
-                          <div className="truncate text-slate-700">{order.city || "-"}</div>
-                          <div className="truncate text-xs text-slate-400">{order.country || "-"}</div>
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-right">
-                          <div className="text-slate-900">{money(order.amount, order.currency)}</div>
-                          {order.refundedAmount > 0 && <div className="mt-0.5 text-xs text-rose-600">Refund: {money(order.refundedAmount, order.currency)}</div>}
-                        </td>
-                        <td className="px-3 py-3">
-                          <Badge value={order.financialStatus} />
-                          {order.paymentMethod && <div className="mt-1 max-w-[160px] truncate text-xs text-slate-400">{order.paymentMethod}</div>}
-                        </td>
-                        <td className="px-3 py-3">
+                        <td className="min-w-0 px-2 py-3">
                           <Badge value={order.fulfillmentStatus} />
-                          {order.shippingMethod && <div className="mt-1 max-w-[170px] truncate text-xs text-slate-400">{order.shippingMethod}</div>}
+                          <div className="mt-1 text-xs text-slate-600">{order.lineCount} sor · {order.itemQty} db</div>
+                          {order.shippingMethod && <div className="mt-1 break-words text-[11px] text-slate-400">{order.shippingMethod}</div>}
                         </td>
-                        <td className="px-3 py-3 text-center">
-                          <div className="text-slate-800">{order.lineCount} sor</div>
-                          <div className="text-xs text-slate-400">{order.itemQty} db</div>
-                        </td>
-                        <td className="px-3 py-3">
-                          {order.unmappedLineCount > 0 ? (
-                            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-                              <AlertTriangle className="h-3.5 w-3.5" /> {order.unmappedLineCount} nincs párosítva
-                            </span>
-                          ) : order.lineCount > 0 ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
-                              <CheckCircle2 className="h-4 w-4" /> {order.mappedLineCount}/{order.lineCount} rendben
+                        <td className="min-w-0 px-2 py-3" onClick={event => event.stopPropagation()}>
+                          {order.unmappedLineCount ? (
+                            <span className="inline-flex flex-wrap items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                              <AlertTriangle className="h-3.5 w-3.5" /> {order.unmappedLineCount} párosítatlan
                             </span>
                           ) : (
-                            <span className="text-xs text-slate-400">Nincs tétel</span>
+                            <span className="inline-flex flex-wrap items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> {order.mappedLineCount}/{order.lineCount} rendben
+                            </span>
                           )}
-                        </td>
-                        <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
-                          <div className="flex justify-end gap-1">
-                            <button
-                              type="button"
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                              onClick={() => void openOrder(order)}
-                              title="Részletek"
-                            >
+                          <div className="mt-2 flex flex-wrap items-center gap-1">
+                            <button type="button" onClick={() => void openOrder(order)} title="Részletek"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-[#108D8B]/50 hover:text-[#108D8B]">
                               <Eye className="h-4 w-4" />
                             </button>
                             {role === "admin" && (
-                              <button
-                                type="button"
-                                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-700"
-                                onClick={() => openDeleteDialog({ ids: [order.id], labels: [order.number] })}
-                                title="Végleges törlés"
-                              >
+                              <button type="button" onClick={() => openDeleteDialog({ids:[order.id],labels:[order.number]})} title="Végleges törlés az AllInből"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100">
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             )}
-                            <button
-                              type="button"
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition group-hover:text-slate-700"
-                              onClick={() => void openOrder(order)}
-                              title="Megnyitás"
-                            >
+                            <button type="button" onClick={() => void openOrder(order)} title="Megnyitás"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50">
                               <ChevronRight className="h-4 w-4" />
                             </button>
                           </div>
@@ -1333,7 +1409,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-slate-900">{order.number}</span>
+                            <span className="font-normal text-slate-900">{order.number}</span>
                             {order.isTest && <TestBadge />}
                             {warehouseByOrder.get(order.id) && <span className="rounded-full border border-[#95bf47]/45 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{warehouseByOrder.get(order.id)?.aviz_number}</span>}
                             <Badge value={order.status} />
@@ -1372,7 +1448,7 @@ export default function AllInShopifyOrders({ role }: Props) {
             if (event.currentTarget === event.target) closeDetail();
           }}
         >
-          <div className="flex max-h-[96vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-[#f4f7f9] shadow-2xl shadow-slate-900/30">
+          <div className="flex max-h-[95vh] w-full max-w-[1320px] min-w-0 flex-col overflow-hidden rounded-2xl border border-[#cbd8e1] bg-[#edf1f4] shadow-2xl shadow-slate-900/30">
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1381,7 +1457,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="truncate text-lg font-medium text-slate-900">{detailOrder?.number || selected.number}</h2>
+                      <h2 className="truncate text-lg font-normal text-slate-900">{detailOrder?.number || selected.number}</h2>
                       {detailOrder?.isTest && <TestBadge />}
                       <Badge value={detailOrder?.status} />
                     </div>
@@ -1406,7 +1482,7 @@ export default function AllInShopifyOrders({ role }: Props) {
               </div>
             </div>
 
-            <div className="overflow-y-auto p-3 sm:p-5">
+            <div className="min-w-0 overflow-y-auto overflow-x-hidden p-3 sm:p-5">
               {detailLoading ? (
                 <div className="flex min-h-80 items-center justify-center gap-3 text-sm text-slate-500">
                   <RefreshCw className="h-5 w-5 animate-spin" /> Rendelés részleteinek betöltése...
@@ -1436,12 +1512,12 @@ export default function AllInShopifyOrders({ role }: Props) {
                     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="text-[11px] uppercase tracking-[0.1em] text-slate-400">Visszatérítés</div>
                       <div className="mt-1 text-xl text-slate-900">{money(detailOrder.refundedAmount, detailOrder.currency)}</div>
-                      <div className="mt-2 text-xs text-slate-500">{detailData.refunds.length} refund</div>
+                      <div className="mt-2 text-xs text-slate-500">{detailData.refunds.length} visszatérítés</div>
                     </div>
                     <div className="rounded-xl border border-[#b8ded5] bg-[#f3fbf8] p-4 shadow-sm">
                       <div className="text-[11px] uppercase tracking-[0.1em] text-[#4d8075]">Készletkezelés</div>
-                      <div className="mt-2 flex items-center gap-2 text-sm text-[#155c50]"><ShieldCheck className="h-4 w-4" /> Inventory webhook</div>
-                      <div className="mt-2 text-xs text-[#4d8075]">A rendelési rekord törlése nem módosít készletet.</div>
+                      <div className="mt-2 flex items-center gap-2 text-sm text-[#155c50]"><ShieldCheck className="h-4 w-4" /> Raktári készletszinkron</div>
+                      <div className="mt-2 text-xs text-[#4d8075]">Készletmódosítást csak az ellenőrzött Shopify-raktári feldolgozás végez.</div>
                     </div>
                   </section>
 
@@ -1516,14 +1592,14 @@ export default function AllInShopifyOrders({ role }: Props) {
                       <DataLine label="Kedvezmény" value={money(discounts, detailOrder.currency)} valueClass={discounts > 0 ? "text-rose-600" : ""} />
                       <DataLine label="Szállítás" value={money(shippingTotal, detailOrder.currency)} />
                       <DataLine label="Adó" value={money(tax, detailOrder.currency)} />
-                      <DataLine label="Végösszeg" value={money(detailOrder.amount, detailOrder.currency)} valueClass="font-medium" />
+                      <DataLine label="Végösszeg" value={money(detailOrder.amount, detailOrder.currency)} valueClass="font-normal" />
                       <DataLine label="Visszatérítve" value={money(detailOrder.refundedAmount, detailOrder.currency)} valueClass={detailOrder.refundedAmount > 0 ? "text-rose-600" : ""} />
                       <DataLine label="Fennmaradó összeg" value={money(outstanding, detailOrder.currency)} />
-                      <DataLine label="Fizetési mód" value={paymentGateways.join(", ") || detailOrder.paymentMethod || "-"} />
+                      <DataLine label="Fizetési mód" value={paymentGateways.map(statusLabel).join(", ") || statusLabel(detailOrder.paymentMethod) || "-"} />
                     </DetailCard>
 
                     <DetailCard icon={<Truck className="h-4 w-4" />} title="Szállítás és forrás">
-                      <DataLine label="Forrás" value={textValue(detailSource.source_name, detailRaw.source_name, "Shopify")} />
+                      <DataLine label="Forrás" value={statusLabel(textValue(detailSource.source_name, detailRaw.source_name, "Shopify"))} />
                       <DataLine label="Szállítás" value={shippingLines.map((line) => textValue(line.title, line.code)).filter(Boolean).join(", ") || "-"} />
                       <DataLine label="Szállítási ár" value={shippingLines.length ? money(shippingLines.reduce((sum, line) => sum + Number(line.price || 0), 0), detailOrder.currency) : "-"} />
                       <DataLine label="Nyelv" value={textValue(detailRaw.customer_locale, detailRaw.locale) || "-"} />
@@ -1536,8 +1612,8 @@ export default function AllInShopifyOrders({ role }: Props) {
                       <DataLine label="Feldolgozva" value={dateTime(textValue(detailSource.processed_at, detailRaw.processed_at))} />
                       <DataLine label="Frissítve" value={dateTime(textValue(detailSource.shopify_updated_at, detailRaw.updated_at))} />
                       <DataLine label="Lezárva" value={dateTime(textValue(detailSource.closed_at, detailRaw.closed_at))} />
-                      <DataLine label="Törölve" value={dateTime(textValue(detailSource.cancelled_at, detailRaw.cancelled_at))} />
-                      <DataLine label="Törlés oka" value={textValue(detailSource.cancel_reason, detailRaw.cancel_reason) || "-"} />
+                      <DataLine label="Lemondva" value={dateTime(textValue(detailSource.cancelled_at, detailRaw.cancelled_at))} />
+                      <DataLine label="Lemondás oka" value={statusLabel(textValue(detailSource.cancel_reason, detailRaw.cancel_reason))} />
                     </DetailCard>
                   </div>
 
@@ -1552,7 +1628,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                   <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
                       <div>
-                        <div className="flex items-center gap-2 text-sm font-medium text-slate-800"><Package className="h-4 w-4 text-[#176b5b]" /> Terméksorok és aktuális AllIn készlet</div>
+                        <div className="flex items-center gap-2 text-sm font-normal text-slate-800"><Package className="h-4 w-4 text-[#176b5b]" /> Terméksorok és aktuális AllIn készlet</div>
                         <div className="mt-1 text-xs text-slate-400">A készletadat valós idejű AllIn állapot, nem a rendelési rekordból számolt érték.</div>
                       </div>
                       <div className="text-xs text-slate-500">{detailLines.length} sor, {detailLines.filter((line) => !line.mapped).length} párosítatlan</div>
@@ -1560,92 +1636,66 @@ export default function AllInShopifyOrders({ role }: Props) {
                     {detailLines.length === 0 ? (
                       <div className="px-4 py-8 text-center text-sm text-slate-400">Nincs terméksor.</div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[1260px] text-left text-sm">
-                          <thead className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.08em] text-slate-500">
-                            <tr>
-                              <th className="px-4 py-3 font-normal">Shopify termék</th>
-                              <th className="px-3 py-3 font-normal">Shopify SKU</th>
-                              <th className="px-3 py-3 font-normal">AllIn termék</th>
-                              <th className="px-3 py-3 text-center font-normal">Rendelt</th>
-                              <th className="px-3 py-3 text-right font-normal">Egységár</th>
-                              <th className="px-3 py-3 font-normal">AllIn készlet</th>
-                              <th className="px-3 py-3 font-normal">Helyszínek</th>
-                              <th className="px-3 py-3 font-normal">Párosítás</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {detailLines.map((line, index) => (
-                              <tr key={line.id || `${line.sku}-${index}`} className="align-top">
-                                <td className="px-4 py-3">
-                                  <div className="flex items-start gap-3">
-                                    <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                                      {line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-cover" loading="lazy" /> : <Box className="h-5 w-5 text-slate-300" />}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="max-w-[260px] text-slate-900">{line.title}</div>
-                                      <div className="mt-1 text-xs text-slate-400">{[line.vendor, line.variantTitle].filter(Boolean).join(" • ") || "-"}</div>
-                                      {line.discount > 0 && <div className="mt-1 text-xs text-rose-600">Kedvezmény: {money(line.discount, detailOrder.currency)}</div>}
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3">
-                                  <div className="font-mono text-xs text-slate-700">{line.sku || "-"}</div>
-                                  <div className="mt-1 text-xs text-slate-400">{line.fulfillmentStatus ? statusLabel(line.fulfillmentStatus) : "-"}</div>
-                                </td>
-                                <td className="px-3 py-3">
-                                  <div className={line.mapped ? "text-slate-800" : "text-amber-700"}>{line.allInTitle || (line.mapped ? line.allInSku || "Párosítva" : "Nincs AllIn termék")}</div>
-                                  <div className="mt-1 space-y-0.5 text-xs text-slate-400">
-                                    {line.brand && <div>{line.brand}</div>}
-                                    <div>{[line.color, line.size].filter(Boolean).join(" / ") || "-"}</div>
-                                    {line.allInSku && <div className="font-mono">SKU: {line.allInSku}</div>}
-                                    {line.barcode && <div className="font-mono">EAN: {line.barcode}</div>}
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3 text-center">
-                                  <div className="text-slate-900">{line.quantity} db</div>
-                                  {line.currentQuantity !== line.quantity && <div className="mt-1 text-xs text-slate-400">Aktív: {line.currentQuantity}</div>}
-                                </td>
-                                <td className="px-3 py-3 text-right text-slate-900">{money(line.price, detailOrder.currency)}</td>
-                                <td className="px-3 py-3">
-                                  {line.mapped ? (
-                                    <div className="space-y-1 text-xs">
-                                      <div className="flex items-center justify-between gap-3"><span className="text-slate-400">Összes</span><span className="text-slate-800">{line.totalQty}</span></div>
-                                      <div className="flex items-center justify-between gap-3"><span className="text-slate-400">Foglalt</span><span className="text-amber-700">{line.reservedQty}</span></div>
-                                      <div className="flex items-center justify-between gap-3"><span className="text-slate-400">Elérhető</span><span className={line.availableQty > 0 ? "text-emerald-700" : "text-rose-700"}>{line.availableQty}</span></div>
-                                    </div>
-                                  ) : <span className="text-xs text-slate-400">Nincs kapcsolat</span>}
-                                </td>
-                                <td className="px-3 py-3">
-                                  {line.stockLocations.length ? (
-                                    <div className="flex max-w-[300px] flex-wrap gap-1.5">
-                                      {line.stockLocations.map((location) => (
-                                        <span key={location.locationId || location.locationCode} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600" title={`Foglalt: ${location.reservedQty}`}>
-                                          {location.locationName}: <span className="text-slate-900">{location.qty}</span>
-                                        </span>
-                                      ))}
-                                    </div>
-                                  ) : <span className="text-xs text-slate-400">Nincs készletsor</span>}
-                                </td>
-                                <td className="px-3 py-3">
-                                  {line.mapped ? (
-                                    <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700"><CheckCircle2 className="h-4 w-4" /> Rendben</span>
-                                  ) : (
-                                    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700"><AlertTriangle className="h-4 w-4" /> Nincs párosítva</span>
-                                  )}
-                                  {line.mappedVariantId && <button type="button" onClick={() => void copyText(line.mappedVariantId)} className="mt-2 flex max-w-[190px] items-center gap-1 truncate font-mono text-[10px] text-slate-400 hover:text-slate-700" title="AllIn variánsazonosító másolása"><Copy className="h-3 w-3 shrink-0" />{line.mappedVariantId}</button>}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="divide-y divide-[#e1e8ec]">
+                        {detailLines.map((line,index) => (
+                          <div key={line.id || `${line.sku}-${index}`} className="grid min-w-0 gap-4 px-3 py-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] sm:px-4">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[#d7e0e7] bg-[#f0f4f6]">
+                                {line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" loading="lazy" /> : <Box className="h-6 w-6 text-slate-300" />}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="break-words text-sm text-[#354153]">{line.title}</div>
+                                <div className="mt-1 text-xs text-slate-500">{[line.vendor,line.variantTitle].filter(Boolean).join(" · ") || "-"}</div>
+                                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                                  <span>Rendelt: {line.quantity} db</span>
+                                  <span>Egységár: {money(line.price,detailOrder.currency)}</span>
+                                  {line.currentQuantity !== line.quantity && <span>Aktív: {line.currentQuantity} db</span>}
+                                </div>
+                                {line.discount > 0 && <div className="mt-1 text-xs text-rose-600">Kedvezmény: {money(line.discount,detailOrder.currency)}</div>}
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                                  {line.sku && <span className="rounded-md bg-[#f2f6f8] px-1.5 py-1">Shopify SKU: {line.sku}</span>}
+                                  {line.barcode && <span className="rounded-md bg-[#f2f6f8] px-1.5 py-1">EAN: {line.barcode}</span>}
+                                  {line.size && <span className="rounded-md bg-[#f2f6f8] px-1.5 py-1">Méret: {line.size}</span>}
+                                  {line.color && <span className="rounded-md bg-[#f2f6f8] px-1.5 py-1">Szín: {line.color}</span>}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="min-w-0 rounded-xl border border-[#e0e9ed] bg-[#f7fafb] p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs text-slate-500">AllIn termék / aktuális készlet</span>
+                                <Badge value={line.mapped ? "processed" : "error"} children={line.mapped ? "Párosítva" : "Nincs párosítva"} />
+                              </div>
+                              <div className="mt-1 break-words text-sm text-[#354153]">{line.allInTitle || (line.mapped ? line.allInSku || "Párosítva" : "Nincs AllIn termék")}</div>
+                              <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                                <div className="rounded-lg bg-white px-2 py-2"><div className="text-slate-400">Összes</div><div className="mt-1 text-[#354153]">{line.totalQty}</div></div>
+                                <div className="rounded-lg bg-white px-2 py-2"><div className="text-slate-400">Foglalt</div><div className="mt-1 text-amber-700">{line.reservedQty}</div></div>
+                                <div className="rounded-lg bg-white px-2 py-2"><div className="text-slate-400">Szabad</div><div className={`mt-1 ${line.availableQty>0 ? "text-emerald-700" : "text-rose-600"}`}>{line.availableQty}</div></div>
+                              </div>
+                              {line.stockLocations.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {line.stockLocations.map(location => (
+                                    <span key={location.locationId || location.locationCode} className="rounded-md border border-[#d7e3e8] bg-white px-2 py-1 text-[11px] text-slate-600" title={`Foglalt: ${location.reservedQty}`}>
+                                      {location.locationName}: {location.qty} db
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {line.mappedVariantId && (
+                                <button type="button" onClick={() => void copyText(line.mappedVariantId)}
+                                  className="mt-2 inline-flex max-w-full items-center gap-1 truncate text-[11px] text-[#108D8B] hover:underline" title="AllIn variánsazonosító másolása">
+                                  <Copy className="h-3 w-3 shrink-0" /> Variánsazonosító másolása
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </section>
 
                   <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-800"><RotateCcw className="h-4 w-4 text-rose-600" /> Visszatérítések</div>
+                      <div className="flex items-center gap-2 text-sm font-normal text-slate-800"><RotateCcw className="h-4 w-4 text-rose-600" /> Visszatérítések</div>
                       <div className="text-xs text-slate-500">{detailData.refunds.length}</div>
                     </div>
                     {detailData.refunds.length === 0 ? (
@@ -1661,7 +1711,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <span className="text-sm text-slate-900">Refund #{textValue(item.shopify_refund_legacy_id, item.shopify_refund_id, item.id, index + 1)}</span>
+                                    <span className="text-sm text-slate-900">Visszatérítés #{textValue(item.shopify_refund_legacy_id, item.shopify_refund_id, item.id, index + 1)}</span>
                                     {item.status && <Badge value={textValue(item.status)} />}
                                     {boolValue(item.restock) && <Badge value="restocked" />}
                                   </div>
@@ -1679,7 +1729,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                                         <div className="text-slate-700">{textValue(line.title, line.sku, "Terméksor")}</div>
                                         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-slate-400">
                                           <span>Db: {integerValue(line.quantity)}</span>
-                                          {textValue(line.restock_type) && <span>Restock: {textValue(line.restock_type)}</span>}
+                                          {textValue(line.restock_type) && <span>Készletművelet: {statusLabel(textValue(line.restock_type))}</span>}
                                           {textValue(line.shopify_location_id) && <span className="max-w-[220px] truncate">Hely: {textValue(line.shopify_location_id)}</span>}
                                         </div>
                                       </div>
@@ -1696,7 +1746,7 @@ export default function AllInShopifyOrders({ role }: Props) {
 
                   <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-800"><Globe2 className="h-4 w-4 text-sky-600" /> Kapcsolódó Shopify események</div>
+                      <div className="flex items-center gap-2 text-sm font-normal text-slate-800"><Globe2 className="h-4 w-4 text-sky-600" /> Kapcsolódó Shopify események</div>
                       <div className="text-xs text-slate-500">{detailData.events.length}</div>
                     </div>
                     {detailData.events.length === 0 ? (
@@ -1706,9 +1756,9 @@ export default function AllInShopifyOrders({ role }: Props) {
                         {detailData.events.map((event, index) => {
                           const item = asRecord(event);
                           return (
-                            <div key={textValue(item.id, item.shopify_webhook_id, index)} className="grid gap-2 px-4 py-3 text-xs md:grid-cols-[240px_125px_80px_1fr]">
+                            <div key={textValue(item.id, item.shopify_webhook_id, index)} className="grid gap-2 px-4 py-3 text-xs sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1.5fr)_110px_90px_minmax(0,1fr)]">
                               <div>
-                                <div className="text-slate-800">{textValue(item.topic, "ismeretlen")}</div>
+                                <div title={textValue(item.topic)}><Badge value={textValue(item.topic, "ismeretlen")} /></div>
                                 <div className="mt-0.5 text-slate-400">{dateTime(textValue(item.received_at, item.created_at))}</div>
                               </div>
                               <div><Badge value={textValue(item.status)} /></div>
@@ -1725,7 +1775,7 @@ export default function AllInShopifyOrders({ role }: Props) {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-2 text-sm text-slate-800"><ShieldCheck className="h-4 w-4 text-[#176b5b]" /> Adat- és készletbiztonság</div>
-                        <div className="mt-1 text-xs text-slate-500">A rendelési modul csak a Shopify rendelés AllIn-másolatát kezeli. A készletet kizárólag az inventory webhook szinkronizálja.</div>
+                        <div className="mt-1 text-xs text-slate-500">A rendelésadatok Shopify-webhookból érkeznek. A fizikai készletet és az Avizokat az AllIn Shopify-raktár kezeli; az online készletfrissítési webhook csak megfigyelésre szolgál.</div>
                       </div>
                       <button type="button" className={buttonClass} onClick={() => void copyText(detailOrder.id)}><Copy className="h-4 w-4" /> Rendelés ID másolása</button>
                     </div>
@@ -1734,6 +1784,97 @@ export default function AllInShopifyOrders({ role }: Props) {
               ) : null}
             </div>
           </div>
+        </div>
+      )}
+
+      {smsOpen && role === "admin" && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-[#283341]/65 p-3 backdrop-blur-sm sm:p-5"
+          onMouseDown={event => {if (event.currentTarget === event.target && !smsSaving) setSmsOpen(false);}}>
+          <section role="dialog" aria-modal="true" aria-label="Shopify rendelésértesítések beállítása"
+            className="flex max-h-[92vh] w-full max-w-[650px] min-w-0 flex-col overflow-hidden rounded-2xl border border-[#aebfcb] bg-[#f2f6f8] shadow-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-[#526678] bg-[#354153] px-4 py-4 text-white sm:px-5">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#74d0cd]/40 bg-[#108D8B]/25 text-[#bff6f3]">
+                  <BellRing className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.13em] text-[#b9d8da]">Shopify • vezetői értesítés</div>
+                  <h2 className="mt-1 text-base font-normal">Értesítések beállítása</h2>
+                </div>
+              </div>
+              <button type="button" aria-label="Bezárás" disabled={smsSaving}
+                onClick={() => setSmsOpen(false)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/20 text-white hover:bg-white/10 disabled:opacity-50">
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+            <div className="min-w-0 space-y-4 overflow-y-auto p-4 sm:p-5">
+              {smsLoading ? (
+                <div className="flex items-center gap-2 py-7 text-sm text-slate-600"><RefreshCw className="h-4 w-4 animate-spin" /> Beállítások betöltése…</div>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-[#d5e1e7] bg-white px-4 py-3">
+                    <label className="flex cursor-pointer items-start justify-between gap-4">
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="text-sm text-[#354153]">SMS az új Shopify-rendelésekről</span>
+                        <span className="text-xs leading-5 text-slate-500">Rendelésszám és rendelési végösszeg a vezető telefonjára. Csak új rendelésről, legfeljebb egyszer.</span>
+                      </span>
+                      <input type="checkbox" checked={smsEnabled} onChange={e => setSmsEnabled(e.target.checked)}
+                        className="mt-1 h-5 w-5 shrink-0 accent-[#108D8B]" />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs text-slate-600">Értesítési telefonszám</span>
+                    <div className="relative">
+                      <Phone className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                      <input type="tel" className={`${fieldClass} w-full pl-9`} value={smsPhone} onChange={e => setSmsPhone(e.target.value)}
+                        placeholder="+407XXXXXXXX" autoComplete="tel" />
+                    </div>
+                    <p className="mt-1.5 text-xs leading-5 text-slate-500">A címzettet csak az adminisztrátor állíthatja. A telefonszámot a szerver menti.</p>
+                  </label>
+                  <div className="rounded-xl border border-[#dbe5eb] bg-white px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-2 text-sm text-[#354153]"><Settings2 className="h-4 w-4 text-[#108D8B]" /> SMSLink-kapcsolat</span>
+                      <Badge value={smsInfo?.provider?.configured && smsInfo?.provider?.liveAllowed ? "processed" : "disabled"}
+                        children={smsInfo?.provider?.configured && smsInfo?.provider?.liveAllowed ? "Éles küldés elérhető" : "Éles küldés nem elérhető"} />
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">A küldést a meglévő SMSLink szolgáltatás végzi. Nem használja a vásárlói SMS-kampányok címzettlistáját. Az aktiválás előtt a szolgáltatói kapcsolatnak éles módban működnie kell.</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-900">
+                    <span className="text-amber-800">Biztonság:</span> régi rendelésekre nem küld utólag SMS-t. Az ismételten beérkező Shopify-webhook nem indít második küldést. Bizonytalan SMSLink-válasz után kézi ellenőrzés szükséges, nincs automatikus újraküldés.
+                  </div>
+                  {smsError && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{smsError}</div>}
+                  {smsFeedback && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{smsFeedback}</div>}
+                  <div className="rounded-xl border border-[#d9e3ea] bg-white">
+                    <div className="border-b border-[#e3eaef] px-4 py-3 text-xs uppercase tracking-[0.1em] text-slate-500">Legutóbbi értesítések</div>
+                    {smsInfo?.history?.length ? (
+                      <div className="max-h-56 divide-y divide-[#edf1f4] overflow-y-auto">
+                        {smsInfo.history.slice(0,12).map((item,index) => (
+                          <div key={`${item.order_number}-${index}`} className="flex min-w-0 flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs">
+                            <div className="min-w-0">
+                              <div className="text-sm text-[#354153]">{item.order_number} · {money(item.amount,item.currency_code)}</div>
+                              <div className="mt-0.5 text-slate-400">{dateTime(item.created_at)}</div>
+                              {item.error && <div className="mt-1 break-words text-rose-600">{item.error}</div>}
+                            </div>
+                            <Badge value={item.status} />
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="px-4 py-5 text-xs text-slate-500">Még nincs naplózott Shopify SMS-értesítés.</div>}
+                  </div>
+                </>
+              )}
+            </div>
+            <footer className="flex flex-wrap justify-end gap-2 border-t border-[#dbe5eb] bg-white px-4 py-3 sm:px-5">
+              <button type="button" className={buttonClass} disabled={smsSaving} onClick={() => setSmsOpen(false)}>Bezárás</button>
+              <button type="button" className={primaryButtonClass} disabled={smsSaving || smsLoading || !smsInfo ||
+                  (smsEnabled === smsInfo?.settings.enabled && smsPhone.trim() === (smsInfo?.settings.phone || ""))}
+                onClick={() => void saveSmsSettings()}>
+                {smsSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                {smsSaving ? "Mentés…" : "Beállítás mentése"}
+              </button>
+            </footer>
+          </section>
         </div>
       )}
 
@@ -1746,7 +1887,22 @@ export default function AllInShopifyOrders({ role }: Props) {
                <div className="flex gap-2"><button className={primaryButtonClass} onClick={printAviz}><FileText className="h-4 w-4"/> Nyomtatás / PDF</button><button className={buttonClass} onClick={()=>setAvizDetail(null)}><X className="h-4 w-4"/> Bezárás</button></div>
              </header>
              <div className="overflow-y-auto p-4"><div className="mb-4 grid gap-2 sm:grid-cols-2"><DataLine label="Aviz" value={String(avizDetail.document.document_number||"")}/><DataLine label="Rendelés" value={String(avizDetail.document.order_name||"")}/><DataLine label="Vevő" value={String(avizDetail.document.customer_name||"")}/><DataLine label="Állapot" value={avizDetail.document.state==='allocated'?"Csomagolásra vár":avizDetail.document.state==='fulfilled'?"Feladva":"Visszavezetve"}/><DataLine label="Honnan" value={String(avizDetail.document.from_location_summary||"")}/><DataLine label="Hová" value={String(avizDetail.document.to_location_summary||"")}/></div>
-               <div className="overflow-x-auto"><table className="min-w-[560px] w-full text-left text-sm"><thead className="bg-slate-100"><tr><th className="p-2 font-normal">Termék</th><th className="p-2 font-normal">Kód / Vonalkód</th><th className="p-2 text-right font-normal">Darab</th><th className="p-2 text-right font-normal">Félretéve</th></tr></thead><tbody>{avizDetail.lines.map((line)=><tr key={String(line.id)} className="border-b border-slate-100"><td className="p-2">{String(line.product_title||"")}<div className="text-xs text-slate-400">{String(line.color_name||"")} / {String(line.size||"")}</div></td><td className="p-2 text-xs">{String(line.product_code||"")}<div>{String(line.barcode||"")}</div></td><td className="p-2 text-right">{String(line.qty||0)}</td><td className="p-2 text-right">{String(Number(line.allocated_qty||0)-Number(line.shipped_qty||0)-Number(line.released_qty||0))}</td></tr>)}</tbody></table></div>
+               <div className="divide-y divide-slate-100 rounded-xl border border-[#d9e3e9] bg-white">
+                 {avizDetail.lines.map(line => (
+                   <div key={String(line.id)} className="grid min-w-0 gap-2 p-3 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_75px]">
+                     <div className="min-w-0 break-words text-[#354153]">{String(line.product_title || "")}
+                       <div className="mt-1 text-xs text-slate-500">{[line.color_name,line.size].filter(Boolean).join(" / ")}</div>
+                     </div>
+                     <div className="min-w-0 break-words text-xs text-slate-600">Kód: {String(line.product_code||"-")}
+                       <div className="mt-1">EAN: {String(line.barcode||"-")}</div>
+                     </div>
+                     <div className="text-xs text-slate-600 sm:text-right">
+                       <div>{String(line.qty||0)} db</div>
+                       <div className="mt-1 text-[#108D8B]">Félretéve: {String(Number(line.allocated_qty||0)-Number(line.shipped_qty||0)-Number(line.released_qty||0))}</div>
+                     </div>
+                   </div>
+                 ))}
+               </div>
              </div>
            </section>
          </div>
@@ -1759,7 +1915,7 @@ export default function AllInShopifyOrders({ role }: Props) {
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700"><Trash2 className="h-5 w-5" /></div>
                 <div>
-                  <h3 className="text-lg font-medium text-slate-900">Végleges törlés az AllInből</h3>
+                  <h3 className="text-lg font-normal text-slate-900">Végleges törlés az AllInből</h3>
                   <p className="mt-1 text-sm text-slate-500">{deleteTarget.ids.length} rendelési rekord és kapcsolódó AllIn-rendelési előzmény törlődik.</p>
                 </div>
               </div>
@@ -1768,7 +1924,7 @@ export default function AllInShopifyOrders({ role }: Props) {
 
             <div className="space-y-4 px-5 py-4">
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                <div className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-medium">Mit töröl és mit nem?</div><div className="mt-1">Az AllIn rendelésfej, terméksorok, refundok és a hozzájuk tartozó rendelési webhook-előzmények törlődnek. A Shopify eredeti rendelése, az AllIn készlet, a készletmozgások és az inventory webhookok változatlanok maradnak.</div></div></div>
+                <div className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-normal">Mit töröl és mit nem?</div><div className="mt-1">Az AllIn rendelésfej, terméksorok, visszatérítések és a hozzájuk tartozó rendelési webhook-előzmények törlődnek. A Shopify eredeti rendelése, az AllIn készlet, a készletmozgások és a készletfrissítési webhookok változatlanok maradnak.</div></div></div>
               </div>
 
               <div className="max-h-28 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -1787,7 +1943,7 @@ export default function AllInShopifyOrders({ role }: Props) {
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">Megerősítésként írd be: <span className="font-medium text-slate-800">TÖRLÉS</span></span>
+                <span className="mb-1 block text-xs text-slate-500">Megerősítésként írd be: <span className="font-normal text-slate-800">TÖRLÉS</span></span>
                 <input className={`${fieldClass} w-full`} value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" />
               </label>
 
