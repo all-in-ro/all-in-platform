@@ -20,57 +20,115 @@ export default function createAifShopifyWarehouseReadRouter({pool,requireAuthed,
     return aifResolveShopLocation(req, pool, req.query.location || null);
   }
 
+  /**
+   * KIZÁRÓLAG OLVASÁS. A jogosultságot a már bevált aifResolveShopLocation
+   * a munkamenethez rendelt üzletből számolja, nem a kliens által írt locationből.
+   * A Shopify Aviz a normál készletbizonylat; nincs külön másodlagos készletnapló.
+   * Nem JOIN-olunk kötelezően az online rendelésre: az Aviz visszakereshetősége
+   * akkor is kötelező, ha a webshop-rendelés adatai később archiválódnak.
+   */
+  async function loadSourceDocuments(req) {
+    const location = await sourceLocation(req);
+    const exists = await pool.query(`SELECT to_regclass('public.aif_shopify_warehouse_orders') AS warehouse,
+      to_regclass('public.aif_stock_transfer_documents') AS documents`);
+    if (!exists.rows[0]?.warehouse || !exists.rows[0]?.documents) {
+      return { location, items: [], summary: { total: 0, pending: 0, fulfilled: 0, cancelled: 0 } };
+    }
+
+    // A bizonylat FORRÁSHELYE az irányadó. Egy eltérő régi összerendelés
+    // nem rejtheti el a készletfelelős üzlet elől a saját hivatalos Avizát.
+    // Hiányzó dokumentumforrásnál a Shopify-kapcsoló sor helyszínét használjuk.
+    const result = await pool.query(`
+      SELECT w.shopify_order_id, w.document_number, w.order_name, w.customer_name,
+        w.state, w.created_at, w.fulfilled_at, w.cancelled_at,
+        d.id::text AS document_id, d.document_date, d.total_qty, d.total_value,
+        d.from_location_summary, d.to_location_summary
+      FROM aif_shopify_warehouse_orders w
+      JOIN aif_stock_transfer_documents d ON d.id=w.document_id
+      WHERE (d.source_location_id=$1::text OR
+        (d.source_location_id IS NULL AND w.source_location_id::text=$1::text))
+      ORDER BY w.created_at DESC, w.document_number DESC
+      LIMIT 1000`, [location.id]);
+
+    const items = result.rows.map((row) => ({ ...row, lines: [] }));
+    if (items.length) {
+      const ids = items.map((item) => item.document_id);
+      const lines = await pool.query(`
+        SELECT dl.document_id::text AS document_id, dl.id::text AS id,
+          dl.product_title AS title, dl.barcode, dl.size, dl.qty,
+          dl.image_url AS "imageUrl", dl.unit_price AS "unitPrice",
+          dl.line_total AS total
+        FROM aif_stock_transfer_document_lines dl
+        WHERE dl.document_id=ANY($1::uuid[])
+        ORDER BY dl.document_id, dl.line_no`, [ids]);
+      const byDoc = new Map();
+      for (const line of lines.rows) {
+        const docId = String(line.document_id);
+        const batch = byDoc.get(docId) || [];
+        batch.push(line);
+        byDoc.set(docId, batch);
+      }
+      for (const item of items) item.lines = byDoc.get(item.document_id) || [];
+    }
+    return { location, items, summary: {
+      total: items.length,
+      pending: items.filter(x => x.state === 'allocated').length,
+      fulfilled: items.filter(x => x.state === 'fulfilled').length,
+      cancelled: items.filter(x => x.state === 'cancelled').length,
+    }};
+  }
+
   router.get('/source/documents', async (req, res) => {
     try {
-      const location = await sourceLocation(req);
-      const exists = await pool.query(`SELECT to_regclass('public.aif_shopify_warehouse_orders') AS t`);
-      if (!exists.rows[0]?.t) return res.json({ok:true,items:[],summary:{total:0,pending:0,fulfilled:0,cancelled:0}});
-      const result = await pool.query(`
-        SELECT w.shopify_order_id, w.document_number, w.order_name, w.customer_name,
-          w.state, w.created_at, w.fulfilled_at, w.cancelled_at,
-          d.id::text AS document_id, d.document_date, d.total_qty, d.total_value,
-          d.from_location_summary, d.to_location_summary, d.raw,
-          o.financial_status, o.fulfillment_status,
-          COALESCE((SELECT jsonb_agg(jsonb_build_object(
-            'id',dl.id::text,'title',dl.product_title,'barcode',dl.barcode,
-            'size',dl.size,'qty',dl.qty,'imageUrl',dl.image_url,
-            'unitPrice',dl.unit_price,'total',dl.line_total
-          ) ORDER BY dl.line_no)
-          FROM aif_stock_transfer_document_lines dl WHERE dl.document_id=d.id), '[]'::jsonb) AS lines
-        FROM aif_shopify_warehouse_orders w
-        JOIN aif_stock_transfer_documents d ON d.id=w.document_id
-        JOIN aif_shopify_orders o ON o.shopify_order_id=w.shopify_order_id
-        WHERE w.source_location_id=$1
-        ORDER BY w.created_at DESC,w.document_number DESC LIMIT 500`, [location.id]);
-      const items=result.rows;
-      res.setHeader('Cache-Control','no-store');
-      return res.json({ok:true,location:{id:String(location.id),name:location.name,code:location.code},items,
-        summary:{total:items.length,pending:items.filter(x=>x.state==='allocated').length,
-          fulfilled:items.filter(x=>x.state==='fulfilled').length,
-          cancelled:items.filter(x=>x.state==='cancelled').length}});
-    } catch(e) {
-      return res.status(e?.statusCode || 500).json({error:e?.message || 'Az üzlet Shopify Avizai nem tölthetők be.'});
+      const result = await loadSourceDocuments(req);
+      res.setHeader('Cache-Control', 'no-store, private');
+      return res.json({
+        ok: true,
+        location: {
+          id: String(result.location.id),
+          name: result.location.name,
+          code: result.location.code,
+        },
+        items: result.items,
+        summary: result.summary,
+      });
+    } catch (error) {
+      console.error('[AIF Shopify shop source documents]', error);
+      return res.status(error?.statusCode || 500).json({
+        ok: false,
+        error: error?.message || 'A Shopify átadási bizonylatok nem tölthetők be.',
+      });
     }
   });
 
   router.get('/source/documents/:id', async (req, res) => {
     try {
       const location = await sourceLocation(req);
-      const id=txt(req.params.id);
-      const result=await pool.query(`SELECT d.*, w.shopify_order_id, w.order_name,
-          w.customer_name, w.state AS shopify_state, w.fulfilled_at, w.cancelled_at
+      const id = txt(req.params.id);
+      if (!id || id.length > 200) return res.status(400).json({ error: 'Érvénytelen bizonylatazonosító.' });
+      const result = await pool.query(`
+        SELECT d.*, w.shopify_order_id, w.order_name, w.customer_name,
+          w.state AS shopify_state, w.fulfilled_at, w.cancelled_at
         FROM aif_shopify_warehouse_orders w
         JOIN aif_stock_transfer_documents d ON d.id=w.document_id
-        WHERE w.source_location_id=$1
+        WHERE (d.source_location_id=$1::text OR
+          (d.source_location_id IS NULL AND w.source_location_id::text=$1::text))
           AND (w.document_number=$2 OR w.shopify_order_id=$2 OR w.document_id::text=$2)
-        LIMIT 1`,[location.id,id]);
-      if(!result.rowCount)return res.status(404).json({error:'Ehhez az üzlethez nem található ilyen Shopify Aviz.'});
-      const document=result.rows[0];
-      const lines=await pool.query(`SELECT * FROM aif_stock_transfer_document_lines
-        WHERE document_id=$1 ORDER BY line_no`,[document.id]);
-      res.setHeader('Cache-Control','no-store');
-      return res.json({ok:true,document,lines:lines.rows});
-    }catch(e){return res.status(e?.statusCode || 500).json({error:e?.message || 'A Shopify Aviz nem tölthető be.'});}
+        LIMIT 1`, [location.id, id]);
+      if (!result.rowCount) return res.status(404).json({ error: 'Ehhez az üzlethez nem található ilyen Shopify Aviz.' });
+      const document = result.rows[0];
+      const lines = await pool.query(`
+        SELECT * FROM aif_stock_transfer_document_lines
+        WHERE document_id=$1 ORDER BY line_no`, [document.id]);
+      res.setHeader('Cache-Control', 'no-store, private');
+      return res.json({ ok: true, document, lines: lines.rows });
+    } catch (error) {
+      console.error('[AIF Shopify shop source detail]', error);
+      return res.status(error?.statusCode || 500).json({
+        ok: false,
+        error: error?.message || 'A Shopify Aviz nem tölthető be.',
+      });
+    }
   });
 
   // A teljes webshop vásárlói és raktári adatait csak a Shopify Raktár kezelője láthatja.
