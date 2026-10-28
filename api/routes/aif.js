@@ -18328,7 +18328,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         totalValue: Math.round((items.reduce((sum, item) => sum + Number(item.total_value || 0), 0) + Number.EPSILON) * 100) / 100,
         internalTransfer: facetItems.filter((item) => item.document_type !== 'shopify_transfer' && cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
         shopifyTransfer: facetItems.filter((item) => item.document_type === 'shopify_transfer').length,
-        shopifyPending: facetItems.filter((item) => item.document_type === 'shopify_transfer' && !['fulfilled', 'cancelled'].includes(String(item.raw?.shopifyWarehouseState || 'allocated'))).length,
+        shopifyPending: facetItems.filter((item) => item.document_type === 'shopify_transfer' && !['fulfilled', 'cancelled', 'recorded'].includes(String(item.raw?.shopifyWarehouseState || 'allocated'))).length,
         supplierReturn: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'supplier_return').length,
         damagedWriteoff: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'damaged_writeoff').length,
         stockCorrection: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'stock_correction').length,
