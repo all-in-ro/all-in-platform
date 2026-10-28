@@ -28,6 +28,7 @@ import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
 import AllInShopIncoming from "./AllInShopIncoming";
 import AllInShopDocuments from "./AllInShopDocuments";
+import AllInShopifySourceDocuments, { type ShopifySourceSummary } from "./AllInShopifySourceDocuments";
 import {
   apiAifShopReservations,
   type AifShopReservation,
@@ -181,6 +182,11 @@ function summarizeReservationDeadlines(items: AifShopReservation[]): Reservation
   };
 }
 
+const SHOPIFY_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
+const SHOPIFY_SOURCE_LOCATION = "main_warehouse";
+const SHOPIFY_SOURCE_LOCATION_NAME = "Magazin - Miercurea Ciuc";
+const EMPTY_SHOPIFY_SOURCE_SUMMARY: ShopifySourceSummary = { total: 0, pending: 0, fulfilled: 0, cancelled: 0 };
+
 const SHOP_ADMIN_UNLOCK_KEY = "allin:shop-administration-unlock:csikszereda";
 
 function shopAdministrationUnlockExpiresAt() {
@@ -226,6 +232,9 @@ export default function AllInMagazinCiuc({
   );
   const [incomingOpen, setIncomingOpen] = useState(false);
   const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [shopifySourceOpen, setShopifySourceOpen] = useState(false);
+  const [shopifySourceSummary, setShopifySourceSummary] = useState<ShopifySourceSummary>(EMPTY_SHOPIFY_SOURCE_SUMMARY);
+  const [shopifySourceError, setShopifySourceError] = useState("");
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [openingInventoryAccess, setOpeningInventoryAccess] = useState<OpeningInventoryAccess>({
     active: false,
@@ -271,6 +280,55 @@ export default function AllInMagazinCiuc({
       // Ne váljon hamisan zölddé egy valódi figyelmeztetés csak azért, mert egy lekérés átmenetileg hibázott.
     }
   }, []);
+
+  // Az Aviz a helyszin keszletfelelossegehez tartozik, nem az aktualis dolgozohoz.
+  // Ez csak OLVASAS; a Shopify mozgasat, foglalasat vagy az AWB-t nem modositja.
+  const refreshShopifySourceDocuments = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/aif/shopify/warehouse/shop/source/documents?location=${encodeURIComponent(SHOPIFY_SOURCE_LOCATION)}`,
+        { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok || body?.ok === false) {
+        throw new Error(String(body?.error || `HTTP ${response.status}`));
+      }
+      if (!Array.isArray(body?.items) || !body?.summary) {
+        throw new Error("A szerver hiányos Shopify-bizonylat választ küldött.");
+      }
+      // A szerver a munkamenethez rendelt helyszín alapján szűr.
+      // Az eltérő helyszínen kapott válasz nem jelenhet meg másik eladónál.
+      if (String(body.location?.code || "") !== SHOPIFY_SOURCE_LOCATION) {
+        throw new Error("A Shopify Aviz-válasz másik helyszínhez tartozik.");
+      }
+      const values = body.summary;
+      setShopifySourceSummary({
+        total: Number(values.total || 0),
+        pending: Number(values.pending || 0),
+        fulfilled: Number(values.fulfilled || 0),
+        cancelled: Number(values.cancelled || 0),
+      });
+      setShopifySourceError("");
+    } catch (error) {
+      // Hibakor nem nullazzuk az utoljara ismert folyamatos felelossegi jelzest.
+      setShopifySourceError(error instanceof Error ? error.message : "Shopify-bizonylat ellenőrzési hiba.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!administrationUnlocked) return;
+    void refreshShopifySourceDocuments();
+    const timer = window.setInterval(() => { void refreshShopifySourceDocuments(); }, 30000);
+    const onFocus = () => { void refreshShopifySourceDocuments(); };
+    const onStockChanged = () => { void refreshShopifySourceDocuments(); };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("aif:stock-moves-changed", onStockChanged);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("aif:stock-moves-changed", onStockChanged);
+    };
+  }, [administrationUnlocked, refreshShopifySourceDocuments]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
@@ -383,7 +441,15 @@ export default function AllInMagazinCiuc({
     }
     if (action.key === "receipts") {
       setNotice("");
-      setDocumentsOpen(true);
+      // A folyamatban levő Shopify-kivezetést a készletért felelős eladó
+      // azonnal lássa, ne csak a saját pénztári bizonylatait.
+      if (shopifySourceSummary.pending > 0 || shopifySourceError) {
+        setDocumentsOpen(false);
+        setShopifySourceOpen(true);
+      } else {
+        setShopifySourceOpen(false);
+        setDocumentsOpen(true);
+      }
       return;
     }
     if (action.key === "search" || action.key === "stock" || action.key === "summary") {
@@ -500,7 +566,19 @@ export default function AllInMagazinCiuc({
               <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Gyors műveletek</p>
               <h2 className="mt-1 text-xl">Értékesítési központ</h2>
             </div>
-            <span className="rounded-full border border-white/14 bg-white/[0.06] px-3 py-1 text-[11px] text-white/55">Érintőképernyőre optimalizált</span>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button"
+                onClick={() => { setDocumentsOpen(false); setShopifySourceOpen(true); }}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition hover:brightness-110 ${shopifySourceSummary.pending > 0 ? "border-[#b4df77]/60 bg-[#96BF48]/25 text-[#ebffdd]" : "border-white/14 bg-white/[0.06] text-white/60"}`}
+                title={shopifySourceError ? `Shopify lekérdezési hiba: ${shopifySourceError}` : "Shopify kimenő Avizok és előzmények"}
+              >
+                <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" />
+                Shopify bizonylatok
+                <span className="rounded-full bg-black/15 px-1.5 text-[10px] tabular-nums">{shopifySourceSummary.total}</span>
+                {shopifySourceError ? <AlertTriangle size={13} className="text-amber-200" /> : null}
+              </button>
+              <span className="rounded-full border border-white/14 bg-white/[0.06] px-3 py-1 text-[11px] text-white/55">Érintőképernyőre optimalizált</span>
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -508,13 +586,17 @@ export default function AllInMagazinCiuc({
               const Icon = action.icon;
               const reservationIsDanger =
                 action.key === "reserved" && reservationDeadlineAlert.count > 0;
-              const alertBadgeText = reservationIsDanger
-                ? reservationDeadlineAlert.count > 1
-                  ? `${reservationDeadlineAlert.count} SÜRGŐS`
-                  : reservationDeadlineAlert.label
-                : action.primary
-                  ? "Aktív modul"
-                  : "Következő lépés";
+              const shopifyReceiptAlert = action.key === "receipts" && shopifySourceSummary.pending > 0;
+              const shopifyReceiptError = action.key === "receipts" && Boolean(shopifySourceError);
+              const alertBadgeText = shopifyReceiptAlert
+                ? `${shopifySourceSummary.pending} SHOPIFY`
+                : shopifyReceiptError
+                  ? "ELLENŐRZÉSI HIBA"
+                  : reservationIsDanger
+                    ? reservationDeadlineAlert.count > 1
+                      ? `${reservationDeadlineAlert.count} SÜRGŐS`
+                      : reservationDeadlineAlert.label
+                    : action.primary ? "Aktív modul" : "Következő lépés";
 
               return (
                 <button
@@ -522,7 +604,9 @@ export default function AllInMagazinCiuc({
                   type="button"
                   onClick={() => openModule(action)}
                   className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
-                    reservationIsDanger
+                    shopifyReceiptAlert
+                      ? "border-[#c7f58e]/75 bg-gradient-to-br from-[#96BF48] via-[#78aa38] to-[#527b20] shadow-[0_16px_32px_rgba(65,105,25,0.35)] ring-1 ring-[#d8ffac]/25 hover:brightness-110"
+                    : reservationIsDanger
                       ? "border-[#ffbac2]/85 bg-gradient-to-br from-[#e0182f] via-[#c30d1c] to-[#8f0714] shadow-[0_18px_38px_rgba(134,7,20,0.42)] ring-2 ring-[#ffccd2]/28 hover:brightness-110"
                       : action.primary
                         ? "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
@@ -531,29 +615,43 @@ export default function AllInMagazinCiuc({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
-                      reservationIsDanger
+                      shopifyReceiptAlert
+                        ? "border-white/38 bg-black/15 text-white shadow-[0_8px_18px_rgba(45,75,20,.30)]"
+                      : reservationIsDanger
                         ? "border-white/38 bg-black/15 text-white shadow-[0_8px_20px_rgba(82,0,12,0.30)]"
                         : action.primary
                           ? "border-white/25 bg-white/14 text-white"
                           : "border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#bdf8f5]"
                     }`}>
-                      <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />
+                      {shopifyReceiptAlert ? <img src={SHOPIFY_ICON_URL} alt="Shopify" className="h-9 w-9 object-contain" /> : <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />}
                     </span>
                     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] ${
-                      reservationIsDanger
+                      shopifyReceiptAlert
+                        ? "border-white/40 bg-black/15 text-white shadow-[0_6px_16px_rgba(65,105,25,.24)]"
+                      : reservationIsDanger
                         ? "border-white/48 bg-white/18 font-semibold text-white shadow-[0_6px_16px_rgba(80,0,12,0.25)]"
                         : "border-white/14 bg-black/10 text-white/55"
                     }`}>
-                      {reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
+                      {shopifyReceiptAlert ? <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 object-contain" /> : reservationIsDanger || shopifyReceiptError ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
                       {alertBadgeText}
                     </span>
                   </div>
                   <h3 className={`mt-4 text-lg text-white ${reservationIsDanger ? "font-semibold" : ""}`}>
                     {action.title}
                   </h3>
-                  <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
-                    {action.description}
+                  <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger || shopifyReceiptAlert ? "text-white/90" : "text-white/58"}`}>
+                    {shopifyReceiptAlert ? "Az üzlet készletéből Shopify-rendelésre átadott termékek Avizai." : action.description}
                   </p>
+                  {shopifyReceiptAlert ? (
+                    <span className="mt-3 inline-flex max-w-full items-center gap-2 rounded-xl border border-white/40 bg-black/15 px-3 py-2 text-[12px] text-white">
+                       <img src={SHOPIFY_ICON_URL} alt="" className="h-4 w-4 shrink-0 object-contain" />
+                       {shopifySourceSummary.pending} Aviz • feladásra vár
+                     </span>
+                  ) : shopifyReceiptError ? (
+                    <span className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-100" title={shopifySourceError}>
+                       <AlertTriangle size={14} /> Shopify Aviz lekérdezési hiba
+                     </span>
+                  ) : null}
                   {reservationIsDanger && reservationDeadlineAlert.date ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 bg-black/20 px-3 py-2 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(74,0,10,0.24)]">
                       <Clock3 size={17} strokeWidth={2.3} />
@@ -641,6 +739,13 @@ export default function AllInMagazinCiuc({
         locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"
         onClose={() => setIncomingOpen(false)}
+      />
+      <AllInShopifySourceDocuments
+        open={shopifySourceOpen}
+        locationCode={SHOPIFY_SOURCE_LOCATION}
+        locationName={SHOPIFY_SOURCE_LOCATION_NAME}
+        onClose={() => { setShopifySourceOpen(false); void refreshShopifySourceDocuments(); }}
+        onOpenRegularDocuments={() => { setShopifySourceOpen(false); setDocumentsOpen(true); }}
       />
       <AllInShopDocuments
         open={documentsOpen}
