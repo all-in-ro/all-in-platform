@@ -3861,6 +3861,8 @@ export type AifShopDailySummaryResponse = {
 export function apiAifShopDailyAuditPdfUrl(options: {
   location: string;
   date: string;
+  from?: string;
+  to?: string;
   scope: "mine" | "all";
   employee?: string;
   handoverId?: string;
@@ -3868,23 +3870,31 @@ export function apiAifShopDailyAuditPdfUrl(options: {
 }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
-  q.set("date", options.date);
+  if (options.from && options.to) {
+    q.set("from", options.from);
+    q.set("to", options.to);
+  } else q.set("date", options.date);
   if (options.mode) q.set("mode", options.mode);
   if (options.scope === "all" && options.employee?.trim()) q.set("employee", options.employee.trim());
   if (options.scope === "mine" && options.handoverId?.trim()) q.set("handoverId", options.handoverId.trim());
   return `${AIF_BASE}/shop-audit/${options.scope}.pdf?${q.toString()}`;
 }
 
-/** Napi Excel export: az eredeti AUDITNAPLO-minta 15 oszlopa + ellenőrző oszlopok. */
+/** Napi vagy időszaki Excel export, egyetlen munkafüzetben, az eredeti audit-oszlopokkal. */
 export function apiAifShopDailyAuditExcelUrl(options: {
   location: string;
   date: string;
+  from?: string;
+  to?: string;
   scope: "mine" | "all";
   employee?: string;
 }) {
   const q = new URLSearchParams();
   q.set("location", options.location);
-  q.set("date", options.date);
+  if (options.from && options.to) {
+    q.set("from", options.from);
+    q.set("to", options.to);
+  } else q.set("date", options.date);
   if (options.scope === "all" && options.employee?.trim()) q.set("employee", options.employee.trim());
   return `${AIF_BASE}/shop-audit/${options.scope}.xlsx?${q.toString()}`;
 }
@@ -3893,6 +3903,8 @@ export function apiAifShopDailyAuditExcelUrl(options: {
 export async function apiAifDownloadShopDailyAuditExcel(options: {
   location: string;
   date: string;
+  from?: string;
+  to?: string;
   scope: "mine" | "all";
   employee?: string;
 }) {
@@ -3918,9 +3930,11 @@ export async function apiAifDownloadShopDailyAuditExcel(options: {
     : locationCode === "magazin_targu_secuiesc"
       ? "Kézdivásárhely"
       : "Üzlet";
-  const dateLabel = /^\d{4}-\d{2}-\d{2}$/.test(options.date)
-    ? options.date.replace(/-/g, ".")
-    : "Dátum nélkül";
+  const from = options.from || options.date;
+  const to = options.to || options.date;
+  const cleanDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? value.replace(/-/g, ".") : "Dátum nélkül";
+  const dateLabel = from===to ? cleanDate(from) : `${cleanDate(from)} - ${cleanDate(to)}`;
   const employeeLabel = String(options.employee || "").trim()
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, " ")
     .replace(/\s+/g, " ")
