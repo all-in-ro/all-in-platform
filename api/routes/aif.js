@@ -24828,6 +24828,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             CHECK (status IN ('pending','accepted','rejected','cancelled')),
           sold_at timestamptz NOT NULL,
           payment_method text NOT NULL CHECK (payment_method IN ('cash','card','bank_transfer')),
+          payment_actor text NULL,
           qty integer NOT NULL CHECK (qty > 0),
           list_total numeric(14,2) NOT NULL CHECK (list_total >= 0),
           net_total numeric(14,2) NOT NULL CHECK (net_total >= 0),
@@ -24838,6 +24839,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           decided_by text NULL,
           decision_note text NULL,
           CHECK (lower(btrim(from_actor)) <> lower(btrim(to_actor))));`);
+        // Compatibility with the first 2026-10-29 deployment. Old transfers all had
+        // their original payment collected by the same person as the sale.
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS payment_actor text`);
+        await pool.query(`UPDATE aif_shop_seller_transfers SET payment_actor=from_actor WHERE payment_actor IS NULL`);
         await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_seller_transfers_active_line_uq
           ON aif_shop_seller_transfers(sale_line_id) WHERE status IN ('pending','accepted')`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_seller_transfers_inbox_idx
@@ -24864,7 +24869,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       saleNumber: row.sale_number || null, title: row.product_title || row.product_code || 'Termék',
       productCode: row.product_code || null, brandName: row.brand_name || null,
       colorName: row.color_name || null, size: row.size || null, imageUrl: row.image_url || null,
-      fromActor: row.from_actor, toActor: row.to_actor, status: row.status,
+      fromActor: row.from_actor, toActor: row.to_actor, paymentActor: row.payment_actor || row.from_actor,
+      status: row.status, isHistorical: aifBucharestIsoDate(row.sold_at) < aifBucharestIsoDate(),
       qty: Number(row.qty), listTotal: aifSellerTransferMoney(row.list_total),
       netTotal: aifSellerTransferMoney(row.net_total), discountTotal: aifSellerTransferMoney(row.discount_total),
       paymentMethod: row.payment_method, soldAt: new Date(row.sold_at).toISOString(),
@@ -24890,30 +24896,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id`;
 
-  async function aifAssertSellerTransferDayOpen(db, locationId, soldAt) {
+  // Historical corrections are REPORT ATTRIBUTION ONLY. Never rewrite a closed till,
+  // handed-over cash, original receipt, stock, or an already accepted shift snapshot.
+  // Two signed seller decisions are required even when the sale day is closed.
+  function aifAssertSellerTransferEligibleDay(soldAt) {
     const date = aifBucharestIsoDate(soldAt);
-    if (date !== aifBucharestIsoDate()) {
-      throw aifSellerTransferError('Átvezetés csak a vásárlás napján végezhető. Korábbi nap javítását az adminisztrátornál kell kérni.',409,'seller_transfer_not_today');
+    const today = aifBucharestIsoDate();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) {
+      throw aifSellerTransferError('Jövőbeli vagy érvénytelen napra nem kérhető elszámolási javítás.',409,'seller_transfer_invalid_day');
     }
-    const locked = await db.query(`SELECT 1 FROM aif_shop_day_closures
-        WHERE location_id=$1 AND work_date=$2::date LIMIT 1`,[locationId,date]);
-    if (locked.rowCount) throw aifSellerTransferError('A nap kasszája már lezárt. Az átvezetés nem módosíthat lezárt pénztárt.',409,'seller_transfer_day_closed');
-    const handovers = await db.query(`SELECT 1 FROM aif_shop_shift_handovers
-       WHERE location_id=$1 AND work_date=$2::date AND status IN ('pending','accepted')
-         AND cutoff_at >= $3::timestamptz LIMIT 1`,[locationId,date,soldAt]);
-    if (handovers.rowCount) throw aifSellerTransferError('Ezen a napon már van műszakátadás. Az eladói pénz nem vezethető át automatikusan.',409,'seller_transfer_shift_closed');
-    const movements = await db.query(`SELECT 1 FROM aif_shop_cash_movements
-      WHERE location_id=$1 AND movement_type='manager_handover' AND status IN ('pending','confirmed')
-        AND requested_at >= $3::timestamptz
-        AND ( (handover_from_date IS NOT NULL AND handover_to_date IS NOT NULL
-                  AND $2::date BETWEEN handover_from_date AND handover_to_date)
-              OR (handover_from_date IS NULL AND (requested_at AT TIME ZONE 'Europe/Bucharest')::date >= $2::date)) LIMIT 1`,[locationId,date,soldAt]);
-    if (movements.rowCount) throw aifSellerTransferError('A napi készpénz már átadásra került vagy arra vár. Nincs automatikus pénzátvezetés.',409,'seller_transfer_cash_handover');
+    return { date, historical: date < today };
   }
 
   async function aifSellerTransferSaleLine(db, locationId, lineId) {
     const selected = await db.query(`SELECT sl.*, s.id AS owner_sale_id, s.sale_number, s.location_id,
-       s.actor AS sale_actor,s.status AS sale_status,s.sale_type,s.payment_status,s.sold_at,
+       s.actor AS sale_actor,s.raw AS sale_raw,s.status AS sale_status,s.sale_type,s.payment_status,s.sold_at,
        s.total AS sale_total,s.paid_total AS sale_paid_total,s.balance_due,
        (SELECT count(*)::int FROM aif_shop_sale_lines x WHERE x.sale_id=s.id) AS line_count,
        (SELECT sum(x.line_total)::numeric FROM aif_shop_sale_lines x WHERE x.sale_id=s.id) AS lines_total
@@ -24933,17 +24930,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const payments=await db.query(`SELECT method, sum(amount)::numeric AS total, count(*)::int AS rows,
       bool_and(customer_payment_id IS NULL) AS regular,
       bool_and((paid_at AT TIME ZONE 'Europe/Bucharest')::date=(s.sold_at AT TIME ZONE 'Europe/Bucharest')::date) AS same_day,
-      bool_and(lower(regexp_replace(btrim(coalesce(p.actor,'')),'[[:space:]]+',' ','g'))=
-        lower(regexp_replace(btrim(s.actor),'[[:space:]]+',' ','g'))) AS same_actor
+      bool_and(lower(regexp_replace(btrim(coalesce(NULLIF(p.actor,''),s.actor)),'[[:space:]]+',' ','g'))=
+        lower(regexp_replace(btrim(s.actor),'[[:space:]]+',' ','g'))) AS same_actor,
+      count(DISTINCT lower(regexp_replace(btrim(coalesce(NULLIF(p.actor,''),s.actor)),'[[:space:]]+',' ','g')))::int AS payer_count,
+      min(btrim(coalesce(NULLIF(p.actor,''),s.actor))) AS payment_actor
       FROM aif_shop_sale_payments p JOIN aif_shop_sales s ON s.id=p.sale_id
       WHERE p.sale_id=$1 AND p.method<>'credit' GROUP BY method`,[row.owner_sale_id]);
     if (payments.rows.length!==1 || !['cash','card','bank_transfer'].includes(payments.rows[0].method)
       || payments.rows[0].regular!==true || payments.rows[0].same_day!==true
-      || payments.rows[0].same_actor!==true
+      || Number(payments.rows[0].payer_count)!==1
       || Math.abs(Number(payments.rows[0].total)-Number(row.sale_total))>0.01) {
-      throw aifSellerTransferError('Ez a bizonylat többféle vagy utólagos fizetést tartalmaz. A pénz hibátlan elosztása miatt nem adható át automatikusan.',409,'seller_transfer_mixed_payment');
+      throw aifSellerTransferError('Ez a bizonylat többféle, több eladó által beszedett vagy utólagos fizetést tartalmaz; automatikus átvezetés nem biztonságos.',409,'seller_transfer_mixed_payment');
     }
-    return { row, paymentMethod: payments.rows[0].method };
+    const payer=text(payments.rows[0].payment_actor);
+    if (!payer) throw aifSellerTransferError('A pénzt átvevő eladó nem azonosítható.',409,'seller_transfer_missing_payer');
+    if (payments.rows[0].same_actor!==true) {
+      // Reservation fulfillment historically attributed the SALE to the employee
+      // who reserved it, but the PAYMENT to the employee who actually served.
+      // This exception is safe only with the server-created reservation provenance.
+      const raw=row.sale_raw && typeof row.sale_raw==='object' ? row.sale_raw : {};
+      if (raw.source!=='shop_reservation' || !aifSellerTransferEmployee(raw.attributedTo,row.sale_actor)
+        || !aifSellerTransferEmployee(raw.fulfilledBy,payer)) {
+        throw aifSellerTransferError('Az eladás és a fizetés eredeti eladója eltér, de nem ellenőrizhető félretételi teljesítésből. Admin ellenőrzés szükséges.',409,'seller_transfer_payer_mismatch');
+      }
+    }
+    return { row, paymentMethod: payments.rows[0].method, paymentActor: payer };
   }
 
   async function aifAcceptedSellerTransfers(db, locationId, fromAt, toAt) {
@@ -24955,6 +24966,38 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         AND t.sold_at >= $2::timestamptz AND t.sold_at < $3::timestamptz
       ORDER BY t.sold_at, t.sale_id, t.id`,[locationId,fromAt,toAt]);
     return result.rows;
+  }
+
+  // The person who physically received the payment may NOT be the original
+  // sale owner (historic reservations). The payment attribution moves from the
+  // ORIGINAL CASHIER, not from the person who created the reservation.
+  function aifSellerTransferPaymentImpact(rows, employee) {
+    const same=(a)=>aifSellerTransferEmployee(a,employee);
+    return rows.map(row=>({ ...row,
+      sign: same(row.to_actor) ? (same(row.payment_actor||row.from_actor)?0:1)
+        : same(row.payment_actor||row.from_actor) ? -1 : 0
+    })).filter(row=>row.sign);
+  }
+
+  function aifSellerTransferPaymentTransactionDelta(allRows, employee) {
+    const grouped=new Map();
+    for(const t of allRows){
+      const id=String(t.sale_id);
+      let g=grouped.get(id);
+      if(!g){g={payer:t.payment_actor||t.from_actor,total:Number(t.total_line_count),moved:0,recipients:new Set()};grouped.set(id,g);}
+      g.moved++;
+      g.recipients.add(aifEmployeeKey(t.to_actor));
+    }
+    const result=new Map();
+    for(const [id,g] of grouped){
+      let delta=0;
+      const isPayer=aifSellerTransferEmployee(g.payer,employee);
+      const isRecipient=g.recipients.has(aifEmployeeKey(employee));
+      if(isPayer && !isRecipient && g.total>0 && g.moved>=g.total) delta--;
+      if(isRecipient && !isPayer)delta++;
+      if(delta)result.set(id,delta);
+    }
+    return result;
   }
 
   function aifSellerTransferImpact(rows, employee) {
@@ -25018,7 +25061,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       discount_percent:Number(row.discount_percent||0),revenue:Number(row.net_total),
       net_total:Number(row.net_total),discount_total:Number(row.discount_total),
       transactions:1,payment_label:aifPaymentMethodLabel(row.payment_method),
-      transferred_from:row.from_actor,transferred_to:row.to_actor,transfer_id:String(row.id) };
+      transferred_from:row.from_actor,transferred_to:row.to_actor,
+      transfer_id:String(row.id),transfer_decided_at:row.decided_at,
+      transfer_reason:row.reason, payment_actor:row.payment_actor||row.from_actor };
   }
 
   // Transfers appear as approvals, not as new sales; original payment actors and stock ledger stay untouched.
@@ -25059,17 +25104,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw aifSellerTransferError('Csak ugyanazon üzlet két külön, aktív eladója között lehet átadni.',403);
       const lineId=text(req.body?.lineId||req.body?.line_id);
       if (!isUuidText(lineId)) throw aifSellerTransferError('Érvénytelen terméksor.',400);
-      const {row,paymentMethod}=await aifSellerTransferSaleLine(db,location.id,lineId);
+      const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,lineId);
       if (!aifSellerTransferEmployee(row.sale_actor,sender))
-        throw aifSellerTransferError('Csak a saját eladásodat adhatod át.',403);
-      await aifAssertSellerTransferDayOpen(db,location.id,row.sold_at);
+        throw aifSellerTransferError('Csak a saját eredeti eladásodat adhatod át.',403);
+      const eligible=aifAssertSellerTransferEligibleDay(row.sold_at);
       const reason=text(req.body?.reason).slice(0,400)||null;
+      if(eligible.historical && (!reason || reason.length < 5))
+        throw aifSellerTransferError('Korábbi nap javításához rövid indoklás kötelező.',400,'seller_transfer_reason_required');
       const qty=Number(row.quantity),net=aifSellerTransferMoney(row.line_total),
         gross=aifSellerTransferMoney(Number(row.list_price)*qty),discount=aifSellerTransferMoney(Math.max(0,gross-net));
       const result=await db.query(`INSERT INTO aif_shop_seller_transfers
-        (location_id,sale_id,sale_line_id,from_actor,to_actor,sold_at,payment_method,qty,list_total,net_total,discount_total,reason)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [location.id,row.owner_sale_id,lineId,sender,target,row.sold_at,paymentMethod,qty,gross,net,discount,reason]);
+        (location_id,sale_id,sale_line_id,from_actor,to_actor,sold_at,payment_method,payment_actor,qty,list_total,net_total,discount_total,reason)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [location.id,row.owner_sale_id,lineId,sender,target,row.sold_at,paymentMethod,paymentActor,qty,gross,net,discount,reason]);
       const detail=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[result.rows[0].id]);
       await db.query('COMMIT');started=false;
       return res.status(201).json({ok:true,item:aifSellerTransferItem(detail.rows[0])});
@@ -25107,9 +25154,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if(!activeEmployees.some(name=>aifSellerTransferEmployee(name,record.from_actor)) ||
            !activeEmployees.some(name=>aifSellerTransferEmployee(name,record.to_actor)))
           throw aifSellerTransferError('Az egyik érintett eladó már nem aktív ennél az üzletnél.',409,'seller_transfer_employee_inactive');
-        const {row,paymentMethod}=await aifSellerTransferSaleLine(db,location.id,record.sale_line_id);
-        await aifAssertSellerTransferDayOpen(db,location.id,row.sold_at);
+        const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,record.sale_line_id);
+        aifAssertSellerTransferEligibleDay(row.sold_at);
         if(!aifSellerTransferEmployee(row.sale_actor,record.from_actor)||paymentMethod!==record.payment_method
+          || !aifSellerTransferEmployee(paymentActor,record.payment_actor||record.from_actor)
           || Number(row.quantity)!==Number(record.qty)
           || Math.abs(Number(row.line_total)-Number(record.net_total))>0.005
           || Math.abs(Number(row.list_price)*Number(row.quantity)-Number(record.list_total))>0.005)
@@ -25520,18 +25568,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     // Totals for the whole store (actor=null) are unchanged. A receipt counts once per employee.
     const employeeTransfers = actor ? await aifAcceptedSellerTransfers(client,locationId,fromAt,toAt) : [];
     const transferImpact = actor ? aifSellerTransferImpact(employeeTransfers,actor) : [];
+    const paymentImpact = actor ? aifSellerTransferPaymentImpact(employeeTransfers,actor) : [];
     const transferReceiptChange = actor ? aifSellerTransferTransactionDelta(employeeTransfers,actor) : new Map();
+    const paymentReceiptChange = actor ? aifSellerTransferPaymentTransactionDelta(employeeTransfers,actor) : new Map();
     let transferNet=0,transferGross=0,transferDiscount=0,transferQty=0;
     for(const t of transferImpact){
       transferNet+=t.sign*aifNumber(t.net_total);
       transferGross+=t.sign*aifNumber(t.list_total);
       transferDiscount+=t.sign*aifNumber(t.discount_total);
       transferQty+=t.sign*aifNumber(t.qty);
-      if(payments[t.payment_method]) {
-        payments[t.payment_method].salesAmount=aifRoundMoney(payments[t.payment_method].salesAmount+t.sign*aifNumber(t.net_total));
-      }
     }
-    for(const [saleId,change] of transferReceiptChange){
+    for(const t of paymentImpact){
+      if(payments[t.payment_method]) payments[t.payment_method].salesAmount=
+        aifRoundMoney(payments[t.payment_method].salesAmount+t.sign*aifNumber(t.net_total));
+    }
+    for(const [saleId,change] of paymentReceiptChange){
       const related=employeeTransfers.find((t)=>String(t.sale_id)===saleId);
       if(related&&payments[related.payment_method])payments[related.payment_method].transactions+=change;
     }
@@ -31035,6 +31086,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-shifts/day-overview", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifSellerTransferSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const date = aifValidIsoDate(req.query.date, aifBucharestIsoDate());
       const bounds = await aifShopDayBounds(pool, date);
@@ -31075,6 +31127,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND e.created_at >= $2::timestamptz
              AND e.created_at < $3::timestamptz
              AND NULLIF(btrim(COALESCE(e.actor,'')),'') IS NOT NULL
+           UNION
+           SELECT btrim(t.to_actor) AS actor
+           FROM aif_shop_seller_transfers t
+           JOIN aif_shop_sales ts ON ts.id=t.sale_id AND ts.status='completed'
+           JOIN aif_shop_sale_lines tl ON tl.id=t.sale_line_id
+           WHERE t.location_id=$1 AND t.status='accepted'
+             AND tl.quantity=t.qty AND abs(tl.line_total-t.net_total)<0.005
+             AND t.sold_at >= $2::timestamptz AND t.sold_at < $3::timestamptz
+             AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex WHERE ex.source_sale_id=ts.id AND ex.status='completed')
            UNION
            SELECT btrim(h.from_actor) AS actor
            FROM aif_shop_shift_handovers h
@@ -33870,7 +33931,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const dayBounds=await aifShopDayBounds(pool,date);
       const sellerTransfers=await aifAcceptedSellerTransfers(pool,location.id,dayBounds.start,dayBounds.end);
       const ownTransferImpact=aifSellerTransferImpact(sellerTransfers,employee);
+      const ownPaymentImpact=aifSellerTransferPaymentImpact(sellerTransfers,employee);
       const ownTransferReceipts=aifSellerTransferTransactionDelta(sellerTransfers,employee);
+      const ownPaymentReceipts=aifSellerTransferPaymentTransactionDelta(sellerTransfers,employee);
       const productTransactionDelta=aifSellerTransferProductTransactionDelta(sellerTransfers,employee);
       const transferNet=aifRoundMoney(ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.net_total),0));
       const transferGross=aifRoundMoney(ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.list_total),0));
@@ -33980,13 +34043,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         customerPaymentAmount: aifNumber(row.customer_payment_amount),
         customerPaymentTransactions: aifNumber(row.customer_payment_transactions),
       }));
-      for(const t of ownTransferImpact){
+      for(const t of ownPaymentImpact){
         let payment=payments.find(p=>p.method===t.payment_method);
         if(!payment){payment={method:t.payment_method,label:aifPaymentMethodLabel(t.payment_method),amount:0,
           transactions:0,customerPaymentAmount:0,customerPaymentTransactions:0};payments.push(payment);}
         payment.amount=aifRoundMoney(payment.amount+t.sign*aifNumber(t.net_total));
       }
-      for(const [saleId,change] of ownTransferReceipts){
+      for(const [saleId,change] of ownPaymentReceipts){
         const t=sellerTransfers.find(r=>String(r.sale_id)===saleId);
         const payment=payments.find(p=>p.method===t?.payment_method);
         if(payment)payment.transactions+=change;
