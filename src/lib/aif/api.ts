@@ -3077,6 +3077,28 @@ export function apiAifSaveShopifyOrderAlertSettings(settings: Pick<AifShopifyOrd
 
 
 
+export type AifSellerTransferStatus = "pending" | "accepted" | "rejected" | "cancelled";
+export type AifSellerTransfer = {
+  id: string; saleId: string; lineId: string; saleNumber?: string | null;
+  title: string; productCode?: string | null; brandName?: string | null;
+  colorName?: string | null; size?: string | null; imageUrl?: string | null;
+  fromActor: string; toActor: string; status: AifSellerTransferStatus;
+  qty: number; listTotal: number; netTotal: number; discountTotal: number;
+  paymentMethod: "cash" | "card" | "bank_transfer";
+  soldAt: string; requestedAt: string; decidedAt?: string | null;
+  reason?: string | null; decisionNote?: string | null;
+};
+export function apiAifSellerTransfers(options: { location: string }) {
+  const q = new URLSearchParams({ location: options.location });
+  return fetchAifJSON<{ ok: true; actor: string; items: AifSellerTransfer[] }>(`/shop-seller-transfers?${q.toString()}`);
+}
+export function apiAifCreateSellerTransfer(input: { location: string; lineId: string; toActor: string; reason?: string }) {
+  return fetchAifJSON<{ ok: true; item: AifSellerTransfer }>("/shop-seller-transfers", { method: "POST", body: JSON.stringify(input) });
+}
+export function apiAifDecideSellerTransfer(id: string, input: { location: string; decision: "accept" | "reject" | "cancel"; note?: string }) {
+  return fetchAifJSON<{ ok: true; item: AifSellerTransfer }>(`/shop-seller-transfers/${encodeURIComponent(id)}/decision`, { method: "POST", body: JSON.stringify(input) });
+}
+
 export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
 
 export type AifRomaniaCounty = {
@@ -3605,6 +3627,10 @@ export type AifShopDailyProductItem = {
   returnedLaterAt?: string | null;
   paidLaterAt?: string | null;
   stockEffect?: number;
+  /** Source and target employees for accepted salesperson reallocations. */
+  transferredFrom?: string | null;
+  transferredTo?: string | null;
+  transferId?: string | null;
 };
 
 
@@ -5063,6 +5089,10 @@ export type AifAdminShopRecentSale = {
   saleNumber: string;
   soldAt: string;
   actor: string;
+  originalActor?: string | null;
+  transferredFrom?: string | null;
+  transferredTo?: string | null;
+  transferId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
   status: string;
