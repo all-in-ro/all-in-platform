@@ -24810,6 +24810,324 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
 
+  // AIF SELLER CORRECTIONS: the sale, original payment, receipt and stock are immutable.
+  // The transfer is a *person-level allocation*, never a new sale/payment/stock movement.
+  let aifSellerTransferSchemaPromise = null;
+  function ensureAifSellerTransferSchema() {
+    if (!aifSellerTransferSchemaPromise) {
+      aifSellerTransferSchemaPromise = (async () => {
+        await ensureAifShopSalesSchema();
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_seller_transfers (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          sale_id uuid NOT NULL REFERENCES aif_shop_sales(id) ON DELETE RESTRICT,
+          sale_line_id uuid NOT NULL REFERENCES aif_shop_sale_lines(id) ON DELETE RESTRICT,
+          from_actor text NOT NULL,
+          to_actor text NOT NULL,
+          status text NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','accepted','rejected','cancelled')),
+          sold_at timestamptz NOT NULL,
+          payment_method text NOT NULL CHECK (payment_method IN ('cash','card','bank_transfer')),
+          qty integer NOT NULL CHECK (qty > 0),
+          list_total numeric(14,2) NOT NULL CHECK (list_total >= 0),
+          net_total numeric(14,2) NOT NULL CHECK (net_total >= 0),
+          discount_total numeric(14,2) NOT NULL CHECK (discount_total >= 0),
+          reason text NULL,
+          requested_at timestamptz NOT NULL DEFAULT now(),
+          decided_at timestamptz NULL,
+          decided_by text NULL,
+          decision_note text NULL,
+          CHECK (lower(btrim(from_actor)) <> lower(btrim(to_actor))));`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_seller_transfers_active_line_uq
+          ON aif_shop_seller_transfers(sale_line_id) WHERE status IN ('pending','accepted')`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_seller_transfers_inbox_idx
+          ON aif_shop_seller_transfers(location_id,lower(to_actor),status,requested_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_seller_transfers_day_idx
+          ON aif_shop_seller_transfers(location_id,sold_at,status)`);
+      })().catch((error) => { aifSellerTransferSchemaPromise = null; throw error; });
+    }
+    return aifSellerTransferSchemaPromise;
+  }
+
+  function aifSellerTransferError(message, statusCode=409, code='seller_transfer_invalid') {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.code = code;
+    return error;
+  }
+
+  const aifSellerTransferEmployee = (left, right) => aifEmployeeKey(left) === aifEmployeeKey(right);
+  const aifSellerTransferMoney = (v) => aifRoundMoney(v);
+  function aifSellerTransferItem(row) {
+    return {
+      id: String(row.id), saleId: String(row.sale_id), lineId: String(row.sale_line_id),
+      saleNumber: row.sale_number || null, title: row.product_title || row.product_code || 'Termék',
+      productCode: row.product_code || null, brandName: row.brand_name || null,
+      colorName: row.color_name || null, size: row.size || null, imageUrl: row.image_url || null,
+      fromActor: row.from_actor, toActor: row.to_actor, status: row.status,
+      qty: Number(row.qty), listTotal: aifSellerTransferMoney(row.list_total),
+      netTotal: aifSellerTransferMoney(row.net_total), discountTotal: aifSellerTransferMoney(row.discount_total),
+      paymentMethod: row.payment_method, soldAt: new Date(row.sold_at).toISOString(),
+      requestedAt: new Date(row.requested_at).toISOString(),
+      decidedAt: row.decided_at ? new Date(row.decided_at).toISOString() : null,
+      reason: row.reason || null, decisionNote: row.decision_note || null,
+    };
+  }
+
+  const AIF_SELLER_TRANSFER_SELECT = `SELECT t.*, s.sale_number, sl.product_title, sl.product_code,
+      sl.brand_name, sl.subcategory_name, sl.color_name, sl.size,
+      COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+      sl.variant_id, sl.list_price, sl.unit_price, sl.discount_percent,
+      s.customer_id, s.customer_name, s.customer_phone, s.payment_status,
+      s.balance_due, s.sale_type, s.status AS sale_status,
+      (SELECT count(*)::int FROM aif_shop_sale_lines sx WHERE sx.sale_id=t.sale_id) AS total_line_count,
+      (SELECT count(*)::int FROM aif_shop_sale_lines sx
+         WHERE sx.sale_id=t.sale_id AND
+           COALESCE(sx.variant_id::text,sx.product_code,sx.product_title,sx.id::text)=
+           COALESCE(sl.variant_id::text,sl.product_code,sl.product_title,sl.id::text)) AS product_line_count
+    FROM aif_shop_seller_transfers t
+    JOIN aif_shop_sales s ON s.id=t.sale_id
+    JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id
+    LEFT JOIN aif_product_variants v ON v.id=sl.variant_id`;
+
+  async function aifAssertSellerTransferDayOpen(db, locationId, soldAt) {
+    const date = aifBucharestIsoDate(soldAt);
+    if (date !== aifBucharestIsoDate()) {
+      throw aifSellerTransferError('Átvezetés csak a vásárlás napján végezhető. Korábbi nap javítását az adminisztrátornál kell kérni.',409,'seller_transfer_not_today');
+    }
+    const locked = await db.query(`SELECT 1 FROM aif_shop_day_closures
+        WHERE location_id=$1 AND work_date=$2::date LIMIT 1`,[locationId,date]);
+    if (locked.rowCount) throw aifSellerTransferError('A nap kasszája már lezárt. Az átvezetés nem módosíthat lezárt pénztárt.',409,'seller_transfer_day_closed');
+    const handovers = await db.query(`SELECT 1 FROM aif_shop_shift_handovers
+       WHERE location_id=$1 AND work_date=$2::date AND status IN ('pending','accepted')
+         AND cutoff_at >= $3::timestamptz LIMIT 1`,[locationId,date,soldAt]);
+    if (handovers.rowCount) throw aifSellerTransferError('Ezen a napon már van műszakátadás. Az eladói pénz nem vezethető át automatikusan.',409,'seller_transfer_shift_closed');
+    const movements = await db.query(`SELECT 1 FROM aif_shop_cash_movements
+      WHERE location_id=$1 AND movement_type='manager_handover' AND status IN ('pending','confirmed')
+        AND requested_at >= $3::timestamptz
+        AND ( (handover_from_date IS NOT NULL AND handover_to_date IS NOT NULL
+                  AND $2::date BETWEEN handover_from_date AND handover_to_date)
+              OR (handover_from_date IS NULL AND (requested_at AT TIME ZONE 'Europe/Bucharest')::date >= $2::date)) LIMIT 1`,[locationId,date,soldAt]);
+    if (movements.rowCount) throw aifSellerTransferError('A napi készpénz már átadásra került vagy arra vár. Nincs automatikus pénzátvezetés.',409,'seller_transfer_cash_handover');
+  }
+
+  async function aifSellerTransferSaleLine(db, locationId, lineId) {
+    const selected = await db.query(`SELECT sl.*, s.id AS owner_sale_id, s.sale_number, s.location_id,
+       s.actor AS sale_actor,s.status AS sale_status,s.sale_type,s.payment_status,s.sold_at,
+       s.total AS sale_total,s.paid_total AS sale_paid_total,s.balance_due,
+       (SELECT count(*)::int FROM aif_shop_sale_lines x WHERE x.sale_id=s.id) AS line_count,
+       (SELECT sum(x.line_total)::numeric FROM aif_shop_sale_lines x WHERE x.sale_id=s.id) AS lines_total
+       FROM aif_shop_sale_lines sl JOIN aif_shop_sales s ON s.id=sl.sale_id
+       WHERE sl.id=$1::uuid AND s.location_id=$2 FOR UPDATE OF s,sl`,[lineId,locationId]);
+    if (!selected.rowCount) throw aifSellerTransferError('A terméksor ebben az üzletben nem található.',404,'seller_transfer_not_found');
+    const row=selected.rows[0];
+    if (row.sale_status!=='completed' || row.sale_type!=='sale' || row.payment_status!=='paid'
+      || Math.abs(Number(row.balance_due))>0.005 || Math.abs(Number(row.sale_paid_total)-Number(row.sale_total))>0.01) {
+      throw aifSellerTransferError('Csak teljesen kifizetett, normál eladási termék adható át. Hiteles, foglalásos és rendezetlen tétel nem.',409,'seller_transfer_unsettled');
+    }
+    if (Math.abs(Number(row.lines_total)-Number(row.sale_total))>0.015) {
+      throw aifSellerTransferError('Az eladási bizonylat összege nem egyezik a terméksorokkal. Javítás helyett pénzügyi ellenőrzés kell.',409,'seller_transfer_totals_mismatch');
+    }
+    const returned=await db.query(`SELECT 1 FROM aif_shop_exchanges WHERE source_sale_id=$1 AND status IN ('completed','cancelled') LIMIT 1`,[row.owner_sale_id]);
+    if (returned.rowCount) throw aifSellerTransferError('Visszáruval vagy cserével érintett bizonylat nem adható át automatikusan.',409,'seller_transfer_has_returns');
+    const payments=await db.query(`SELECT method, sum(amount)::numeric AS total, count(*)::int AS rows,
+      bool_and(customer_payment_id IS NULL) AS regular,
+      bool_and((paid_at AT TIME ZONE 'Europe/Bucharest')::date=(s.sold_at AT TIME ZONE 'Europe/Bucharest')::date) AS same_day,
+      bool_and(lower(regexp_replace(btrim(coalesce(p.actor,'')),'[[:space:]]+',' ','g'))=
+        lower(regexp_replace(btrim(s.actor),'[[:space:]]+',' ','g'))) AS same_actor
+      FROM aif_shop_sale_payments p JOIN aif_shop_sales s ON s.id=p.sale_id
+      WHERE p.sale_id=$1 AND p.method<>'credit' GROUP BY method`,[row.owner_sale_id]);
+    if (payments.rows.length!==1 || !['cash','card','bank_transfer'].includes(payments.rows[0].method)
+      || payments.rows[0].regular!==true || payments.rows[0].same_day!==true
+      || payments.rows[0].same_actor!==true
+      || Math.abs(Number(payments.rows[0].total)-Number(row.sale_total))>0.01) {
+      throw aifSellerTransferError('Ez a bizonylat többféle vagy utólagos fizetést tartalmaz. A pénz hibátlan elosztása miatt nem adható át automatikusan.',409,'seller_transfer_mixed_payment');
+    }
+    return { row, paymentMethod: payments.rows[0].method };
+  }
+
+  async function aifAcceptedSellerTransfers(db, locationId, fromAt, toAt) {
+    await ensureAifSellerTransferSchema();
+    const result=await db.query(`${AIF_SELLER_TRANSFER_SELECT}
+      WHERE t.location_id=$1 AND t.status='accepted' AND s.status='completed' AND s.sale_type='sale'
+        AND sl.quantity=t.qty AND abs(sl.line_total-t.net_total)<0.005
+        AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id AND ex.status='completed')
+        AND t.sold_at >= $2::timestamptz AND t.sold_at < $3::timestamptz
+      ORDER BY t.sold_at, t.sale_id, t.id`,[locationId,fromAt,toAt]);
+    return result.rows;
+  }
+
+  function aifSellerTransferImpact(rows, employee) {
+    const match = (actor) => aifSellerTransferEmployee(actor,employee);
+    return rows.filter((row) => match(row.from_actor)||match(row.to_actor))
+      .map((row) => ({...row, sign:match(row.to_actor)?1:-1}));
+  }
+
+  // A transaction is counted once per employee and receipt, even with multiple moved lines.
+  // A source loses that transaction only when every line left its original employee.
+  function aifSellerTransferTransactionDelta(allRows, employee) {
+    const grouped = new Map();
+    for (const row of allRows) {
+      const id=String(row.sale_id);
+      let entry=grouped.get(id);
+      if (!entry) {entry={origin:row.from_actor, total:Number(row.total_line_count), moved:0, recipients:new Set()};grouped.set(id,entry);}
+      entry.moved+=1;
+      entry.recipients.add(aifEmployeeKey(row.to_actor));
+    }
+    const result=new Map();
+    for (const [id,entry] of grouped) {
+      let change=0;
+      if (aifSellerTransferEmployee(entry.origin,employee) && entry.moved>=entry.total) change--;
+      if (entry.recipients.has(aifEmployeeKey(employee))) change++;
+      if (change) result.set(id,change);
+    }
+    return result;
+  }
+
+  // An item displayed twice on one receipt is still one product transaction.
+  function aifSellerTransferProductTransactionDelta(allRows, employee) {
+    const groups=new Map();
+    for(const row of allRows){
+      const key=String(row.variant_id||row.product_code||row.product_title||row.sale_line_id);
+      const pair=`${row.sale_id}:${key}`;
+      let group=groups.get(pair);
+      if(!group){group={key,origin:row.from_actor,total:Number(row.product_line_count||1),moved:0,recipients:new Set()};groups.set(pair,group);}
+      group.moved+=1;group.recipients.add(aifEmployeeKey(row.to_actor));
+    }
+    const delta=new Map();
+    for(const group of groups.values()){
+      let change=0;
+      if(aifSellerTransferEmployee(group.origin,employee)&&group.moved>=group.total)change--;
+      if(group.recipients.has(aifEmployeeKey(employee)))change++;
+      if(change)delta.set(group.key,(delta.get(group.key)||0)+change);
+    }
+    return delta;
+  }
+
+  function aifSellerTransferLineProjection(row) {
+    const title=row.product_title||row.product_code||'Ismeretlen termék';
+    const qty=Number(row.qty);
+    return { key:String(row.sale_line_id), line_id:String(row.sale_line_id), sale_id:String(row.sale_id),
+      sale_number:row.sale_number,sold_at:row.sold_at,customer_id:row.customer_id,
+      customer_name:row.customer_name,customer_phone:row.customer_phone,
+      payment_status:row.payment_status,balance_due:Number(row.balance_due||0),
+      sale_type:'sale',record_type:'sale',title,product_code:row.product_code,
+      brand_name:row.brand_name,subcategory_name:row.subcategory_name,color_name:row.color_name,
+      size:row.size,image_url:row.image_url,qty,list_price:Number(row.list_price||0),
+      unit_price:Number(row.unit_price||0),list_total:Number(row.list_total||0),
+      discount_percent:Number(row.discount_percent||0),revenue:Number(row.net_total),
+      net_total:Number(row.net_total),discount_total:Number(row.discount_total),
+      transactions:1,payment_label:aifPaymentMethodLabel(row.payment_method),
+      transferred_from:row.from_actor,transferred_to:row.to_actor,transfer_id:String(row.id) };
+  }
+
+  // Transfers appear as approvals, not as new sales; original payment actors and stock ledger stay untouched.
+  router.get('/shop-seller-transfers',requireAuthed,async(req,res)=>{
+    try {
+      await ensureAifSellerTransferSchema();
+      const location=await aifResolveShopLocation(req,pool,req.query.location);
+      const actor=actorFrom(req);
+      const rows=await pool.query(`${AIF_SELLER_TRANSFER_SELECT}
+        WHERE t.location_id=$1 AND (
+         lower(regexp_replace(btrim(t.from_actor),'[[:space:]]+',' ','g'))=$2 OR
+         lower(regexp_replace(btrim(t.to_actor),'[[:space:]]+',' ','g'))=$2)
+        ORDER BY CASE WHEN t.status='pending' THEN 0 ELSE 1 END,t.requested_at DESC LIMIT 150`,[location.id,aifEmployeeKey(actor)]);
+      return res.json({ok:true,actor,location:{id:String(location.id),code:location.code,name:location.name},
+        items:rows.rows.map(aifSellerTransferItem)});
+    } catch(error) { const status=Number(error.statusCode||500);return res.status(status).json({error:error.message||'Az átadások nem tölthetők be.',code:error.code||null}); }
+  });
+
+  router.post('/shop-seller-transfers',requireAuthed,async(req,res)=>{
+    const db=await pool.connect();
+    let started=false;
+    try {
+      if (normCode(req.session?.role)!=='shop') throw aifSellerTransferError('Átadást csak saját eladói belépéssel lehet indítani.',403);
+      await ensureAifSellerTransferSchema();
+      await db.query('BEGIN');started=true;
+      const location=await aifResolveShopLocation(req,db,req.body?.location);
+      // A location-level advisory lock serializes financial handovers and transfers.
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext('aif_seller_transfer'),hashtext($1))`,[String(location.id)]);
+      // The ordinary day-close / shift-handover and cash-handover paths use these
+      // exact lock keys. Serialize with them so approval cannot race past closing.
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_shift:${location.id}`]);
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_cash:${location.id}`]);
+      const actor=actorFrom(req),targetName=text(req.body?.toActor||req.body?.to_actor);
+      const members=await aifListActiveShopEmployees(db,location.code);
+      const sender=members.find((name)=>aifSellerTransferEmployee(name,actor));
+      const target=members.find((name)=>aifSellerTransferEmployee(name,targetName));
+      if (!sender||!target||aifSellerTransferEmployee(sender,target))
+        throw aifSellerTransferError('Csak ugyanazon üzlet két külön, aktív eladója között lehet átadni.',403);
+      const lineId=text(req.body?.lineId||req.body?.line_id);
+      if (!isUuidText(lineId)) throw aifSellerTransferError('Érvénytelen terméksor.',400);
+      const {row,paymentMethod}=await aifSellerTransferSaleLine(db,location.id,lineId);
+      if (!aifSellerTransferEmployee(row.sale_actor,sender))
+        throw aifSellerTransferError('Csak a saját eladásodat adhatod át.',403);
+      await aifAssertSellerTransferDayOpen(db,location.id,row.sold_at);
+      const reason=text(req.body?.reason).slice(0,400)||null;
+      const qty=Number(row.quantity),net=aifSellerTransferMoney(row.line_total),
+        gross=aifSellerTransferMoney(Number(row.list_price)*qty),discount=aifSellerTransferMoney(Math.max(0,gross-net));
+      const result=await db.query(`INSERT INTO aif_shop_seller_transfers
+        (location_id,sale_id,sale_line_id,from_actor,to_actor,sold_at,payment_method,qty,list_total,net_total,discount_total,reason)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [location.id,row.owner_sale_id,lineId,sender,target,row.sold_at,paymentMethod,qty,gross,net,discount,reason]);
+      const detail=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[result.rows[0].id]);
+      await db.query('COMMIT');started=false;
+      return res.status(201).json({ok:true,item:aifSellerTransferItem(detail.rows[0])});
+    } catch(error) {
+      if(started)try{await db.query('ROLLBACK');}catch{}
+      const status=error.code==='23505'?409:Number(error.statusCode||500);
+      return res.status(status).json({error:error.code==='23505'?'Erre a termékre már van folyamatban lévő vagy jóváhagyott átvezetés.':error.message||'Az átadás kérése nem sikerült.',code:error.code||null});
+    } finally{db.release();}
+  });
+
+  router.post('/shop-seller-transfers/:id/decision',requireAuthed,async(req,res)=>{
+    const db=await pool.connect();let started=false;
+    try {
+      if(normCode(req.session?.role)!=='shop') throw aifSellerTransferError('Az eladó csak saját munkamenetével dönthet.',403);
+      await ensureAifSellerTransferSchema();await db.query('BEGIN');started=true;
+      const location=await aifResolveShopLocation(req,db,req.body?.location);
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext('aif_seller_transfer'),hashtext($1))`,[String(location.id)]);
+      // The ordinary day-close / shift-handover and cash-handover paths use these
+      // exact lock keys. Serialize with them so approval cannot race past closing.
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_shift:${location.id}`]);
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_cash:${location.id}`]);
+      const decision=text(req.body?.decision);
+      if(!['accept','reject','cancel'].includes(decision)) throw aifSellerTransferError('Érvénytelen döntés.',400);
+      const id=text(req.params.id);
+      if(!isUuidText(id)) throw aifSellerTransferError('Érvénytelen átadásazonosító.',400);
+      const found=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1 AND t.location_id=$2 FOR UPDATE OF t`,[id,location.id]);
+      if(!found.rowCount) throw aifSellerTransferError('Az átadás nem található.',404);
+      const record=found.rows[0],actor=actorFrom(req);
+      if(record.status!=='pending') throw aifSellerTransferError('Ezt a kérést már elbírálták.',409);
+      const expected=decision==='cancel'?record.from_actor:record.to_actor;
+      if(!aifSellerTransferEmployee(actor,expected)) throw aifSellerTransferError('Csak az átadás érintett eladója dönthet.',403);
+      let status=decision==='accept'?'accepted':decision==='reject'?'rejected':'cancelled';
+      if(status==='accepted') {
+        const activeEmployees=await aifListActiveShopEmployees(db,location.code);
+        if(!activeEmployees.some(name=>aifSellerTransferEmployee(name,record.from_actor)) ||
+           !activeEmployees.some(name=>aifSellerTransferEmployee(name,record.to_actor)))
+          throw aifSellerTransferError('Az egyik érintett eladó már nem aktív ennél az üzletnél.',409,'seller_transfer_employee_inactive');
+        const {row,paymentMethod}=await aifSellerTransferSaleLine(db,location.id,record.sale_line_id);
+        await aifAssertSellerTransferDayOpen(db,location.id,row.sold_at);
+        if(!aifSellerTransferEmployee(row.sale_actor,record.from_actor)||paymentMethod!==record.payment_method
+          || Number(row.quantity)!==Number(record.qty)
+          || Math.abs(Number(row.line_total)-Number(record.net_total))>0.005
+          || Math.abs(Number(row.list_price)*Number(row.quantity)-Number(record.list_total))>0.005)
+          throw aifSellerTransferError('A bizonylat az átadáskérés óta megváltozott. A kérelem nem fogadható el.',409,'seller_transfer_stale');
+      }
+      const updated=await db.query(`UPDATE aif_shop_seller_transfers SET status=$2,decided_at=now(),decided_by=$3,
+       decision_note=$4 WHERE id=$1 RETURNING id`,[id,status,actor,text(req.body?.note).slice(0,400)||null]);
+      const after=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[updated.rows[0].id]);
+      await db.query('COMMIT');started=false;
+      return res.json({ok:true,item:aifSellerTransferItem(after.rows[0])});
+    } catch(error) {
+      if(started)try{await db.query('ROLLBACK');}catch{}
+      const status=Number(error.statusCode||500);
+      return res.status(status).json({error:error.message||'Az átadás elbírálása nem sikerült.',code:error.code||null});
+    } finally{db.release();}
+  });
+
+
   function aifIsAdminSession(req) {
     return ["admin", "administrator"].includes(normCode(req.session?.role));
   }
@@ -25198,6 +25516,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       salesOnlyBeforeDiscount + customerPaymentTotal + settledDiscounts.total
     );
     const collectedDiscountTotal = aifRoundMoney(salesOnlyDiscountTotal + settledDiscounts.total);
+    // Accepted employee-to-employee sale lines reallocate reporting money, not real cash or stock.
+    // Totals for the whole store (actor=null) are unchanged. A receipt counts once per employee.
+    const employeeTransfers = actor ? await aifAcceptedSellerTransfers(client,locationId,fromAt,toAt) : [];
+    const transferImpact = actor ? aifSellerTransferImpact(employeeTransfers,actor) : [];
+    const transferReceiptChange = actor ? aifSellerTransferTransactionDelta(employeeTransfers,actor) : new Map();
+    let transferNet=0,transferGross=0,transferDiscount=0,transferQty=0;
+    for(const t of transferImpact){
+      transferNet+=t.sign*aifNumber(t.net_total);
+      transferGross+=t.sign*aifNumber(t.list_total);
+      transferDiscount+=t.sign*aifNumber(t.discount_total);
+      transferQty+=t.sign*aifNumber(t.qty);
+      if(payments[t.payment_method]) {
+        payments[t.payment_method].salesAmount=aifRoundMoney(payments[t.payment_method].salesAmount+t.sign*aifNumber(t.net_total));
+      }
+    }
+    for(const [saleId,change] of transferReceiptChange){
+      const related=employeeTransfers.find((t)=>String(t.sale_id)===saleId);
+      if(related&&payments[related.payment_method])payments[related.payment_method].transactions+=change;
+    }
+    for(const item of Object.values(payments)) item.amount=aifRoundMoney(item.salesAmount+item.customerPaymentAmount+item.exchangeAmount);
+    const transferTransactions=Array.from(transferReceiptChange.values()).reduce((sum,n)=>sum+n,0);
+    const transferCustomerTransactions=Array.from(transferReceiptChange.entries()).reduce((sum,[id,n])=>{
+      const r=employeeTransfers.find(t=>String(t.sale_id)===id);return sum+(r?.customer_id?n:0);
+    },0);
+    const revenueWithTransfers=aifRoundMoney(revenue+transferNet);
+    const transactionsWithTransfers=transactions+transferTransactions;
     const collectedTotal = aifRoundMoney(Object.values(payments)
       .filter((payment) => payment.method !== 'credit')
       .reduce((sum, payment) => sum + aifNumber(payment.amount), 0));
@@ -25206,24 +25550,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       fromAt: fromAt ? new Date(fromAt).toISOString() : null,
       toAt: toAt ? new Date(toAt).toISOString() : null,
       actor: actor || null,
-      revenue, // Csak az adott idoszakban ujonnan eladott termekek forgalma.
-      salesBeforeDiscount: grossCollectedTotal,
-      discountTotal: collectedDiscountTotal,
+      revenue: revenueWithTransfers, // Új eladások tulajdonosi átvezetés után.
+      salesBeforeDiscount: aifRoundMoney(grossCollectedTotal+transferGross),
+      discountTotal: aifRoundMoney(collectedDiscountTotal+transferDiscount),
       // Az eredeti eladasok kulon maradnak az utolagos tartozasbefizetesektol.
-      salesOnlyBeforeDiscount,
-      salesOnlyDiscountTotal,
+      salesOnlyBeforeDiscount: aifRoundMoney(salesOnlyBeforeDiscount+transferGross),
+      salesOnlyDiscountTotal: aifRoundMoney(salesOnlyDiscountTotal+transferDiscount),
       customerPaymentTotal,
       settlementDiscountTotal: settledDiscounts.total,
-      grossCollectedTotal,
-      collectedDiscountTotal,
+      grossCollectedTotal: aifRoundMoney(grossCollectedTotal+transferGross),
+      collectedDiscountTotal: aifRoundMoney(collectedDiscountTotal+transferDiscount),
       collectedTotal,
-      transactions,
-      itemsSold,
-      averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
-      paidTotal: aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)),
+      transactions: transactionsWithTransfers,
+      itemsSold: itemsSold+transferQty,
+      averageBasket: transactionsWithTransfers > 0 ? aifRoundMoney(revenueWithTransfers / transactionsWithTransfers) : 0,
+      paidTotal: aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)+transferNet),
       unpaidTotal: aifRoundMoney(row.unpaid_total),
       unpaidSales: aifNumber(row.unpaid_sales),
-      customerSales: aifNumber(row.customer_sales) + aifNumber(exchangeRow.customer_sales),
+      customerSales: aifNumber(row.customer_sales) + aifNumber(exchangeRow.customer_sales)+transferCustomerTransactions,
       firstSaleAt,
       lastSaleAt,
       payments: Object.values(payments),
@@ -33523,10 +33867,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         aifLoadDailyCreditHistory(pool, { locationId: location.id, date, employee }),
       ]);
 
+      const dayBounds=await aifShopDayBounds(pool,date);
+      const sellerTransfers=await aifAcceptedSellerTransfers(pool,location.id,dayBounds.start,dayBounds.end);
+      const ownTransferImpact=aifSellerTransferImpact(sellerTransfers,employee);
+      const ownTransferReceipts=aifSellerTransferTransactionDelta(sellerTransfers,employee);
+      const productTransactionDelta=aifSellerTransferProductTransactionDelta(sellerTransfers,employee);
+      const transferNet=aifRoundMoney(ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.net_total),0));
+      const transferGross=aifRoundMoney(ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.list_total),0));
+      const transferDiscount=aifRoundMoney(ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.discount_total),0));
+      const transferQty=ownTransferImpact.reduce((sum,t)=>sum+t.sign*aifNumber(t.qty),0);
+      const transferTransactionCount=Array.from(ownTransferReceipts.values()).reduce((sum,x)=>sum+x,0);
+      const transferCustomerCount=Array.from(ownTransferReceipts.entries()).reduce((sum,[saleId,x])=>{
+        const t=sellerTransfers.find(row=>String(row.sale_id)===saleId);return sum+(t?.customer_id?x:0);
+      },0);
       const saleSummary = summaryResult.rows[0] || {};
       const exchangeSummary = exchangeSummaryResult.rows[0] || {};
-      const revenue = aifRoundMoney(aifNumber(saleSummary.revenue) + aifNumber(exchangeSummary.revenue));
-      const transactions = aifNumber(saleSummary.transactions) + aifNumber(exchangeSummary.transactions);
+      const revenue = aifRoundMoney(aifNumber(saleSummary.revenue) + aifNumber(exchangeSummary.revenue)+transferNet);
+      const transactions = aifNumber(saleSummary.transactions) + aifNumber(exchangeSummary.transactions)+transferTransactionCount;
       const firstValues = [saleSummary.first_sale_at, exchangeSummary.first_sale_at].filter(Boolean).map((value) => new Date(value));
       const lastValues = [saleSummary.last_sale_at, exchangeSummary.last_sale_at].filter(Boolean).map((value) => new Date(value));
 
@@ -33557,6 +33914,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (!current.image_url && row.image_url) current.image_url = row.image_url;
         productMap.set(key, current);
       }
+      // Recalculate per-product allocation without creating a second sale or stock movement.
+      for(const t of ownTransferImpact){
+        const key=String(t.variant_id||t.product_code||t.product_title||t.sale_line_id);
+        const current=productMap.get(key)||{key,title:t.product_title||t.product_code||'Termék',
+          product_code:t.product_code||null,brand_name:t.brand_name||null,
+          subcategory_name:t.subcategory_name||null,color_name:t.color_name||null,
+          size:t.size||null,image_url:t.image_url||null,qty:0,revenue:0,discount_total:0,transactions:0};
+        current.qty+=t.sign*aifNumber(t.qty);
+        current.revenue=aifRoundMoney(current.revenue+t.sign*aifNumber(t.net_total));
+        current.discount_total=aifRoundMoney(current.discount_total+t.sign*aifNumber(t.discount_total));
+        current.transactions=aifNumber(current.transactions);
+        productMap.set(key,current);
+      }
+      for(const [key,delta] of productTransactionDelta){
+        const item=productMap.get(key);
+        if(item)item.transactions+=delta;
+      }
       const productRows = Array.from(productMap.values())
         .filter((row) => Math.abs(row.qty) > 0.0001 || Math.abs(row.revenue) > 0.005)
         .sort((a, b) => b.qty - a.qty || b.revenue - a.revenue || String(a.title).localeCompare(String(b.title), "hu"))
@@ -33567,16 +33941,36 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // products lista mellett külön sale-line szintű listát is visszaadunk.
       // Credit issues use their selected-day snapshot. Allocated payments are
       // separate immutable events. Regular paid-sale return behaviour is unchanged.
+      const outgoingIds=new Set(ownTransferImpact.filter(t=>t.sign<0).map(t=>String(t.sale_line_id)));
+      const incomingRows=ownTransferImpact.filter(t=>t.sign>0).map(aifSellerTransferLineProjection);
       const productLineRows = [
-        ...productLinesResult.rows,
+        ...productLinesResult.rows.filter(r=>!outgoingIds.has(String(r.line_id))),
+        ...incomingRows,
         ...creditHistory.productLines,
         ...exchangeProductLinesResult.rows,
         ...settlementProductLinesResult.rows,
-      ]
-        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime());
+      ].sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime());
 
-      const saleRows = [...salesResult.rows, ...creditHistory.sales, ...exchangeSalesResult.rows]
-        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime());
+      // A nyugta eredeti azonosítója marad. A többtermékes nyugta részben is átvezethető.
+      const saleMap=new Map(salesResult.rows.map(r=>[String(r.id),{...r}]));
+      for(const t of ownTransferImpact){
+        const id=String(t.sale_id);
+        const item=saleMap.get(id)||{id,sale_number:t.sale_number,sold_at:t.sold_at,
+          customer_name:t.customer_name,customer_phone:t.customer_phone,
+          subtotal:0,discount_total:0,total:0,paid_total:0,balance_due:0,
+          payment_status:'paid',sale_type:'sale',line_count:0,item_count:0,
+          payment_label:aifPaymentMethodLabel(t.payment_method),record_type:'sale',transferred:true};
+        item.subtotal=aifRoundMoney(aifNumber(item.subtotal)+t.sign*aifNumber(t.list_total));
+        item.discount_total=aifRoundMoney(aifNumber(item.discount_total)+t.sign*aifNumber(t.discount_total));
+        item.total=aifRoundMoney(aifNumber(item.total)+t.sign*aifNumber(t.net_total));
+        item.paid_total=aifRoundMoney(aifNumber(item.paid_total)+t.sign*aifNumber(t.net_total));
+        item.line_count=aifNumber(item.line_count)+t.sign;
+        item.item_count=aifNumber(item.item_count)+t.sign*aifNumber(t.qty);
+        saleMap.set(id,item);
+      }
+      const saleRows = [...Array.from(saleMap.values()).filter(r=>aifNumber(r.line_count)>0),
+        ...creditHistory.sales, ...exchangeSalesResult.rows]
+        .sort((a,b)=>new Date(b.sold_at||0).getTime()-new Date(a.sold_at||0).getTime());
 
       const payments = paymentsResult.rows.map((row) => ({
         method: row.method,
@@ -33586,6 +33980,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         customerPaymentAmount: aifNumber(row.customer_payment_amount),
         customerPaymentTransactions: aifNumber(row.customer_payment_transactions),
       }));
+      for(const t of ownTransferImpact){
+        let payment=payments.find(p=>p.method===t.payment_method);
+        if(!payment){payment={method:t.payment_method,label:aifPaymentMethodLabel(t.payment_method),amount:0,
+          transactions:0,customerPaymentAmount:0,customerPaymentTransactions:0};payments.push(payment);}
+        payment.amount=aifRoundMoney(payment.amount+t.sign*aifNumber(t.net_total));
+      }
+      for(const [saleId,change] of ownTransferReceipts){
+        const t=sellerTransfers.find(r=>String(r.sale_id)===saleId);
+        const payment=payments.find(p=>p.method===t?.payment_method);
+        if(payment)payment.transactions+=change;
+      }
       const historicalUnpaidTotal = aifRoundMoney(aifNumber(saleSummary.unpaid_total) + creditHistory.unpaidTotal);
       const historicalUnpaidSales = aifNumber(saleSummary.unpaid_sales) + creditHistory.unpaidSales;
       const creditPayment = payments.find((item) => item.method === "credit");
@@ -33616,8 +34021,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))`;
       const settledDiscounts = await aifReadSettledGrossDiscounts(pool, paymentDiscountWhere, baseArgs);
       const originalSalesGross = aifRoundMoney(
-        aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount));
-      const originalSalesDiscount = aifRoundMoney(aifNumber(saleSummary.discount_total));
+        aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount)+transferGross);
+      const originalSalesDiscount = aifRoundMoney(aifNumber(saleSummary.discount_total)+transferDiscount);
       const grossCollectedTotal = aifRoundMoney(
         originalSalesGross + customerPaymentTotal + settledDiscounts.total);
       const collectedDiscountTotal = aifRoundMoney(originalSalesDiscount + settledDiscounts.total);
@@ -33650,16 +34055,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           salesOnlyDiscountTotal: originalSalesDiscount,
           salesBeforeDiscount: grossCollectedTotal,
           transactions,
-          itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold),
+          itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold)+transferQty,
           averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
           discountTotal: collectedDiscountTotal,
-          paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)),
+          paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)+transferNet),
           unpaidTotal: historicalUnpaidTotal,
           unpaidSales: historicalUnpaidSales,
           currentUnpaidTotal: aifRoundMoney(aifNumber(saleSummary.unpaid_total) + creditHistory.currentUnpaidTotal),
           currentUnpaidSales: aifNumber(saleSummary.unpaid_sales) + creditHistory.currentUnpaidSales,
           creditSales: creditHistory.creditSales,
-          customerSales: aifNumber(saleSummary.customer_sales) + aifNumber(exchangeSummary.customer_sales),
+          customerSales: aifNumber(saleSummary.customer_sales) + aifNumber(exchangeSummary.customer_sales)+transferCustomerCount,
           firstSaleAt: firstValues.length ? new Date(Math.min(...firstValues.map((value) => value.getTime()))).toISOString() : null,
           lastSaleAt: lastValues.length ? new Date(Math.max(...lastValues.map((value) => value.getTime()))).toISOString() : null,
         },
@@ -33720,6 +34125,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           transactions: aifNumber(row.transactions),
           paymentLabel: row.payment_label || null,
           settlementAmount: aifNumber(row.settlement_amount),
+          transferredFrom: row.transferred_from || null,
+          transferredTo: row.transferred_to || null,
+          transferId: row.transfer_id || null,
           stockEffect: aifNumber(row.stock_effect),
         })),
         sales: saleRows.map((row) => ({
@@ -34500,6 +34908,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     requireAuthed,
     requireAdminOrSecret,
     ensureAifShopSalesSchema,
+    ensureAifSellerTransferSchema,
     aifResolveShopLocation,
     actorFrom,
   }));
@@ -34513,6 +34922,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifResolveShopLocation,
     actorFrom,
     aifLoadDailyCreditHistory,
+    ensureAifSellerTransferSchema,
   }));
 
   // Utólagos, terméksor-szintű eladási megjegyzések. Külön modulban marad,
@@ -34626,6 +35036,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifPaymentMethodLabel,
     aifBuildDailyCreditHistory, // SAME audited day-end reconstruction as shop's Daily Summary
     aifReadSettledGrossDiscounts, // SAME historic settlement-discount lookup as the shop screen
+    ensureAifSellerTransferSchema,
     readSalesTvaSettings,
   }));
 
