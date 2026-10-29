@@ -1,5 +1,5 @@
 // ALLINFASHION_DAILY_AUDIT_EXCEL_20261026
-// Read-only, role-scoped, date-scoped XLSX export. No inventory/cash writes.
+// Read-only, role-scoped XLSX export for a day or inclusive date range. No inventory/cash writes.
 // AIF_AUDIT_SUBCATEGORY_20261027: a saved subcategory is preferred; otherwise
 // use the linked product's actual subcategory (Hungarian, then Romanian).
 // Missing subcategories remain blank; no inference from title, code or brand.
@@ -47,7 +47,19 @@ function distributeMoney(total, weightedRows) {
 }
 const EMPLOYEE_SQL = ` AND ($3::text IS NULL OR lower(regexp_replace(btrim(COALESCE(%ACTOR%,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g')))`;
 const who = (field) => EMPLOYEE_SQL.replace('%ACTOR%',field);
-const dayFilter = (field) => `${field} >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest') AND ${field} < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')`;
+// $2 = from, $3 = optional employee, $4 = to (inclusive). Bucharest-local boundaries.
+const dayFilter = (field) => `${field} >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest') AND ${field} < (($4::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest') AND ($3::text IS NULL OR $3::text IS NOT NULL)`;
+export function aifAuditExcelPeriod(query = {}) {
+  const date = text(query.date);
+  const from = text(query.from || date || query.to);
+  const to = text(query.to || date || query.from);
+  if (!checkDate(from) || !checkDate(to) || from > to) {
+    throw Object.assign(new Error('Adj meg érvényes Ettől–Eddig dátumot, növekvő sorrendben.'),{statusCode:400});
+  }
+  const days = Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86400000) + 1;
+  if (days > 366) throw Object.assign(new Error('Egyszerre legfeljebb 366 nap exportálható.'),{statusCode:400});
+  return {from,to,days};
+}
 
 // AIF_AUDIT_PRODUCT_CODE_SOURCE_20261027_V2
 // Keep product-code selection in the data layer. legacyProductCode and
@@ -71,7 +83,7 @@ export function aifAuditProductCode({ supplierProductCode, modelCode, saleProduc
   return match && brandKey && brandKey === match[1].toLowerCase() ? match[2] : saved;
 }
 
-async function loadDay(client, args) {
+async function loadPeriod(client, args) {
   const locationId = args[0];
   const salesQuery = `
     SELECT s.id::text AS sale_id,s.sale_number,s.sold_at,s.actor,s.customer_name,s.customer_phone,
@@ -114,26 +126,26 @@ async function loadDay(client, args) {
       LIMIT 1
     ) stock_code ON true
     WHERE s.location_id=$1 AND s.status='completed' AND ${dayFilter('s.sold_at')}
-    ORDER BY s.sold_at, s.sale_number, sl.line_no,sl.id LIMIT 20001`;
+    ORDER BY s.sold_at, s.sale_number, sl.line_no,sl.id LIMIT 50001`;
   const paymentsQuery = `
     SELECT p.id::text AS id,p.sale_id::text AS sale_id,p.method,p.amount,p.paid_at,p.actor,
       COALESCE(NULLIF(p.actor,''),s.actor) AS effective_payment_actor,
       s.sale_number,s.sold_at AS original_sold_at,s.sale_type,s.customer_name,
-      (s.sold_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
-        AND s.sold_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')) AS sold_this_day
+      ((p.paid_at AT TIME ZONE 'Europe/Bucharest')::date =
+        (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date) AS sold_this_day
     FROM aif_shop_sale_payments p
     JOIN aif_shop_sales s ON s.id=p.sale_id
     WHERE s.location_id=$1 AND s.status='completed'
       AND p.method<>'credit' AND p.customer_payment_id IS NULL AND ${dayFilter('p.paid_at')}
 
-    ORDER BY p.paid_at,p.id LIMIT 20001`;
+    ORDER BY p.paid_at,p.id LIMIT 50001`;
   const customerPaymentsQuery = `
     SELECT cp.id::text AS id,cp.amount,cp.method,cp.paid_at,cp.actor,cp.note,
       COALESCE(NULLIF(c.full_name,''),'Ismeretlen kliens') AS customer_name
     FROM aif_shop_customer_payments cp
     LEFT JOIN aif_shop_customers c ON c.id=cp.customer_id
     WHERE cp.location_id=$1 AND ${dayFilter('cp.paid_at')} ${who('cp.actor')}
-    ORDER BY cp.paid_at,cp.id LIMIT 20001`;
+    ORDER BY cp.paid_at,cp.id LIMIT 50001`;
   const allocationsQuery = `
     SELECT la.customer_payment_id::text AS payment_id,la.id::text AS id,la.amount,la.quantity,
       s.id::text AS sale_id,s.sale_number,s.sold_at AS original_sold_at,
@@ -163,7 +175,7 @@ async function loadDay(client, args) {
       LIMIT 1
     ) stock_code ON true
     WHERE cp.location_id=$1 AND ${dayFilter('cp.paid_at')} ${who('cp.actor')}
-    ORDER BY cp.paid_at,la.id LIMIT 20001`;
+    ORDER BY cp.paid_at,la.id LIMIT 50001`;
   const exchangeQuery = `
     SELECT e.id::text AS id,e.exchange_number,e.created_at,e.actor,e.customer_name,
       e.returned_qty,e.return_credit,e.replacement_total,e.difference,
@@ -220,14 +232,14 @@ async function loadDay(client, args) {
       LIMIT 1
     ) return_code ON true
     WHERE e.location_id=$1 AND e.status='completed' AND ${dayFilter('e.created_at')} ${who('e.actor')}
-    ORDER BY e.created_at,e.id LIMIT 20001`;
+    ORDER BY e.created_at,e.id LIMIT 50001`;
 
   const [salesResult,paymentsResult,customerResult,allocResult,exchangeResult] = await Promise.all([
     client.query(salesQuery,args),client.query(paymentsQuery,args),client.query(customerPaymentsQuery,args),
     client.query(allocationsQuery,args),client.query(exchangeQuery,args),
   ]);
   for (const r of [salesResult,paymentsResult,customerResult,allocResult,exchangeResult]) {
-    if (r.rows.length>20000) throw Object.assign(new Error('A napi export túl sok sort tartalmaz; szűkebb időszakra van szükség.'), {statusCode:413});
+    if (r.rows.length>50000) throw Object.assign(new Error('Az időszaki export több mint 50 000 sort tartalmaz. Válassz rövidebb időszakot.'), {statusCode:413});
   }
   return { sales:salesResult.rows, payments:paymentsResult.rows, customerPayments:customerResult.rows,
     allocations:allocResult.rows, exchanges:exchangeResult.rows };
@@ -432,7 +444,7 @@ function excelEntries(data, employee = null) {
   const paymentMethods=round(totals.cash+totals.card+totals.transfer+totals.other);
   if (Math.abs(paymentMethods-totals.collected)>0.02) {
     // Important: never download a plausible looking but false reconciliation.
-    throw Object.assign(new Error(`Nem egyezik a nap pénzmozgása: részletek ${totals.collected}, fizetési módok ${paymentMethods} RON.`), {statusCode:409});
+    throw Object.assign(new Error(`Nem egyezik az időszak pénzmozgása: részletek ${totals.collected}, fizetési módok ${paymentMethods} RON.`), {statusCode:409});
   }
   return {entries:rows,totals};
 }
@@ -442,37 +454,47 @@ export default function createAifShopDailyAuditExcelRouter({pool,requireAuthed,r
   async function download(req,res,scope) {
     let client=null;let started=false;
     try {
-      const date=text(req.query.date);
-      if(!checkDate(date)) return res.status(400).json({error:'A letöltéshez érvényes napi dátumot adj meg (ÉÉÉÉ-HH-NN).'});
+      const {from,to}=aifAuditExcelPeriod(req.query);
       const isAll=scope==='all';
       const employee=isAll?(text(req.query.employee).slice(0,120)||null):text(actorFrom(req));
       if(!isAll&&!employee) return res.status(403).json({error:'A bejelentkezett eladó nem azonosítható.'});
       await ensureAifShopSalesSchema();
       await ensureAifSellerTransferSchema(); // DDL only before the read-only export transaction.
       client=await pool.connect();
-      await client.query('BEGIN READ ONLY');started=true;
-      await client.query("SET LOCAL statement_timeout = '15000ms'");
+      await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');started=true;
+      await client.query("SET LOCAL statement_timeout = '120000ms'");
       const location=await aifResolveShopLocation(req,client,req.query.location);
-      const data=await loadDay(client,[location.id,date,employee]);
+      // One snapshot and five period queries: monthly payments are still credited
+      // on their *actual paid date*. Same-day vs late payment is evaluated per
+      // receipt, never against the whole date range.
+      const data=await loadPeriod(client,[location.id,from,employee,to]);
       const result=excelEntries(data,employee);
+      if (result.entries.length > 50000) throw Object.assign(
+        new Error('Az export több mint 50 000 eseménysort tartalmaz; válassz rövidebb időszakot.'),
+        {statusCode:413});
+      result.entries.sort((a,b) => new Date(a.at||0).getTime()-new Date(b.at||0).getTime()
+        || String(a.id||'').localeCompare(String(b.id||'')));
       await client.query('COMMIT');started=false;
       client.release();client=null;
+      const periodLabel = from===to ? from : `${from} - ${to}`;
+      // Preserve the existing 15-column audit format, but write all rows and
+      // one reconciled period total into ONE workbook.
       const file=buildAifDailyAuditXlsx({
-        date,location:location.name||location.code,employeeLabel:employee||'Minden eladó',
+        date:periodLabel,location:location.name||location.code,employeeLabel:employee||'Minden eladó',
         entries:result.entries,totals:result.totals,
       });
       const safeStore=text(location.code).replace(/[^a-z0-9_-]/gi,'_').slice(0,60);
-      const filename=`AllInFashion_Auditnaplo_${safeStore}_${date}${employee?'_elado':''}.xlsx`;
+      const filename=`AllInFashion_Auditnaplo_${safeStore}_${from}${from!==to?'_'+to:''}${employee?'_elado':''}.xlsx`;
       res.set('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.set('Content-Disposition',`attachment; filename="${filename}"`);
       res.set('Cache-Control','no-store, private');
       return res.status(200).send(file);
     }catch(err) {
       if(started) try {await client.query('ROLLBACK');}catch(_){}
-      console.error('AIF daily XLSX export failed',err);
+      console.error('AIF period XLSX export failed',err);
       const status=Number(err?.statusCode||500);
       if(res.headersSent) return;
-      return res.status(status>=400&&status<600?status:500).json({error:err?.message||'A napi Excel nem tölthető le.'});
+      return res.status(status>=400&&status<600?status:500).json({error:err?.message||'Az időszaki Excel nem tölthető le.'});
     }finally {if(client) client.release();}
   }
   router.get('/all.xlsx',requireAdminOrSecret,(req,res)=>download(req,res,'all'));
