@@ -24829,6 +24829,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           sold_at timestamptz NOT NULL,
           payment_method text NOT NULL CHECK (payment_method IN ('cash','card','bank_transfer')),
           payment_actor text NULL,
+          transfer_kind text NOT NULL DEFAULT 'sale' CHECK (transfer_kind IN ('sale','money')),
+          requested_by text NULL,
+          approval_actor text NULL,
+          batch_id uuid NULL,
           qty integer NOT NULL CHECK (qty > 0),
           list_total numeric(14,2) NOT NULL CHECK (list_total >= 0),
           net_total numeric(14,2) NOT NULL CHECK (net_total >= 0),
@@ -24844,6 +24848,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         // Compatibility with the first 2026-10-29 deployment. Old transfers all had
         // their original payment collected by the same person as the sale.
         await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS payment_actor text`);
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS transfer_kind text NOT NULL DEFAULT 'sale'`);
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS requested_by text`);
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS approval_actor text`);
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS batch_id uuid`);
+        await pool.query(`UPDATE aif_shop_seller_transfers SET requested_by=from_actor WHERE requested_by IS NULL`);
+        await pool.query(`UPDATE aif_shop_seller_transfers SET approval_actor=to_actor WHERE approval_actor IS NULL`);
         // A legacy accepted transfer must not appear as a NEW confirmation.
         // Only decisions made after this deployment set sender_notification_at.
         await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS sender_notification_at timestamptz`);
@@ -24879,6 +24889,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       productCode: row.product_code || null, brandName: row.brand_name || null,
       colorName: row.color_name || null, size: row.size || null, imageUrl: row.image_url || null,
       fromActor: row.from_actor, toActor: row.to_actor, paymentActor: row.payment_actor || row.from_actor,
+      transferKind: row.transfer_kind || 'sale', requestedBy: row.requested_by || row.from_actor,
+      approvalActor: row.approval_actor || row.to_actor,
+      batchId: row.batch_id ? String(row.batch_id) : null,
+      lineIds: [String(row.sale_line_id)], lineCount: 1,
       status: row.status, isHistorical: aifBucharestIsoDate(row.sold_at) < aifBucharestIsoDate(),
       qty: Number(row.qty), listTotal: aifSellerTransferMoney(row.list_total),
       netTotal: aifSellerTransferMoney(row.net_total), discountTotal: aifSellerTransferMoney(row.discount_total),
@@ -24889,6 +24903,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       senderNotificationPending: row.status === 'accepted' && Boolean(row.sender_notification_at) && !row.sender_acknowledged_at,
       reason: row.reason || null, decisionNote: row.decision_note || null,
     };
+  }
+
+  // One approval and one confirmation for a whole selected batch. Each line remains
+  // a separate immutable accounting allocation, with its own exact amount.
+  function aifSellerTransferItems(rows) {
+    const groups = new Map();
+    for (const row of rows || []) {
+      const groupKey = (row.transfer_kind === 'money' && row.batch_id)
+        ? String(row.batch_id) : String(row.id);
+      const item = aifSellerTransferItem(row);
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { ...item, lineIds: [], lineCount: 0,
+          qty: 0, netTotal: 0, listTotal: 0, discountTotal: 0,
+          senderNotificationPending: false, _titles: [], _saleNumbers: [] });
+      }
+      const group = groups.get(groupKey);
+      group.lineIds.push(String(row.sale_line_id));
+      group.lineCount += 1;
+      group.qty += Number(row.qty);
+      group.netTotal = aifSellerTransferMoney(group.netTotal + Number(row.net_total));
+      group.listTotal = aifSellerTransferMoney(group.listTotal + Number(row.list_total));
+      group.discountTotal = aifSellerTransferMoney(group.discountTotal + Number(row.discount_total));
+      group.senderNotificationPending ||= item.senderNotificationPending;
+      if (!group._titles.includes(item.title)) group._titles.push(item.title);
+      if (item.saleNumber && !group._saleNumbers.includes(item.saleNumber)) group._saleNumbers.push(item.saleNumber);
+    }
+    return Array.from(groups.values()).map(group => {
+      if (group.lineCount > 1) {
+        group.title = `${group.lineCount} termék: ${group._titles.slice(0, 3).join(', ')}${group._titles.length > 3 ? '…' : ''}`;
+        group.saleNumber = group._saleNumbers.join(', ');
+        group.imageUrl = null;
+      }
+      delete group._titles;
+      delete group._saleNumbers;
+      return group;
+    });
   }
 
   const AIF_SELLER_TRANSFER_SELECT = `SELECT t.*, s.sale_number, sl.product_title, sl.product_code,
@@ -25013,7 +25063,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function aifSellerTransferImpact(rows, employee) {
     const match = (actor) => aifSellerTransferEmployee(actor,employee);
-    return rows.filter((row) => match(row.from_actor)||match(row.to_actor))
+    return rows.filter((row) => (row.transfer_kind||'sale')==='sale' && (match(row.from_actor)||match(row.to_actor)))
       .map((row) => ({...row, sign:match(row.to_actor)?1:-1}));
   }
 
@@ -25022,6 +25072,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   function aifSellerTransferTransactionDelta(allRows, employee) {
     const grouped = new Map();
     for (const row of allRows) {
+      if ((row.transfer_kind||'sale')!=='sale') continue;
       const id=String(row.sale_id);
       let entry=grouped.get(id);
       if (!entry) {entry={origin:row.from_actor, total:Number(row.total_line_count), moved:0, recipients:new Set()};grouped.set(id,entry);}
@@ -25042,6 +25093,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   function aifSellerTransferProductTransactionDelta(allRows, employee) {
     const groups=new Map();
     for(const row of allRows){
+      if ((row.transfer_kind||'sale')!=='sale') continue;
       const key=String(row.variant_id||row.product_code||row.product_title||row.sale_line_id);
       const pair=`${row.sale_id}:${key}`;
       let group=groups.get(pair);
@@ -25089,13 +25141,61 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          lower(regexp_replace(btrim(t.to_actor),'[[:space:]]+',' ','g'))=$2)
         ORDER BY CASE
           WHEN t.status='accepted' AND t.sender_notification_at IS NOT NULL AND t.sender_acknowledged_at IS NULL
-            AND lower(regexp_replace(btrim(t.from_actor),'[[:space:]]+',' ','g'))=$2 THEN 0
+            AND lower(regexp_replace(btrim(COALESCE(t.requested_by,t.from_actor)),'[[:space:]]+',' ','g'))=$2 THEN 0
           WHEN t.status='pending' THEN 1
           ELSE 2 END,
-          COALESCE(t.decided_at,t.requested_at) DESC LIMIT 150`,[location.id,aifEmployeeKey(actor)]);
+          COALESCE(t.decided_at,t.requested_at) DESC, t.batch_id NULLS LAST, t.sale_line_id LIMIT 150`,[location.id,aifEmployeeKey(actor)]);
       return res.json({ok:true,actor,location:{id:String(location.id),code:location.code,name:location.name},
-        items:rows.rows.map(aifSellerTransferItem)});
+        items:aifSellerTransferItems(rows.rows)});
     } catch(error) { const status=Number(error.statusCode||500);return res.status(status).json({error:error.message||'Az átadások nem tölthetők be.',code:error.code||null}); }
+  });
+
+  router.get('/shop-seller-transfers/payment-lines', requireAuthed, async (req,res)=>{
+    try {
+      if (normCode(req.session?.role)!=='shop')
+        throw aifSellerTransferError('Pénzügyi korrekciót csak saját eladói belépéssel lehet kezdeményezni.',403);
+      await ensureAifSellerTransferSchema();
+      const location=await aifResolveShopLocation(req,pool,req.query.location);
+      const date=text(req.query.date);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date>aifBucharestIsoDate())
+        throw aifSellerTransferError('Érvényes korábbi vagy mai napot válassz.',400);
+      const result=await pool.query(`SELECT sl.id::text AS line_id,s.id::text AS sale_id,
+           s.sale_number,s.sold_at,s.actor AS sale_actor,pay.payment_actor,pay.payment_method,
+           sl.quantity,sl.line_total,sl.product_title,sl.product_code,sl.color_name,sl.size,
+           COALESCE(NULLIF(sl.image_url,''),NULLIF(v.image_url,'')) AS image_url
+          FROM aif_shop_sales s
+          JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+          LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+          JOIN LATERAL (
+            SELECT min(p.method) AS payment_method,
+              min(btrim(COALESCE(NULLIF(p.actor,''),s.actor))) AS payment_actor,
+              count(DISTINCT p.method)::int AS method_count,
+              count(DISTINCT lower(regexp_replace(btrim(COALESCE(NULLIF(p.actor,''),s.actor)),'[[:space:]]+',' ','g')))::int AS actor_count,
+              COALESCE(sum(p.amount),0)::numeric AS paid,
+              bool_and(p.customer_payment_id IS NULL) AS regular,
+              bool_and((p.paid_at AT TIME ZONE 'Europe/Bucharest')::date=(s.sold_at AT TIME ZONE 'Europe/Bucharest')::date) AS same_day
+            FROM aif_shop_sale_payments p WHERE p.sale_id=s.id AND p.method<>'credit'
+          ) pay ON true
+          WHERE s.location_id=$1 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+            AND s.status='completed' AND s.sale_type='sale' AND s.payment_status='paid'
+            AND abs(s.balance_due)<0.005 AND abs(s.paid_total-s.total)<0.01
+            AND pay.method_count=1 AND pay.actor_count=1
+            AND pay.payment_method IN ('cash','card','bank_transfer')
+            AND pay.regular=true AND pay.same_day=true AND abs(pay.paid-s.total)<0.01
+            AND abs((SELECT COALESCE(sum(x.line_total),0) FROM aif_shop_sale_lines x WHERE x.sale_id=s.id)-s.total)<0.015
+            AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges e WHERE e.source_sale_id=s.id AND e.status IN ('completed','cancelled'))
+            AND NOT EXISTS (SELECT 1 FROM aif_shop_seller_transfers t WHERE t.sale_line_id=sl.id AND t.status IN ('pending','accepted'))
+          ORDER BY s.sold_at,sl.line_no LIMIT 1000`,[location.id,date]);
+      return res.json({ok:true,items:result.rows.map(r=>({
+        lineId:r.line_id,saleId:r.sale_id,saleNumber:r.sale_number,soldAt:new Date(r.sold_at).toISOString(),
+        saleActor:r.sale_actor,paymentActor:r.payment_actor,paymentMethod:r.payment_method,
+        qty:Number(r.quantity),netTotal:aifSellerTransferMoney(r.line_total),title:r.product_title||r.product_code||'Termék',
+        productCode:r.product_code||null,colorName:r.color_name||null,size:r.size||null,imageUrl:r.image_url||null
+      }))});
+    } catch(error) {
+      const status=Number(error.statusCode||500);
+      return res.status(status).json({error:error.message||'A fizetési sorok nem tölthetők be.',code:error.code||null});
+    }
   });
 
   router.post('/shop-seller-transfers',requireAuthed,async(req,res)=>{
@@ -25112,12 +25212,49 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // exact lock keys. Serialize with them so approval cannot race past closing.
       await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_shift:${location.id}`]);
       await db.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_shop_cash:${location.id}`]);
-      const actor=actorFrom(req),targetName=text(req.body?.toActor||req.body?.to_actor);
+      const kind=text(req.body?.kind)==='money'?'money':'sale';
+      const actor=actorFrom(req),targetName=kind==='money'
+        ? text(req.body?.fromActor||req.body?.from_actor)
+        : text(req.body?.toActor||req.body?.to_actor);
       const members=await aifListActiveShopEmployees(db,location.code);
       const sender=members.find((name)=>aifSellerTransferEmployee(name,actor));
       const target=members.find((name)=>aifSellerTransferEmployee(name,targetName));
       if (!sender||!target||aifSellerTransferEmployee(sender,target))
         throw aifSellerTransferError('Csak ugyanazon üzlet két külön, aktív eladója között lehet átadni.',403);
+      if(kind==='money') {
+        const rawIds=Array.isArray(req.body?.lineIds)?req.body.lineIds:[];
+        const lineIds=[...new Set(rawIds.map(value=>text(value)))];
+        if(!lineIds.length||lineIds.length>30||lineIds.some(id=>!isUuidText(id)))
+          throw aifSellerTransferError('1–30 különböző, érvényes fizetett terméksort válassz.',400);
+        const workDate=text(req.body?.date);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(workDate)||workDate>aifBucharestIsoDate())
+          throw aifSellerTransferError('Érvényes eladási nap szükséges.',400);
+        const reason=text(req.body?.reason).slice(0,400)||null;
+        if(workDate<aifBucharestIsoDate()&&(!reason||reason.length<5))
+          throw aifSellerTransferError('Korábbi nap javításához indoklás kötelező.',400,'seller_transfer_reason_required');
+        const batchId=(await db.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+        const created=[];
+        for(const lineId of [...lineIds].sort()) {
+          const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,lineId);
+          if(!aifSellerTransferEmployee(paymentActor,target))
+            throw aifSellerTransferError(`${row.product_title||row.product_code||'Termék'}: a pénz nem a kiválasztott eladónál van elszámolva.`,409,'seller_transfer_wrong_payer');
+          const eligible=aifAssertSellerTransferEligibleDay(row.sold_at);
+          if(eligible.date!==workDate)
+            throw aifSellerTransferError('Egy kérelembe csak ugyanazon napi termékek kerülhetnek.',409);
+          const qty=Number(row.quantity),net=aifSellerTransferMoney(row.line_total),
+            gross=aifSellerTransferMoney(Number(row.list_price)*qty),discount=aifSellerTransferMoney(Math.max(0,gross-net));
+          const saved=await db.query(`INSERT INTO aif_shop_seller_transfers
+             (location_id,sale_id,sale_line_id,from_actor,to_actor,sold_at,payment_method,payment_actor,
+              transfer_kind,requested_by,approval_actor,batch_id,qty,list_total,net_total,discount_total,reason)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'money',$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+             [location.id,row.owner_sale_id,lineId,target,sender,row.sold_at,paymentMethod,paymentActor,
+              sender,target,batchId,qty,gross,net,discount,reason]);
+          created.push(saved.rows[0].id);
+        }
+        const detail=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.batch_id=$1 ORDER BY t.sale_line_id`,[batchId]);
+        await db.query('COMMIT');started=false;
+        return res.status(201).json({ok:true,item:aifSellerTransferItems(detail.rows)[0]});
+      }
       const lineId=text(req.body?.lineId||req.body?.line_id);
       if (!isUuidText(lineId)) throw aifSellerTransferError('Érvénytelen terméksor.',400);
       const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,lineId);
@@ -25162,30 +25299,43 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if(!found.rowCount) throw aifSellerTransferError('Az átadás nem található.',404);
       const record=found.rows[0],actor=actorFrom(req);
       if(record.status!=='pending') throw aifSellerTransferError('Ezt a kérést már elbírálták.',409);
-      const expected=decision==='cancel'?record.from_actor:record.to_actor;
+      const expected=decision==='cancel'?(record.requested_by||record.from_actor):(record.approval_actor||record.to_actor);
       if(!aifSellerTransferEmployee(actor,expected)) throw aifSellerTransferError('Csak az átadás érintett eladója dönthet.',403);
+      const group=record.transfer_kind==='money'&&record.batch_id
+        ? (await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.batch_id=$1 AND t.location_id=$2 ORDER BY t.sale_line_id FOR UPDATE OF t`,[record.batch_id,location.id])).rows
+        : [record];
+      if(group.some(t=>t.status!=='pending'||!aifSellerTransferEmployee(t.requested_by||t.from_actor,record.requested_by||record.from_actor)
+        ||!aifSellerTransferEmployee(t.approval_actor||t.to_actor,record.approval_actor||record.to_actor)))
+        throw aifSellerTransferError('A kérelem egyik tétele már megváltozott.',409,'seller_transfer_stale');
       let status=decision==='accept'?'accepted':decision==='reject'?'rejected':'cancelled';
       if(status==='accepted') {
         const activeEmployees=await aifListActiveShopEmployees(db,location.code);
         if(!activeEmployees.some(name=>aifSellerTransferEmployee(name,record.from_actor)) ||
            !activeEmployees.some(name=>aifSellerTransferEmployee(name,record.to_actor)))
           throw aifSellerTransferError('Az egyik érintett eladó már nem aktív ennél az üzletnél.',409,'seller_transfer_employee_inactive');
-        const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,record.sale_line_id);
-        aifAssertSellerTransferEligibleDay(row.sold_at);
-        if(!aifSellerTransferEmployee(row.sale_actor,record.from_actor)||paymentMethod!==record.payment_method
-          || !aifSellerTransferEmployee(paymentActor,record.payment_actor||record.from_actor)
-          || Number(row.quantity)!==Number(record.qty)
-          || Math.abs(Number(row.line_total)-Number(record.net_total))>0.005
-          || Math.abs(Number(row.list_price)*Number(row.quantity)-Number(record.list_total))>0.005)
-          throw aifSellerTransferError('A bizonylat az átadáskérés óta megváltozott. A kérelem nem fogadható el.',409,'seller_transfer_stale');
+        for(const t of group){
+          const {row,paymentMethod,paymentActor}=await aifSellerTransferSaleLine(db,location.id,t.sale_line_id);
+          aifAssertSellerTransferEligibleDay(row.sold_at);
+          if((t.transfer_kind==='money'
+                ? !aifSellerTransferEmployee(paymentActor,t.from_actor)
+                : !aifSellerTransferEmployee(row.sale_actor,t.from_actor))
+            || paymentMethod!==t.payment_method
+            || !aifSellerTransferEmployee(paymentActor,t.payment_actor||t.from_actor)
+            || Number(row.quantity)!==Number(t.qty)
+            || Math.abs(Number(row.line_total)-Number(t.net_total))>0.005
+            || Math.abs(Number(row.list_price)*Number(row.quantity)-Number(t.list_total))>0.005)
+            throw aifSellerTransferError('A bizonylat a kérelem óta megváltozott. Az átvezetés nem hagyható jóvá.',409,'seller_transfer_stale');
+        }
       }
-      const updated=await db.query(`UPDATE aif_shop_seller_transfers SET status=$2,decided_at=now(),decided_by=$3,
+      await db.query(`UPDATE aif_shop_seller_transfers SET status=$2,decided_at=now(),decided_by=$3,
        decision_note=$4,
        sender_notification_at=CASE WHEN $2='accepted' THEN now() ELSE sender_notification_at END
-       WHERE id=$1 RETURNING id`,[id,status,actor,text(req.body?.note).slice(0,400)||null]);
-      const after=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[updated.rows[0].id]);
+       WHERE location_id=$5 AND status='pending' AND (id=$1 OR ($6::uuid IS NOT NULL AND batch_id=$6::uuid))`,
+       [id,status,actor,text(req.body?.note).slice(0,400)||null,location.id,record.transfer_kind==='money'?record.batch_id:null]);
+      const after=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.location_id=$2 AND (t.id=$1 OR ($3::uuid IS NOT NULL AND t.batch_id=$3::uuid)) ORDER BY t.sale_line_id`,
+        [id,location.id,record.transfer_kind==='money'?record.batch_id:null]);
       await db.query('COMMIT');started=false;
-      return res.json({ok:true,item:aifSellerTransferItem(after.rows[0])});
+      return res.json({ok:true,item:aifSellerTransferItems(after.rows)[0]});
     } catch(error) {
       if(started)try{await db.query('ROLLBACK');}catch{}
       const status=Number(error.statusCode||500);
@@ -25205,16 +25355,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if(!isUuidText(id)) throw aifSellerTransferError('Érvénytelen átadásazonosító.',400);
       const location=await aifResolveShopLocation(req,pool,req.body?.location);
       const actor=actorFrom(req);
+      const chosen=await pool.query(`SELECT batch_id,transfer_kind FROM aif_shop_seller_transfers
+        WHERE id=$1::uuid AND location_id=$2`,[id,location.id]);
+      if(!chosen.rowCount) throw aifSellerTransferError('A kérelem nem található.',404);
+      const batchId=chosen.rows[0].transfer_kind==='money'?chosen.rows[0].batch_id:null;
       const result=await pool.query(`UPDATE aif_shop_seller_transfers
         SET sender_acknowledged_at=COALESCE(sender_acknowledged_at,now())
-        WHERE id=$1::uuid AND location_id=$2 AND status='accepted'
+        WHERE location_id=$2 AND status='accepted' AND (id=$1::uuid OR ($4::uuid IS NOT NULL AND batch_id=$4::uuid))
           AND sender_notification_at IS NOT NULL
-          AND lower(regexp_replace(btrim(from_actor),'[[:space:]]+',' ','g'))=$3
-        RETURNING id`,[id,location.id,aifEmployeeKey(actor)]);
+          AND lower(regexp_replace(btrim(COALESCE(requested_by,from_actor)),'[[:space:]]+',' ','g'))=$3
+        RETURNING id`,[id,location.id,aifEmployeeKey(actor),batchId]);
       if(!result.rowCount)
         throw aifSellerTransferError('A jóváhagyás nem található, vagy nem a te átadásod.',404,'seller_transfer_ack_not_found');
-      const detail=await pool.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[id]);
-      return res.json({ok:true,item:aifSellerTransferItem(detail.rows[0])});
+      const detail=await pool.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.location_id=$2 AND (t.id=$1 OR ($3::uuid IS NOT NULL AND t.batch_id=$3::uuid)) ORDER BY t.sale_line_id`,[id,location.id,batchId]);
+      return res.json({ok:true,item:aifSellerTransferItems(detail.rows)[0]});
     } catch(error) {
       const status=Number(error.statusCode||500);
       return res.status(status).json({error:error.message||'A visszaigazolás nyugtázása nem sikerült.',code:error.code||null});
@@ -25661,7 +25815,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       transactions: transactionsWithTransfers,
       itemsSold: itemsSold+transferQty,
       averageBasket: transactionsWithTransfers > 0 ? aifRoundMoney(revenueWithTransfers / transactionsWithTransfers) : 0,
-      paidTotal: aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)+transferNet),
+      paidTotal: actor ? aifRoundMoney(Object.values(payments).reduce((sum,p)=>sum+aifNumber(p.salesAmount)+aifNumber(p.exchangeAmount),0))
+        : aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)),
       unpaidTotal: aifRoundMoney(row.unpaid_total),
       unpaidSales: aifNumber(row.unpaid_sales),
       customerSales: aifNumber(row.customer_sales) + aifNumber(exchangeRow.customer_sales)+transferCustomerTransactions,
@@ -34051,10 +34206,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Credit issues use their selected-day snapshot. Allocated payments are
       // separate immutable events. Regular paid-sale return behaviour is unchanged.
       const outgoingIds=new Set(ownTransferImpact.filter(t=>t.sign<0).map(t=>String(t.sale_line_id)));
+      // Pénz-only korrekciónál a terméksor az eredeti eladónál marad, de a
+      // jóváhagyott pénz-átvezetés legyen látható a nap visszaellenőrzésekor is.
+      const moneyTransfersByLine=new Map(sellerTransfers
+        .filter(t=>(t.transfer_kind||'sale')==='money')
+        .map(t=>[String(t.sale_line_id),t]));
+      const annotateMoneyTransfer=(row)=>{
+        const t=moneyTransfersByLine.get(String(row.line_id||''));
+        return t ? {...row,money_transferred_from:t.from_actor,
+          money_transferred_to:t.to_actor,money_transfer_decided_at:t.decided_at} : row;
+      };
       const incomingRows=ownTransferImpact.filter(t=>t.sign>0).map(aifSellerTransferLineProjection);
       const productLineRows = [
-        ...productLinesResult.rows.filter(r=>!outgoingIds.has(String(r.line_id))),
-        ...incomingRows,
+        ...productLinesResult.rows.filter(r=>!outgoingIds.has(String(r.line_id))).map(annotateMoneyTransfer),
+        ...incomingRows.map(annotateMoneyTransfer),
         ...creditHistory.productLines,
         ...exchangeProductLinesResult.rows,
         ...settlementProductLinesResult.rows,
@@ -34167,7 +34332,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold)+transferQty,
           averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
           discountTotal: collectedDiscountTotal,
-          paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)+transferNet),
+          paidTotal: employee ? aifRoundMoney(collectedTotal-customerPaymentTotal)
+            : aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)),
           unpaidTotal: historicalUnpaidTotal,
           unpaidSales: historicalUnpaidSales,
           currentUnpaidTotal: aifRoundMoney(aifNumber(saleSummary.unpaid_total) + creditHistory.currentUnpaidTotal),
@@ -34237,6 +34403,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           transferredFrom: row.transferred_from || null,
           transferredTo: row.transferred_to || null,
           transferId: row.transfer_id || null,
+          moneyTransferredFrom: row.money_transferred_from || null,
+          moneyTransferredTo: row.money_transferred_to || null,
+          moneyTransferDecidedAt: row.money_transfer_decided_at ? new Date(row.money_transfer_decided_at).toISOString() : null,
           stockEffect: aifNumber(row.stock_effect),
         })),
         sales: saleRows.map((row) => ({
