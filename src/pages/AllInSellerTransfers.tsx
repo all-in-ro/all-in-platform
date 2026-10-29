@@ -64,6 +64,7 @@ function SellerHandoffIcon({ compact = false }: { compact?: boolean }) {
   );
 }
 
+
 // A naptár és az eladóválasztó ugyanazt a saját, magyar nyelvű
 // megjelenítési mintát követi, mint az AllInFashion admin felületei.
 // Portálban nyílnak: a görgethető átadási ablak nem vághatja le őket.
