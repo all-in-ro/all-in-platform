@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeftRight,
   ArrowRight,
   Banknote,
   Check,
   CheckCircle2,
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   CreditCard,
   Landmark,
@@ -54,6 +59,322 @@ function SellerHandoffIcon({ compact = false }: { compact?: boolean }) {
         <UserRound size={compact ? 13 : 15} strokeWidth={1.85} />
       </span>
     </span>
+  );
+}
+
+// A naptár és az eladóválasztó ugyanazt a saját, magyar nyelvű
+// megjelenítési mintát követi, mint az AllInFashion admin felületei.
+// Portálban nyílnak: a görgethető átadási ablak nem vághatja le őket.
+type TransferPopoverPlacement = {
+  left: number;
+  width: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+};
+
+function transferPopoverPlacement(trigger: HTMLButtonElement, widthHint: number, heightHint: number): TransferPopoverPlacement {
+  const rect = trigger.getBoundingClientRect();
+  const edge = 10;
+  const gap = 8;
+  const width = Math.min(Math.max(rect.width, widthHint), Math.max(220, window.innerWidth - edge * 2));
+  const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+  const below = window.innerHeight - rect.bottom - gap - edge;
+  const above = rect.top - gap - edge;
+  const upward = below < Math.min(heightHint, 240) && above > below;
+  if (upward) {
+    return { left, width, bottom: window.innerHeight - rect.top + gap, maxHeight: Math.max(100, above) };
+  }
+  return { left, width, top: rect.bottom + gap, maxHeight: Math.max(100, below) };
+}
+
+function TransferEmployeeSelect({
+  value,
+  names,
+  onChange,
+}: {
+  value: string;
+  names: string[];
+  onChange: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<TransferPopoverPlacement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const reposition = useCallback(() => {
+    if (triggerRef.current) setPosition(transferPopoverPlacement(triggerRef.current, 285, Math.min(320, 65 + names.length * 49)));
+  }, [names.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    reposition();
+    const onOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onOutside, true);
+    window.addEventListener("keydown", onEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      window.removeEventListener("keydown", onEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, reposition]);
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={triggerRef}
+        aria-label="Átvevő eladó kiválasztása"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={!names.length}
+        onClick={() => { if (!open) reposition(); setOpen(current => !current); }}
+        className={`group flex h-11 w-full items-center justify-between gap-2 rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition disabled:cursor-not-allowed disabled:opacity-50 ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${value ? "border-[#8ce7e2]/36 bg-[#108D8B]/24 text-[#d7fffd]" : "border-white/12 bg-white/[0.05] text-white/50"}`}>
+            <UserRound size={16} strokeWidth={1.8} />
+          </span>
+          <span className={`min-w-0 flex-1 truncate ${value ? "text-white" : "text-white/46"}`}>
+            {value || (names.length ? "Válassz eladót…" : "Nincs elérhető eladó")}
+          </span>
+        </span>
+        <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${open ? "border-[#9be9e5]/45 bg-[#108D8B]/30 text-[#d7fffd]" : "border-white/10 bg-white/[0.035] text-white/55 group-hover:text-white"}`}>
+          <ChevronDown size={15} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          aria-label="Átvevő eladók"
+          className="overflow-y-auto rounded-[18px] border border-[#7bd7d4]/45 bg-[#202c3d]/[0.995] p-2 text-white shadow-[0_28px_70px_rgba(2,6,23,0.76)] backdrop-blur-xl"
+          style={{ position: "fixed", zIndex: 10050, ...position }}
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2 px-2 py-1.5">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Kinek adod át?</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/50">{names.length} eladó</span>
+          </div>
+          <div className="space-y-1">
+            {names.map(name => {
+              const selected = name === value;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => { onChange(name); setOpen(false); }}
+                  className={`group/item flex min-h-12 w-full items-center gap-3 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                    selected
+                      ? "border-[#8ce7e2]/42 bg-gradient-to-r from-[#2a8d8b] to-[#287b82] text-white"
+                      : "border-transparent bg-[#2e3b4f] text-white/86 hover:border-white/12 hover:bg-[#3a4a61]"
+                  }`}
+                >
+                  <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${selected ? "border-white/28 bg-white/14" : "border-white/12 bg-white/[0.05]"}`}><UserRound size={16} strokeWidth={1.8} /></span>
+                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                  {selected ? <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#d7fffd] text-[#176b69]"><Check size={17} strokeWidth={2.4} /></span> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+const TRANSFER_MONTHS = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"] as const;
+const TRANSFER_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function transferDateParts(value: string) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!parts) return null;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { year, month, day };
+}
+
+function transferIsoDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function transferHuDate(value: string) {
+  const parts = transferDateParts(value);
+  return parts ? `${parts.year}. ${String(parts.month).padStart(2, "0")}. ${String(parts.day).padStart(2, "0")}.` : "Válassz dátumot";
+}
+
+function TransferHungarianDatePicker({
+  value,
+  maxDate,
+  onChange,
+}: {
+  value: string;
+  maxDate: string;
+  onChange: (date: string) => void;
+}) {
+  const selected = transferDateParts(value);
+  const [open, setOpen] = useState(false);
+  const [viewYear, setViewYear] = useState(selected?.year ?? new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((selected?.month ?? (new Date().getMonth() + 1)) - 1);
+  const [position, setPosition] = useState<TransferPopoverPlacement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const maxParts = transferDateParts(maxDate);
+  const canGoNext = maxParts ? viewYear * 12 + viewMonth < maxParts.year * 12 + maxParts.month - 1 : true;
+
+  const reposition = useCallback(() => {
+    if (triggerRef.current) setPosition(transferPopoverPlacement(triggerRef.current, 336, 404));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const parts = transferDateParts(value);
+    if (parts) { setViewYear(parts.year); setViewMonth(parts.month - 1); }
+    reposition();
+    const onOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onOutside, true);
+    window.addEventListener("keydown", onEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      window.removeEventListener("keydown", onEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, reposition, value]);
+
+  const first = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const firstGridDay = new Date(first);
+  firstGridDay.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, i) => {
+    const date = new Date(firstGridDay);
+    date.setUTCDate(firstGridDay.getUTCDate() + i);
+    return date;
+  });
+
+  const moveMonth = (amount: number) => {
+    const date = new Date(Date.UTC(viewYear, viewMonth + amount, 1, 12));
+    setViewYear(date.getUTCFullYear());
+    setViewMonth(date.getUTCMonth());
+  };
+  const choose = (date: string) => {
+    if (date > maxDate) return;
+    setOpen(false);
+    if (date !== value) onChange(date);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Ellenőrzendő eladási nap kiválasztása"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => { if (!open) reposition(); setOpen(current => !current); }}
+        className={`group flex h-11 w-full items-center justify-between gap-3 rounded-[13px] border px-3 text-left text-sm font-normal text-white outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <CalendarDays size={17} className="shrink-0 text-[#8fe9e5]" strokeWidth={1.8} />
+          <span className="truncate tracking-[0.02em]">{transferHuDate(value)}</span>
+        </span>
+        <ChevronDown size={15} className={`shrink-0 text-white/55 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          role="dialog"
+          aria-label="Magyar dátumválasztó"
+          className="overflow-y-auto rounded-[20px] border border-[#8ce7e2]/46 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl"
+          style={{ position: "fixed", zIndex: 10060, ...position }}
+        >
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button type="button" onClick={() => moveMonth(-1)} aria-label="Előző hónap" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"><ChevronLeft size={17} /></button>
+            <div className="text-center">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p>
+              <p className="mt-0.5 text-sm font-normal text-white">{viewYear}. {TRANSFER_MONTHS[viewMonth]}</p>
+            </div>
+            <button type="button" disabled={!canGoNext} onClick={() => moveMonth(1)} aria-label="Következő hónap" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white disabled:cursor-not-allowed disabled:opacity-25"><ChevronRight size={17} /></button>
+          </div>
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {TRANSFER_WEEKDAYS.map((weekday, i) => (
+              <div key={weekday} className={`py-1 text-center text-[10px] uppercase tracking-[0.05em] ${i >= 5 ? "text-rose-100/65" : "text-[#cffffd]/60"}`}>{weekday}</div>
+            ))}
+            {days.map(day => {
+              const date = transferIsoDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const isSelected = date === value;
+              const isToday = date === maxDate;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              const future = date > maxDate;
+              return (
+                <button
+                  key={date}
+                  type="button"
+                  disabled={future}
+                  aria-label={transferHuDate(date)}
+                  aria-pressed={isSelected}
+                  onClick={() => choose(date)}
+                  className={`relative flex h-9 items-center justify-center rounded-lg border text-xs font-normal transition disabled:cursor-not-allowed disabled:opacity-20 ${
+                    isSelected
+                      ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]"
+                      : inMonth
+                        ? weekend
+                          ? "border-transparent bg-white/[0.025] text-rose-50/76 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                          : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                        : "border-transparent text-white/27 hover:bg-white/[0.04] hover:text-white/50"
+                  }`}
+                >
+                  {day.getUTCDate()}
+                  {isToday && !isSelected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
+            <span className="text-[10px] text-white/42">Hétfővel kezdődő hét</span>
+            <button type="button" onClick={() => choose(maxDate)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"><CalendarDays size={13} /> Ma</button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -429,16 +750,17 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
             <div className="min-h-0 space-y-4 overflow-y-auto p-5">
               <p className="text-sm text-white/70">Válaszd ki a napot és a saját eladott terméksort. A másik eladó külön felugró ablakban hagyja jóvá. A jóváhagyás utólagos elszámolás, nem új pénz- vagy készletmozgás.</p>
               <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#9be9e5]/30 bg-[#244854]/70 px-4 py-3">
-                <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] text-[#d7fffd]">
-                  <span className="inline-flex items-center gap-2"><Clock3 size={15}/> Ellenőrzendő eladási nap</span>
-                  <input type="date" value={selectedDate} max={localDate()} onChange={e=>void loadSend("",e.currentTarget.value)}
-                    className="h-11 max-w-[250px] rounded-xl border border-white/25 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#8ce7e2] [color-scheme:dark]" />
-                </label>
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] text-[#d7fffd]">
+                  <span className="inline-flex items-center gap-2"><Clock3 size={15} /> Ellenőrzendő eladási nap</span>
+                  <div className="w-full max-w-[260px]">
+                    <TransferHungarianDatePicker value={selectedDate} maxDate={localDate()} onChange={date => void loadSend("", date)} />
+                  </div>
+                </div>
                 <button type="button" onClick={()=>void loadSend("",localDate())} className={softButton}>Mai nap</button>
                 {selectedDate < localDate() ? <span className="text-[11px] text-amber-100">Utólagos elszámolási javítás</span> : null}
               </div>
-              <div className="grid gap-3 sm:grid-cols-[1fr_1fr]"><label className="block text-xs text-white/65">Átvevő eladó<select value={target} onChange={e => setTarget(e.target.value)} className="mt-1 block min-h-11 w-full rounded-xl border border-white/20 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#96e0d9]"><option value="">Válassz eladót…</option>{employees.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label className="block text-xs text-white/65">Termék keresése<div className="mt-1 flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-[#273243] px-3"><Search size={16} className="text-white/40" /><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Név, kód, bizonylat" className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35" /></div></label></div>
-              <div className="space-y-2">{loading ? <p className="py-8 text-center text-sm text-white/55">Kiválasztott napi eladások betöltése…</p> : filtered.length ? filtered.map(line => <button type="button" key={line.lineId || line.key} onClick={() => setLineId(line.lineId || "")} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${lineId === line.lineId ? "border-[#7ae2d9] bg-[#108D8B]/25" : "border-white/12 bg-[#293647] hover:border-white/30"}`}><div className={`h-4 w-4 shrink-0 rounded-full border ${lineId === line.lineId ? "border-[#84e2d9] bg-[#108D8B]" : "border-white/35"}`} />{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain" /> : <div className="h-12 w-12 shrink-0 rounded-lg bg-white/10" />}<div className="min-w-0 flex-1"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-xs text-white/50">{[line.productCode, line.colorName, line.size, line.saleNumber].filter(Boolean).join(" • ")}</p></div><div className="shrink-0 text-right"><p className="text-sm">{money(line.netTotal || line.revenue)}</p><p className="mt-1 text-xs text-white/45">{line.qty} db • {line.soldAt ? dateTime(line.soldAt) : ""}</p></div></button>) : <p className="py-8 text-center text-sm text-white/55">Nincs ilyen saját eladási tétel a mai listában.</p>}</div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_1fr]"><div className="min-w-0 text-xs text-white/65"><p className="mb-1">Átvevő eladó</p><TransferEmployeeSelect value={target} names={employees} onChange={setTarget} /></div><label className="block text-xs text-white/65">Termék keresése<div className="mt-1 flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-[#273243] px-3"><Search size={16} className="text-white/40" /><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Név, kód, bizonylat" className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35" /></div></label></div>
+              <div className="space-y-2">{loading ? <p className="py-8 text-center text-sm text-white/55">Kiválasztott napi eladások betöltése…</p> : filtered.length ? filtered.map(line => <button type="button" key={line.lineId || line.key} onClick={() => setLineId(line.lineId || "")} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${lineId === line.lineId ? "border-[#7ae2d9] bg-[#108D8B]/25" : "border-white/12 bg-[#293647] hover:border-white/30"}`}><div className={`h-4 w-4 shrink-0 rounded-full border ${lineId === line.lineId ? "border-[#84e2d9] bg-[#108D8B]" : "border-white/35"}`} />{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain" /> : <div className="h-12 w-12 shrink-0 rounded-lg bg-white/10" />}<div className="min-w-0 flex-1"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-xs text-white/50">{[line.productCode, line.colorName, line.size, line.saleNumber].filter(Boolean).join(" • ")}</p></div><div className="shrink-0 text-right"><p className="text-sm">{money(line.netTotal || line.revenue)}</p><p className="mt-1 text-xs text-white/45">{line.qty} db • {line.soldAt ? dateTime(line.soldAt) : ""}</p></div></button>) : <p className="py-8 text-center text-sm text-white/55">Nincs ilyen saját eladási tétel a kiválasztott napon.</p>}</div>
               {selectedLine && <div className="rounded-xl border border-[#7ae2d9]/35 bg-[#108D8B]/15 p-3 text-sm">{selectedLine.title} <ArrowRight size={14} className="mx-2 inline" /> {target || "Átvevő kiválasztása"} • {money(selectedLine.netTotal ?? selectedLine.revenue)}</div>}
               {selectedDate < localDate() ? (
                 <label className="block rounded-xl border border-amber-200/30 bg-amber-500/10 p-3 text-xs text-amber-50">
