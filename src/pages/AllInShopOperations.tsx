@@ -83,6 +83,7 @@ import {
 
 export type AllInShopOperationMode = "search" | "stock" | "summary";
 
+
 type AifDayClosePreview = {
   canClose: boolean;
   reasonCode?: string | null;
