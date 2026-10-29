@@ -31,7 +31,7 @@ import {
 
 type Props = { locationCode: string; actor: string; role?: "shop" | "admin"; onChanged?: () => void };
 const money = (v: number) => `${new Intl.NumberFormat("hu-HU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v || 0)} RON`;
-const dateTime = (v: string) => new Date(v).toLocaleString("hu-HU", { timeZone: "Europe/Bucharest", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+const dateTime = (v: string) => new Date(v).toLocaleString("hu-HU", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 function localDate() {
   const values = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()).map(p => [p.type, p.value]));
   return `${values.year}-${values.month}-${values.day}`;
@@ -55,6 +55,9 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
   const [filter, setFilter] = useState("");
   const [lineId, setLineId] = useState("");
   const [target, setTarget] = useState("");
+  const [selectedDate, setSelectedDate] = useState(localDate);
+  const [reason, setReason] = useState("");
+  const requestIdRef = useRef(0);
   const dismissedRef = useRef<Set<string>>(new Set());
   const busyRef = useRef(false);
   const currentIncomingId = incoming?.id || "";
@@ -88,22 +91,29 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
     if (next) setIncoming(next);
   }, [pending, sendOpen, manualInbox, currentIncomingId]);
 
-  const loadSend = async (initialLineId = "") => {
-    setSendOpen(true); setError(""); setSuccess(""); setLoading(true);setLineId("");setTarget("");setFilter("");
+  const loadSend = async (initialLineId = "", date = localDate()) => {
+    const requestId = ++requestIdRef.current;
+    setSendOpen(true);setError("");setSuccess("");setLoading(true);
+    setLineId("");setTarget("");setFilter("");setReason("");setSelectedDate(date);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > localDate()){
+      setSaleLines([]);setError("Csak a mai vagy korábbi nap választható.");setLoading(false);return;
+    }
     try {
       const [people, summary] = await Promise.all([
         apiAifShopShiftEmployees({ location: locationCode }),
-        apiAifShopDailySummary({ location: locationCode, date: localDate() }),
+        apiAifShopDailySummary({ location: locationCode, date, employee: actor }),
       ]);
-      setEmployees(people.items.filter(p => !p.current && employeeKey(p.name) !== employeeKey(actor)).map(p => p.name));
+      if(requestId!==requestIdRef.current)return;
+      setEmployees(people.items.filter(p => employeeKey(p.name) !== employeeKey(actor)).map(p => p.name));
       const ownLines = (summary.productLines || []).filter(line => line.dailyCategory === "sale" && line.recordType === "sale"
         && Boolean(line.lineId && line.saleId) && !line.transferredFrom && line.qty > 0);
       setSaleLines(ownLines);
       if (initialLineId && ownLines.some(line => line.lineId === initialLineId)) setLineId(initialLineId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "A saját eladások nem tölthetők be.");
+      if(requestId!==requestIdRef.current)return;
+      setError(err instanceof Error ? err.message : "Az adott napi saját eladások nem tölthetők be.");
       setSaleLines([]);
-    } finally { setLoading(false); }
+    } finally { if(requestId===requestIdRef.current)setLoading(false); }
   };
 
   // A napi összesítés konkrét terméksorának átadási gombja ugyanazt a biztonságos
@@ -111,9 +121,9 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
   useEffect(() => {
     if (!active) return;
     const onRequestLine = (event: Event) => {
-      const detail = (event as CustomEvent<{lineId?: string; locationCode?: string}>).detail;
+      const detail = (event as CustomEvent<{lineId?: string; locationCode?: string; date?: string}>).detail;
       if (detail?.locationCode !== locationCode || !detail?.lineId) return;
-      void loadSend(detail.lineId);
+      void loadSend(detail.lineId,detail.date || localDate());
     };
     window.addEventListener("aif:seller-transfer-request-line", onRequestLine);
     return () => window.removeEventListener("aif:seller-transfer-request-line", onRequestLine);
@@ -126,9 +136,13 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
   };
   const submit = async () => {
     if (!lineId || !target || sending) return;
+    if(selectedDate < localDate() && reason.trim().length < 5){
+      setError("Korábbi nap javításához legalább öt karakteres indoklás szükséges.");return;
+    }
     busyRef.current = true; setSending(true);setError("");
     try {
-      await apiAifCreateSellerTransfer({ location: locationCode, lineId, toActor: target });
+      await apiAifCreateSellerTransfer({ location: locationCode, lineId, toActor: target,
+        reason: reason.trim() || undefined });
       setSendOpen(false);setSuccess("Átadás elküldve. A másik eladónak jóvá kell hagynia.");
       await apiAifSellerTransfers({ location: locationCode }).then(data => setItems(data.items || []));
       notify();
@@ -142,7 +156,7 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
       await apiAifDecideSellerTransfer(item.id, { location: locationCode, decision });
       dismissedRef.current.add(item.id);
       setIncoming(null);
-      setSuccess(decision === "accept" ? "Az átadás elfogadva. A termék és a pénz átvezetve a kimutatásban." : decision === "reject" ? "Az átadási kérés elutasítva." : "Az átadási kérés visszavonva.");
+      setSuccess(decision === "accept" ? "Elfogadva. A terméksor elszámolása a kiválasztott eladóhoz került; a lezárt kassza és a bizonylat változatlan." : decision === "reject" ? "Az átadási kérés elutasítva." : "Az átadási kérés visszavonva.");
       const data = await apiAifSellerTransfers({ location: locationCode });setItems(data.items || []);
       notify();
     } catch (err) {setError(err instanceof Error ? err.message : "Az átadás elbírálása nem sikerült.");}
@@ -159,7 +173,7 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
     <>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => void loadSend()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-[#9fe6dd]/50 bg-[#108D8B] px-4 text-sm text-white transition hover:bg-[#159d9a]">
-          <ArrowLeftRight size={17} strokeWidth={1.8} /> Eladás átadása
+          <ArrowLeftRight size={17} strokeWidth={1.8} /> Eladás / régi nap javítása
         </button>
         <button type="button" onClick={() => {setManualInbox(true);setError("");setSuccess("");}} className={softButton}>
           <Clock3 size={16} /> Átadási kérelmek
@@ -264,6 +278,12 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
                 </div>
               </div>
 
+              {incoming.isHistorical ? (
+                <div className="rounded-[15px] border border-amber-200/35 bg-amber-500/10 px-3.5 py-2.5 text-[11px] leading-5 text-amber-50">
+                  Korábbi nap utólagos elszámolási javítása. Az eredeti napzárás, kassza és műszakátadás bizonylatai nem változnak.
+                  {incoming.reason ? <p className="mt-1 text-white/75">Indok: {incoming.reason}</p> : null}
+                </div>
+              ) : null}
               <div id="aif-transfer-accept-help" className="flex gap-3 rounded-[17px] border border-[#a9e9e4]/18 bg-[#253b48] px-3.5 py-3">
                 <ShieldCheck size={20} className="mt-0.5 shrink-0 text-[#9ce7de]" strokeWidth={1.7} />
                 <p className="text-[11px] leading-[19px] text-white/72">
@@ -300,21 +320,39 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
           <div role="dialog" aria-modal="true" aria-label="Eladás átadása másik eladónak" className={`${panel} flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden`}>
             <header className="flex items-center justify-between border-b border-white/15 bg-[#108D8B] px-5 py-4"><div><p className="text-[10px] uppercase tracking-[.14em] text-white/65">Eladói korrekció</p><h2 className="mt-1 text-xl font-normal">Eladott termék átadása</h2></div><button type="button" onClick={() => {setSendOpen(false);setError("");}} disabled={sending} className="rounded-lg p-2 hover:bg-white/10"><X size={20} /></button></header>
             <div className="min-h-0 space-y-4 overflow-y-auto p-5">
-              <p className="text-sm text-white/70">Válaszd ki a mai saját eladásodat. A másik eladó felugró értesítést kap, és csak a jóváhagyása után kerül át a termék és a hozzá tartozó pénz.</p>
+              <p className="text-sm text-white/70">Válaszd ki a napot és a saját eladott terméksort. A másik eladó külön felugró ablakban hagyja jóvá. A jóváhagyás utólagos elszámolás, nem új pénz- vagy készletmozgás.</p>
+              <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#9be9e5]/30 bg-[#244854]/70 px-4 py-3">
+                <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] text-[#d7fffd]">
+                  <span className="inline-flex items-center gap-2"><Clock3 size={15}/> Ellenőrzendő eladási nap</span>
+                  <input type="date" value={selectedDate} max={localDate()} onChange={e=>void loadSend("",e.currentTarget.value)}
+                    className="h-11 max-w-[250px] rounded-xl border border-white/25 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#8ce7e2] [color-scheme:dark]" />
+                </label>
+                <button type="button" onClick={()=>void loadSend("",localDate())} className={softButton}>Mai nap</button>
+                {selectedDate < localDate() ? <span className="text-[11px] text-amber-100">Utólagos elszámolási javítás</span> : null}
+              </div>
               <div className="grid gap-3 sm:grid-cols-[1fr_1fr]"><label className="block text-xs text-white/65">Átvevő eladó<select value={target} onChange={e => setTarget(e.target.value)} className="mt-1 block min-h-11 w-full rounded-xl border border-white/20 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#96e0d9]"><option value="">Válassz eladót…</option>{employees.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label className="block text-xs text-white/65">Termék keresése<div className="mt-1 flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-[#273243] px-3"><Search size={16} className="text-white/40" /><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Név, kód, bizonylat" className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35" /></div></label></div>
-              <div className="space-y-2">{loading ? <p className="py-8 text-center text-sm text-white/55">Mai eladások betöltése…</p> : filtered.length ? filtered.map(line => <button type="button" key={line.lineId || line.key} onClick={() => setLineId(line.lineId || "")} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${lineId === line.lineId ? "border-[#7ae2d9] bg-[#108D8B]/25" : "border-white/12 bg-[#293647] hover:border-white/30"}`}><div className={`h-4 w-4 shrink-0 rounded-full border ${lineId === line.lineId ? "border-[#84e2d9] bg-[#108D8B]" : "border-white/35"}`} />{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain" /> : <div className="h-12 w-12 shrink-0 rounded-lg bg-white/10" />}<div className="min-w-0 flex-1"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-xs text-white/50">{[line.productCode, line.colorName, line.size, line.saleNumber].filter(Boolean).join(" • ")}</p></div><div className="shrink-0 text-right"><p className="text-sm">{money(line.netTotal || line.revenue)}</p><p className="mt-1 text-xs text-white/45">{line.qty} db • {line.soldAt ? dateTime(line.soldAt) : ""}</p></div></button>) : <p className="py-8 text-center text-sm text-white/55">Nincs ilyen saját eladási tétel a mai listában.</p>}</div>
-              {selectedLine && <div className="rounded-xl border border-[#7ae2d9]/35 bg-[#108D8B]/15 p-3 text-sm">{selectedLine.title} <ArrowRight size={14} className="mx-2 inline" /> {target || "Átvevő kiválasztása"} • {money(selectedLine.netTotal || selectedLine.revenue)}</div>}
+              <div className="space-y-2">{loading ? <p className="py-8 text-center text-sm text-white/55">Kiválasztott napi eladások betöltése…</p> : filtered.length ? filtered.map(line => <button type="button" key={line.lineId || line.key} onClick={() => setLineId(line.lineId || "")} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${lineId === line.lineId ? "border-[#7ae2d9] bg-[#108D8B]/25" : "border-white/12 bg-[#293647] hover:border-white/30"}`}><div className={`h-4 w-4 shrink-0 rounded-full border ${lineId === line.lineId ? "border-[#84e2d9] bg-[#108D8B]" : "border-white/35"}`} />{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain" /> : <div className="h-12 w-12 shrink-0 rounded-lg bg-white/10" />}<div className="min-w-0 flex-1"><p className="truncate text-sm">{line.title}</p><p className="mt-1 text-xs text-white/50">{[line.productCode, line.colorName, line.size, line.saleNumber].filter(Boolean).join(" • ")}</p></div><div className="shrink-0 text-right"><p className="text-sm">{money(line.netTotal || line.revenue)}</p><p className="mt-1 text-xs text-white/45">{line.qty} db • {line.soldAt ? dateTime(line.soldAt) : ""}</p></div></button>) : <p className="py-8 text-center text-sm text-white/55">Nincs ilyen saját eladási tétel a mai listában.</p>}</div>
+              {selectedLine && <div className="rounded-xl border border-[#7ae2d9]/35 bg-[#108D8B]/15 p-3 text-sm">{selectedLine.title} <ArrowRight size={14} className="mx-2 inline" /> {target || "Átvevő kiválasztása"} • {money(selectedLine.netTotal ?? selectedLine.revenue)}</div>}
+              {selectedDate < localDate() ? (
+                <label className="block rounded-xl border border-amber-200/30 bg-amber-500/10 p-3 text-xs text-amber-50">
+                  Indoklás a múltbeli javításhoz (kötelező)
+                  <textarea value={reason} rows={2} maxLength={400} onChange={e=>setReason(e.target.value)}
+                    placeholder="Pl. a félretett terméket a másik eladó adta ki és ő fogadta a fizetést"
+                    className="mt-2 w-full resize-y rounded-xl border border-white/20 bg-[#273243] px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#8ce7e2]" />
+                  <p className="mt-1.5 text-[10px] text-amber-50/70">Az eredeti bizonylat, pénztárzárás és készletnapló sértetlen marad. A javítás időpontja és a jóváhagyás naplózott.</p>
+                </label>
+              ) : null}
               {error && <p className="rounded-lg border border-red-400/40 bg-red-500/15 p-3 text-sm text-red-100">{error}</p>}
             </div>
-            <footer className="flex justify-end gap-2 border-t border-white/15 p-4"><button type="button" onClick={() => {setSendOpen(false);setError("");}} disabled={sending} className={softButton}>Vissza</button><button type="button" onClick={() => void submit()} disabled={!lineId || !target || sending} className={greenButton}><Send size={16} /> Átadás kérése</button></footer>
+            <footer className="flex justify-end gap-2 border-t border-white/15 p-4"><button type="button" onClick={() => {setSendOpen(false);setError("");}} disabled={sending} className={softButton}>Vissza</button><button type="button" onClick={() => void submit()} disabled={!lineId || !target || sending || loading || (selectedDate < localDate() && reason.trim().length < 5)} className={greenButton}><Send size={16} /> Átadás kérése</button></footer>
           </div>
         ) : (
           <div role="dialog" aria-modal="true" aria-label="Eladói átadási kérelmek" className={`${panel} flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden`}>
             <header className="flex items-center justify-between border-b border-white/15 bg-[#108D8B] px-5 py-4"><div><p className="text-[10px] uppercase tracking-[.14em] text-white/65">Eladók között</p><h2 className="mt-1 text-xl font-normal">Átadási kérelmek</h2></div><button type="button" onClick={closeInbox} className="rounded-lg p-2 hover:bg-white/10"><X size={20} /></button></header>
             <div className="min-h-0 space-y-4 overflow-y-auto p-5">
               <p className="text-xs text-white/60">Beérkezett kérelmek: {pending.length} • Saját kérések: {outgoing.length}</p>
-              {pending.map(item => <div key={item.id} className="rounded-xl border border-[#82dad5]/40 bg-[#29434e] p-4"><p className="text-sm">{item.fromActor} → {item.toActor}</p><p className="mt-1 text-sm text-white/80">{item.title} • {item.qty} db • {money(item.netTotal)}</p><p className="mt-1 text-xs text-white/50">{item.saleNumber} • {dateTime(item.requestedAt)}</p><div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" disabled={sending} className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-[#b83545] px-3 text-sm text-white disabled:opacity-50" onClick={() => void decide(item, "reject")}><XCircle size={16} /> Elutasítás</button><button type="button" disabled={sending} className={greenButton} onClick={() => void decide(item, "accept")}><Check size={16} /> Elfogadás</button></div></div>)}
-              {outgoing.map(item => <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/12 bg-[#293647] p-3"><div className="min-w-0"><p className="truncate text-sm">{item.title} • {money(item.netTotal)}</p><p className="mt-1 text-xs text-white/50">{item.toActor} • {dateTime(item.requestedAt)} • {item.status === "pending" ? "Várakozik" : item.status === "accepted" ? "Elfogadva" : item.status === "rejected" ? "Elutasítva" : "Visszavonva"}</p></div>{item.status === "pending" ? <button type="button" disabled={sending} onClick={() => void decide(item, "cancel")} className={softButton}><X size={16} /> Visszavonás</button> : null}</div>)}
+              {pending.map(item => <div key={item.id} className="rounded-xl border border-[#82dad5]/40 bg-[#29434e] p-4"><p className="text-sm">{item.fromActor} → {item.toActor}</p><p className="mt-1 text-sm text-white/80">{item.title} • {item.qty} db • {money(item.netTotal)}</p><p className="mt-1 text-xs text-white/50">{item.saleNumber} • Eladás: {dateTime(item.soldAt)} • Kérés: {dateTime(item.requestedAt)}</p>{item.reason ? <p className="mt-1 text-xs text-amber-50/80">Indok: {item.reason}</p> : null}<div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" disabled={sending} className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-[#b83545] px-3 text-sm text-white disabled:opacity-50" onClick={() => void decide(item, "reject")}><XCircle size={16} /> Elutasítás</button><button type="button" disabled={sending} className={greenButton} onClick={() => void decide(item, "accept")}><Check size={16} /> Elfogadás</button></div></div>)}
+              {outgoing.map(item => <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/12 bg-[#293647] p-3"><div className="min-w-0"><p className="truncate text-sm">{item.title} • {money(item.netTotal)}</p><p className="mt-1 text-xs text-white/50">{item.toActor} • Eladás: {dateTime(item.soldAt)} • Kérés: {dateTime(item.requestedAt)} • {item.status === "pending" ? "Várakozik" : item.status === "accepted" ? "Elfogadva" : item.status === "rejected" ? "Elutasítva" : "Visszavonva"}</p></div>{item.status === "pending" ? <button type="button" disabled={sending} onClick={() => void decide(item, "cancel")} className={softButton}><X size={16} /> Visszavonás</button> : null}</div>)}
               {!pending.length && !outgoing.length && <p className="py-8 text-center text-sm text-white/55">Nincs átadási kérelem.</p>}
               {success && <p className="rounded-lg border border-[#7ae2d9]/35 bg-[#108D8B]/15 p-3 text-sm text-[#cafff9]">{success}</p>}
               {error && <p className="rounded-lg border border-red-400/40 bg-red-500/15 p-3 text-sm text-red-100">{error}</p>}

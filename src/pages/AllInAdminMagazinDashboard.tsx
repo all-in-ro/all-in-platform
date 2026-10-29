@@ -2673,6 +2673,7 @@ export default function AllInAdminMagazinDashboard({
                         {sale.transferId ? (
                           <p className="mt-1 rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#bff8f5]" title="Elfogadott eladói elszámolási átvezetés, nem új készletmozgás">
                             Átvezetve: {sale.transferredFrom || sale.originalActor || "-"} → {sale.transferredTo || sale.actor}
+                            {sale.transferDecidedAt ? ` • Jóváhagyva: ${dateTime(sale.transferDecidedAt)}` : ""}
                           </p>
                         ) : null}
                         <p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p>

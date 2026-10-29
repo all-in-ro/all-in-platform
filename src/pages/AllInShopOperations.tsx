@@ -3939,13 +3939,13 @@ export default function AllInShopOperations({
                                 </>
                               ) : null}
 
-                              {/* Csak a saját mai, teljesen kifizetett, át nem vett terméksor átadható. */}
-                              {summaryIsToday && !unpaid && !settlement && item.dailyCategory === "sale" &&
+                              {/* Saját kifizetett terméksor korábbi napon is átadható, két eladói jóváhagyással. */}
+                              {summaryDate <= todayIso() && !unpaid && !settlement && item.dailyCategory === "sale" &&
                                 item.recordType === "sale" && item.lineId && !item.transferredFrom ? (
                                 <>
                                   <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
                                   <button type="button"
-                                    onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId } }))}
+                                    onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId, date: summaryDate } }))}
                                     title="Termék és elszámolási összeg átadása másik eladónak"
                                     className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#9be9e5]/40 bg-[#2a8d8b]/20 px-2.5 text-[11px] text-[#bdf8f5] transition hover:bg-[#2a8d8b]/38">
                                     <ArrowRightLeft size={14} /> Átadás
