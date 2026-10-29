@@ -25268,7 +25268,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         gross=aifSellerTransferMoney(Number(row.list_price)*qty),discount=aifSellerTransferMoney(Math.max(0,gross-net));
       const result=await db.query(`INSERT INTO aif_shop_seller_transfers
         (location_id,sale_id,sale_line_id,from_actor,to_actor,sold_at,payment_method,payment_actor,qty,list_total,net_total,discount_total,reason)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
         [location.id,row.owner_sale_id,lineId,sender,target,row.sold_at,paymentMethod,paymentActor,qty,gross,net,discount,reason]);
       const detail=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[result.rows[0].id]);
       await db.query('COMMIT');started=false;
