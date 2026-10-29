@@ -3083,6 +3083,8 @@ export type AifSellerTransfer = {
   title: string; productCode?: string | null; brandName?: string | null;
   colorName?: string | null; size?: string | null; imageUrl?: string | null;
   fromActor: string; toActor: string; paymentActor?: string; status: AifSellerTransferStatus;
+  transferKind?: "sale" | "money"; requestedBy?: string; approvalActor?: string;
+  batchId?: string | null; lineIds?: string[]; lineCount?: number;
   isHistorical?: boolean;
   qty: number; listTotal: number; netTotal: number; discountTotal: number;
   paymentMethod: "cash" | "card" | "bank_transfer";
@@ -3094,7 +3096,20 @@ export function apiAifSellerTransfers(options: { location: string }) {
   const q = new URLSearchParams({ location: options.location });
   return fetchAifJSON<{ ok: true; actor: string; items: AifSellerTransfer[] }>(`/shop-seller-transfers?${q.toString()}`);
 }
-export function apiAifCreateSellerTransfer(input: { location: string; lineId: string; toActor: string; reason?: string }) {
+export type AifSellerTransferPaymentCandidate = {
+  lineId: string; saleId: string; saleNumber: string; soldAt: string;
+  saleActor: string; paymentActor: string; paymentMethod: "cash" | "card" | "bank_transfer";
+  qty: number; netTotal: number; title: string; productCode?: string | null;
+  colorName?: string | null; size?: string | null; imageUrl?: string | null;
+};
+export function apiAifSellerTransferPaymentLines(options: { location: string; date: string }) {
+  const query = new URLSearchParams({ location: options.location, date: options.date });
+  return fetchAifJSON<{ ok: true; items: AifSellerTransferPaymentCandidate[] }>(`/shop-seller-transfers/payment-lines?${query.toString()}`);
+}
+export function apiAifCreateSellerTransfer(input:
+  | { location: string; lineId: string; toActor: string; reason?: string; kind?: "sale" }
+  | { location: string; kind: "money"; lineIds: string[]; fromActor: string; date: string; reason?: string }
+) {
   return fetchAifJSON<{ ok: true; item: AifSellerTransfer }>("/shop-seller-transfers", { method: "POST", body: JSON.stringify(input) });
 }
 export function apiAifDecideSellerTransfer(id: string, input: { location: string; decision: "accept" | "reject" | "cancel"; note?: string }) {
@@ -3636,6 +3651,10 @@ export type AifShopDailyProductItem = {
   transferredFrom?: string | null;
   transferredTo?: string | null;
   transferId?: string | null;
+  /** Money-only corrections are separate from physical product attribution. */
+  moneyTransferredFrom?: string | null;
+  moneyTransferredTo?: string | null;
+  moneyTransferDecidedAt?: string | null;
 };
 
 
