@@ -1,5 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, ArrowRight, Check, Clock3, Search, Send, X, XCircle } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ArrowRight,
+  Banknote,
+  Check,
+  CheckCircle2,
+  Clock3,
+  CreditCard,
+  Landmark,
+  Loader2,
+  PackageSearch,
+  ReceiptText,
+  Search,
+  Send,
+  ShieldCheck,
+  UserRound,
+  WalletCards,
+  X,
+  XCircle,
+} from "lucide-react";
 import {
   apiAifShopDailySummary,
   apiAifShopShiftEmployees,
@@ -151,23 +170,132 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
 
       {open && <div className="fixed inset-0 z-[10000] flex items-center justify-center overflow-y-auto bg-[#101927]/80 p-3 backdrop-blur-[3px] sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget && !sending) { if (incoming) dismissIncoming();else {setSendOpen(false);closeInbox();} } }}>
         {incoming && !sendOpen && !manualInbox ? (
-          <div role="dialog" aria-modal="true" aria-label="Eladói átadás jóváhagyása" className={`${panel} w-full max-w-lg overflow-hidden`}>
-            <header className="flex items-center justify-between border-b border-white/15 bg-[#108D8B] px-5 py-4">
-              <div><p className="text-[10px] uppercase tracking-[.14em] text-white/65">Új eladói átadás</p><h2 className="mt-1 text-xl font-normal">Jóváhagyás szükséges</h2></div>
-              <button type="button" onClick={dismissIncoming} className="rounded-lg p-2 hover:bg-white/10" aria-label="Bezárás"><X size={20} /></button>
-            </header>
-            <div className="space-y-4 p-5">
-              <p className="text-sm text-white/80"><span className="text-[#b1e8e5]">{incoming.fromActor}</span> át szeretne adni neked egy eladást.</p>
-              <div className="flex items-center gap-3 rounded-xl border border-white/15 bg-[#2d3949] p-3">
-                {incoming.imageUrl ? <img src={incoming.imageUrl} alt="" className="h-20 w-20 rounded-xl bg-white object-contain" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-white/10"><ArrowLeftRight /></div>}
-                <div className="min-w-0 flex-1"><p className="text-base">{incoming.title}</p><p className="mt-1 text-xs text-white/55">{[incoming.productCode, incoming.colorName, incoming.size].filter(Boolean).join(" • ")}</p><p className="mt-1 text-xs text-white/55">{incoming.saleNumber} • {dateTime(incoming.soldAt)} • {incoming.qty} db</p></div>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="aif-transfer-accept-title"
+            aria-describedby="aif-transfer-accept-help"
+            className="relative flex max-h-[94dvh] w-full max-w-[640px] flex-col overflow-hidden rounded-[30px] border border-[#95e6df]/55 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(2,8,20,0.75),0_0_0_1px_rgba(255,255,255,0.07)]"
+          >
+            {/* AIF SELLER TRANSFER: THE RECIPIENT'S CONFIRMATION IS THE ONLY ACTION THAT MOVES OWNERSHIP. */}
+            <header className="relative shrink-0 overflow-hidden border-b border-white/15 bg-gradient-to-br from-[#204655] via-[#236e73] to-[#108D8B] px-5 pb-5 pt-5 sm:px-6 sm:pb-6 sm:pt-6">
+              <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-24 h-60 w-60 rounded-full border border-white/15 bg-white/[0.06]" />
+              <div aria-hidden="true" className="pointer-events-none absolute right-14 top-6 h-28 w-28 rounded-full border border-white/10" />
+              <div aria-hidden="true" className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#d6fffb]/85 to-transparent" />
+              <div className="relative flex items-start gap-3.5">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] border border-[#d8fffb]/50 bg-white/15 shadow-[0_12px_30px_rgba(0,0,0,0.12)]">
+                  <ArrowLeftRight size={27} strokeWidth={1.65} />
+                </div>
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-[0.17em] text-[#d8fffb]/78">AllInFashion · Eladói korrekció</span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-[#d8fffb]/40 bg-black/10 px-2.5 py-1 text-[9px] uppercase tracking-[0.08em] text-white">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#bafff6]" />
+                      Jóváhagyásra vár
+                    </span>
+                  </div>
+                  <h2 id="aif-transfer-accept-title" className="mt-2 text-[25px] font-normal leading-tight tracking-tight text-white sm:text-[29px]">Eladás átvétele</h2>
+                  <p className="mt-1.5 max-w-[430px] text-[12px] leading-5 text-white/78">
+                    Egy kollégád a te elszámolásodhoz szeretné átvezetni ezt az eladott terméket.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={dismissIncoming}
+                  disabled={sending}
+                  title="Később döntök"
+                  aria-label="Később döntök, kérelem bezárása"
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/30 bg-black/10 text-white transition hover:border-white/55 hover:bg-white/15 disabled:opacity-40"
+                >
+                  <X size={19} />
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-3 rounded-xl border border-white/15 bg-[#2b3545] p-4"><div><p className="text-[10px] text-white/50">Átvezetendő összeg</p><p className="mt-1 text-xl">{money(incoming.netTotal)}</p></div><div><p className="text-[10px] text-white/50">Fizetés módja</p><p className="mt-1 text-sm">{incoming.paymentMethod === "cash" ? "Készpénz" : incoming.paymentMethod === "card" ? "Bankkártya" : "Átutalás"}</p></div></div>
-              <p className="text-xs leading-relaxed text-white/60">Elfogadás után ez a termék és az összege a te napi és műszakos elszámolásodba kerül. Az eredeti nyugta és a készlet változatlan marad.</p>
-              {error && <p className="rounded-lg border border-red-400/40 bg-red-500/15 p-3 text-sm text-red-100">{error}</p>}
-              <div className="grid grid-cols-2 gap-3"><button type="button" onClick={() => void decide(incoming, "reject")} disabled={sending} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#b83545] px-3 text-white hover:bg-[#c84252] disabled:opacity-50"><XCircle size={18} /> Elutasítom</button><button type="button" onClick={() => void decide(incoming, "accept")} disabled={sending} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#108D8B] px-3 text-white hover:bg-[#159d9a] disabled:opacity-50"><Check size={18} /> Elfogadom</button></div>
+            </header>
+
+            <div className="min-h-0 space-y-3.5 overflow-y-auto overscroll-contain bg-[#303a4c] p-4 sm:space-y-4 sm:p-5">
+              <div className="relative grid grid-cols-[minmax(0,1fr)_36px_minmax(0,1fr)] items-center gap-2 rounded-[20px] border border-white/12 bg-[#273548] p-3 sm:gap-3 sm:p-4">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-white/46"><UserRound size={12} /> Átadó</p>
+                  <p className="mt-1.5 truncate text-[16px] text-white sm:text-[18px]" title={incoming.fromActor}>{incoming.fromActor}</p>
+                </div>
+                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[#86e8e1]/40 bg-[#108D8B]/25 text-[#b9fff6]"><ArrowRight size={18} /></span>
+                <div className="min-w-0 text-right">
+                  <p className="flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-[0.12em] text-white/46"><UserRound size={12} /> Átvevő</p>
+                  <p className="mt-1.5 truncate text-[16px] text-[#bffff7] sm:text-[18px]" title={incoming.toActor}>{incoming.toActor}</p>
+                </div>
+              </div>
+
+              <article className="grid gap-3 rounded-[22px] border border-white/15 bg-[#39475b] p-3 sm:grid-cols-[100px_minmax(0,1fr)] sm:gap-4 sm:p-4">
+                <span className="flex h-[100px] w-[100px] items-center justify-center overflow-hidden rounded-[17px] border border-white/25 bg-white shadow-[0_8px_24px_rgba(0,0,0,0.16)]">
+                  {incoming.imageUrl ? (
+                    <img src={incoming.imageUrl} alt={incoming.title || "Átadásra váró termék"} className="h-full w-full object-contain p-1.5" />
+                  ) : (
+                    <PackageSearch size={35} className="text-[#526173]" />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-lg border border-[#a4f2ea]/26 bg-[#108D8B]/15 px-2.5 py-1 text-[9px] uppercase tracking-[0.1em] text-[#c6fff9]">Átadott termék</span>
+                    <span className="rounded-lg border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/70">{incoming.qty} db</span>
+                  </div>
+                  <h3 className="mt-2 text-[16px] font-normal leading-snug text-white sm:text-[18px]">{incoming.title}</h3>
+                  <p className="mt-1.5 break-words text-[11px] leading-5 text-white/60">
+                    {[incoming.productCode, incoming.colorName, incoming.size].filter(Boolean).join("  ·  ") || "A termék adatai az eredeti bizonylaton találhatók."}
+                  </p>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/10 pt-2.5 text-[11px] text-white/56">
+                    <span className="inline-flex items-center gap-1.5"><ReceiptText size={13} className="text-[#8ce7e2]" /> {incoming.saleNumber}</span>
+                    <span className="inline-flex items-center gap-1.5"><Clock3 size={13} className="text-[#8ce7e2]" /> {dateTime(incoming.soldAt)}</span>
+                  </div>
+                </div>
+              </article>
+
+              <div className="grid gap-2.5 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)]">
+                <div className="relative overflow-hidden rounded-[19px] border border-[#8ae3dc]/45 bg-gradient-to-br from-[#1e7375] to-[#166468] px-4 py-3.5 shadow-[0_10px_26px_rgba(16,141,139,0.15)]">
+                  <span aria-hidden="true" className="pointer-events-none absolute -right-4 -top-10 h-24 w-24 rounded-full border border-white/10" />
+                  <p className="relative text-[10px] uppercase tracking-[0.13em] text-[#cffffb]/72">Hozzád átvezetendő összeg</p>
+                  <p className="relative mt-1.5 whitespace-nowrap text-[clamp(1.45rem,4.1vw,2rem)] font-normal tracking-tight text-white">{money(incoming.netTotal)}</p>
+                </div>
+                <div className="rounded-[19px] border border-white/13 bg-[#273548] px-4 py-3.5">
+                  <p className="text-[10px] uppercase tracking-[0.13em] text-white/45">Fizetési mód</p>
+                  <p className="mt-3 flex items-center gap-2 text-[14px] text-white">
+                    {incoming.paymentMethod === "cash" ? <Banknote size={18} className="text-[#8ce7e2]" /> : incoming.paymentMethod === "card" ? <CreditCard size={18} className="text-[#8ce7e2]" /> : incoming.paymentMethod === "credit" ? <Clock3 size={18} className="text-[#8ce7e2]" /> : incoming.paymentMethod === "mixed" ? <WalletCards size={18} className="text-[#8ce7e2]" /> : <Landmark size={18} className="text-[#8ce7e2]" />}
+                    {incoming.paymentMethod === "cash" ? "Készpénz" : incoming.paymentMethod === "card" ? "Bankkártya" : incoming.paymentMethod === "bank_transfer" ? "Banki átutalás" : incoming.paymentMethod === "mixed" ? "Vegyes fizetés" : incoming.paymentMethod === "credit" ? "Utólag fizet" : incoming.paymentMethod || "Nincs megadva"}
+                  </p>
+                </div>
+              </div>
+
+              <div id="aif-transfer-accept-help" className="flex gap-3 rounded-[17px] border border-[#a9e9e4]/18 bg-[#253b48] px-3.5 py-3">
+                <ShieldCheck size={20} className="mt-0.5 shrink-0 text-[#9ce7de]" strokeWidth={1.7} />
+                <p className="text-[11px] leading-[19px] text-white/72">
+                  <span className="text-[#d8fffb]">Csak elfogadás után kerül át</span> a termék és az összege a te napi és műszakos elszámolásodba. Nem keletkezik új eladás vagy készletmozgás, az eredeti bizonylat megmarad.
+                </p>
+              </div>
+
+              {error ? (
+                <div role="alert" className="rounded-[15px] border border-red-300/50 bg-[#a82235]/25 px-4 py-3 text-[12px] leading-5 text-red-50">{error}</div>
+              ) : null}
             </div>
-          </div>
+
+            <footer className="grid shrink-0 grid-cols-2 gap-2.5 border-t border-white/12 bg-[#283548] p-4 sm:gap-3 sm:px-5 sm:py-4">
+              <button
+                type="button"
+                onClick={() => void decide(incoming, "reject")}
+                disabled={sending}
+                className="group inline-flex min-h-[56px] items-center justify-center gap-2 rounded-[15px] border border-[#ff8792]/65 bg-[#d82438] px-2 text-[13px] font-normal text-white shadow-[0_9px_20px_rgba(216,36,56,0.15)] transition hover:border-[#ffb1b9] hover:bg-[#ed2b40] active:scale-[0.985] disabled:cursor-wait disabled:opacity-50 sm:px-4 sm:text-[15px]"
+              >
+                <XCircle size={18} strokeWidth={1.8} /> Elutasítom
+              </button>
+              <button
+                type="button"
+                onClick={() => void decide(incoming, "accept")}
+                disabled={sending}
+                className="group inline-flex min-h-[56px] items-center justify-center gap-2 rounded-[15px] border border-[#b5fff8]/62 bg-[#108D8B] px-2 text-[13px] font-normal text-white shadow-[0_10px_28px_rgba(16,141,139,0.24)] transition hover:border-[#d9fffb] hover:bg-[#159f9c] active:scale-[0.985] disabled:cursor-wait disabled:opacity-50 sm:px-4 sm:text-[15px]"
+              >
+                {sending ? <Loader2 size={19} className="animate-spin" /> : <CheckCircle2 size={19} strokeWidth={1.8} />}
+                {sending ? "Feldolgozás…" : "Elfogadom"}
+              </button>
+            </footer>
+          </section>
         ) : sendOpen ? (
           <div role="dialog" aria-modal="true" aria-label="Eladás átadása másik eladónak" className={`${panel} flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden`}>
             <header className="flex items-center justify-between border-b border-white/15 bg-[#108D8B] px-5 py-4"><div><p className="text-[10px] uppercase tracking-[.14em] text-white/65">Eladói korrekció</p><h2 className="mt-1 text-xl font-normal">Eladott termék átadása</h2></div><button type="button" onClick={() => {setSendOpen(false);setError("");}} disabled={sending} className="rounded-lg p-2 hover:bg-white/10"><X size={20} /></button></header>
