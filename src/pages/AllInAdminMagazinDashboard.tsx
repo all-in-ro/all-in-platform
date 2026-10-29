@@ -80,7 +80,6 @@ export type AllInAdminMagazinDashboardProps = {
   otherCityName: string;
 };
 
-
 type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card" | "bank_transfer"; indent?: boolean };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
