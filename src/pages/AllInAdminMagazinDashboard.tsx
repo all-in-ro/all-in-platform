@@ -240,6 +240,9 @@ type AdminRecentSaleExtended = AifAdminShopRecentSale & {
   settlementApproximate?: boolean;
   stockEffect?: number | null;
   paymentMethod?: string | null;
+  moneyTransferredFrom?: string | null;
+  moneyTransferredTo?: string | null;
+  moneyTransferAcceptedAt?: string | null;
 };
 
 function settlementInfo(sale: AifAdminShopRecentSale) {
@@ -2674,6 +2677,13 @@ export default function AllInAdminMagazinDashboard({
                           <p className="mt-1 rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#bff8f5]" title="Elfogadott eladói elszámolási átvezetés, nem új készletmozgás">
                             Átvezetve: {sale.transferredFrom || sale.originalActor || "-"} → {sale.transferredTo || sale.actor}
                             {sale.transferDecidedAt ? ` • Jóváhagyva: ${dateTime(sale.transferDecidedAt)}` : ""}
+                          </p>
+                        ) : null}
+                        {settlementInfo(sale).moneyTransferredFrom ? (
+                          <p className="mt-1 rounded-lg border border-[#9be9e5]/30 bg-[#108D8B]/12 px-2 py-1 text-[10px] text-[#bff8f5]"
+                            title="Csak az eladói pénzelszámolás változott, a termék és az eredeti bizonylat változatlan">
+                            Pénz: {settlementInfo(sale).moneyTransferredFrom} → {settlementInfo(sale).moneyTransferredTo}
+                            {settlementInfo(sale).moneyTransferAcceptedAt ? ` • Jóváhagyva: ${dateTime(settlementInfo(sale).moneyTransferAcceptedAt)}` : ""}
                           </p>
                         ) : null}
                         <p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p>

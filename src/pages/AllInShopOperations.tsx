@@ -3869,6 +3869,12 @@ export default function AllInShopOperations({
                             {item.transferredFrom ? (
                               <p className="mt-1 text-[10px] text-[#bdf8f5]">Eladói átvezetés: {item.transferredFrom} → {actor}</p>
                             ) : null}
+                            {item.moneyTransferredFrom ? (
+                              <p className="mt-1 text-[10px] text-[#bdf8f5]" title="Csak az eladók pénzügyi elszámolása változott; a termék és az eredeti fizetés változatlan.">
+                                <span className="text-white/65">Pénz átvezetve:</span> {item.moneyTransferredFrom} → {item.moneyTransferredTo}
+                                {item.moneyTransferDecidedAt ? ` · ${formatExactDateTime(item.moneyTransferDecidedAt)}` : ""}
+                              </p>
+                            ) : null}
                             {settlement && item.originalSoldAt ? (
                               <p className="mt-1 text-[10px] text-[#cfe5ff]/82">
                                 Eredeti eladás: {formatExactDateTime(item.originalSoldAt)}
