@@ -23,6 +23,7 @@ import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
 import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
 import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
+import AllInSellerTransfers from "./AllInSellerTransfers";
 import AllInShopReturns from "./AllInShopReturns";
 import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
@@ -237,6 +238,7 @@ export default function AllInMagazinCiuc({
   const [shopifySourceSummary, setShopifySourceSummary] = useState<ShopifySourceSummary>(EMPTY_SHOPIFY_SOURCE_SUMMARY);
   const [shopifySourceError, setShopifySourceError] = useState("");
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
+  const [shopOperationRevision, setShopOperationRevision] = useState(0);
   const [openingInventoryAccess, setOpeningInventoryAccess] = useState<OpeningInventoryAccess>({
     active: false,
     editable: false,
@@ -582,6 +584,9 @@ export default function AllInMagazinCiuc({
             </div>
           </div>
 
+          <div className="mb-3">
+            <AllInSellerTransfers locationCode="main_warehouse" actor={actor} role={role} onChanged={() => setShopOperationRevision(value => value + 1)} />
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {actions.map((action) => {
               const Icon = action.icon;
@@ -720,6 +725,7 @@ export default function AllInMagazinCiuc({
         onClose={() => setVacationsOpen(false)}
       />
       <AllInShopOperations
+        key={shopOperationRevision}
         open={shopOperationMode !== null}
         mode={shopOperationMode || "search"}
         actor={actor}

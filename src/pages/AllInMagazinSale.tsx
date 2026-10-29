@@ -1,4 +1,5 @@
 import { useSmsCoupon } from "../components/aif/sms/SmsCouponBox";
+import AllInSellerTransfers from "./AllInSellerTransfers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -988,6 +989,11 @@ export default function AllInMagazinSale({
             </div>
           </div>
         </header>
+
+        {/* Az eladók az Új eladás képernyőn dolgoznak; itt is mindig kapják a jóváhagyási értesítést. */}
+        <div className="rounded-2xl border border-[#7bd7d4]/25 bg-[#344357] px-4 py-2.5">
+          <AllInSellerTransfers locationCode={locationCode} actor={actor} role={role} />
+        </div>
 
         {error ? (
           <div className="rounded-2xl border border-red-400 bg-red-600 px-4 py-3 text-sm text-white">

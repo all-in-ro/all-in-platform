@@ -2668,7 +2668,15 @@ export default function AllInAdminMagazinDashboard({
                           <p className="mt-1 text-[10px] text-[#cfe5ff]/62">Eladás: {dateTime(settlementMeta.originalSoldAt)}</p>
                         ) : null}
                       </td>
-                      <td className="min-w-[145px] px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
+                      <td className="min-w-[145px] px-3 py-3">
+                        <p>{sale.actor || "-"}</p>
+                        {sale.transferId ? (
+                          <p className="mt-1 rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#bff8f5]" title="Elfogadott eladói elszámolási átvezetés, nem új készletmozgás">
+                            Átvezetve: {sale.transferredFrom || sale.originalActor || "-"} → {sale.transferredTo || sale.actor}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p>
+                      </td>
                       <td className="px-3 py-3 text-center">
                         <span className={`rounded-full border px-2 py-1 text-[10px] ${
                           settlement
@@ -2939,7 +2947,9 @@ export default function AllInAdminMagazinDashboard({
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                  ["Eladó", receiptTarget.actor || "-"],
+                  ["Eladó", receiptTarget.transferId
+                    ? `${receiptTarget.actor || "-"} (átvezetve: ${receiptTarget.transferredFrom || receiptTarget.originalActor || "-"} → ${receiptTarget.actor || "-"})`
+                    : (receiptTarget.actor || "-")],
                   ["Kliens", receiptTarget.customerName || "Nincs kliens"],
                   ["Eladás típusa", saleTypeDisplayLabel(receiptTarget.saleType, receiptTarget.balanceDue)],
                   ["Fizetés", paymentLabel(receiptTarget.paymentStatus)],
@@ -2993,6 +3003,11 @@ export default function AllInAdminMagazinDashboard({
                         <p className="mt-1 truncate text-[10px] text-[#9be9e5]/65">
                           {[line.productCode ? `Kód: ${line.productCode}` : "", line.barcode ? `Vonalkód: ${line.barcode}` : ""].filter(Boolean).join(" • ")}
                         </p>
+                        {line.transferId ? (
+                          <p className="mt-1 text-[10px] text-[#bff8f5]">
+                            Eladói átvezetés: {line.transferredFrom || line.originalActor || "-"} → {line.transferredTo || line.actor}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="shrink-0">
                         <div className="mb-2 flex justify-end">

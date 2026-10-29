@@ -2684,7 +2684,11 @@ export default function AllInShopOperations({
       void refreshSummaryPage(summaryDate);
     };
     window.addEventListener("allin:shift-handover-changed", onShiftChanged as EventListener);
-    return () => window.removeEventListener("allin:shift-handover-changed", onShiftChanged as EventListener);
+    window.addEventListener("aif:shop-seller-transfer-changed", onShiftChanged as EventListener);
+    return () => {
+      window.removeEventListener("allin:shift-handover-changed", onShiftChanged as EventListener);
+      window.removeEventListener("aif:shop-seller-transfer-changed", onShiftChanged as EventListener);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationCode, mode, open, summaryDate]);
 
@@ -3847,6 +3851,9 @@ export default function AllInShopOperations({
                                 {item.currentBalanceDue != null ? <span className="text-white/50">Bizonylat most: {numberValue(item.currentBalanceDue) > 0.005 ? `${formatMoney(item.currentBalanceDue)} tartozás` : "rendezve"}</span> : null}
                               </div>
                             ) : null}
+                            {item.transferredFrom ? (
+                              <p className="mt-1 text-[10px] text-[#bdf8f5]">Eladói átvezetés: {item.transferredFrom} → {actor}</p>
+                            ) : null}
                             {settlement && item.originalSoldAt ? (
                               <p className="mt-1 text-[10px] text-[#cfe5ff]/82">
                                 Eredeti eladás: {formatExactDateTime(item.originalSoldAt)}
@@ -3928,6 +3935,20 @@ export default function AllInShopOperations({
                                     aria-label={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
                                   >
                                     {hasProductNote ? <Mail size={14} strokeWidth={2.1} /> : <Plus size={15} strokeWidth={2.4} />}
+                                  </button>
+                                </>
+                              ) : null}
+
+                              {/* Csak a saját mai, teljesen kifizetett, át nem vett terméksor átadható. */}
+                              {summaryIsToday && !unpaid && !settlement && item.dailyCategory === "sale" &&
+                                item.recordType === "sale" && item.lineId && !item.transferredFrom ? (
+                                <>
+                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                  <button type="button"
+                                    onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId } }))}
+                                    title="Termék és elszámolási összeg átadása másik eladónak"
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#9be9e5]/40 bg-[#2a8d8b]/20 px-2.5 text-[11px] text-[#bdf8f5] transition hover:bg-[#2a8d8b]/38">
+                                    <ArrowRightLeft size={14} /> Átadás
                                   </button>
                                 </>
                               ) : null}
