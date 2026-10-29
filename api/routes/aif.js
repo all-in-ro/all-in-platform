@@ -24838,10 +24838,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           decided_at timestamptz NULL,
           decided_by text NULL,
           decision_note text NULL,
+          sender_notification_at timestamptz NULL,
+          sender_acknowledged_at timestamptz NULL,
           CHECK (lower(btrim(from_actor)) <> lower(btrim(to_actor))));`);
         // Compatibility with the first 2026-10-29 deployment. Old transfers all had
         // their original payment collected by the same person as the sale.
         await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS payment_actor text`);
+        // A legacy accepted transfer must not appear as a NEW confirmation.
+        // Only decisions made after this deployment set sender_notification_at.
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS sender_notification_at timestamptz`);
+        await pool.query(`ALTER TABLE aif_shop_seller_transfers ADD COLUMN IF NOT EXISTS sender_acknowledged_at timestamptz`);
         await pool.query(`UPDATE aif_shop_seller_transfers SET payment_actor=from_actor WHERE payment_actor IS NULL`);
         await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_seller_transfers_active_line_uq
           ON aif_shop_seller_transfers(sale_line_id) WHERE status IN ('pending','accepted')`);
@@ -24849,6 +24855,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_seller_transfers(location_id,lower(to_actor),status,requested_at DESC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_seller_transfers_day_idx
           ON aif_shop_seller_transfers(location_id,sold_at,status)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_seller_transfers_sender_notice_idx
+          ON aif_shop_seller_transfers(location_id,lower(from_actor),sender_notification_at DESC)
+          WHERE status='accepted' AND sender_notification_at IS NOT NULL AND sender_acknowledged_at IS NULL`);
       })().catch((error) => { aifSellerTransferSchemaPromise = null; throw error; });
     }
     return aifSellerTransferSchemaPromise;
@@ -24876,6 +24885,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       paymentMethod: row.payment_method, soldAt: new Date(row.sold_at).toISOString(),
       requestedAt: new Date(row.requested_at).toISOString(),
       decidedAt: row.decided_at ? new Date(row.decided_at).toISOString() : null,
+      // A sender sees the confirmation until explicitly acknowledging it.
+      senderNotificationPending: row.status === 'accepted' && Boolean(row.sender_notification_at) && !row.sender_acknowledged_at,
       reason: row.reason || null, decisionNote: row.decision_note || null,
     };
   }
@@ -25076,7 +25087,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         WHERE t.location_id=$1 AND (
          lower(regexp_replace(btrim(t.from_actor),'[[:space:]]+',' ','g'))=$2 OR
          lower(regexp_replace(btrim(t.to_actor),'[[:space:]]+',' ','g'))=$2)
-        ORDER BY CASE WHEN t.status='pending' THEN 0 ELSE 1 END,t.requested_at DESC LIMIT 150`,[location.id,aifEmployeeKey(actor)]);
+        ORDER BY CASE
+          WHEN t.status='accepted' AND t.sender_notification_at IS NOT NULL AND t.sender_acknowledged_at IS NULL
+            AND lower(regexp_replace(btrim(t.from_actor),'[[:space:]]+',' ','g'))=$2 THEN 0
+          WHEN t.status='pending' THEN 1
+          ELSE 2 END,
+          COALESCE(t.decided_at,t.requested_at) DESC LIMIT 150`,[location.id,aifEmployeeKey(actor)]);
       return res.json({ok:true,actor,location:{id:String(location.id),code:location.code,name:location.name},
         items:rows.rows.map(aifSellerTransferItem)});
     } catch(error) { const status=Number(error.statusCode||500);return res.status(status).json({error:error.message||'Az átadások nem tölthetők be.',code:error.code||null}); }
@@ -25164,7 +25180,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           throw aifSellerTransferError('A bizonylat az átadáskérés óta megváltozott. A kérelem nem fogadható el.',409,'seller_transfer_stale');
       }
       const updated=await db.query(`UPDATE aif_shop_seller_transfers SET status=$2,decided_at=now(),decided_by=$3,
-       decision_note=$4 WHERE id=$1 RETURNING id`,[id,status,actor,text(req.body?.note).slice(0,400)||null]);
+       decision_note=$4,
+       sender_notification_at=CASE WHEN $2='accepted' THEN now() ELSE sender_notification_at END
+       WHERE id=$1 RETURNING id`,[id,status,actor,text(req.body?.note).slice(0,400)||null]);
       const after=await db.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[updated.rows[0].id]);
       await db.query('COMMIT');started=false;
       return res.json({ok:true,item:aifSellerTransferItem(after.rows[0])});
@@ -25173,6 +25191,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const status=Number(error.statusCode||500);
       return res.status(status).json({error:error.message||'Az átadás elbírálása nem sikerült.',code:error.code||null});
     } finally{db.release();}
+  });
+
+
+  // The original sender explicitly confirms that they have SEEN the acceptance.
+  // No sale, payment, warehouse, shift or cash rows are updated here.
+  router.post('/shop-seller-transfers/:id/sender-ack',requireAuthed,async(req,res)=>{
+    try {
+      if(normCode(req.session?.role)!=='shop')
+        throw aifSellerTransferError('A visszaigazolást csak az eredeti eladó nyugtázhatja.',403);
+      await ensureAifSellerTransferSchema();
+      const id=text(req.params.id);
+      if(!isUuidText(id)) throw aifSellerTransferError('Érvénytelen átadásazonosító.',400);
+      const location=await aifResolveShopLocation(req,pool,req.body?.location);
+      const actor=actorFrom(req);
+      const result=await pool.query(`UPDATE aif_shop_seller_transfers
+        SET sender_acknowledged_at=COALESCE(sender_acknowledged_at,now())
+        WHERE id=$1::uuid AND location_id=$2 AND status='accepted'
+          AND sender_notification_at IS NOT NULL
+          AND lower(regexp_replace(btrim(from_actor),'[[:space:]]+',' ','g'))=$3
+        RETURNING id`,[id,location.id,aifEmployeeKey(actor)]);
+      if(!result.rowCount)
+        throw aifSellerTransferError('A jóváhagyás nem található, vagy nem a te átadásod.',404,'seller_transfer_ack_not_found');
+      const detail=await pool.query(`${AIF_SELLER_TRANSFER_SELECT} WHERE t.id=$1`,[id]);
+      return res.json({ok:true,item:aifSellerTransferItem(detail.rows[0])});
+    } catch(error) {
+      const status=Number(error.statusCode||500);
+      return res.status(status).json({error:error.message||'A visszaigazolás nyugtázása nem sikerült.',code:error.code||null});
+    }
   });
 
 
