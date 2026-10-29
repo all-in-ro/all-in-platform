@@ -3082,7 +3082,8 @@ export type AifSellerTransfer = {
   id: string; saleId: string; lineId: string; saleNumber?: string | null;
   title: string; productCode?: string | null; brandName?: string | null;
   colorName?: string | null; size?: string | null; imageUrl?: string | null;
-  fromActor: string; toActor: string; status: AifSellerTransferStatus;
+  fromActor: string; toActor: string; paymentActor?: string; status: AifSellerTransferStatus;
+  isHistorical?: boolean;
   qty: number; listTotal: number; netTotal: number; discountTotal: number;
   paymentMethod: "cash" | "card" | "bank_transfer";
   soldAt: string; requestedAt: string; decidedAt?: string | null;
@@ -5093,6 +5094,7 @@ export type AifAdminShopRecentSale = {
   transferredFrom?: string | null;
   transferredTo?: string | null;
   transferId?: string | null;
+  transferDecidedAt?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
   status: string;
