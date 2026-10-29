@@ -70,6 +70,8 @@ function notifyStockMovesChanged() {
 }
 
 type DocumentType = "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
+// A receptió számsora másik szerveroldali táblából jön, de ugyanitt kezelhető.
+type NumberingType = "reception" | DocumentType;
 type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | "shopify_transfer" | DocumentType;
 type CorrectionDirection = "increase" | "decrease";
 type DeleteMode = "restore_stock" | "permanent";
@@ -146,6 +148,13 @@ type StockDocumentSettings = {
   updatedAt?: string | null;
   updatedBy?: string | null;
 };
+
+type NumberingSettings = Omit<StockDocumentSettings, "documentType"> & {
+  documentType: NumberingType;
+};
+type ReceptionAvizApiSettings = Pick<NumberingSettings,
+  "series" | "nextNumber" | "digits" | "includeYear" | "yearlyReset" | "sequenceYear" | "previewNumber"
+> & { updatedAt?: string | null; updatedBy?: string | null };
 
 type DocumentListItem = {
   id: string;
@@ -310,6 +319,55 @@ const DOCUMENT_TYPES: Array<{
     tone: "border-amber-200/28 bg-amber-500/12 text-amber-50",
   },
 ];
+
+// A készletbizonylatok négy számsora már külön létezik. Az ötödik a
+// receptió AVZ számsora, amelyet a receptió modul saját API-ja kezel.
+const NUMBERING_TYPES: Array<{
+  type: NumberingType;
+  label: string;
+  shortLabel: string;
+  subtitle: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  tone: string;
+}> = [
+  {
+    type: "reception",
+    label: "Receptió",
+    shortLabel: "Receptió",
+    subtitle: "Beérkezéshez tartozó saját AVZ számsor",
+    icon: PackagePlus,
+    tone: "border-cyan-200/30 bg-cyan-500/12 text-cyan-50",
+  },
+  ...DOCUMENT_TYPES.map((item) => ({
+    ...item,
+    label: item.type === "internal_transfer" ? "Aviz / belső átadás" : item.type === "supplier_return" ? "Retur" : item.label,
+    shortLabel: item.type === "internal_transfer" ? "Aviz" : item.type === "supplier_return" ? "Retur" : item.shortLabel,
+  })),
+];
+
+function numberingMeta(type: NumberingType) {
+  return NUMBERING_TYPES.find((item) => item.type === type) || NUMBERING_TYPES[0];
+}
+
+function receptionNumberingSettings(data: ReceptionAvizApiSettings): NumberingSettings {
+  return {
+    ...data,
+    documentType: "reception",
+    // A receptió API-ja kizárólag a számozást tárolja, nem a dokumentumcímeket.
+    documentTitle: "RECEPȚIE",
+    documentSubtitle: "Aviz pentru recepție",
+  };
+}
+
+function draftNumberPreview(settings: NumberingSettings | null): string {
+  if (!settings) return "-";
+  const series = String(settings.series || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20);
+  const digits = Math.min(10, Math.max(3, Math.trunc(Number(settings.digits) || 6)));
+  const next = Math.max(1, Math.trunc(Number(settings.nextNumber) || 1));
+  const year = Math.max(2000, Math.min(2100, Math.trunc(Number(settings.sequenceYear) || new Date().getFullYear())));
+  const suffix = String(next).padStart(digits, "0");
+  return `${series || "?"}/${settings.includeYear ? `${year}/` : ""}${suffix}`;
+}
 
 const REASON_OPTIONS: Record<DocumentType, Array<{ value: string; label: string; ro: string }>> = {
   internal_transfer: [],
@@ -1942,7 +2000,7 @@ export default function AllInProductMoves() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
   const [receptions, setReceptions] = useState<ReceptionItem[]>([]);
-  const [settings, setSettings] = useState<Record<DocumentType, StockDocumentSettings> | null>(null);
+  const [settings, setSettings] = useState<Record<NumberingType, NumberingSettings> | null>(null);
   const [pageNo, setPageNo] = useState(1);
   const [pages, setPages] = useState(1);
   const [limit, setLimit] = useState(30);
@@ -1969,8 +2027,9 @@ export default function AllInProductMoves() {
   const [deletingMode, setDeletingMode] = useState<DeleteMode | null>(null);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsType, setSettingsType] = useState<DocumentType>("internal_transfer");
-  const [settingsDraft, setSettingsDraft] = useState<StockDocumentSettings | null>(null);
+  const [settingsType, setSettingsType] = useState<NumberingType>("reception");
+  const [settingsDraft, setSettingsDraft] = useState<NumberingSettings | null>(null);
+  const [settingsError, setSettingsError] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -2015,8 +2074,17 @@ export default function AllInProductMoves() {
   const draftListScrollRef = useRef<HTMLDivElement | null>(null);
 
   const loadSettings = useCallback(async () => {
-    const result = await fetchJson<{ settings?: Record<DocumentType, StockDocumentSettings>; items?: StockDocumentSettings[] }>("/stock-documents/settings");
-    const map = result.settings || Object.fromEntries((result.items || []).map((row) => [row.documentType, row])) as Record<DocumentType, StockDocumentSettings>;
+    // Ezek független számlálók. A receptió AVZ-sorozata nem azonos a
+    // készletmozgási Aviz (PV) sorozatával, és a RET külön számsor.
+    const [stock, reception] = await Promise.all([
+      fetchJson<{ settings?: Record<DocumentType, StockDocumentSettings>; items?: StockDocumentSettings[] }>("/stock-documents/settings"),
+      fetchJson<{ settings: ReceptionAvizApiSettings }>("/receptions/settings/aviz"),
+    ]);
+    const stockMap = stock.settings || Object.fromEntries((stock.items || []).map((row) => [row.documentType, row])) as Record<DocumentType, StockDocumentSettings>;
+    const map: Record<NumberingType, NumberingSettings> = {
+      ...stockMap,
+      reception: receptionNumberingSettings(reception.settings),
+    };
     setSettings(map);
     return map;
   }, []);
@@ -3147,27 +3215,55 @@ export default function AllInProductMoves() {
     }
   }
 
-  function openSettings(typeToOpen: DocumentType = "internal_transfer") {
+  function openSettings(typeToOpen: NumberingType = "reception") {
     const row = settings?.[typeToOpen] || null;
     setSettingsType(typeToOpen);
     setSettingsDraft(row ? { ...row } : null);
+    setSettingsError("");
     setSettingsOpen(true);
   }
 
   async function saveSettings() {
-    if (!settingsDraft) return;
+    if (!settingsDraft || settingsSaving) return;
+    setSettingsError("");
+    const series = String(settingsDraft.series || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 20);
+    if (!series) {
+      setSettingsError("Adj meg érvényes sorozatot.");
+      return;
+    }
+    // A külön sorozatkód garantálja, hogy a receptió, Aviz, retur és
+    // a többi dokumentum sorszámai soha ne legyenek összetéveszthetők.
+    const conflict = NUMBERING_TYPES.find((item) => item.type !== settingsType &&
+      String(settings?.[item.type]?.series || "").trim().toUpperCase() === series);
+    if (conflict) {
+      setSettingsError(`A(z) ${series} sorozatot már használja a(z) ${conflict.shortLabel}. Minden dokumentumtípus kapjon saját sorozatkódot.`);
+      return;
+    }
+    if (settings?.[settingsType] &&
+        settingsDraft.sequenceYear === settings[settingsType].sequenceYear &&
+        series === String(settings[settingsType].series || "").trim().toUpperCase() &&
+        settingsDraft.nextNumber < settings[settingsType].nextNumber) {
+      setSettingsError(`A következő sorszám nem lehet kisebb a már kiosztott sorozat aktuális állásánál (${settings[settingsType].nextNumber}).`);
+      return;
+    }
     setSettingsSaving(true);
     setError("");
     try {
-      const result = await fetchJson<{ settings: StockDocumentSettings }>(`/stock-documents/settings/${settingsType}`, {
-        method: "PUT",
-        body: JSON.stringify({ settings: settingsDraft }),
-      });
-      setSettings((current) => ({ ...(current || {} as Record<DocumentType, StockDocumentSettings>), [settingsType]: result.settings }));
+      const payload = { ...settingsDraft, series };
+      const updated = settingsType === "reception"
+        ? receptionNumberingSettings((await fetchJson<{ settings: ReceptionAvizApiSettings }>("/receptions/settings/aviz", {
+            method: "PATCH",
+            body: JSON.stringify({ settings: payload }),
+          })).settings)
+        : (await fetchJson<{ settings: StockDocumentSettings }>(`/stock-documents/settings/${settingsType}`, {
+            method: "PUT",
+            body: JSON.stringify({ settings: payload }),
+          })).settings;
+      setSettings((current) => ({ ...(current || {} as Record<NumberingType, NumberingSettings>), [settingsType]: updated }));
       setSettingsOpen(false);
-      setMessage(`${documentMeta(settingsType).shortLabel} számozása mentve. Következő: ${result.settings.previewNumber}.`);
+      setMessage(`${numberingMeta(settingsType).shortLabel} számozása mentve. Következő: ${updated.previewNumber}.`);
     } catch (saveError: any) {
-      setError(saveError?.message || "A számozási beállítás mentése nem sikerült.");
+      setSettingsError(saveError?.message || "A számozási beállítás mentése nem sikerült.");
     } finally {
       setSettingsSaving(false);
     }
@@ -3360,7 +3456,7 @@ export default function AllInProductMoves() {
             </div>
             <div className="mt-3 grid grid-cols-[minmax(0,1fr)_40px] gap-2">
               <button type="button" onClick={() => openCreate("internal_transfer")} className="inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_18px_rgba(42,141,139,.18)] active:scale-[0.98]"><Plus size={15} /><span>Új bizonylat</span>{settings?.internal_transfer ? <span className="truncate text-[9px] text-white/65">• {settings.internal_transfer.previewNumber}</span> : null}</button>
-              <button type="button" onClick={() => openSettings("internal_transfer")} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Admin beállítások"><Settings size={16} /></button>
+              <button type="button" onClick={() => openSettings("reception")} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Admin beállítások"><Settings size={16} /></button>
             </div>
           </div>
 
@@ -3376,7 +3472,7 @@ export default function AllInProductMoves() {
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
               {settings?.internal_transfer ? <span className="hidden rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#cffffd]/78 md:inline">Következő: {settings.internal_transfer.previewNumber}</span> : null}
               <button type="button" className={primaryBtn} onClick={() => openCreate("internal_transfer")}><Plus size={15} /> Új bizonylat</button>
-              <button type="button" className={iconBtn} onClick={() => openSettings("internal_transfer")} title="Admin beállítások" aria-label="Admin beállítások"><Settings size={16} /></button>
+              <button type="button" className={iconBtn} onClick={() => openSettings("reception")} title="Admin beállítások" aria-label="Admin beállítások"><Settings size={16} /></button>
               <button type="button" className={btnSoft} onClick={() => void loadList()} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
               <button type="button" className={btn} onClick={goHome}><Home size={15} /> Kezdőlap</button>
             </div>
@@ -3947,13 +4043,21 @@ export default function AllInProductMoves() {
 
       {settingsOpen ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !settingsSaving) setSettingsOpen(false); }}>
-          <div className="w-full max-w-3xl overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/12 bg-gradient-to-r from-[#263246] to-[#2a8d8b]/60 px-4 py-3"><div><p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/65">Admin settings</p><h3 className="mt-1 text-lg">Készletbizonylatok számozása</h3></div><button type="button" className={iconBtn} onClick={() => setSettingsOpen(false)}><X size={16} /></button></div>
-            <div className="p-4">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{DOCUMENT_TYPES.map((row) => { const Icon = row.icon; return <button key={row.type} type="button" onClick={() => { setSettingsType(row.type); setSettingsDraft(settings?.[row.type] ? { ...settings[row.type] } : null); }} className={`rounded-xl border p-2.5 text-left ${settingsType === row.type ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/20" : "border-white/12 bg-white/[0.05]"}`}><span className="flex items-center gap-2 text-xs"><Icon size={14} /> {row.shortLabel}</span><span className="mt-1 block text-[10px] text-white/42">{settings?.[row.type]?.previewNumber || "-"}</span></button>; })}</div>
-              {settingsDraft ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><label className={label}>Sorozat<input className={input} value={settingsDraft.series} onChange={(event) => setSettingsDraft({ ...settingsDraft, series: event.target.value.toUpperCase() })} /></label><label className={label}>Következő szám<input className={input} type="number" min={1} value={settingsDraft.nextNumber} onChange={(event) => setSettingsDraft({ ...settingsDraft, nextNumber: Math.max(1, Number(event.target.value) || 1) })} /></label><label className={label}>Számjegyek<input className={input} type="number" min={3} max={10} value={settingsDraft.digits} onChange={(event) => setSettingsDraft({ ...settingsDraft, digits: Math.min(10, Math.max(3, Number(event.target.value) || 6)) })} /></label><label className={label}>Sorozat éve<input className={input} type="number" min={2000} max={2100} value={settingsDraft.sequenceYear} onChange={(event) => setSettingsDraft({ ...settingsDraft, sequenceYear: Number(event.target.value) || new Date().getFullYear() })} /></label><label className={`${label} sm:col-span-2`}>Román dokumentumcím<input className={input} value={settingsDraft.documentTitle} onChange={(event) => setSettingsDraft({ ...settingsDraft, documentTitle: event.target.value })} /></label><label className={`${label} sm:col-span-2`}>Román alcím<input className={input} value={settingsDraft.documentSubtitle} onChange={(event) => setSettingsDraft({ ...settingsDraft, documentSubtitle: event.target.value })} /></label><label className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-xs"><input type="checkbox" checked={settingsDraft.includeYear} onChange={(event) => setSettingsDraft({ ...settingsDraft, includeYear: event.target.checked })} className="accent-[#2a8d8b]" /> Év szerepeljen a számban</label><label className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-xs"><input type="checkbox" checked={settingsDraft.yearlyReset} onChange={(event) => setSettingsDraft({ ...settingsDraft, yearlyReset: event.target.checked })} className="accent-[#2a8d8b]" /> Évente újrainduljon</label><div className="rounded-xl border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-3 py-2 sm:col-span-2"><p className="text-[10px] uppercase tracking-[0.1em] text-[#cffffd]/55">Következő bizonylat</p><p className="mt-1 text-lg text-[#d7fffd]">{settingsDraft.previewNumber}</p></div></div> : <div className="mt-4 rounded-xl border border-rose-200/20 bg-rose-500/10 px-3 py-3 text-sm text-rose-50">A beállítás még nem tölthető be.</div>}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-white/12 bg-[#303a4c] px-4 py-3"><button type="button" className={btnSoft} onClick={() => setSettingsOpen(false)}>Mégse</button><button type="button" className={primaryBtn} onClick={() => void saveSettings()} disabled={!settingsDraft || settingsSaving}><CheckCircle2 size={15} /> {settingsSaving ? "Mentés..." : "Beállítás mentése"}</button></div>
+          <div className="flex max-h-[92dvh] w-full max-w-[900px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/12 bg-gradient-to-r from-[#263246] to-[#2a8d8b]/60 px-4 py-3"><div><p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/65">Admin settings</p><h3 className="mt-1 text-lg">Receptió · Aviz · Retur számozása</h3></div><button type="button" className={iconBtn} onClick={() => setSettingsOpen(false)}><X size={16} /></button></div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <p className="mb-3 text-[11px] leading-relaxed text-white/58">Minden dokumentumtípusnak külön sorozata és saját következő sorszáma van. Az egyik típus kiállítása nem lépteti a másikét.</p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">{NUMBERING_TYPES.map((row) => { const Icon = row.icon; const selected = settingsType === row.type; return <button key={row.type} type="button" onClick={() => { setSettingsType(row.type); setSettingsDraft(settings?.[row.type] ? { ...settings[row.type] } : null); setSettingsError(""); }} className={`min-w-0 rounded-xl border p-2.5 text-left transition ${selected ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/23 shadow-[0_0_0_1px_rgba(123,215,212,.12)]" : "border-white/12 bg-white/[0.05] hover:bg-white/[0.08]"}`}><span className="flex items-center gap-2 text-xs text-white"><Icon size={14} className="shrink-0" /> {row.shortLabel}</span><span className="mt-1.5 block truncate font-mono text-[10px] text-[#d7fffd]/80">{settings?.[row.type]?.previewNumber || "-"}</span></button>; })}</div>
+                {settingsDraft ? <>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] text-white/75"><span>{numberingMeta(settingsType).subtitle}</span><span className="text-[#d7fffd]">Önálló számsor</span></div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><label className={label}>Sorozat<input className={input} value={settingsDraft.series} onChange={(event) => setSettingsDraft({ ...settingsDraft, series: event.target.value.toUpperCase() })} /></label><label className={label}>Következő szám<input className={input} type="number" min={1} value={settingsDraft.nextNumber} onChange={(event) => setSettingsDraft({ ...settingsDraft, nextNumber: Math.max(1, Number(event.target.value) || 1) })} /></label><label className={label}>Számjegyek<input className={input} type="number" min={3} max={10} value={settingsDraft.digits} onChange={(event) => setSettingsDraft({ ...settingsDraft, digits: Math.min(10, Math.max(3, Number(event.target.value) || 6)) })} /></label><label className={label}>Sorozat éve<input className={input} type="number" min={2000} max={2100} value={settingsDraft.sequenceYear} onChange={(event) => setSettingsDraft({ ...settingsDraft, sequenceYear: Number(event.target.value) || new Date().getFullYear() })} /></label>
+                    {settingsType !== "reception" ? <><label className={`${label} sm:col-span-2`}>Román dokumentumcím<input className={input} value={settingsDraft.documentTitle} onChange={(event) => setSettingsDraft({ ...settingsDraft, documentTitle: event.target.value })} /></label><label className={`${label} sm:col-span-2`}>Román alcím<input className={input} value={settingsDraft.documentSubtitle} onChange={(event) => setSettingsDraft({ ...settingsDraft, documentSubtitle: event.target.value })} /></label></> : <div className="flex items-center rounded-xl border border-white/12 bg-white/[0.04] px-3 py-2 text-xs leading-relaxed text-white/56 sm:col-span-2 lg:col-span-4">A receptió számsora a beérkezési AVZ azonosítóját kezeli. A készletátadási PV / Aviz és a beszállítói RET számsora ettől független.</div>}
+                    <label className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-xs"><input type="checkbox" checked={settingsDraft.includeYear} onChange={(event) => setSettingsDraft({ ...settingsDraft, includeYear: event.target.checked })} className="accent-[#2a8d8b]" /> Év szerepeljen a számban</label><label className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-xs"><input type="checkbox" checked={settingsDraft.yearlyReset} onChange={(event) => setSettingsDraft({ ...settingsDraft, yearlyReset: event.target.checked })} className="accent-[#2a8d8b]" /> Évente újrainduljon</label><div className="rounded-xl border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-3 py-2 sm:col-span-2"><p className="text-[10px] uppercase tracking-[0.1em] text-[#cffffd]/55">Következő bizonylat</p><p className="mt-1 font-mono text-lg text-[#d7fffd]">{draftNumberPreview(settingsDraft)}</p></div></div>
+                  <p className="mt-3 text-[10px] leading-relaxed text-white/45">A meglévő, már kiosztott bizonylatszámok változatlanok maradnak. Törölt vagy sztornózott bizonylat száma nem használható fel újra.</p>
+                </> : <div className="mt-4 rounded-xl border border-rose-200/20 bg-rose-500/10 px-3 py-3 text-sm text-rose-50">A beállítás még nem tölthető be.</div>}
+                {settingsError ? <div role="alert" className="mt-3 rounded-xl border border-rose-300/32 bg-rose-500/12 px-3 py-2.5 text-xs text-rose-50">{settingsError}</div> : null}
+              </div>
+            <div className="flex shrink-0 justify-end gap-2 border-t border-white/12 bg-[#303a4c] px-4 py-3"><button type="button" className={btnSoft} onClick={() => setSettingsOpen(false)}>Mégse</button><button type="button" className={primaryBtn} onClick={() => void saveSettings()} disabled={!settingsDraft || settingsSaving}><CheckCircle2 size={15} /> {settingsSaving ? "Mentés..." : "Beállítás mentése"}</button></div>
           </div>
         </div>
       ) : null}
