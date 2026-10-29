@@ -175,7 +175,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       // Fetch previous comparison period too, so changes never distort the delta cards.
       const sellerTransferRows = (await pool.query(`
         SELECT t.id::text AS transfer_id,t.sale_id::text AS sale_id,
-          t.sale_line_id::text AS sale_line_id,t.from_actor,t.to_actor,
+          t.sale_line_id::text AS sale_line_id,t.from_actor,t.to_actor,t.payment_actor,
           t.qty,t.list_total,t.net_total,t.discount_total,t.payment_method,
           t.sold_at,(t.sold_at AT TIME ZONE 'Europe/Bucharest')::date::text AS sale_day,
           s.sale_number,s.customer_name,s.customer_phone,s.customer_id,s.raw AS sale_raw,
@@ -1313,7 +1313,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              s.sale_number, s.sold_at,
              COALESCE(st.to_actor,s.actor) AS actor,s.actor AS original_actor,
              st.from_actor AS transferred_from,st.to_actor AS transferred_to,
-             st.id::text AS transfer_id,
+             st.id::text AS transfer_id,st.decided_at AS transfer_decided_at,
              s.customer_name, s.customer_phone,
              s.status, s.payment_status, s.sale_type,
              COALESCE(
@@ -1907,9 +1907,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
       // payment method and cost. This is never booked again as physical revenue.
       function adjustPersonalSummary(target,transfers,person){
         if(!person || !transfers.length) return;
-        let net=0,gross=0,discount=0,qty=0,netExVat=0,cost=0;
+        let net=0,paymentNet=0,gross=0,discount=0,qty=0,netExVat=0,cost=0;
         let snapshotQty=0,fallbackQty=0,missingQty=0;
         for(const t of transfers){
+          const payFrom=sameSeller(t.payment_actor||t.from_actor,person);
+          const payTo=sameSeller(t.to_actor,person);
+          paymentNet+=((payTo?1:0)-(payFrom?1:0))*Number(t.net_total||0);
           const sign=sameSeller(t.to_actor,person)?1:sameSeller(t.from_actor,person)?-1:0;
           if(!sign)continue;
           net+=sign*Number(t.net_total||0);
@@ -1922,13 +1925,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
           else if(t.cost_fallback===true)fallbackQty+=sign*Number(t.qty||0);
           else if(t.cost_missing===true)missingQty+=sign*Number(t.qty||0);
         }
-        target.revenue=roundSellerMoney(Number(target.revenue||0)+net);
-        target.paidTotal=roundSellerMoney(Number(target.paidTotal||0)+net);
+        // Revenue in a filtered overview is payment-date money, not sale-owner money.
+        target.revenue=roundSellerMoney(Number(target.revenue||0)+paymentNet);
+        target.paidTotal=roundSellerMoney(Number(target.paidTotal||0)+paymentNet);
         target.itemsSold=Number(target.itemsSold||0)+qty;
         target.transactions=Number(target.transactions||0)+transactionChangeFor(transfers,person);
         target.discountTotal=roundSellerMoney(Number(target.discountTotal||0)+discount);
         target.netRevenue=roundSellerMoney(Number(target.netRevenue||0)+netExVat);
-        target.tvaAmount=roundSellerMoney(Number(target.tvaAmount||0)+net-netExVat);
+        target.tvaAmount=roundSellerMoney(Number(target.revenue||0)-Number(target.netRevenue||0));
         target.estimatedCost=roundSellerMoney(Number(target.estimatedCost||0)+cost);
         target.grossProfit=roundSellerMoney(Number(target.netRevenue||0)-Number(target.estimatedCost||0));
         target.grossMargin=Number(target.netRevenue||0)?target.grossProfit/target.netRevenue*100:0;
@@ -2055,7 +2059,9 @@ export default function createAifAdminShopOverviewRouter(deps) {
           if(!sign)continue;
           const point=trendMap.get(t.sale_day);
           if(!point)continue;
-          point.revenue=roundSellerMoney(point.revenue+sign*Number(t.net_total||0));
+          const payer=t.payment_actor||t.from_actor;
+          const paymentSign=(sameSeller(t.to_actor,employee)?1:0)-(sameSeller(payer,employee)?1:0);
+          point.revenue=roundSellerMoney(point.revenue+paymentSign*Number(t.net_total||0));
           point.itemsSold+=sign*Number(t.qty||0);
           point.discountTotal=roundSellerMoney(point.discountTotal+sign*Number(t.discount_total||0));
           if(!transactionDeltaByDay.has(t.sale_day))transactionDeltaByDay.set(t.sale_day,[]);
@@ -2079,7 +2085,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       if(employee){
         const methodsBySale=new Map();
         for(const t of currentSellerTransfers){
-          const sign=sameSeller(t.to_actor,employee)?1:sameSeller(t.from_actor,employee)?-1:0;
+          const sign=(sameSeller(t.to_actor,employee)?1:0)-(sameSeller(t.payment_actor||t.from_actor,employee)?1:0);
           if(!sign)continue;
           const method=String(t.payment_method||'');
           const entry=paymentMap.get(method)||{method,amount:0,transactions:0};
@@ -2093,7 +2099,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
           transactionGroups.get(t.sale_id).push(t);
         }
         for(const group of transactionGroups.values()){
-          const delta=transactionChangeFor(group,employee);
+          const t=group[0];
+          const originalPayer=t.payment_actor||t.from_actor;
+          const allMoved=group.length>=Number(t.total_line_count||0);
+          const payerIsEmployee=sameSeller(originalPayer,employee);
+          const recipientIsEmployee=group.some(item=>sameSeller(item.to_actor,employee));
+          const delta=(recipientIsEmployee&&!payerIsEmployee?1:0)
+            -(allMoved&&payerIsEmployee&&!recipientIsEmployee?1:0);
           if(!delta)continue;
           const method=String(group[0].payment_method||'');
           const entry=paymentMap.get(method)||{method,amount:0,transactions:0};
@@ -2179,6 +2191,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         transferredFrom: row.transferred_from || null,
         transferredTo: row.transferred_to || null,
         transferId: row.transfer_id ? String(row.transfer_id) : null,
+        transferDecidedAt: row.transfer_decided_at ? new Date(row.transfer_decided_at).toISOString() : null,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
         status: row.status,

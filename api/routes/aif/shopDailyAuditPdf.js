@@ -286,7 +286,11 @@ export function writeShopDailyAuditPdf(doc, report) {
     if (identification) details.push(identification);
     if (item?.sn_cod) details.push(`S/N: ${String(item.sn_cod).trim()}`);
     // The physical receipt stays in the original seller's name; financial ownership is corrected.
-    if (item?.transferred_from) details.push(`Eladói átvezetés: ${item.transferred_from} → ${item.transferred_to || 'átvevő'}`);
+    if (item?.transferred_from) {
+      details.push(`Eladói átvezetés: ${item.transferred_from} → ${item.transferred_to || 'átvevő'}`);
+      if (item.transfer_accepted_at) details.push(`Jóváhagyás: ${bucharest(item.transfer_accepted_at)}`);
+      if (item.transfer_reason) details.push(`Indok: ${String(item.transfer_reason).slice(0,100)}`);
+    }
     return [name, details.join('  •  ')].filter(Boolean).join('\n');
   };
   function employeeNotes(actor, entries, numbered = false) {
@@ -830,7 +834,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   // Fetch the whole day's original lines once, then split paid receipts in integer bani.
   // This preserves store totals and lets one receipt's lines belong to two sellers.
   const accepted=await client.query(`SELECT t.id,t.sale_line_id,t.sale_id,t.from_actor,t.to_actor,
-       t.net_total,t.payment_method,t.qty,t.requested_at,t.decided_at
+       t.net_total,t.payment_method,t.qty,t.requested_at,t.decided_at,t.reason
        FROM aif_shop_seller_transfers t
        JOIN aif_shop_sales s ON s.id=t.sale_id
        JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id
@@ -845,7 +849,8 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   for(const r of original.rows){
     const transfer=transferByLine.get(String(r.line_id));
     if(transfer){r.original_actor=r.actor;r.actor=transfer.to_actor;
-      r.transferred_from=transfer.from_actor;r.transferred_to=transfer.to_actor;r.transfer_id=String(transfer.id);}
+      r.transferred_from=transfer.from_actor;r.transferred_to=transfer.to_actor;r.transfer_id=String(transfer.id);
+      r.transfer_accepted_at=transfer.decided_at;r.transfer_reason=transfer.reason;}
     const saleId=String(r.sale_id);
     if(!saleLines.has(saleId)) saleLines.set(saleId,[]);
     saleLines.get(saleId).push(r);

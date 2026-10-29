@@ -77,6 +77,7 @@ async function loadDay(client, args) {
     SELECT s.id::text AS sale_id,s.sale_number,s.sold_at,s.actor,s.customer_name,s.customer_phone,
       s.sale_type,s.status,s.total AS sale_total,s.discount_total AS sale_discount,
        COALESCE(NULLIF(btrim(st.to_actor),''),s.actor) AS effective_actor, st.from_actor AS transferred_from, st.id::text AS transfer_id,
+      st.decided_at AS transfer_decided_at, st.reason AS transfer_reason,
       sl.id::text AS line_id,sl.line_no,sl.variant_id::text AS variant_id,sl.quantity,
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
@@ -275,7 +276,7 @@ function excelEntries(data, employee = null) {
       const credit=text(r.sale_type)==='credit';
       const fromActor=text(r.transferred_from);
       const noteParts=[credit?'Az eredeti eladás készletcsökkenése. Későbbi befizetés nem új eladás.':''];
-      if(fromActor) noteParts.push(`Eladói elszámolási átvezetés: ${fromActor} → ${r.effective_actor}; az eredeti bizonylat és raktármozgás nem módosult.`);
+      if(fromActor) noteParts.push(`Eladói elszámolási átvezetés: ${fromActor} → ${r.effective_actor}; jóváhagyva: ${bookDateTime(r.transfer_decided_at)}; ${text(r.transfer_reason) ? `indok: ${text(r.transfer_reason)}; ` : ''}az eredeti bizonylat, napzárás és raktármozgás nem módosult.`);
       add({id:`sale:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
         brand:r.brand_name,sn:r.sn_code,
         productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,

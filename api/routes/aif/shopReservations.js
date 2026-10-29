@@ -538,14 +538,16 @@ export default function createAifShopReservationsRouter({
         totalQty += qty;
       }
 
-      const saleActor = text(reservation.created_by) || cashier;
+      // Mónika félreteheti, de ha Melinda adja ki és veszi át a pénzt,
+      // a teljesített eladás Melindáé. A félretétel létrehozója megmarad a naplóban.
+      const saleActor = cashier;
       const saleNumber = await aifAllocateShopSaleNumber(client, location);
       const saleInsert = await client.query(
         `INSERT INTO aif_shop_sales (
            sale_number,location_id,customer_id,status,sale_type,payment_status,actor,sold_at,
            subtotal,discount_total,total,paid_total,balance_due,currency_code,customer_name,customer_phone,note,client_request_id,raw
          ) VALUES ($1,$2,$3,'completed',$4,$5,$6,now(),$7,0,$7,$8,$9,'RON',$10,$11,$12,$13,$14::jsonb) RETURNING *`,
-        [saleNumber, location.id, saleCustomerId || null, isCredit ? "credit" : "sale", isCredit ? "credit" : "paid", saleActor, subtotal, isCredit ? 0 : subtotal, isCredit ? subtotal : 0, saleCustomerName, saleCustomerPhone, text(body.note) || reservation.note || null, idempotencyKey, JSON.stringify({ source: "shop_reservation", reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, attributedTo: saleActor, fulfilledBy: cashier, paymentMethod: method, customerId: saleCustomerId || null })],
+        [saleNumber, location.id, saleCustomerId || null, isCredit ? "credit" : "sale", isCredit ? "credit" : "paid", saleActor, subtotal, isCredit ? 0 : subtotal, isCredit ? subtotal : 0, saleCustomerName, saleCustomerPhone, text(body.note) || reservation.note || null, idempotencyKey, JSON.stringify({ source: "shop_reservation", reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, reservedBy: reservation.created_by, attributedTo: saleActor, fulfilledBy: cashier, paymentMethod: method, customerId: saleCustomerId || null })],
       );
       const sale = saleInsert.rows[0];
 
@@ -594,7 +596,7 @@ export default function createAifShopReservationsRouter({
       await client.query(
         `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
          VALUES ($1,'completed',$2,$3,$4::jsonb)`,
-        [sale.id, saleActor, text(body.note) || reservation.note || null, JSON.stringify({ reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, fulfilledBy: cashier, paymentMethod: method, total: subtotal, itemCount: totalQty })],
+        [sale.id, saleActor, text(body.note) || reservation.note || null, JSON.stringify({ reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, reservedBy: reservation.created_by, fulfilledBy: cashier, paymentMethod: method, total: subtotal, itemCount: totalQty })],
       );
       await client.query(
         `UPDATE aif_shop_reservations SET status='fulfilled',fulfilled_by=$2,fulfilled_sale_id=$3,fulfilled_at=now(),updated_at=now() WHERE id=$1`,
@@ -602,11 +604,11 @@ export default function createAifShopReservationsRouter({
       );
       await client.query(
         `INSERT INTO aif_shop_reservation_events (reservation_id,event_type,actor,payload) VALUES ($1,'fulfilled',$2,$3::jsonb)`,
-        [reservation.id, cashier, JSON.stringify({ saleId: String(sale.id), saleNumber, saleAttributedTo: saleActor, paymentMethod: method, customerId: saleCustomerId || null, total: subtotal })],
+        [reservation.id, cashier, JSON.stringify({ saleId: String(sale.id), saleNumber, saleAttributedTo: saleActor, reservedBy: reservation.created_by, paymentMethod: method, customerId: saleCustomerId || null, total: subtotal })],
       );
       const completed = await aifLoadShopSaleResult(client, sale.id);
       await client.query("COMMIT");
-      res.json({ ...aifShopSaleResponse(completed, location, false), reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, attributedTo: saleActor, fulfilledBy: cashier });
+      res.json({ ...aifShopSaleResponse(completed, location, false), reservationId: String(reservation.id), reservationNumber: reservation.reservation_number, reservedBy: reservation.created_by, attributedTo: saleActor, fulfilledBy: cashier });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       const status = Number(error?.statusCode || 500);
