@@ -111,6 +111,21 @@ const MODE_META: Record<AllInShopOperationMode, { title: string; eyebrow: string
   summary: { title: "Napi összesítés", eyebrow: "Saját műszak és eladások", icon: Receipt },
 };
 
+/** Egyértelmű eladótól eladóig jel: két kolléga, köztük jobbra mutató nyíl. */
+function SellerHandoffIcon({ compact = false }: { compact?: boolean }) {
+  return (
+    <span aria-hidden="true" className={`inline-flex shrink-0 items-center ${compact ? "gap-[3px]" : "gap-[4px]"}`}>
+      <span className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-white/35 bg-white/13 text-white ${compact ? "h-[20px] w-[20px]" : "h-[24px] w-[24px]"}`}>
+        <UserRound size={compact ? 13 : 15} strokeWidth={1.85} />
+      </span>
+      <ArrowRight size={compact ? 12 : 15} strokeWidth={2.4} className="text-[#d3fffc] transition-transform duration-200 group-hover:translate-x-[2px]" />
+      <span className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-[#d2fffa]/55 bg-white/20 text-white ${compact ? "h-[20px] w-[20px]" : "h-[24px] w-[24px]"}`}>
+        <UserRound size={compact ? 13 : 15} strokeWidth={1.85} />
+      </span>
+    </span>
+  );
+}
+
 const AIF_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 const AIF_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg";
 const AIF_SHOPIFY_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
@@ -3946,9 +3961,10 @@ export default function AllInShopOperations({
                                   <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
                                   <button type="button"
                                     onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId, date: summaryDate } }))}
-                                    title="Termék és elszámolási összeg átadása másik eladónak"
-                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#9be9e5]/40 bg-[#2a8d8b]/20 px-2.5 text-[11px] text-[#bdf8f5] transition hover:bg-[#2a8d8b]/38">
-                                    <ArrowRightLeft size={14} /> Átadás
+                                    title="Elszámolás átadása másik eladónak • kétoldali jóváhagyással"
+                                    aria-label={`${item.title}: átadás egy másik eladónak`}
+                                    className="group inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-[11px] border border-[#bafff7]/55 bg-gradient-to-r from-[#267e7d] to-[#108D8B] px-2.5 py-1 text-[11px] font-normal text-white shadow-[0_5px_16px_rgba(16,141,139,0.21)] transition hover:border-[#ddfffc]/75 hover:from-[#2b9593] hover:to-[#179d99] hover:shadow-[0_7px_20px_rgba(16,141,139,0.32)] active:scale-[0.96]">
+                                    <SellerHandoffIcon compact /> <span>Átadás</span>
                                   </button>
                                 </>
                               ) : null}

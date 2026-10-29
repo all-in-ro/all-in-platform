@@ -25,6 +25,7 @@ import {
   apiAifSellerTransfers,
   apiAifCreateSellerTransfer,
   apiAifDecideSellerTransfer,
+  apiAifAcknowledgeSellerTransfer,
   type AifSellerTransfer,
   type AifShopDailyProductItem,
 } from "../lib/aif/api";
@@ -41,9 +42,29 @@ const panel = "rounded-[22px] border border-white/20 bg-[#354153] text-white sha
 const softButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#465468] px-4 text-sm font-normal text-white transition hover:bg-[#536277] disabled:cursor-not-allowed disabled:opacity-45";
 const greenButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#9fe6dd]/40 bg-[#108D8B] px-4 text-sm font-normal text-white transition hover:bg-[#159d9a] disabled:cursor-not-allowed disabled:opacity-45";
 
+/** Egyértelmű eladótól eladóig jel: két kolléga, köztük jobbra mutató nyíl. */
+function SellerHandoffIcon({ compact = false }: { compact?: boolean }) {
+  return (
+    <span aria-hidden="true" className={`inline-flex shrink-0 items-center ${compact ? "gap-[3px]" : "gap-[4px]"}`}>
+      <span className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-white/35 bg-white/13 text-white ${compact ? "h-[20px] w-[20px]" : "h-[24px] w-[24px]"}`}>
+        <UserRound size={compact ? 13 : 15} strokeWidth={1.85} />
+      </span>
+      <ArrowRight size={compact ? 12 : 15} strokeWidth={2.4} className="text-[#d3fffc] transition-transform duration-200 group-hover:translate-x-[2px]" />
+      <span className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-[#d2fffa]/55 bg-white/20 text-white ${compact ? "h-[20px] w-[20px]" : "h-[24px] w-[24px]"}`}>
+        <UserRound size={compact ? 13 : 15} strokeWidth={1.85} />
+      </span>
+    </span>
+  );
+}
+
 export default function AllInSellerTransfers({ locationCode, actor, role = "shop", onChanged }: Props) {
   const [items, setItems] = useState<AifSellerTransfer[]>([]);
   const [incoming, setIncoming] = useState<AifSellerTransfer | null>(null);
+  const [confirmation, setConfirmation] = useState<AifSellerTransfer | null>(null);
+  const [acknowledging, setAcknowledging] = useState(false);
+  const acknowledgedIdsRef = useRef<Set<string>>(new Set());
+  const notifiedSenderIdsRef = useRef<Set<string>>(new Set());
+  const senderConfirmationButtonRef = useRef<HTMLButtonElement | null>(null);
   const [manualInbox, setManualInbox] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [employees, setEmployees] = useState<string[]>([]);
@@ -60,7 +81,6 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
   const requestIdRef = useRef(0);
   const dismissedRef = useRef<Set<string>>(new Set());
   const busyRef = useRef(false);
-  const currentIncomingId = incoming?.id || "";
   const active = role === "shop";
 
   const refresh = useCallback(async (showError = false) => {
@@ -85,11 +105,35 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
 
   const pending = useMemo(() => items.filter(item => item.status === "pending" && employeeKey(item.toActor) === employeeKey(actor)), [items, actor]);
   const outgoing = useMemo(() => items.filter(item => employeeKey(item.fromActor) === employeeKey(actor)), [items, actor]);
+  // Accepted outgoing requests take priority over incoming requests. The server
+  // tracks acknowledgments, so a reload/login/device switch never loses one.
   useEffect(() => {
-    if (sendOpen || manualInbox || currentIncomingId) return;
+    if (sendOpen || manualInbox || incoming || confirmation) return;
+    const accepted = outgoing.find(item => item.senderNotificationPending && !acknowledgedIdsRef.current.has(item.id));
+    if (accepted) { setError(""); setConfirmation(accepted); return; }
     const next = pending.find(item => !dismissedRef.current.has(item.id));
     if (next) setIncoming(next);
-  }, [pending, sendOpen, manualInbox, currentIncomingId]);
+  }, [pending, outgoing, sendOpen, manualInbox, incoming, confirmation]);
+
+  // The confirmation also refreshes any daily summary open in this browser.
+  // The remote employee's approval must never leave stale figures on screen.
+  useEffect(() => {
+    if (!confirmation || notifiedSenderIdsRef.current.has(confirmation.id)) return;
+    notifiedSenderIdsRef.current.add(confirmation.id);
+    window.dispatchEvent(new CustomEvent("aif:shop-seller-transfer-changed", { detail: { locationCode } }));
+    senderConfirmationButtonRef.current?.focus();
+  }, [confirmation, locationCode]);
+
+  // Another browser tab may acknowledge the same notification. Close it once
+  // polling confirms the server has recorded the acknowledgment.
+  useEffect(() => {
+    if (!confirmation || acknowledging) return;
+    const latest = items.find(item => item.id === confirmation.id);
+    if (latest && !latest.senderNotificationPending) {
+      setConfirmation(null);
+      setError("");
+    }
+  }, [items, confirmation, acknowledging]);
 
   const loadSend = async (initialLineId = "", date = localDate()) => {
     const requestId = ++requestIdRef.current;
@@ -163,17 +207,35 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
     finally {setSending(false);busyRef.current = false;}
   };
   const dismissIncoming = () => { if (incoming) dismissedRef.current.add(incoming.id);setIncoming(null); };
+  const acknowledgeConfirmation = async () => {
+    if (!confirmation || acknowledging) return;
+    setAcknowledging(true);
+    setError("");
+    try {
+      await apiAifAcknowledgeSellerTransfer(confirmation.id, { location: locationCode });
+      acknowledgedIdsRef.current.add(confirmation.id);
+      setItems(current => current.map(item => item.id === confirmation.id
+        ? { ...item, senderNotificationPending: false } : item));
+      setConfirmation(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "A visszajelzés nyugtázása nem sikerült.");
+    } finally {
+      setAcknowledging(false);
+    }
+  };
   const selectedLine = saleLines.find(line => line.lineId === lineId);
   const filtered = saleLines.filter(line => `${line.title} ${line.productCode || ""} ${line.saleNumber || ""} ${line.size || ""}`.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
-  const open = Boolean(sendOpen || manualInbox || incoming);
+  const open = Boolean(sendOpen || manualInbox || incoming || confirmation);
   const closeInbox = () => { setManualInbox(false);setError(""); };
 
   if (!active) return null;
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void loadSend()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-[#9fe6dd]/50 bg-[#108D8B] px-4 text-sm text-white transition hover:bg-[#159d9a]">
-          <ArrowLeftRight size={17} strokeWidth={1.8} /> Eladás / régi nap javítása
+        <button type="button" onClick={() => void loadSend()} title="Eladás elszámolásának átadása egy másik eladónak, korábbi napról is"
+          className="group inline-flex min-h-[49px] items-center gap-2.5 rounded-[13px] border border-[#bcfff9]/55 bg-gradient-to-r from-[#267d7e] to-[#108D8B] px-3.5 py-2 text-sm font-normal text-white shadow-[0_9px_22px_rgba(16,141,139,0.22)] transition hover:border-[#dcfffc]/75 hover:from-[#2d9493] hover:to-[#159f9c] hover:shadow-[0_11px_27px_rgba(16,141,139,0.35)] active:scale-[0.98]">
+          <SellerHandoffIcon />
+          <span>Eladás / régi nap javítása</span>
         </button>
         <button type="button" onClick={() => {setManualInbox(true);setError("");setSuccess("");}} className={softButton}>
           <Clock3 size={16} /> Átadási kérelmek
@@ -182,8 +244,53 @@ export default function AllInSellerTransfers({ locationCode, actor, role = "shop
         {success && !open ? <span className="text-xs text-[#bbf5e4]">{success}</span> : null}
       </div>
 
-      {open && <div className="fixed inset-0 z-[10000] flex items-center justify-center overflow-y-auto bg-[#101927]/80 p-3 backdrop-blur-[3px] sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget && !sending) { if (incoming) dismissIncoming();else {setSendOpen(false);closeInbox();} } }}>
-        {incoming && !sendOpen && !manualInbox ? (
+      {open && <div className="fixed inset-0 z-[10000] flex items-center justify-center overflow-y-auto bg-[#101927]/80 p-3 backdrop-blur-[3px] sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget && !sending && !confirmation) { if (incoming) dismissIncoming();else {setSendOpen(false);closeInbox();} } }}>
+        {confirmation && !sendOpen && !manualInbox && !incoming ? (
+          <section role="alertdialog" aria-modal="true" aria-labelledby="aif-seller-confirmation-title"
+            className="relative flex w-full max-w-[550px] flex-col overflow-hidden rounded-[27px] border border-[#8dece5]/50 bg-[#303a4c] text-white shadow-[0_38px_110px_rgba(2,12,26,0.72)]">
+            <header className="relative overflow-hidden bg-gradient-to-br from-[#22505b] via-[#207477] to-[#108D8B] px-5 pb-6 pt-6 sm:px-7">
+              <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-48 w-48 rounded-full border border-white/15 bg-white/[0.04]" />
+              <span aria-hidden="true" className="pointer-events-none absolute right-12 top-7 h-20 w-20 rounded-full border border-white/10" />
+              <div className="relative flex items-center gap-4">
+                <span className="flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-[20px] border border-[#cffffa]/55 bg-white/15 shadow-[0_10px_30px_rgba(0,0,0,0.13)]">
+                  <CheckCircle2 size={35} strokeWidth={1.7} className="text-white" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.17em] text-white/72">AllInFashion · Visszaigazolás</p>
+                  <h2 id="aif-seller-confirmation-title" className="mt-1 text-[25px] font-normal tracking-tight sm:text-[29px]">Átadás elfogadva</h2>
+                  <p className="mt-1 text-[13px] text-[#e6fffd]/85">{confirmation.toActor} jóváhagyta az átadást.</p>
+                </div>
+              </div>
+            </header>
+            <div className="space-y-3.5 p-4 sm:p-5">
+              <article className="flex items-center gap-3.5 rounded-[19px] border border-white/14 bg-[#39475b] p-3">
+                <span className="flex h-[76px] w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-white/20 bg-white">
+                  {confirmation.imageUrl ? <img src={confirmation.imageUrl} alt="" className="h-full w-full object-contain p-1" />
+                    : <PackageSearch size={30} className="text-[#526173]" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[16px] leading-snug text-white">{confirmation.title}</p>
+                  <p className="mt-1.5 text-[11px] text-white/56">{[confirmation.productCode, confirmation.size].filter(Boolean).join(" · ")}</p>
+                  <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-[#bdfaf3]/75">
+                    <ReceiptText size={12} /> {confirmation.saleNumber} · {dateTime(confirmation.soldAt)}
+                  </p>
+                </div>
+              </article>
+              <div className="rounded-[19px] border border-[#a6f0e9]/43 bg-gradient-to-br from-[#19787a] to-[#155c65] px-4 py-3.5">
+                <p className="text-[10px] uppercase tracking-[0.13em] text-[#d3fffb]/73">Átvezetett összeg</p>
+                <p className="mt-1.5 text-[29px] font-normal tracking-tight text-white sm:text-[33px]">{money(confirmation.netTotal)}</p>
+              </div>
+              {error ? <p role="alert" className="rounded-xl border border-red-300/50 bg-red-500/15 px-3 py-2.5 text-xs text-red-50">{error}</p> : null}
+            </div>
+            <footer className="border-t border-white/12 bg-[#283548] px-4 py-4 sm:px-5">
+              <button ref={senderConfirmationButtonRef} type="button" onClick={() => void acknowledgeConfirmation()} disabled={acknowledging}
+                className="flex min-h-[54px] w-full items-center justify-center gap-2.5 rounded-[15px] border border-[#b6fff9]/56 bg-[#108D8B] text-[15px] font-normal text-white shadow-[0_10px_24px_rgba(16,141,139,0.20)] transition hover:bg-[#159f9c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b6fff9]/90 active:scale-[0.985] disabled:cursor-wait disabled:opacity-50">
+                {acknowledging ? <Loader2 size={19} className="animate-spin" /> : <Check size={19} strokeWidth={1.9} />}
+                {acknowledging ? "Nyugtázás…" : "Rendben"}
+              </button>
+            </footer>
+          </section>
+        ) : incoming && !sendOpen && !manualInbox ? (
           <section
             role="dialog"
             aria-modal="true"
