@@ -80,6 +80,7 @@ export type AllInAdminMagazinDashboardProps = {
   otherCityName: string;
 };
 
+
 type SelectOption = { value: string; label: string; paymentIcon?: "cash" | "card" | "bank_transfer"; indent?: boolean };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
@@ -1502,13 +1503,13 @@ function AifAuditPdfChoiceDialog({
       className="fixed inset-0 z-[1400] flex items-center justify-center bg-[#071421]/82 px-4 py-6 backdrop-blur-[8px]"
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <section role="dialog" aria-modal="true" aria-label="Napi audit PDF típusa" className="w-full max-w-[550px] overflow-hidden rounded-[26px] border border-[#8ce7e2]/45 bg-[#303a4c] text-white shadow-[0_35px_115px_rgba(0,0,0,0.65)]">
+      <section role="dialog" aria-modal="true" aria-label="PDF audit típusa" className="w-full max-w-[550px] overflow-hidden rounded-[26px] border border-[#8ce7e2]/45 bg-[#303a4c] text-white shadow-[0_35px_115px_rgba(0,0,0,0.65)]">
         <header className="flex items-center gap-3 border-b border-white/12 bg-gradient-to-r from-[#224e59] via-[#27656b] to-[#2a8d8b] px-5 py-4">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-black/10">
             <img src={AIF_PDF_ICON} alt="" className="h-7 w-7 object-contain" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] uppercase tracking-[0.15em] text-[#d7fffd]/70">AllInFashion • Napi audit</p>
+            <p className="text-[10px] uppercase tracking-[0.15em] text-[#d7fffd]/70">AllInFashion • Időszaki audit</p>
             <h2 className="mt-0.5 text-lg font-medium leading-tight">Melyik PDF-et kéred?</h2>
             <p className="mt-1 truncate text-[11px] text-white/65" title={`${date} • ${subject}`}>{date} • {subject}</p>
           </div>
@@ -1522,7 +1523,7 @@ function AifAuditPdfChoiceDialog({
             className="group rounded-[19px] border border-[#aaf0ec]/42 bg-[#244f57] p-4 text-left outline-none transition hover:border-[#bafff9] hover:bg-[#2a7377] focus-visible:ring-2 focus-visible:ring-[#aaf0ec]"
           >
             <div className="flex items-center justify-between gap-3"><span className="text-[15px] font-medium text-white">Összefoglaló</span><span className="rounded-lg border border-[#bafff9]/35 bg-black/10 px-2 py-1 text-[10px] text-[#d7fffd]">1 oldal</span></div>
-            <p className="mt-2 text-xs leading-5 text-white/70">Bruttó, napi bevétel, készpénz, bankkártya, kassza/műszak és megjegyzések.</p>
+            <p className="mt-2 text-xs leading-5 text-white/70">Bruttó, időszaki bevétel, készpénz, bankkártya, kassza/műszak és megjegyzések.</p>
             <span className="mt-4 inline-flex items-center gap-2 text-xs text-[#cffffd]">PDF megnyitása <ChevronRight size={14} /></span>
           </button>
           <button
@@ -1569,10 +1570,8 @@ export default function AllInAdminMagazinDashboard({
   const [shiftDay, setShiftDay] = useState<AifShopShiftDayOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [dailyPdfChoice, setDailyPdfChoice] = useState<{date: string; employee: string | null} | null>(null);
+  const [dailyPdfChoice, setDailyPdfChoice] = useState<{from: string; to: string; employee: string | null} | null>(null);
   const [excelDownloadBusy, setExcelDownloadBusy] = useState(false);
-  const [dailyPdfDateNoticeOpen, setDailyPdfDateNoticeOpen] = useState(false);
-  const dailyPdfNoticeOkRef = useRef<HTMLButtonElement | null>(null);
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [showHistoricalCreditRows, setShowHistoricalCreditRows] = useState(false);
@@ -1591,63 +1590,34 @@ export default function AllInAdminMagazinDashboard({
   const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [shiftRepairOpen, setShiftRepairOpen] = useState(false);
 
-  useEffect(() => {
-    if (!dailyPdfDateNoticeOpen) return;
-
-    const previousOverflow = document.body.style.overflow;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    document.body.style.overflow = "hidden";
-    dailyPdfNoticeOkRef.current?.focus();
-
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setDailyPdfDateNoticeOpen(false);
-    };
-
-    window.addEventListener("keydown", onEscape, true);
-    return () => {
-      window.removeEventListener("keydown", onEscape, true);
-      document.body.style.overflow = previousOverflow;
-      previousFocus?.focus();
-    };
-  }, [dailyPdfDateNoticeOpen]);
-
   function openAdminPdfChoice(employee: string | null = null) {
-    if (applied.from !== applied.to) {
-      setDailyPdfDateNoticeOpen(true);
-      return;
-    }
-    setDailyPdfChoice({date:applied.to,employee});
+    // Freeze date range when the selection modal opens. A later filter change
+    // must not silently alter the export while its confirmation is open.
+    setDailyPdfChoice({from:applied.from,to:applied.to,employee});
   }
 
   function chooseAdminPdfMode(mode: "summary" | "full") {
     if (!dailyPdfChoice) return;
     window.open(apiAifShopDailyAuditPdfUrl({
-      location:locationCode,date:dailyPdfChoice.date,scope:"all",
+      location:locationCode,date:dailyPdfChoice.to,
+      from:dailyPdfChoice.from,to:dailyPdfChoice.to,scope:"all",
       ...(dailyPdfChoice.employee ? {employee:dailyPdfChoice.employee} : {}),mode,
     }),"_blank","noopener,noreferrer");
     setDailyPdfChoice(null);
   }
 
   async function downloadAdminDailyExcel(employee: string | null = null) {
-    if (applied.from !== applied.to) {
-      setDailyPdfDateNoticeOpen(true);
-      return;
-    }
     if (excelDownloadBusy) return;
     setExcelDownloadBusy(true);
     setError("");
     try {
       await apiAifDownloadShopDailyAuditExcel({
-        location: locationCode,
-        date: applied.to,
-        scope: "all",
-        ...(employee ? { employee } : {}),
+        location:locationCode,date:applied.to,
+        from:applied.from,to:applied.to,scope:"all",
+        ...(employee ? {employee} : {}),
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A napi Excel letöltése sikertelen.");
+      setError(caught instanceof Error ? caught.message : "Az időszaki Excel letöltése sikertelen.");
     } finally {
       setExcelDownloadBusy(false);
     }
@@ -2195,22 +2165,22 @@ export default function AllInAdminMagazinDashboard({
                 onClick={() => {
                   openAdminPdfChoice();
                 }}
-                title="Teljes üzleti napi audit: minden eladó, külön bontásban"
+                title="Teljes üzleti PDF a kiválasztott időszakra: minden eladó, külön bontásban"
                 className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/40 bg-[#2a8d8b] px-2.5 text-xs text-white hover:bg-[#319c99]">
-                <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Teljes napi PDF
+                <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Teljes PDF
               </button>
               <button type="button"
                 onClick={() => void downloadAdminDailyExcel()}
                 disabled={excelDownloadBusy}
-                title="Teljes üzleti napi audit Excelben, a csatolt 15 oszlopos minta alapján"
+                title="Egyetlen teljes XLSX munkafüzet a kiválasztott időszak összes auditadatával"
                 className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white transition hover:bg-[#46556B] disabled:opacity-45">
                 {excelDownloadBusy ? <Loader2 size={15} className="animate-spin" /> : <img src={AIF_EXCEL_ICON} alt="" className="h-5 w-5 rounded object-contain" />}
-                Teljes napi Excel
+                Teljes XLS
               </button>
               {applied.employee ? (
                 <button type="button" onClick={() => {
                   openAdminPdfChoice(applied.employee);
-                }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white hover:bg-[#46556B]" title={`${applied.employee} napi auditja`}>
+                }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/36 bg-[#344154] px-2.5 text-xs text-white hover:bg-[#46556B]" title={`${applied.employee} időszaki auditja`}>
                   <img src={AIF_PDF_ICON} alt="" className="h-5 w-5 object-contain" /> Eladó PDF
                 </button>
               ) : null}
@@ -2218,8 +2188,8 @@ export default function AllInAdminMagazinDashboard({
                 <button type="button" disabled={excelDownloadBusy}
                   onClick={() => void downloadAdminDailyExcel(applied.employee)}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#B5EDE9]/30 bg-[#344154] px-2.5 text-xs text-white transition hover:bg-[#46556B] disabled:opacity-45"
-                  title={`${applied.employee} napi auditja Excelben`}>
-                  <img src={AIF_EXCEL_ICON} alt="" className="h-5 w-5 rounded object-contain" /> Eladó Excel
+                  title={`${applied.employee} időszaki auditja Excelben`}>
+                  <img src={AIF_EXCEL_ICON} alt="" className="h-5 w-5 rounded object-contain" /> Eladó XLS
                 </button>
               ) : null}
               {[
@@ -3151,75 +3121,11 @@ export default function AllInAdminMagazinDashboard({
       />
 
       {dailyPdfChoice ? <AifAuditPdfChoiceDialog
-        date={dailyPdfChoice.date}
+        date={dailyPdfChoice.from===dailyPdfChoice.to ? huDateLabel(dailyPdfChoice.from) : `${huDateLabel(dailyPdfChoice.from)} – ${huDateLabel(dailyPdfChoice.to)}`}
         subject={dailyPdfChoice.employee || cityName}
         onClose={() => setDailyPdfChoice(null)}
         onChoose={chooseAdminPdfMode}
       /> : null}
-
-      {dailyPdfDateNoticeOpen ? createPortal(
-        <div
-          className="fixed inset-0 z-[1200] flex items-center justify-center overflow-y-auto bg-[#071421]/80 px-4 py-6 backdrop-blur-[7px]"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setDailyPdfDateNoticeOpen(false);
-          }}
-        >
-          <section
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="allin-admin-pdf-date-title"
-            aria-describedby="allin-admin-pdf-date-description"
-            className="w-full max-w-[470px] overflow-hidden rounded-[26px] border border-[#8ce7e2]/40 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.65)]"
-          >
-            <header className="flex items-center gap-3 border-b border-white/12 bg-gradient-to-r from-[#224e59] via-[#27656b] to-[#2a8d8b] px-5 py-4">
-              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-black/10 text-white">
-                <CalendarDays size={21} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Napi audit PDF / Excel</p>
-                <h3 id="allin-admin-pdf-date-title" className="mt-1 text-lg font-medium leading-tight text-white">
-                  Válassz egyetlen napot
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDailyPdfDateNoticeOpen(false)}
-                aria-label="Figyelmeztetés bezárása"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/24 bg-black/10 text-white transition hover:bg-black/20"
-              >
-                <X size={17} />
-              </button>
-            </header>
-
-            <div className="space-y-4 px-5 py-5">
-              <p id="allin-admin-pdf-date-description" className="text-[13px] leading-6 text-white/82">
-                A napi PDF és Excel csak egy dátumra készíthető. Állítsd az <span className="font-medium text-white">Ettől</span> és
-                <span className="font-medium text-white"> Eddig</span> mezőt ugyanarra a napra.
-              </p>
-              <div className="rounded-2xl border border-white/12 bg-[#273548] p-3">
-                <p className="mb-2 text-[10px] uppercase tracking-[0.12em] text-white/46">Jelenleg kiválasztott időszak</p>
-                <div className="flex flex-wrap items-center gap-2 text-[12px] text-white/86">
-                  <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 tabular-nums">{huDateLabel(applied.from)}</span>
-                  <ChevronRight size={16} className="text-[#8ce7e2]" />
-                  <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 tabular-nums">{huDateLabel(applied.to)}</span>
-                </div>
-              </div>
-            </div>
-
-            <footer className="flex justify-end border-t border-white/10 bg-[#293548] px-5 py-4">
-              <button
-                ref={dailyPdfNoticeOkRef}
-                type="button"
-                onClick={() => setDailyPdfDateNoticeOpen(false)}
-                className="inline-flex h-11 min-w-[124px] items-center justify-center gap-2 rounded-xl border border-[#baf7f3]/45 bg-[#2a8d8b] px-5 text-sm font-medium text-white shadow-[0_8px_20px_rgba(42,141,139,0.25)] outline-none transition hover:bg-[#319c99] focus-visible:ring-2 focus-visible:ring-[#baf7f3]/65 active:scale-[0.98]"
-              >
-                <Check size={17} /> Rendben
-              </button>
-            </footer>
-          </section>
-        </div>,
-        document.body,
-      ) : null}
 
       {loading ? (
         <div className="fixed inset-0 z-[300] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]">
