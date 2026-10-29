@@ -78,6 +78,8 @@ async function loadDay(client, args) {
       s.sale_type,s.status,s.total AS sale_total,s.discount_total AS sale_discount,
        COALESCE(NULLIF(btrim(st.to_actor),''),s.actor) AS effective_actor, st.from_actor AS transferred_from, st.id::text AS transfer_id,
       st.decided_at AS transfer_decided_at, st.reason AS transfer_reason,
+      mt.from_actor AS money_from_actor,mt.to_actor AS money_to_actor,
+      mt.decided_at AS money_decided_at,mt.reason AS money_reason,
       sl.id::text AS line_id,sl.line_no,sl.variant_id::text AS variant_id,sl.quantity,
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
@@ -90,8 +92,14 @@ async function loadDay(client, args) {
     FROM aif_shop_sales s
     JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
     LEFT JOIN aif_shop_seller_transfers st ON st.sale_line_id=sl.id AND st.status='accepted'
+      AND st.transfer_kind='sale'
       AND st.location_id=s.location_id AND s.status='completed' AND s.sale_type='sale'
       AND sl.quantity=st.qty AND abs(sl.line_total-st.net_total)<0.005
+      AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id AND ex.status='completed')
+    LEFT JOIN aif_shop_seller_transfers mt ON mt.sale_line_id=sl.id AND mt.status='accepted'
+      AND mt.transfer_kind='money' AND mt.location_id=s.location_id
+      AND s.status='completed' AND s.sale_type='sale'
+      AND sl.quantity=mt.qty AND abs(sl.line_total-mt.net_total)<0.005
       AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id AND ex.status='completed')
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
@@ -254,43 +262,74 @@ function excelEntries(data, employee = null) {
     const sale=lines[0];
     const paid=(paymentGroups.get(saleId)||[]).filter(p=>p.sold_this_day);
     const methods=[...new Set(paid.map(p=>methodName(p.method)))].join(' + ');
-    // Divide each ACTUAL payment once across all receipt lines in integer bani.
-    // The seller may change for one line, but the store still receives the same sum.
+    // Distribute actual receipts in integer bani. Goods ownership and payment
+    // attribution are independent: the two people may genuinely be different.
     const paidByLine=lines.map(()=>({}));
+    const paidByLineAndActor=lines.map(()=>new Map());
     for(const payment of paid){
       const split=distributeMoney(payment.amount,lines.map(line=>Number(line.line_total||0)));
       split.forEach((amount,index)=>{
+        const line=lines[index];
         const key=totalMethod(text(payment.method));
+        const financialActor=text(line.money_to_actor||line.transferred_to||payment.effective_payment_actor||payment.actor||line.actor);
         paidByLine[index][key]=round(Number(paidByLine[index][key]||0)+amount);
+        const sub=paidByLineAndActor[index];
+        const whoKey=normalize(financialActor);
+        if(!sub.has(whoKey))sub.set(whoKey,{actor:financialActor,amounts:{}});
+        const allocation=sub.get(whoKey).amounts;
+        allocation[key]=round(Number(allocation[key]||0)+amount);
       });
     }
     for(let i=0;i<lines.length;i++) {
       const r=lines[i];
-      if(!shouldInclude(r.effective_actor || r.actor)) continue;
+      const goodsActor=text(r.effective_actor||r.actor);
+      const goodsVisible=shouldInclude(goodsActor);
+      const financialRows=[...paidByLineAndActor[i].values()];
+      const financialAllocations=employee
+        ? financialRows.filter(record=>shouldInclude(record.actor))
+        : financialRows;
+      const allocated={};
+      for(const record of financialAllocations){
+        for(const [kind,value] of Object.entries(record.amounts))
+          allocated[kind]=round(Number(allocated[kind]||0)+Number(value||0));
+      }
+      const collected=round(Object.values(allocated).reduce((a,b)=>a+Number(b||0),0));
+      for(const [kind,value] of Object.entries(allocated))totals[kind]=round(totals[kind]+Number(value||0));
       const qty=Number(r.quantity||0);
       const lineTotal=round(r.line_total);
       const discount=round(Math.max(0,Number(r.discount_amount||0)));
-      const allocated=paidByLine[i];
-      const collected=round(Object.values(allocated).reduce((a,b)=>a+Number(b||0),0));
-      for(const [kind,value] of Object.entries(allocated)) totals[kind]=round(totals[kind]+Number(value||0));
       const credit=text(r.sale_type)==='credit';
-      const fromActor=text(r.transferred_from);
+      const saleFrom=text(r.transferred_from);
+      const moneyFrom=text(r.money_from_actor);
+      const productCode=aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
+        modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name});
       const noteParts=[credit?'Az eredeti eladás készletcsökkenése. Későbbi befizetés nem új eladás.':''];
-      if(fromActor) noteParts.push(`Eladói elszámolási átvezetés: ${fromActor} → ${r.effective_actor}; jóváhagyva: ${bookDateTime(r.transfer_decided_at)}; ${text(r.transfer_reason) ? `indok: ${text(r.transfer_reason)}; ` : ''}az eredeti bizonylat, napzárás és raktármozgás nem módosult.`);
-      add({id:`sale:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
-        brand:r.brand_name,sn:r.sn_code,
-        productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
-          modelCode:r.export_model_code,saleProductCode:r.export_product_code,brand:r.brand_name}),
-        barcode:r.export_barcode,subcategory:r.export_subcategory,
-        color:r.color_name,size:r.size,customer:r.customer_name,qty,
-        listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
-        lineTotal,method:methods || (credit?'Utólag fizet':'Nincs fizetési adat'),
-        document:r.sale_number,actor:r.effective_actor || r.actor,
-        kind:credit?'Hitelre elvitt':fromActor?'Eladás · másik eladótól átvéve':'Eladás',collected,originalDate:'',stockQty:-qty,
-        note:noteParts.filter(Boolean).join(' '),});
-      if(credit) totals.creditValue+=lineTotal;
-      if(!credit && collected>0) totals.discount+=discount;
-      if(credit && collected>0 && lineTotal>0) totals.discount+=round(discount*Math.min(1,collected/lineTotal));
+      if(saleFrom)noteParts.push(`Eladói terméksor-átvezetés: ${saleFrom} → ${goodsActor}; jóváhagyva: ${bookDateTime(r.transfer_decided_at)}; ${text(r.transfer_reason)?`indok: ${text(r.transfer_reason)}; `:''}az eredeti bizonylat és a raktármozgás nem módosult.`);
+      if(moneyFrom)noteParts.push(`Csak pénzügyi elszámolási átvezetés: ${moneyFrom} → ${r.money_to_actor}; jóváhagyva: ${bookDateTime(r.money_decided_at)}; ${text(r.money_reason)?`indok: ${text(r.money_reason)}; `:''}az eredeti pénzbevétel, bizonylat, készlet és kassza változatlan.`);
+      if(goodsVisible){
+        add({id:`sale:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
+          brand:r.brand_name,sn:r.sn_code,productCode,barcode:r.export_barcode,subcategory:r.export_subcategory,
+          color:r.color_name,size:r.size,customer:r.customer_name,qty,
+          listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
+          lineTotal,method:methods||(credit?'Utólag fizet':'Nincs fizetési adat'),
+          document:r.sale_number,actor:goodsActor,
+          kind:credit?'Hitelre elvitt':saleFrom?'Eladás · másik eladótól átvéve':'Eladás',
+          collected,originalDate:'',stockQty:-qty,note:noteParts.filter(Boolean).join(' ')});
+        if(credit)totals.creditValue+=lineTotal;
+        if(!credit&&collected>0)totals.discount+=discount;
+        if(credit&&collected>0&&lineTotal>0)totals.discount+=round(discount*Math.min(1,collected/lineTotal));
+      }else if(collected>0){
+        // Employee payment-only view: zero new sold units and zero stock delta.
+        const financialActor=financialAllocations[0]?.actor||'';
+        add({id:`financial:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
+          brand:r.brand_name,sn:r.sn_code,productCode,barcode:r.export_barcode,subcategory:r.export_subcategory,
+          color:r.color_name,size:r.size,customer:r.customer_name,qty:0,
+          listPrice:0,discountPercent:0,discount:0,lineTotal:collected,method:methods,
+          document:r.sale_number,actor:financialActor,
+          kind:moneyFrom?'Pénz átvezetése · jóváírás':'Másik eladó termékének pénzbevétele',
+          collected,originalDate:bookDateTime(r.sold_at),stockQty:0,
+          note:noteParts.concat([`Terméksor értéke ${lineTotal.toFixed(2)} RON, a terméket ${goodsActor} értékesítette. Csak pénzelszámolási esemény.`]).filter(Boolean).join(' ')});
+      }
     }
   }
   // Late payments without customer_payment_id: historical compatibility.

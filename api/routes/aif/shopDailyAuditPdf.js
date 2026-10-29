@@ -834,7 +834,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   // Fetch the whole day's original lines once, then split paid receipts in integer bani.
   // This preserves store totals and lets one receipt's lines belong to two sellers.
   const accepted=await client.query(`SELECT t.id,t.sale_line_id,t.sale_id,t.from_actor,t.to_actor,
-       t.net_total,t.payment_method,t.qty,t.requested_at,t.decided_at,t.reason
+       t.net_total,t.payment_method,t.payment_actor,t.transfer_kind,t.qty,t.requested_at,t.decided_at,t.reason
        FROM aif_shop_seller_transfers t
        JOIN aif_shop_sales s ON s.id=t.sale_id
        JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id
@@ -844,13 +844,18 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
          AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges e WHERE e.source_sale_id=s.id AND e.status='completed')
          AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
        ORDER BY t.decided_at,t.id`,[id,date]);
-  const transferByLine=new Map(accepted.rows.map(t=>[String(t.sale_line_id),t]));
+  const transferByLine=new Map(accepted.rows.filter(t=>(t.transfer_kind||'sale')==='sale').map(t=>[String(t.sale_line_id),t]));
+  const moneyByLine=new Map(accepted.rows.filter(t=>t.transfer_kind==='money').map(t=>[String(t.sale_line_id),t]));
   const saleLines=new Map();
   for(const r of original.rows){
     const transfer=transferByLine.get(String(r.line_id));
     if(transfer){r.original_actor=r.actor;r.actor=transfer.to_actor;
       r.transferred_from=transfer.from_actor;r.transferred_to=transfer.to_actor;r.transfer_id=String(transfer.id);
       r.transfer_accepted_at=transfer.decided_at;r.transfer_reason=transfer.reason;}
+    const moneyTransfer=moneyByLine.get(String(r.line_id));
+    if(moneyTransfer){r.money_transfer_id=String(moneyTransfer.id);
+      r.money_transferred_from=moneyTransfer.from_actor;r.money_transferred_to=moneyTransfer.to_actor;
+      r.money_transfer_accepted_at=moneyTransfer.decided_at;r.money_transfer_reason=moneyTransfer.reason;}
     const saleId=String(r.sale_id);
     if(!saleLines.has(saleId)) saleLines.set(saleId,[]);
     saleLines.get(saleId).push(r);
@@ -869,13 +874,16 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   const attributedReceipts=[];
   for(const receipt of normalReceipts.rows){
     const lines=saleLines.get(String(receipt.sale_id))||[];
-    if(!lines.some(line=>line.transfer_id)){attributedReceipts.push(receipt);continue;}
+    if(!lines.some(line=>line.transfer_id||line.money_transfer_id)){attributedReceipts.push(receipt);continue;}
     const portions=shareCents(receipt.amount,lines);
     lines.forEach((line,i)=>{
       if(Math.abs(portions[i])<0.005)return;
-      attributedReceipts.push({...receipt,amount:portions[i],receipt_actor:line.actor,
-        transferred_from:line.transferred_from||null,sale_line_id:line.line_id,
-        product_label:line.product_title||line.product_code||'Termék'});
+      attributedReceipts.push({...receipt,amount:portions[i],
+        receipt_actor:line.money_transferred_to||line.transferred_to||receipt.receipt_actor,
+        transferred_from:line.transferred_from||null,
+        money_transferred_from:line.money_transferred_from||null,
+        money_transferred_to:line.money_transferred_to||null,
+        sale_line_id:line.line_id,product_label:line.product_title||line.product_code||'Termék'});
     });
   }
   normalReceipts.rows=attributedReceipts;
@@ -894,6 +902,14 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     push('Eladási esemény',n.actor||n.sale_actor,n.created_at,n.note,n.sale_number);
   }
   for(const n of productNotes)push(n.type,n.actor,n.at,n.note,n.reference,n.productInfo,n.lineId);
+  for(const t of accepted.rows){
+    if(t.transfer_kind!=='money')continue;
+    const line=original.rows.find(r=>String(r.line_id)===String(t.sale_line_id));
+    push('Pénzügyi elszámolási korrekció',t.to_actor,t.decided_at,
+      `${t.from_actor} → ${t.to_actor}: ${Number(t.net_total).toFixed(2)} RON (${({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás'})[t.payment_method]||t.payment_method}). `+
+      `Jóváhagyva, az eredeti pénztár- és készletmozgás változatlan.${t.reason?' Indok: '+t.reason:''}`,
+      line?.sale_number||'',line?{title:line.product_title||line.product_code||'Termék'}:null,String(t.sale_line_id));
+  }
   for(const h of handovers.rows){push('Műszakátadás',h.from_actor,h.cutoff_at,h.note,`${h.from_actor} → ${h.to_actor}`);push('Átvételi megjegyzés',h.accepted_by||h.to_actor,h.accepted_at||h.created_at,h.acceptance_note,`${h.from_actor} → ${h.to_actor}`);}
   for(const n of closings.rows)push('Napzárási megjegyzés',n.actor,n.closed_at,n.note);
   // A készpénzmozgás megjegyzése a kezdeményezés napján kerül be.
@@ -969,7 +985,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
         const line=original.rows.find(r=>String(r.line_id)===String(receipt.sale_line_id));
         return [receipt.product_label||'Eladás',line?.quantity?`(${line.quantity} db)`:'',
           line?.customer_name?`• ${line.customer_name}`:'',
-          line?aifAuditIdentity(line):'',receipt.transferred_from?'• Eladói átvezetés':''].filter(Boolean).join(' ');
+          line?aifAuditIdentity(line):'',receipt.transferred_from?'• Eladói átvezetés':receipt.money_transferred_from?'• Pénzügyi átvezetés':''].filter(Boolean).join(' ');
       }
       const lines=original.rows.filter(r=>r.sale_number===receipt.sale_number);
       const customer=lines.find(r=>String(r.customer_name||'').trim())?.customer_name;
@@ -1023,7 +1039,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       if(matches(t.from_actor)||matches(t.to_actor)){
         const outgoing=matches(t.from_actor);
         moves.push({at:t.decided_at||t.requested_at,
-          type:outgoing?'Eladás elszámolási átadása':'Eladás elszámolási átvétele',
+          type:t.transfer_kind==='money'?'Pénzelszámolás átvezetése':outgoing?'Eladás elszámolási átadása':'Eladás elszámolási átvétele',
           people:`${t.from_actor} → ${t.to_actor}`,
           status:'Jóváhagyva · nem új pénzmozgás',
           amount:(outgoing?-1:1)*moneyNumber(t.net_total)});
