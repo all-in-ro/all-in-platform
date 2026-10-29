@@ -285,6 +285,8 @@ export function writeShopDailyAuditPdf(doc, report) {
     const identification = aifAuditIdentity(item);
     if (identification) details.push(identification);
     if (item?.sn_cod) details.push(`S/N: ${String(item.sn_cod).trim()}`);
+    // The physical receipt stays in the original seller's name; financial ownership is corrected.
+    if (item?.transferred_from) details.push(`Eladói átvezetés: ${item.transferred_from} → ${item.transferred_to || 'átvevő'}`);
     return [name, details.join('  •  ')].filter(Boolean).join('\n');
   };
   function employeeNotes(actor, entries, numbered = false) {
@@ -824,6 +826,55 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       WHERE e.location_id=$1 AND e.status='completed'
       AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY e.created_at`,[id,date]),
   ]);
+  // Accepted corrections apply to ACCOUNTING OWNERSHIP, not physical payments or stock.
+  // Fetch the whole day's original lines once, then split paid receipts in integer bani.
+  // This preserves store totals and lets one receipt's lines belong to two sellers.
+  const accepted=await client.query(`SELECT t.id,t.sale_line_id,t.sale_id,t.from_actor,t.to_actor,
+       t.net_total,t.payment_method,t.qty,t.requested_at,t.decided_at
+       FROM aif_shop_seller_transfers t
+       JOIN aif_shop_sales s ON s.id=t.sale_id
+       JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id
+       WHERE t.location_id=$1 AND t.status='accepted'
+         AND s.status='completed' AND s.sale_type='sale'
+         AND sl.quantity=t.qty AND abs(sl.line_total-t.net_total)<0.005
+         AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges e WHERE e.source_sale_id=s.id AND e.status='completed')
+         AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+       ORDER BY t.decided_at,t.id`,[id,date]);
+  const transferByLine=new Map(accepted.rows.map(t=>[String(t.sale_line_id),t]));
+  const saleLines=new Map();
+  for(const r of original.rows){
+    const transfer=transferByLine.get(String(r.line_id));
+    if(transfer){r.original_actor=r.actor;r.actor=transfer.to_actor;
+      r.transferred_from=transfer.from_actor;r.transferred_to=transfer.to_actor;r.transfer_id=String(transfer.id);}
+    const saleId=String(r.sale_id);
+    if(!saleLines.has(saleId)) saleLines.set(saleId,[]);
+    saleLines.get(saleId).push(r);
+  }
+  const shareCents=(amount,lines)=>{
+    const total=Math.round(Number(amount||0)*100);
+    const weights=lines.map(l=>Math.max(0,Number(l.line_total||0)));
+    const sum=weights.reduce((a,b)=>a+b,0);
+    if(!weights.length) return [];
+    let left=total;
+    return weights.map((w,i)=>{
+      const portion=i===weights.length-1?left:(sum>0?Math.min(left,Math.round(total*w/sum)):0);
+      left-=portion;return portion/100;
+    });
+  };
+  const attributedReceipts=[];
+  for(const receipt of normalReceipts.rows){
+    const lines=saleLines.get(String(receipt.sale_id))||[];
+    if(!lines.some(line=>line.transfer_id)){attributedReceipts.push(receipt);continue;}
+    const portions=shareCents(receipt.amount,lines);
+    lines.forEach((line,i)=>{
+      if(Math.abs(portions[i])<0.005)return;
+      attributedReceipts.push({...receipt,amount:portions[i],receipt_actor:line.actor,
+        transferred_from:line.transferred_from||null,sale_line_id:line.line_id,
+        product_label:line.product_title||line.product_code||'Termék'});
+    });
+  }
+  normalReceipts.rows=attributedReceipts;
+
   const handover=handoverId?handovers.rows.find(r=>String(r.id)===handoverId):null;
   if(handoverId&&!handover){const e=new Error('A műszakátadás nem található ezen a napon.');e.statusCode=404;throw e;}
   const selected = employee ? actorKey(employee):null;
@@ -856,6 +907,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     }
     for(const r of normalReceipts.rows)if(r.receipt_actor)actors.add(r.receipt_actor);
     for(const r of cashMoves.rows)if(r.requested_by)actors.add(r.requested_by);
+    for(const transfer of accepted.rows){actors.add(transfer.from_actor);actors.add(transfer.to_actor);}
     for(const n of allNotes)if(n.actor&&n.actor!=='–')actors.add(n.actor);
   }
   const sections=[];
@@ -908,6 +960,12 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     // Display meaningful product/customer descriptions, not internal sale numbers or UUIDs.
     // Payment IDs remain in the database for audit traceability, but waste no paper.
     const describeNormalPayment=(receipt)=>{
+      if(receipt.sale_line_id) {
+        const line=original.rows.find(r=>String(r.line_id)===String(receipt.sale_line_id));
+        return [receipt.product_label||'Eladás',line?.quantity?`(${line.quantity} db)`:'',
+          line?.customer_name?`• ${line.customer_name}`:'',
+          line?aifAuditIdentity(line):'',receipt.transferred_from?'• Eladói átvezetés':''].filter(Boolean).join(' ');
+      }
       const lines=original.rows.filter(r=>r.sale_number===receipt.sale_number);
       const customer=lines.find(r=>String(r.customer_name||'').trim())?.customer_name;
       const items=lines.reduce((sum,r)=>sum+moneyNumber(r.quantity),0);
@@ -955,6 +1013,17 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       for(const ev of aifDailyAuditCashEvents(m,date))
         if(withinShift(ev,handover))moves.push(ev);
     for(const e of returnEvents.rows)if(matches(e.actor)&&withinShift({at:e.created_at},handover))moves.push({at:e.created_at,type:'Visszáru',people:[e.product_title,aifAuditIdentity(e)].filter(Boolean).join(' • '),status:'Visszavett',amount:moneyNumber(e.return_credit)*-1});
+    for(const t of accepted.rows){
+      if(!withinShift({at:t.decided_at||t.requested_at},handover))continue;
+      if(matches(t.from_actor)||matches(t.to_actor)){
+        const outgoing=matches(t.from_actor);
+        moves.push({at:t.decided_at||t.requested_at,
+          type:outgoing?'Eladás elszámolási átadása':'Eladás elszámolási átvétele',
+          people:`${t.from_actor} → ${t.to_actor}`,
+          status:'Jóváhagyva · nem új pénzmozgás',
+          amount:(outgoing?-1:1)*moneyNumber(t.net_total)});
+      }
+    }
     const productsBySale=new Map();
     for (const line of [...normal,...credits]) {
       const key=String(line.sale_number||'');
@@ -987,7 +1056,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   return {location,date,scope,handover,sections,totals,closure:closings.rows[0]||null,miscNotes};
 }
 
-export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,requireAdminOrSecret,ensureAifShopSalesSchema,aifResolveShopLocation,actorFrom,aifLoadDailyCreditHistory}){
+export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,requireAdminOrSecret,ensureAifShopSalesSchema,ensureAifSellerTransferSchema,aifResolveShopLocation,actorFrom,aifLoadDailyCreditHistory}){
   const router=express.Router();
   async function handle(req,res,scope){
     try{
@@ -996,7 +1065,9 @@ export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,req
       const pdfMode=String(req.query.mode || 'full').toLowerCase();
       if(!['full','summary'].includes(pdfMode))return res.status(400).json({error:'Ismeretlen PDF-változat.'});
       if(!validDay(date))return res.status(400).json({error:'Érvénytelen napi dátum.'});
-      const location=await aifResolveShopLocation(req,pool,req.query.location);
+       await ensureAifShopSalesSchema();
+       await ensureAifSellerTransferSchema(); // Ensure migration finishes outside READ ONLY.
+       const location=await aifResolveShopLocation(req,pool,req.query.location);
       let employee=scope==='mine'?String(actorFrom(req)||'').trim():String(req.query.employee||'').trim()||null;
       if(scope==='mine' && (!employee || ['system','shop'].includes(actorKey(employee))))return res.status(403).json({error:'A saját eladói munkamenet nem azonosítható.'});
       const handoverId=String(req.query.handoverId||'').trim();

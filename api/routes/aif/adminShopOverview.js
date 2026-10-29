@@ -88,6 +88,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
     aifNumber, aifBucharestIsoDate, aifValidIsoDate, aifInclusiveDayCount,
     aifShiftIsoDate, aifMapShopSummary, aifPaymentMethodLabel,
     aifBuildDailyCreditHistory, aifReadSettledGrossDiscounts, readSalesTvaSettings,
+    ensureAifSellerTransferSchema,
   } = deps;
   const router = express.Router();
   let retailBookSchemaPromise = null;
@@ -121,6 +122,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
     try {
       await ensureAifShopSalesSchema();
       await ensureRetailBookSchema();
+      await ensureAifSellerTransferSchema();
 
       const requestedLocation = text(req.query.location || req.query.locationCode || req.query.location_code);
       const aliasMap = {
@@ -166,6 +168,95 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const category = text(req.query.category);
       const snCod = text(req.query.snCod || req.query.sn_cod);
       const search = text(req.query.search || req.query.q);
+
+      // AIF SELLER-TRANSFER ADMIN 20261029
+      // Read-only projection of accepted corrections. Never update the original receipt,
+      // original payment actor, physical till or warehouse stock from this dashboard.
+      // Fetch previous comparison period too, so changes never distort the delta cards.
+      const sellerTransferRows = (await pool.query(`
+        SELECT t.id::text AS transfer_id,t.sale_id::text AS sale_id,
+          t.sale_line_id::text AS sale_line_id,t.from_actor,t.to_actor,
+          t.qty,t.list_total,t.net_total,t.discount_total,t.payment_method,
+          t.sold_at,(t.sold_at AT TIME ZONE 'Europe/Bucharest')::date::text AS sale_day,
+          s.sale_number,s.customer_name,s.customer_phone,s.customer_id,s.raw AS sale_raw,
+          sl.product_title,sl.product_code,sl.barcode,sl.brand_name,
+          COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS category_name,
+          sl.size,sl.color_name,v.sn_cod,
+          round(COALESCE(sl.buy_price_snapshot,v.buy_price,0)::numeric * sl.quantity,2) AS line_cost,
+          (sl.buy_price_snapshot IS NOT NULL) AS cost_snapshot,
+          (sl.buy_price_snapshot IS NULL AND v.buy_price IS NOT NULL) AS cost_fallback,
+          (sl.buy_price_snapshot IS NULL AND v.buy_price IS NULL) AS cost_missing,
+          (SELECT count(*)::int FROM aif_shop_sale_lines other WHERE other.sale_id=s.id) AS total_line_count
+        FROM aif_shop_seller_transfers t
+        JOIN aif_shop_sales s ON s.id=t.sale_id AND s.location_id=t.location_id
+        JOIN aif_shop_sale_lines sl ON sl.id=t.sale_line_id AND sl.sale_id=s.id
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+        LEFT JOIN aif_product_models m ON m.id=v.model_id
+        LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+        WHERE t.location_id=$1 AND t.status='accepted'
+          AND s.status='completed' AND s.sale_type='sale'
+          AND sl.quantity=t.qty AND abs(sl.line_total-t.net_total)<0.005
+          AND (t.sold_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+          AND NOT EXISTS (
+            SELECT 1 FROM aif_shop_exchanges ex
+            WHERE ex.source_sale_id=s.id AND ex.status='completed'
+          )
+        ORDER BY t.sold_at,t.sale_id,t.sale_line_id`, [location.id,previousFrom,to])).rows;
+
+      const sellerKey = name => String(name || '').trim().replace(/\s+/g,' ').toLocaleLowerCase('hu-HU');
+      const sameSeller = (one,two) => sellerKey(one) === sellerKey(two);
+      const roundSellerMoney = value => Math.round((Number(value || 0)+Number.EPSILON)*100)/100;
+      // These restrictions mirror the selection controls, but the actual sale still
+      // exists only once. Transfer is a responsibility correction, not a new sale.
+      function transferPassesFilters(t) {
+        if (paymentStatus && paymentStatus !== 'paid') return false;
+        if (saleType && saleType !== 'sale') return false;
+        if (paymentMethod && paymentMethod !== t.payment_method) return false;
+        if (brand && String(t.brand_name||'').toLocaleLowerCase('hu-HU')!==brand.toLocaleLowerCase('hu-HU')) return false;
+        if (category && String(t.category_name||'').toLocaleLowerCase('hu-HU')!==category.toLocaleLowerCase('hu-HU')) return false;
+        if (snCod && !String(t.sn_cod||'').toLocaleLowerCase('hu-HU').includes(snCod.toLocaleLowerCase('hu-HU'))) return false;
+        if (search) {
+          const needle=search.toLocaleLowerCase('hu-HU');
+          if (![t.sale_number,t.from_actor,t.to_actor,t.customer_name,t.customer_phone,
+            t.product_title,t.product_code,t.barcode,t.color_name,t.size]
+            .some(value=>String(value||'').toLocaleLowerCase('hu-HU').includes(needle))) return false;
+        }
+        return true;
+      }
+      const transfersForRange = (start,end) => sellerTransferRows.filter(t =>
+        t.sale_day >= start && t.sale_day <= end && transferPassesFilters(t));
+      const currentSellerTransfers=transfersForRange(from,to);
+      const previousSellerTransfers=transfersForRange(previousFrom,previousTo);
+      function transferTransactionChanges(rows) {
+        const groups=new Map();
+        for(const t of rows){
+          let g=groups.get(t.sale_id);
+          if(!g){g={from:t.from_actor,count:0,total:Number(t.total_line_count||0),recipients:new Set(),method:t.payment_method,day:t.sale_day};groups.set(t.sale_id,g);}
+          g.count++;g.recipients.add(sellerKey(t.to_actor));
+        }
+        const deltas=new Map();
+        for(const g of groups.values()){
+          const fromKey=sellerKey(g.from);
+          if(g.total>0&&g.count>=g.total)deltas.set(fromKey,(deltas.get(fromKey)||0)-1);
+          for(const key of g.recipients)deltas.set(key,(deltas.get(key)||0)+1);
+        }
+        return deltas;
+      }
+      // For a multi-line receipt, an employee keeps one transaction if at least
+      // one line remains with them. The recipient gets one, never one per item.
+      function transactionChangeFor(rows,name) {
+        return transferTransactionChanges(rows).get(sellerKey(name))||0;
+      }
+      function effectiveVatNet(t) {
+        const raw=t.sale_raw&&typeof t.sale_raw==='object'?t.sale_raw:{};
+        const vatFlag=String(raw.sellPriceIncludesTva??raw.salesPriceIncludesTva??'').toLowerCase();
+        const incl=vatFlag==='true'?true:vatFlag==='false'?false:sellPriceIncludesTva;
+        const storedRate=Number(raw.salesTvaRate);
+        const rate=raw.salesTvaRate!==undefined && Number.isFinite(storedRate)
+          ? Math.max(0,Math.min(100,storedRate)):salesTvaRate;
+        const total=Number(t.net_total||0);
+        return incl?total/(1+rate/100):total;
+      }
 
       const salesTvaSettings = typeof readSalesTvaSettings === "function"
         ? await readSalesTvaSettings(pool)
@@ -866,7 +957,15 @@ export default function createAifAdminShopOverviewRouter(deps) {
         };
         if (employee) {
           const p = push(employee);
-          where.push(`s.actor=${p}`);
+          where.push(`COALESCE((
+            SELECT st.to_actor FROM aif_shop_seller_transfers st
+            WHERE st.sale_line_id=sl.id AND st.status='accepted'
+              AND s.sale_type='sale' AND s.status='completed'
+              AND sl.quantity=st.qty AND abs(sl.line_total-st.net_total)<0.005
+              AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex
+                WHERE ex.source_sale_id=s.id AND ex.status='completed')
+            LIMIT 1
+          ),s.actor)=${p}`);
         }
         if (paymentStatus === "credit") {
           where.push(`(s.sale_type='credit' OR s.payment_status='credit')`);
@@ -1211,7 +1310,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
              sl.sale_id,
              sl.line_no,
              sl.variant_id,
-             s.sale_number, s.sold_at, s.actor, s.customer_name, s.customer_phone,
+             s.sale_number, s.sold_at,
+             COALESCE(st.to_actor,s.actor) AS actor,s.actor AS original_actor,
+             st.from_actor AS transferred_from,st.to_actor AS transferred_to,
+             st.id::text AS transfer_id,
+             s.customer_name, s.customer_phone,
              s.status, s.payment_status, s.sale_type,
              COALESCE(
                (
@@ -1245,6 +1348,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
              sl.line_total
            FROM aif_shop_sales s
            JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+           LEFT JOIN aif_shop_seller_transfers st ON st.sale_line_id=sl.id
+             AND st.status='accepted' AND s.sale_type='sale' AND s.status='completed'
+             AND sl.quantity=st.qty AND abs(sl.line_total-st.net_total)<0.005
+             AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex
+               WHERE ex.source_sale_id=s.id AND ex.status='completed')
            LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
            LEFT JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
@@ -1794,6 +1902,45 @@ export default function createAifAdminShopOverviewRouter(deps) {
       summary.revenue = aifNumber(currentCombinedRow.paid_total);
       previousSummary.revenue = aifNumber(previousCombinedRow.paid_total);
 
+      // Employee cards are personnel attribution. Store totals stay immutable.
+      // A corrected line is moved with its actual net, pre-discount value, discount,
+      // payment method and cost. This is never booked again as physical revenue.
+      function adjustPersonalSummary(target,transfers,person){
+        if(!person || !transfers.length) return;
+        let net=0,gross=0,discount=0,qty=0,netExVat=0,cost=0;
+        let snapshotQty=0,fallbackQty=0,missingQty=0;
+        for(const t of transfers){
+          const sign=sameSeller(t.to_actor,person)?1:sameSeller(t.from_actor,person)?-1:0;
+          if(!sign)continue;
+          net+=sign*Number(t.net_total||0);
+          gross+=sign*Number(t.list_total||0);
+          discount+=sign*Number(t.discount_total||0);
+          qty+=sign*Number(t.qty||0);
+          netExVat+=sign*effectiveVatNet(t);
+          cost+=sign*Number(t.line_cost||0);
+          if(t.cost_snapshot===true)snapshotQty+=sign*Number(t.qty||0);
+          else if(t.cost_fallback===true)fallbackQty+=sign*Number(t.qty||0);
+          else if(t.cost_missing===true)missingQty+=sign*Number(t.qty||0);
+        }
+        target.revenue=roundSellerMoney(Number(target.revenue||0)+net);
+        target.paidTotal=roundSellerMoney(Number(target.paidTotal||0)+net);
+        target.itemsSold=Number(target.itemsSold||0)+qty;
+        target.transactions=Number(target.transactions||0)+transactionChangeFor(transfers,person);
+        target.discountTotal=roundSellerMoney(Number(target.discountTotal||0)+discount);
+        target.netRevenue=roundSellerMoney(Number(target.netRevenue||0)+netExVat);
+        target.tvaAmount=roundSellerMoney(Number(target.tvaAmount||0)+net-netExVat);
+        target.estimatedCost=roundSellerMoney(Number(target.estimatedCost||0)+cost);
+        target.grossProfit=roundSellerMoney(Number(target.netRevenue||0)-Number(target.estimatedCost||0));
+        target.grossMargin=Number(target.netRevenue||0)?target.grossProfit/target.netRevenue*100:0;
+        target.costSnapshotQty=Number(target.costSnapshotQty||0)+snapshotQty;
+        target.costFallbackQty=Number(target.costFallbackQty||0)+fallbackQty;
+        target.costMissingQty=Number(target.costMissingQty||0)+missingQty;
+        const covered=target.costSnapshotQty+target.costFallbackQty;
+        target.costCoveragePercent=covered+target.costMissingQty>0?covered/(covered+target.costMissingQty)*100:100;
+        target.averageBasket=target.transactions>0?roundSellerMoney(target.revenue/target.transactions):0;
+        // Rebuilt below from actual attributed money + collected discount.
+        target.salesBeforeDiscount=roundSellerMoney(Number(target.revenue||0)+Number(target.discountTotal||0));
+      }
       // Later, discounted credit payments are counted as cash ONLY at their
       // paid amount. Their original sticker-price difference goes to discount,
       // not to extra income and never backdated to the original issue day.
@@ -1808,6 +1955,11 @@ export default function createAifAdminShopOverviewRouter(deps) {
       // Forgalommal (pl. korábbi hitel későbbi rendezése esetén).
       summary.salesBeforeDiscount = aifNumber(summary.revenue) + aifNumber(summary.discountTotal);
       previousSummary.salesBeforeDiscount = aifNumber(previousSummary.revenue) + aifNumber(previousSummary.discountTotal);
+
+      if(employee) {
+        adjustPersonalSummary(summary,currentSellerTransfers,employee);
+        adjustPersonalSummary(previousSummary,previousSellerTransfers,employee);
+      }
 
       const mergeRankingRows = (saleRows, exchangeRows, nameKey, productCodeKey = null) => {
         const map = new Map();
@@ -1896,6 +2048,25 @@ export default function createAifAdminShopOverviewRouter(deps) {
         if (point) point.discountTotal = roundMoney(point.discountTotal + receipt.discount);
       }
 
+      if(employee){
+        const transactionDeltaByDay=new Map();
+        for(const t of currentSellerTransfers){
+          const sign=sameSeller(t.to_actor,employee)?1:sameSeller(t.from_actor,employee)?-1:0;
+          if(!sign)continue;
+          const point=trendMap.get(t.sale_day);
+          if(!point)continue;
+          point.revenue=roundSellerMoney(point.revenue+sign*Number(t.net_total||0));
+          point.itemsSold+=sign*Number(t.qty||0);
+          point.discountTotal=roundSellerMoney(point.discountTotal+sign*Number(t.discount_total||0));
+          if(!transactionDeltaByDay.has(t.sale_day))transactionDeltaByDay.set(t.sale_day,[]);
+          transactionDeltaByDay.get(t.sale_day).push(t);
+        }
+        for(const [day,rows] of transactionDeltaByDay){
+          const point=trendMap.get(day);
+          if(point)point.transactions+=transactionChangeFor(rows,employee);
+        }
+      }
+
       const paymentMap = new Map();
       for (const row of [...paymentResult.rows, ...exchangePaymentResult.rows]) {
         const method = String(row.method || "");
@@ -1904,6 +2075,31 @@ export default function createAifAdminShopOverviewRouter(deps) {
         current.amount += aifNumber(row.amount);
         current.transactions += aifNumber(row.transactions);
         paymentMap.set(method, current);
+      }
+      if(employee){
+        const methodsBySale=new Map();
+        for(const t of currentSellerTransfers){
+          const sign=sameSeller(t.to_actor,employee)?1:sameSeller(t.from_actor,employee)?-1:0;
+          if(!sign)continue;
+          const method=String(t.payment_method||'');
+          const entry=paymentMap.get(method)||{method,amount:0,transactions:0};
+          entry.amount=roundSellerMoney(entry.amount+sign*Number(t.net_total||0));
+          paymentMap.set(method,entry);
+          if(!methodsBySale.has(t.sale_id))methodsBySale.set(t.sale_id,method);
+        }
+        const transactionGroups=new Map();
+        for(const t of currentSellerTransfers){
+          if(!transactionGroups.has(t.sale_id))transactionGroups.set(t.sale_id,[]);
+          transactionGroups.get(t.sale_id).push(t);
+        }
+        for(const group of transactionGroups.values()){
+          const delta=transactionChangeFor(group,employee);
+          if(!delta)continue;
+          const method=String(group[0].payment_method||'');
+          const entry=paymentMap.get(method)||{method,amount:0,transactions:0};
+          entry.transactions+=delta;
+          paymentMap.set(method,entry);
+        }
       }
       const paymentRows = Array.from(paymentMap.values()).sort((a, b) => b.amount - a.amount);
       const totalPaymentAbs = paymentRows.reduce((sum, row) => sum + Math.abs(row.amount), 0);
@@ -1941,6 +2137,27 @@ export default function createAifAdminShopOverviewRouter(deps) {
         entry.unpaidTotal = roundMoney(Math.max(0,
           entry.unpaidTotal - aifNumber(sale.current_balance_due) + aifNumber(sale.balance_due)));
       }
+      // All sellers are shown by the *effective* owner of the sold lines.
+      // Each multi-product original receipt remains one original transaction
+      // unless every item moved away, and one per recipient of that receipt.
+      for(const t of currentSellerTransfers){
+        for(const [name,sign] of [[t.from_actor,-1],[t.to_actor,1]]){
+          if(employee&&!sameSeller(name,employee))continue;
+          const key=sellerKey(name);
+          const row=employeeMap.get(key)||{
+            actor:name,revenue:0,transactions:0,itemsSold:0,discountTotal:0,unpaidTotal:0,
+          };
+          row.revenue=roundSellerMoney(row.revenue+sign*Number(t.net_total||0));
+          row.itemsSold+=sign*Number(t.qty||0);
+          row.discountTotal=roundSellerMoney(row.discountTotal+sign*Number(t.discount_total||0));
+          employeeMap.set(key,row);
+        }
+      }
+      const employeeTransactionDeltas=transferTransactionChanges(currentSellerTransfers);
+      for(const [key,delta] of employeeTransactionDeltas){
+        const row=employeeMap.get(key);
+        if(row)row.transactions+=delta;
+      }
       const employees = Array.from(employeeMap.values())
         .map((row) => ({
           ...row,
@@ -1958,6 +2175,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
         soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
         originalSoldAt: row.original_sold_at ? new Date(row.original_sold_at).toISOString() : null,
         actor: row.actor,
+        originalActor: row.original_actor || row.actor,
+        transferredFrom: row.transferred_from || null,
+        transferredTo: row.transferred_to || null,
+        transferId: row.transfer_id ? String(row.transfer_id) : null,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
         status: row.status,
@@ -2055,9 +2276,35 @@ export default function createAifAdminShopOverviewRouter(deps) {
         groups.flat().map((value) => String(value || "").trim()).filter(Boolean)
       )).sort((a, b) => a.localeCompare(b, "hu"));
 
-      const brands = mergeRankingRows(brandResult.rows, exchangeImpactResult.rows, "brand_name");
-      const categories = mergeRankingRows(categoryResult.rows, exchangeImpactResult.rows, "category_name");
-      const products = mergeRankingRows(productResult.rows, exchangeImpactResult.rows, "product_name", "product_code");
+      function adjustPersonalRanking(rows,getName,withProductCode=false) {
+        if(!employee)return rows;
+        const map=new Map(rows.map(r=>[String(r.name||'').toLocaleLowerCase('hu-HU'),{...r}]));
+        for(const t of currentSellerTransfers){
+          const sign=sameSeller(t.to_actor,employee)?1:sameSeller(t.from_actor,employee)?-1:0;
+          if(!sign)continue;
+          const name=String(getName(t)||'Ismeretlen');
+          const key=name.toLocaleLowerCase('hu-HU');
+          const item=map.get(key)||{name,revenue:0,qty:0,transactions:0,productCode:withProductCode?(t.product_code||null):null};
+          item.revenue=roundSellerMoney(item.revenue+sign*Number(t.net_total||0));
+          item.qty+=sign*Number(t.qty||0);
+          map.set(key,item);
+        }
+        const values=Array.from(map.values())
+          .filter(row=>Math.abs(Number(row.revenue||0))>0.005||Math.abs(Number(row.qty||0))>0.0001||Number(row.transactions||0)>0)
+          .sort((a,b)=>b.revenue-a.revenue||b.qty-a.qty||a.name.localeCompare(b.name,'hu'))
+          .slice(0,12);
+        const whole=values.reduce((n,row)=>n+Math.abs(Number(row.revenue||0)),0);
+        return values.map(row=>({...row,share:whole?Math.abs(row.revenue)/whole*100:0}));
+      }
+      const brands=adjustPersonalRanking(
+        mergeRankingRows(brandResult.rows,exchangeImpactResult.rows,'brand_name'),
+        t=>t.brand_name||'Ismeretlen márka');
+      const categories=adjustPersonalRanking(
+        mergeRankingRows(categoryResult.rows,exchangeImpactResult.rows,'category_name'),
+        t=>t.category_name||'Nincs alkategória');
+      const products=adjustPersonalRanking(
+        mergeRankingRows(productResult.rows,exchangeImpactResult.rows,'product_name','product_code'),
+        t=>t.product_title||t.product_code||'Ismeretlen termék',true);
 
       res.json({
         ok: true,
@@ -2117,6 +2364,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
           employees: uniqueTextOptions(
             employeesOptionResult.rows.map((row) => row.actor),
             exchangeEmployeesOptionResult.rows.map((row) => row.actor),
+            sellerTransferRows.flatMap(t=>[t.from_actor,t.to_actor]),
           ),
           brands: uniqueTextOptions(
             brandsOptionResult.rows.map((row) => row.value),

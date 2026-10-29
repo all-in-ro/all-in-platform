@@ -76,6 +76,7 @@ async function loadDay(client, args) {
   const salesQuery = `
     SELECT s.id::text AS sale_id,s.sale_number,s.sold_at,s.actor,s.customer_name,s.customer_phone,
       s.sale_type,s.status,s.total AS sale_total,s.discount_total AS sale_discount,
+       COALESCE(NULLIF(btrim(st.to_actor),''),s.actor) AS effective_actor, st.from_actor AS transferred_from, st.id::text AS transfer_id,
       sl.id::text AS line_id,sl.line_no,sl.variant_id::text AS variant_id,sl.quantity,
       sl.list_price,sl.unit_price,sl.discount_amount,sl.discount_percent,sl.line_total,
       sl.product_title,sl.product_code,sl.barcode,sl.brand_name,sl.color_name,sl.size,
@@ -87,6 +88,10 @@ async function loadDay(client, args) {
       COALESCE(NULLIF(sl.barcode,''),NULLIF(v.barcode,'')) AS export_barcode
     FROM aif_shop_sales s
     JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+    LEFT JOIN aif_shop_seller_transfers st ON st.sale_line_id=sl.id AND st.status='accepted'
+      AND st.location_id=s.location_id AND s.status='completed' AND s.sale_type='sale'
+      AND sl.quantity=st.qty AND abs(sl.line_total-st.net_total)<0.005
+      AND NOT EXISTS (SELECT 1 FROM aif_shop_exchanges ex WHERE ex.source_sale_id=s.id AND ex.status='completed')
     LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
     LEFT JOIN aif_product_models m ON m.id=v.model_id
     LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
@@ -99,10 +104,11 @@ async function loadDay(client, args) {
         sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST, sc.id::text DESC
       LIMIT 1
     ) stock_code ON true
-    WHERE s.location_id=$1 AND s.status='completed' AND ${dayFilter('s.sold_at')} ${who('s.actor')}
+    WHERE s.location_id=$1 AND s.status='completed' AND ${dayFilter('s.sold_at')}
     ORDER BY s.sold_at, s.sale_number, sl.line_no,sl.id LIMIT 20001`;
   const paymentsQuery = `
     SELECT p.id::text AS id,p.sale_id::text AS sale_id,p.method,p.amount,p.paid_at,p.actor,
+      COALESCE(NULLIF(p.actor,''),s.actor) AS effective_payment_actor,
       s.sale_number,s.sold_at AS original_sold_at,s.sale_type,s.customer_name,
       (s.sold_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
         AND s.sold_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')) AS sold_this_day
@@ -110,7 +116,7 @@ async function loadDay(client, args) {
     JOIN aif_shop_sales s ON s.id=p.sale_id
     WHERE s.location_id=$1 AND s.status='completed'
       AND p.method<>'credit' AND p.customer_payment_id IS NULL AND ${dayFilter('p.paid_at')}
-      ${who("COALESCE(NULLIF(p.actor,''),s.actor)")}
+
     ORDER BY p.paid_at,p.id LIMIT 20001`;
   const customerPaymentsQuery = `
     SELECT cp.id::text AS id,cp.amount,cp.method,cp.paid_at,cp.actor,cp.note,
@@ -217,7 +223,8 @@ async function loadDay(client, args) {
   return { sales:salesResult.rows, payments:paymentsResult.rows, customerPayments:customerResult.rows,
     allocations:allocResult.rows, exchanges:exchangeResult.rows };
 }
-function excelEntries(data) {
+function excelEntries(data, employee = null) {
+  const shouldInclude = (actor) => !employee || normalize(actor)===normalize(employee);
   const rows = [];
   const totals = {collected:0,gross:0,discount:0,settled:0,creditValue:0,exchangeCash:0,cash:0,card:0,transfer:0,other:0};
   const salesById=new Map();
@@ -229,12 +236,11 @@ function excelEntries(data) {
     allocationsByPayment.get(id).push(a);
   }
   const paymentGroups=new Map();
+  const totalMethod = method => method==='cash'?'cash':method==='card'?'card':method==='bank_transfer'?'transfer':'other';
   for (const p of data.payments) {
     const id=text(p.sale_id);
     if(!paymentGroups.has(id)) paymentGroups.set(id,[]);
     paymentGroups.get(id).push(p);
-    const method=text(p.method);
-    totals[method==='cash'?'cash':method==='card'?'card':method==='bank_transfer'?'transfer':'other']+=round(p.amount);
   }
   for (const sale of data.sales) {
     const key=text(sale.sale_id);
@@ -246,16 +252,30 @@ function excelEntries(data) {
   for(const [saleId,lines] of salesById) {
     const sale=lines[0];
     const paid=(paymentGroups.get(saleId)||[]).filter(p=>p.sold_this_day);
-    const totalPaid=round(paid.reduce((s,p)=>s+Number(p.amount||0),0));
-    const amounts=distributeMoney(totalPaid,lines.map(line=>Number(line.line_total||0)));
     const methods=[...new Set(paid.map(p=>methodName(p.method)))].join(' + ');
+    // Divide each ACTUAL payment once across all receipt lines in integer bani.
+    // The seller may change for one line, but the store still receives the same sum.
+    const paidByLine=lines.map(()=>({}));
+    for(const payment of paid){
+      const split=distributeMoney(payment.amount,lines.map(line=>Number(line.line_total||0)));
+      split.forEach((amount,index)=>{
+        const key=totalMethod(text(payment.method));
+        paidByLine[index][key]=round(Number(paidByLine[index][key]||0)+amount);
+      });
+    }
     for(let i=0;i<lines.length;i++) {
-      const r=lines[i];const qty=Number(r.quantity||0);
-      const list=round(Number(r.list_price||0)*qty);
+      const r=lines[i];
+      if(!shouldInclude(r.effective_actor || r.actor)) continue;
+      const qty=Number(r.quantity||0);
       const lineTotal=round(r.line_total);
       const discount=round(Math.max(0,Number(r.discount_amount||0)));
-      const collected=amounts[i]||0;
+      const allocated=paidByLine[i];
+      const collected=round(Object.values(allocated).reduce((a,b)=>a+Number(b||0),0));
+      for(const [kind,value] of Object.entries(allocated)) totals[kind]=round(totals[kind]+Number(value||0));
       const credit=text(r.sale_type)==='credit';
+      const fromActor=text(r.transferred_from);
+      const noteParts=[credit?'Az eredeti eladás készletcsökkenése. Későbbi befizetés nem új eladás.':''];
+      if(fromActor) noteParts.push(`Eladói elszámolási átvezetés: ${fromActor} → ${r.effective_actor}; az eredeti bizonylat és raktármozgás nem módosult.`);
       add({id:`sale:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
         brand:r.brand_name,sn:r.sn_code,
         productCode:aifAuditProductCode({supplierProductCode:r.export_supplier_product_code,
@@ -264,9 +284,9 @@ function excelEntries(data) {
         color:r.color_name,size:r.size,customer:r.customer_name,qty,
         listPrice:round(r.list_price),discountPercent:round(r.discount_percent),discount,
         lineTotal,method:methods || (credit?'Utólag fizet':'Nincs fizetési adat'),
-        document:r.sale_number,actor:r.actor,
-        kind:credit?'Hitelre elvitt':'Eladás',collected,originalDate:'',stockQty:-qty,
-        note:credit?'Az eredeti eladás készletcsökkenése. Későbbi befizetés nem új eladás.':'',});
+        document:r.sale_number,actor:r.effective_actor || r.actor,
+        kind:credit?'Hitelre elvitt':fromActor?'Eladás · másik eladótól átvéve':'Eladás',collected,originalDate:'',stockQty:-qty,
+        note:noteParts.filter(Boolean).join(' '),});
       if(credit) totals.creditValue+=lineTotal;
       if(!credit && collected>0) totals.discount+=discount;
       if(credit && collected>0 && lineTotal>0) totals.discount+=round(discount*Math.min(1,collected/lineTotal));
@@ -276,6 +296,8 @@ function excelEntries(data) {
   for (const [saleId,ps] of paymentGroups) {
     const old=ps.filter(p=>!p.sold_this_day);
     for (const p of old) {
+      if(!shouldInclude(p.effective_payment_actor || p.actor)) continue;
+      totals[totalMethod(text(p.method))]=round(totals[totalMethod(text(p.method))]+round(p.amount));
       // Product-wise attribution was not saved for legacy payments: do not guess SKUs.
       add({id:`legacy-payment:${p.id}`,at:p.paid_at,dateTime:bookDateTime(p.paid_at),
         customer:p.customer_name,qty:0,listPrice:0,discountPercent:0,discount:0,lineTotal:round(p.amount),
@@ -375,7 +397,7 @@ function excelEntries(data) {
   return {entries:rows,totals};
 }
 
-export default function createAifShopDailyAuditExcelRouter({pool,requireAuthed,requireAdminOrSecret,ensureAifShopSalesSchema,aifResolveShopLocation,actorFrom}) {
+export default function createAifShopDailyAuditExcelRouter({pool,requireAuthed,requireAdminOrSecret,ensureAifShopSalesSchema,ensureAifSellerTransferSchema,aifResolveShopLocation,actorFrom}) {
   const router=express.Router();
   async function download(req,res,scope) {
     let client=null;let started=false;
@@ -386,12 +408,13 @@ export default function createAifShopDailyAuditExcelRouter({pool,requireAuthed,r
       const employee=isAll?(text(req.query.employee).slice(0,120)||null):text(actorFrom(req));
       if(!isAll&&!employee) return res.status(403).json({error:'A bejelentkezett eladó nem azonosítható.'});
       await ensureAifShopSalesSchema();
+      await ensureAifSellerTransferSchema(); // DDL only before the read-only export transaction.
       client=await pool.connect();
       await client.query('BEGIN READ ONLY');started=true;
       await client.query("SET LOCAL statement_timeout = '15000ms'");
       const location=await aifResolveShopLocation(req,client,req.query.location);
       const data=await loadDay(client,[location.id,date,employee]);
-      const result=excelEntries(data);
+      const result=excelEntries(data,employee);
       await client.query('COMMIT');started=false;
       client.release();client=null;
       const file=buildAifDailyAuditXlsx({
