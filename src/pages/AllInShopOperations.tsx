@@ -3875,109 +3875,112 @@ export default function AllInShopOperations({
                               </p>
                             ) : null}
 
-                            <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-white/[0.08] pt-2.5">
-                              {item.customerName ? (
-                                item.customerId ? (
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void openCustomerQuickView(item.customerId, item.customerName || "");
-                                    }}
-                                    className="group/customer inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-[#d7fffd] transition hover:text-white"
-                                    title="Kliens adatlap megnyitása"
-                                  >
-                                    <UserRound size={13} className="shrink-0 text-[#8ee6e2]" />
-                                    <span className="truncate">{item.customerName}</span>
-                                    <ChevronRight size={12} className="shrink-0 text-white/32 transition group-hover/customer:translate-x-0.5 group-hover/customer:text-white/65" />
-                                  </button>
+                            {/* Eladói műveletek fix oszlopa: a változó hosszúságú kliensadatok nem mozdíthatják el a gombokat. */}
+                            <div className="mt-2.5 grid min-w-0 grid-cols-1 items-center gap-x-3 gap-y-2 border-t border-white/[0.08] pt-2.5 lg:grid-cols-[minmax(0,1fr)_210px]">
+                              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                                {item.customerName ? (
+                                  item.customerId ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void openCustomerQuickView(item.customerId, item.customerName || "");
+                                      }}
+                                      className="group/customer inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-[#d7fffd] transition hover:text-white"
+                                      title="Kliens adatlap megnyitása"
+                                    >
+                                      <UserRound size={13} className="shrink-0 text-[#8ee6e2]" />
+                                      <span className="truncate">{item.customerName}</span>
+                                      <ChevronRight size={12} className="shrink-0 text-white/32 transition group-hover/customer:translate-x-0.5 group-hover/customer:text-white/65" />
+                                    </button>
+                                  ) : (
+                                    <span
+                                      className="inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-white/62"
+                                      title={item.customerName}
+                                    >
+                                      <UserRound size={13} className="shrink-0 text-[#8ee6e2]/72" />
+                                      <span className="truncate">{item.customerName}</span>
+                                    </span>
+                                  )
                                 ) : (
-                                  <span
-                                    className="inline-flex max-w-[430px] items-center gap-1.5 text-[12px] text-white/62"
-                                    title={item.customerName}
-                                  >
-                                    <UserRound size={13} className="shrink-0 text-[#8ee6e2]/72" />
-                                    <span className="truncate">{item.customerName}</span>
-                                  </span>
-                                )
-                              ) : (
-                                <span className="text-[11px] text-white/28">Nincs klienshez csatolva</span>
-                              )}
+                                  <span className="text-[11px] text-white/28">Nincs klienshez csatolva</span>
+                                )}
 
-                              <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
 
-                              <span
-                                className="inline-flex items-center gap-1.5 text-[11px] text-white/66"
-                                title={`Fizetés: ${paymentLabel}`}
-                              >
-                                <PaymentIcon
-                                  size={14}
-                                  className={
-                                    paymentKey.includes("készpénz")
-                                      ? "text-[#8ee6e2]"
-                                      : paymentKey.includes("kártya")
-                                        ? "text-[#a9c8ff]"
-                                        : paymentKey.includes("átutalás")
-                                          ? "text-[#c7b5ff]"
-                                          : "text-white/52"
-                                  }
-                                />
-                                <span>{paymentLabel}</span>
-                              </span>
+                                <span
+                                  className="inline-flex items-center gap-1.5 text-[11px] text-white/66"
+                                  title={`Fizetés: ${paymentLabel}`}
+                                >
+                                  <PaymentIcon
+                                    size={14}
+                                    className={
+                                      paymentKey.includes("készpénz")
+                                        ? "text-[#8ee6e2]"
+                                        : paymentKey.includes("kártya")
+                                          ? "text-[#a9c8ff]"
+                                          : paymentKey.includes("átutalás")
+                                            ? "text-[#c7b5ff]"
+                                            : "text-white/52"
+                                    }
+                                  />
+                                  <span>{paymentLabel}</span>
+                                </span>
 
-                              {item.soldAt ? (
-                                <>
-                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
-                                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] tabular-nums text-white/42">
-                                    <Clock3 size={13} className="text-white/32" />
-                                    {settlement ? "Fizetve " : ""}{formatTime(item.soldAt)}
-                                  </span>
-                                </>
-                              ) : null}
+                                {item.soldAt ? (
+                                  <>
+                                    <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] tabular-nums text-white/42">
+                                      <Clock3 size={13} className="text-white/32" />
+                                      {settlement ? "Fizetve " : ""}{formatTime(item.soldAt)}
+                                    </span>
+                                  </>
+                                ) : null}
 
-                              {!settlement && String(item.recordType || "sale") === "sale" && item.lineId ? (
-                                <>
-                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
-                                  <button
-                                    type="button"
-                                    onClick={() => openSaleLineNote(item)}
-                                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition active:scale-[0.95] ${
-                                      hasProductNote
-                                        ? "border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.22)] hover:bg-[#319c99]"
-                                        : "border-[#8ce7e2]/28 bg-[#2a8d8b]/10 text-[#bff8f5] hover:border-[#8ce7e2]/52 hover:bg-[#2a8d8b]/22"
-                                    }`}
-                                    title={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
-                                    aria-label={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
-                                  >
-                                    {hasProductNote ? <Mail size={14} strokeWidth={2.1} /> : <Plus size={15} strokeWidth={2.4} />}
-                                  </button>
-                                </>
-                              ) : null}
+                                {unpaid ? (
+                                  <>
+                                    <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
+                                    <span className="inline-flex items-center gap-1.5 rounded-md bg-[#E21C2A] px-2.5 py-1 text-[11px] text-white shadow-[0_3px_10px_rgba(226,28,42,0.16)]">
+                                      <TriangleAlert size={12} />
+                                      {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
+                                    </span>
+                                  </>
+                                ) : null}
+                              </div>
+                              <div className="flex min-w-0 items-center justify-start gap-2.5 lg:pl-1">
+                                {!settlement && String(item.recordType || "sale") === "sale" && item.lineId ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => openSaleLineNote(item)}
+                                      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition active:scale-[0.95] ${
+                                        hasProductNote
+                                          ? "border-[#8ce7e2]/48 bg-[#2a8d8b] text-white shadow-[0_5px_14px_rgba(42,141,139,0.22)] hover:bg-[#319c99]"
+                                          : "border-[#8ce7e2]/28 bg-[#2a8d8b]/10 text-[#bff8f5] hover:border-[#8ce7e2]/52 hover:bg-[#2a8d8b]/22"
+                                      }`}
+                                      title={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
+                                      aria-label={hasProductNote ? "Termékmegjegyzések" : "Megjegyzés hozzáadása"}
+                                    >
+                                      {hasProductNote ? <Mail size={14} strokeWidth={2.1} /> : <Plus size={15} strokeWidth={2.4} />}
+                                    </button>
+                                  </>
+                                ) : null}
 
-                              {/* Saját kifizetett terméksor korábbi napon is átadható, két eladói jóváhagyással. */}
-                              {summaryDate <= todayIso() && !unpaid && !settlement && item.dailyCategory === "sale" &&
-                                item.recordType === "sale" && item.lineId && !item.transferredFrom ? (
-                                <>
-                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
-                                  <button type="button"
-                                    onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId, date: summaryDate } }))}
-                                    title="Elszámolás átadása másik eladónak • kétoldali jóváhagyással"
-                                    aria-label={`${item.title}: átadás egy másik eladónak`}
-                                    className="group inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-[11px] border border-[#bafff7]/55 bg-gradient-to-r from-[#267e7d] to-[#108D8B] px-2.5 py-1 text-[11px] font-normal text-white shadow-[0_5px_16px_rgba(16,141,139,0.21)] transition hover:border-[#ddfffc]/75 hover:from-[#2b9593] hover:to-[#179d99] hover:shadow-[0_7px_20px_rgba(16,141,139,0.32)] active:scale-[0.96]">
-                                    <SellerHandoffIcon compact /> <span>Átadás</span>
-                                  </button>
-                                </>
-                              ) : null}
+                                {/* Saját kifizetett terméksor korábbi napon is átadható, két eladói jóváhagyással. */}
+                                {summaryDate <= todayIso() && !unpaid && !settlement && item.dailyCategory === "sale" &&
+                                  item.recordType === "sale" && item.lineId && !item.transferredFrom ? (
+                                  <>
+                                    <button type="button"
+                                      onClick={() => window.dispatchEvent(new CustomEvent("aif:seller-transfer-request-line", { detail: { locationCode, lineId: item.lineId, date: summaryDate } }))}
+                                      title="Elszámolás átadása másik eladónak • kétoldali jóváhagyással"
+                                      aria-label={`${item.title}: átadás egy másik eladónak`}
+                                      className="group inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-[11px] border border-[#bafff7]/55 bg-gradient-to-r from-[#267e7d] to-[#108D8B] px-2.5 py-1 text-[11px] font-normal text-white shadow-[0_5px_16px_rgba(16,141,139,0.21)] transition hover:border-[#ddfffc]/75 hover:from-[#2b9593] hover:to-[#179d99] hover:shadow-[0_7px_20px_rgba(16,141,139,0.32)] active:scale-[0.96]">
+                                      <SellerHandoffIcon compact /> <span>Átadás</span>
+                                    </button>
+                                  </>
+                                ) : null}
 
-                              {unpaid ? (
-                                <>
-                                  <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
-                                  <span className="inline-flex items-center gap-1.5 rounded-md bg-[#E21C2A] px-2.5 py-1 text-[11px] text-white shadow-[0_3px_10px_rgba(226,28,42,0.16)]">
-                                    <TriangleAlert size={12} />
-                                    {paymentStatus === "partial" ? "Részben fizetve" : "Nincs kifizetve"}
-                                  </span>
-                                </>
-                              ) : null}
+                              </div>
                             </div>
                           </div>
 
