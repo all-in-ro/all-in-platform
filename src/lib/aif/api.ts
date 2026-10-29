@@ -3087,6 +3087,7 @@ export type AifSellerTransfer = {
   qty: number; listTotal: number; netTotal: number; discountTotal: number;
   paymentMethod: "cash" | "card" | "bank_transfer";
   soldAt: string; requestedAt: string; decidedAt?: string | null;
+  senderNotificationPending?: boolean;
   reason?: string | null; decisionNote?: string | null;
 };
 export function apiAifSellerTransfers(options: { location: string }) {
@@ -3098,6 +3099,9 @@ export function apiAifCreateSellerTransfer(input: { location: string; lineId: st
 }
 export function apiAifDecideSellerTransfer(id: string, input: { location: string; decision: "accept" | "reject" | "cancel"; note?: string }) {
   return fetchAifJSON<{ ok: true; item: AifSellerTransfer }>(`/shop-seller-transfers/${encodeURIComponent(id)}/decision`, { method: "POST", body: JSON.stringify(input) });
+}
+export function apiAifAcknowledgeSellerTransfer(id: string, input: { location: string }) {
+  return fetchAifJSON<{ ok: true; item: AifSellerTransfer }>(`/shop-seller-transfers/${encodeURIComponent(id)}/sender-ack`, { method: "POST", body: JSON.stringify(input) });
 }
 
 export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
