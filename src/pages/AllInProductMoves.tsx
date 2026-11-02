@@ -122,6 +122,7 @@ type InventoryItem = {
   available_qty?: number | string | null;
   variant_status?: string | null;
   model_status?: string | null;
+  match_type?: string | null;
 };
 
 type StockItem = {
@@ -676,6 +677,31 @@ function cleanScanCode(value: unknown) {
     .replace(/[\s\u00a0]+/g, "")
     .trim();
 }
+
+// Egy scanner néha az utolsó GTIN ellenőrző számjegyet nem továbbítja.
+// CSAK egy létező teljes kódra teszünk javaslatot, és a javaslatból
+// soha nem lesz automatikus készletmozgás. A 12 számjegy önmagában is
+// lehet érvényes UPC-A, ezért nem írjuk át és nem tekintjük biztos egyezésnek.
+function missingGtinCheckDigitCandidate(raw: unknown): string | null {
+  const code = cleanScanCode(raw);
+  if (!/^(?:\d{7}|\d{11}|\d{12})$/.test(code)) return null;
+  const sum = [...code].reverse().reduce(
+    (total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 3 : 1),
+    0,
+  );
+  return `${code}${(10 - (sum % 10)) % 10}`;
+}
+
+type GtinScanSuggestion = {
+  enteredCode: string;
+  completeCode: string;
+  item: InventoryItem;
+};
+
+type GtinSearchSuggestion = {
+  enteredCode: string;
+  completeCode: string;
+};
 
 function scanExactKey(value: unknown) {
   return normalize(cleanScanCode(value));
@@ -2048,7 +2074,9 @@ export default function AllInProductMoves() {
   const [scanValue, setScanValue] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
+  const [scanSuggestion, setScanSuggestion] = useState<GtinScanSuggestion | null>(null);
   const [productSearch, setProductSearch] = useState("");
+  const [productSearchSuggestion, setProductSearchSuggestion] = useState<GtinSearchSuggestion | null>(null);
   const [productSearchBusy, setProductSearchBusy] = useState(false);
   const [productSearchError, setProductSearchError] = useState("");
   const [productSearchRemoteItems, setProductSearchRemoteItems] = useState<InventoryItem[] | null>(null);
@@ -2170,6 +2198,7 @@ export default function AllInProductMoves() {
       if (document.querySelector('[data-allin-product-select="open"], [data-allin-product-date="open"]')) return;
       event.preventDefault();
       if (cameraOpen) setCameraOpen(false);
+      else if (scanSuggestion) dismissScanSuggestion();
       else if (deleteTarget && !deleting) setDeleteTarget(null);
       else if (settingsOpen && !settingsSaving) setSettingsOpen(false);
       else if (createOpen && !savingDocument) setCreateOpen(false);
@@ -2178,7 +2207,7 @@ export default function AllInProductMoves() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cameraOpen, createOpen, deleteTarget, deleting, detail, mobileFiltersOpen, savingDocument, settingsOpen, settingsSaving]);
+  }, [cameraOpen, createOpen, deleteTarget, deleting, detail, mobileFiltersOpen, savingDocument, scanSuggestion, settingsOpen, settingsSaving]);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem>();
@@ -2255,6 +2284,9 @@ export default function AllInProductMoves() {
     }
 
     if (localExact.length) return localExact.slice(0, 10);
+    // A távoli pontos kódellenőrzés közben nem mutatunk a beírt vonalkód
+    // töredékére illeszkedő, akár teljesen más termékeket.
+    if (/^\d{8,18}$/.test(compact)) return [] as InventoryItem[];
 
     return inventory
       .filter((item) => {
@@ -2289,9 +2321,11 @@ export default function AllInProductMoves() {
       setProductSearchBusy(false);
       setProductSearchError("");
       setProductSearchRemoteItems(null);
+      setProductSearchSuggestion(null);
       return;
     }
 
+    setProductSearchSuggestion(null);
     const compact = cleanScanCode(query);
     const codeLike = compact.length >= 6 && !/\s/.test(query);
     const barcodeLike = /^\d{8,18}$/.test(compact);
@@ -2324,9 +2358,28 @@ export default function AllInProductMoves() {
             return;
           }
 
-          // Egy 8-18 számjegyes kódot vonalkódnak tekintünk. Ha nincs pontos
-          // egyezés, nem dobálunk fel hasonló 1977774021116-féle találatokat.
+          // Ha pontos egyezés nincs, csak a szabványos UTOLSÓ GTIN számjegy
+          // lehetséges hiányát vizsgáljuk. Nem engedünk tetszőleges prefix-
+          // keresést: a különböző termékek összekeverése Avizban tilos.
           if (barcodeLike) {
+            const completeCode = missingGtinCheckDigitCandidate(compact);
+            if (completeCode) {
+              const proposal = await fetchJson<{ items?: InventoryItem[] }>(
+                `/inventory/lookup?code=${encodeURIComponent(completeCode)}&_=${Date.now()}`,
+              );
+              if (requestId !== productSearchRequestIdRef.current) return;
+              const proposalItems = uniqueInventoryItems((proposal.items || []).filter((item) =>
+                item.match_type === "barcode" &&
+                String(item.variant_status || "active") !== "archived" &&
+                String(item.model_status || "active") !== "archived"
+              ));
+              if (proposalItems.length) {
+                setInventory((current) => uniqueInventoryItems([...current, ...proposalItems]));
+                setProductSearchSuggestion({ enteredCode: compact, completeCode });
+                setProductSearchRemoteItems(proposalItems);
+                return;
+              }
+            }
             setProductSearchRemoteItems([]);
             return;
           }
@@ -2346,6 +2399,7 @@ export default function AllInProductMoves() {
           String(item.model_status || "active") !== "archived"
         );
 
+        setProductSearchSuggestion(null);
         setProductSearchRemoteItems(remoteItems);
         if (remoteItems.length) {
           setInventory((current) => uniqueInventoryItems([...current, ...remoteItems]));
@@ -2386,6 +2440,7 @@ export default function AllInProductMoves() {
     setScanValue("");
     setScanBusy(false);
     setScanFeedback(null);
+    setScanSuggestion(null);
     scanQueueRef.current = [];
     if (scanAutoTimerRef.current !== null) {
       window.clearTimeout(scanAutoTimerRef.current);
@@ -2395,6 +2450,7 @@ export default function AllInProductMoves() {
     setProductSearchBusy(false);
     setProductSearchError("");
     setProductSearchRemoteItems(null);
+    setProductSearchSuggestion(null);
     productSearchRequestIdRef.current += 1;
     setDraftLines({});
     setEditingDraftId("");
@@ -2487,6 +2543,9 @@ export default function AllInProductMoves() {
       }
       setDraftLines(rows);
       setProductSearch("");
+      setProductSearchSuggestion(null);
+      setScanSuggestion(null);
+      setScanFeedback(null);
       setScanValue("");
       setDetail(null);
       setCreateOpen(true);
@@ -2568,6 +2627,8 @@ export default function AllInProductMoves() {
       return next;
     });
     setError("");
+    setScanSuggestion(null);
+    setProductSearchSuggestion(null);
     setProductSearch("");
     setScanValue("");
   }
@@ -2612,7 +2673,8 @@ export default function AllInProductMoves() {
     return Boolean(
       sourceLocationId &&
       (draftType !== "internal_transfer" || targetLocationId) &&
-      !savingDocument
+      !savingDocument &&
+      !scanSuggestion
     );
   }
 
@@ -2636,7 +2698,49 @@ export default function AllInProductMoves() {
       setInventory((current) => uniqueInventoryItems([...current, ...remoteItems]));
     }
 
-    return uniqueInventoryItems(remoteItems.filter((item) => exactProductMatch(item, code)));
+    // A szerver /inventory/lookup útvonala már ellenőrizte a pontos azonosítót.
+    // A beszállítói vonalkód és a jóváhagyott régi címke eltérhet a megjelenített
+    // fő vonalkódtól, ezért a kliens nem dobhatja el ezt a szerver-találatot.
+    return uniqueInventoryItems(remoteItems);
+  }
+
+  async function findMissingCheckDigitProposal(code: string) {
+    const completeCode = missingGtinCheckDigitCandidate(code);
+    if (!completeCode) return null;
+    const response = await fetchJson<{ items?: InventoryItem[] }>(
+      `/inventory/lookup?code=${encodeURIComponent(completeCode)}&_=${Date.now()}`,
+    );
+    const candidates = uniqueInventoryItems((response.items || []).filter((item) =>
+      item.match_type === "barcode" &&
+      String(item.variant_status || "active") !== "archived" &&
+      String(item.model_status || "active") !== "archived"
+    ));
+    if (candidates.length) {
+      setInventory((current) => uniqueInventoryItems([...current, ...candidates]));
+    }
+    return { completeCode, candidates };
+  }
+
+  function confirmScanSuggestion() {
+    if (!scanSuggestion) return;
+    const { item } = scanSuggestion;
+    const available = outgoingDraft ? availableAt(item.variant_id, sourceLocationId) : 999999;
+    if (outgoingDraft && available <= 0) {
+      setScanFeedback({ tone: "error", text: `${productTitle(item)}: nincs szabad készlet a forráshelyen.` });
+      setError(`${productTitle(item)}: nincs szabad készlet a forráshelyen.`);
+      return;
+    }
+    setScanSuggestion(null);
+    addDraftItem(item, 1);
+    setScanFeedback({ tone: "success", text: `✓ Ellenőrzött teljes kód: ${visibleBarcode(item) || scanSuggestion.completeCode} • +1 db hozzáadva` });
+    setMessage("");
+    focusScanInput();
+  }
+
+  function dismissScanSuggestion() {
+    setScanSuggestion(null);
+    setScanFeedback({ tone: "info", text: "A javaslatot elvetetted. Ellenőrizd a címkét, vagy keress terméknévvel." });
+    focusScanInput();
   }
 
   async function processScannedCode(code: string) {
@@ -2678,6 +2782,24 @@ export default function AllInProductMoves() {
         setProductSearch(code);
         setError("Több termék egyezik ezzel a kóddal. Válaszd ki a megfelelő variánst a találatokból.");
         setScanFeedback({ tone: "error", text: `Több pontos egyezés: ${code}.` });
+        return;
+      }
+
+      // A rövidebb szám önmagában is lehet érvényes termékkód.
+      // Csak 0 pontos találat után ajánlunk fel ellenőrző számjeggyel
+      // kiegészített kódot, és AZT SOHA NEM ADJUK AUTOMATIKUSAN HOZZÁ.
+      const proposal = await findMissingCheckDigitProposal(code);
+      if (proposal?.candidates.length === 1) {
+        setScanSuggestion({ enteredCode: code, completeCode: proposal.completeCode, item: proposal.candidates[0] });
+        scanQueueRef.current = []; // Jóváhagyásig ne legyen újabb automatikus tétel.
+        setScanFeedback({ tone: "info", text: `Lehetséges hiányzó utolsó számjegy: ${code} → ${proposal.completeCode}. Ellenőrzés szükséges.` });
+        setError("");
+        return;
+      }
+      if (proposal && proposal.candidates.length > 1) {
+        setProductSearch(proposal.completeCode);
+        setError("A kiegészített kóddal több termék egyezik. Válaszd ki a megfelelőt, a rendszer nem választ helyetted.");
+        setScanFeedback({ tone: "error", text: `Több lehetséges termék: ${proposal.completeCode}.` });
         return;
       }
 
@@ -2728,8 +2850,13 @@ export default function AllInProductMoves() {
     const code = cleanScanCode(rawValue);
     if (!code || !scannerReady()) return;
 
+    // 170 ms túl rövid volt: a scanner utolsó számjegye még érkezhetett,
+    // miközben a félkész kódot a rendszer már keresni kezdte. Numeric kódnál
+    // kivárjuk a stabil bevitelt; Enter/Tab továbbra is azonnal feldolgoz.
     const localExact = uniqueInventoryItems(inventory.filter((item) => exactProductMatch(item, code)));
-    const delay = localExact.length === 1 ? 45 : 170;
+    const delay = /^\d+$/.test(code)
+      ? (code.length < 13 ? 650 : 350)
+      : (localExact.length === 1 ? 270 : 500);
     scanAutoTimerRef.current = window.setTimeout(() => {
       scanAutoTimerRef.current = null;
       handleScannedValue(code);
@@ -3901,7 +4028,36 @@ export default function AllInProductMoves() {
                       </span>
                     </div>
                   </label>
-                  {scanFeedback ? (
+                  {scanSuggestion ? (
+                    <div className="mt-2 overflow-hidden rounded-2xl border border-amber-200/55 bg-[#3c3a35] shadow-[0_12px_30px_rgba(0,0,0,.20)]" role="alert" aria-label="Vonalkód ellenőrzése szükséges">
+                      <div className="flex items-start gap-2 border-b border-amber-200/20 bg-amber-400/10 px-3 py-2.5">
+                        <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-200" />
+                        <div className="min-w-0">
+                          <p className="text-xs text-amber-100">Lehetséges hiányzó ellenőrző számjegy</p>
+                          <p className="mt-0.5 text-[10px] leading-relaxed text-white/65">Ez csak javaslat. Ellenőrizd a termék nevét, méretét és a címkét, mielőtt hozzáadod.</p>
+                        </div>
+                      </div>
+                      <div className="grid gap-2 p-3">
+                        <div className="grid grid-cols-2 gap-2 text-[10px]">
+                          <div className="rounded-lg border border-white/12 bg-black/15 p-2"><span className="block text-white/45">Beírt kód</span><span className="mt-1 block break-all font-mono text-white/85">{scanSuggestion.enteredCode}</span></div>
+                          <div className="rounded-lg border border-amber-200/30 bg-amber-300/10 p-2"><span className="block text-amber-100/75">Javasolt teljes kód</span><span className="mt-1 block break-all font-mono text-amber-50">{scanSuggestion.completeCode}</span></div>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-xl border border-white/12 bg-[#303a4c] p-2">
+                          <ProductThumb item={scanSuggestion.item} className="h-11 w-11" />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs text-white">{productTitle(scanSuggestion.item)}</p>
+                            <p className="mt-0.5 truncate text-[10px] text-white/55">{scanSuggestion.item.brand_name || "-"} • {scanSuggestion.item.color_name || scanSuggestion.item.color_code || "-"} • {scanSuggestion.item.size || "-"}</p>
+                            <p className="mt-0.5 text-[10px] text-[#baf7f4]">{locationById(sourceLocationId)?.name || "Forráshely"}: {availableAt(scanSuggestion.item.variant_id, sourceLocationId)} db elérhető</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className={`${primaryBtn} flex-1`} onClick={confirmScanSuggestion} disabled={outgoingDraft && availableAt(scanSuggestion.item.variant_id, sourceLocationId) <= 0}><CheckCircle2 size={14} /> Ellenőriztem, +1 db</button>
+                          <button type="button" className={btnSoft} onClick={dismissScanSuggestion}><X size={14} /> Nem ez</button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  {scanFeedback && !scanSuggestion ? (
                     <div className={`mt-2 rounded-xl border px-3 py-2 text-[11px] ${
                       scanFeedback.tone === "success"
                         ? "border-[#7bd7d4]/32 bg-[#2a8d8b]/14 text-[#d7fffd]"
@@ -3922,6 +4078,7 @@ export default function AllInProductMoves() {
                         onChange={(event) => {
                           setProductSearchError("");
                           setProductSearchRemoteItems(null);
+                          setProductSearchSuggestion(null);
                           setProductSearch(event.target.value);
                         }}
                         placeholder="Vonalkódot is beírhatsz…"
@@ -3934,6 +4091,16 @@ export default function AllInProductMoves() {
                   </label>
                   {productSearch ? (
                     <div className="mt-2 max-h-[330px] space-y-1.5 overflow-auto rounded-xl border border-white/10 bg-[#303a4c] p-1.5">
+                      {productSearchSuggestion ? (
+                        <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-200/35 bg-amber-400/10 p-2.5 text-[11px] text-amber-50">
+                          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                          <div>
+                            <p>Nem pontos egyezés: az utolsó ellenőrző számjegy hiányozhat.</p>
+                            <p className="mt-1 font-mono">{productSearchSuggestion.enteredCode} → {productSearchSuggestion.completeCode}</p>
+                            <p className="mt-1 text-amber-100/70">Csak az ellenőrzött terméksor kézi kiválasztásával kerülhet az Avizba.</p>
+                          </div>
+                        </div>
+                      ) : null}
                       {productSearchResults.map((item) => (
                         <button
                           key={item.variant_id}
@@ -3951,8 +4118,11 @@ export default function AllInProductMoves() {
                               {visibleBarcode(item) || productCode(item) || "Azonosító nélkül"}
                             </span>
                           </span>
-                          <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">
-                            {sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}
+                          <span className="flex shrink-0 flex-col items-end gap-1">
+                            <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">
+                              {sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}
+                            </span>
+                            {productSearchSuggestion ? <span className="text-[9px] text-amber-200">Kézi kiválasztás</span> : null}
                           </span>
                         </button>
                       ))}
