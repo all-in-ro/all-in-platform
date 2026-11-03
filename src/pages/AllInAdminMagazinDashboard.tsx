@@ -49,6 +49,7 @@ import {
   WalletCards,
   Wrench,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   apiAifAdminDeleteShopSaleLine,
@@ -1187,8 +1188,51 @@ function SalesVolumeCard({
       ? "text-rose-100"
       : "text-white";
 
+  const MetricButton = ({
+    label,
+    icon: MetricIcon,
+    view,
+    value,
+    delta,
+    onClick,
+    title,
+    helper,
+  }: {
+    label: string;
+    icon: LucideIcon;
+    view: "value" | "percent";
+    value: string | number;
+    delta: number;
+    onClick: () => void;
+    title: string;
+    helper: string;
+  }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
+      title={title}
+    >
+      <div className="flex min-w-0 items-start gap-1.5">
+        <MetricIcon size={11} className="mt-0.5 shrink-0 text-[#8ee6e2]" />
+        <span className="min-w-0 text-[8px] uppercase leading-[1.25] tracking-[0.11em] text-white/42">{label}</span>
+      </div>
+      <div className="mt-2 flex min-h-[28px] items-end">
+        {view === "value" ? (
+          <span className="break-words text-[1.16rem] leading-none text-white">{value}</span>
+        ) : (
+          <span className={`break-words text-[1.08rem] leading-none ${percentTone(delta)}`}>{signedPercent(delta)}</span>
+        )}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="min-w-0 text-[8px] leading-none text-white/38">{view === "value" ? helper : "Változás"}</span>
+        <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{view === "value" ? "db" : "%"}</span>
+      </div>
+    </button>
+  );
+
   return (
-    <article className="relative flex min-h-[136px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
+    <article className="relative flex min-h-[144px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
       <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
       <div className="relative flex min-h-[36px] items-start justify-between gap-3">
@@ -1197,44 +1241,27 @@ function SalesVolumeCard({
           <ShoppingBag size={17} />
         </span>
       </div>
-      <div className="relative mt-auto grid grid-cols-2 gap-2">
-        <button
-          type="button"
+      <div className="relative mt-auto grid grid-cols-2 gap-2.5">
+        <MetricButton
+          label="Eladások"
+          icon={ReceiptText}
+          view={transactionsView}
+          value={integer(transactions)}
+          delta={transactionsDelta}
           onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
-          className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
           title="Kattintás: eladások száma / változás százalék"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ReceiptText size={11} className="shrink-0 text-[#8ee6e2]" />Eladások</span>
-            <span className="rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{transactionsView === "value" ? "%" : "db"}</span>
-          </div>
-          <div className="mt-2 min-h-[24px]">
-            {transactionsView === "value" ? (
-              <span className="text-[1.22rem] leading-none text-white">{integer(transactions)}</span>
-            ) : (
-              <span className={`whitespace-nowrap text-[1.12rem] leading-none ${percentTone(transactionsDelta)}`}>{signedPercent(transactionsDelta)}</span>
-            )}
-          </div>
-        </button>
-
-        <button
-          type="button"
+          helper="Darabszám"
+        />
+        <MetricButton
+          label="Eladott termékek"
+          icon={ShoppingBag}
+          view={itemsView}
+          value={`${integer(itemsSold)} db`}
+          delta={itemsDelta}
           onClick={() => setItemsView((current) => current === "value" ? "percent" : "value")}
-          className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
           title="Kattintás: eladott darab / változás százalék"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-1.5 text-[8px] uppercase tracking-[0.11em] text-white/38"><ShoppingBag size={11} className="shrink-0 text-[#8ee6e2]" />Eladott termék</span>
-            <span className="rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{itemsView === "value" ? "%" : "db"}</span>
-          </div>
-          <div className="mt-2 min-h-[24px]">
-            {itemsView === "value" ? (
-              <span className="whitespace-nowrap text-[1.22rem] leading-none text-white">{integer(itemsSold)} db</span>
-            ) : (
-              <span className={`whitespace-nowrap text-[1.12rem] leading-none ${percentTone(itemsDelta)}`}>{signedPercent(itemsDelta)}</span>
-            )}
-          </div>
-        </button>
+          helper="Darabszám"
+        />
       </div>
     </article>
   );
