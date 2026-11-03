@@ -13,7 +13,7 @@ const HEADER = [
 ];
 const FIRST_DATA_ROW=3;
 const MONEY='#,##0.00 "RON";[Red](#,##0.00 "RON")';
-const INT='#,##0;[Red](#,##0)';
+const INT='0'; // Minden mennyiség és sorszám tizedesjegy nélkül (régebbi táblázatkezelőkkel is kompatibilis).
 const xmlEscape=(v)=>String(v??'').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;').slice(0,32767);
 const clean=(v)=>String(v??'').trim();
 // Csak a régi Excel-ből átvett, numerikus kódok elé írt szövegesítő
@@ -122,7 +122,8 @@ function stylesXml(){
     '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF1D6"/><bgColor indexed="64"/></patternFill></fill>',
     '<fill><patternFill patternType="solid"><fgColor rgb="FFE4F7F5"/><bgColor indexed="64"/></patternFill></fill>',
   ];
-  const border='<border><left style="hair"><color rgb="FFE0E7EE"/></left><right style="hair"><color rgb="FFE0E7EE"/></right><top style="hair"><color rgb="FFE0E7EE"/></top><bottom style="hair"><color rgb="FFE0E7EE"/></bottom><diagonal/></border>';
+  // Nincs cellánkénti szegély ('kertléc'); a váltakozó világos sorháttér biztosítja az olvashatóságot.
+  const border='<border><left/><right/><top/><bottom/><diagonal/></border>';
   const xs=[
     [0,5,0,0,0], [1,2,0,0,0], [2,3,0,0,0], [3,4,0,1,1],
     // Minden kód szövegként és középre igazítva; mennyiségek szintén középen.
@@ -132,7 +133,7 @@ function stylesXml(){
     [7,9,49,1,1], [6,8,49,1,1], [4,10,164,1,2], [0,5,166,1,1],
     [0,6,166,1,1], [8,6,0,1,0], [3,3,0,1,0], [4,10,165,1,1],
     [5,7,164,1,2], [6,8,164,1,2],
-  ];
+  ].map(([font,fill,numFmt,br,align]) => [font,fill,numFmt===165?1:numFmt,br,align]);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
    `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`+
    `<numFmts count="3"><numFmt numFmtId="164" formatCode="${xmlEscape(MONEY)}"/><numFmt numFmtId="165" formatCode="${xmlEscape(INT)}"/><numFmt numFmtId="166" formatCode="yyyy.mm.dd hh:mm"/></numFmts>`+
