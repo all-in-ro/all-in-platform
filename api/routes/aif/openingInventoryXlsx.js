@@ -3,12 +3,13 @@
 // No stock writes, movements, approvals, sessions, or other financial operations.
 import { deflateRawSync } from 'node:zlib';
 
-// Egyetlen egyszerű munkalap, a felhasználó "leltar minta.xlsx" táblázatához igazítva.
+// Rövid fejléc és üzletileg értelmezhető, külön kezelt állományok.
+// A fizikai beolvasást soha nem mossuk össze a későbbi visszáruval.
 const HEADER = [
-  ['NR.',8], ['BRAND',19], ['S/N KÓD',19], ['TERMÉK KÓD',21],
-  ['BARCODE',22], ['TERMÉKNÉV',42], ['KATEGÓRIA',21], ['ALKATEGÓRIA',24],
-  ['SZÍN',16], ['MÉRET',11], ['DB (LELTÁR)',15], ['DB (RENDSZER)',18],
-  ['ELTÉRÉS DB',15], ['BRUTTÓ ÁR',18], ['BRUTTÓ ÉRTÉK',22], ['ÁLLAPOT',25],
+  ['#',6], ['MÁRKA',16], ['S/N KÓD',19], ['TERMÉK KÓD',19],
+  ['VONALKÓD',20], ['TERMÉK',43], ['SZÍN',18], ['MÉRET',12],
+  ['BEOLVASOTT',15], ['KÖZBENI MOZGÁS',18], ['EGYEZTETETT DB',18],
+  ['RENDSZER MOST',17], ['ELTÉRÉS',13], ['ELADÁSI ÁR',17], ['ÁLLAPOT',22],
 ];
 const FIRST_DATA_ROW=3;
 const MONEY='#,##0.00 "RON";[Red](#,##0.00 "RON")';
@@ -83,7 +84,7 @@ function productRows(detail){
 function stylesXml(){
   const fonts=[
     '<font><sz val="10"/><color rgb="FF243449"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="19"/><color rgb="FFFFFFFF"/><name val="Aptos Display"/></font>',
+    '<font><b/><sz val="12"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
     '<font><sz val="10"/><color rgb="FFDCFDF9"/><name val="Aptos"/></font>',
     '<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
     '<font><b/><sz val="11"/><color rgb="FF184D4C"/><name val="Aptos"/></font>',
@@ -145,69 +146,122 @@ function worksheetXml({columnWidths,rows,merges=[],autoFilter=null,freeze=0,prin
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxCol}${end}"/>${freezePane}<sheetFormatPr defaultRowHeight="19"/><cols>${cols}</cols><sheetData>${rows.map(r=>rowXml(r.row,r.cells,{height:r.height})).join('')}</sheetData>${autoFilter?`<autoFilter ref="${autoFilter}"/>`:''}${mergeXml}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${printLandscape?'landscape':'portrait'}"/></worksheet>`;
 }
-function itemSheet(detail,data){
-  const session=detail.session||{};
-  const unknown=(detail.unknown||[]).filter(x=>nz(x.qty)>0);
-  const place=clean(session.location_name||session.location?.name)||'Üzlet';
-  const title=`ALLINFASHION  |  LELTÁR  |  ${place}  |  ${clean(session.code)}  |  ${dateText(session.started_at||session.created_at)}`;
-  const rows=[
-    {row:1,height:29,cells:[txt('A',title,1)]},
-    {row:2,height:34,cells:HEADER.map(([name],i)=>txt(columnName(i),name,3))},
+function commonTitle(detail, label) {
+  const s=detail.session||{};
+  const loc=clean(s.location_name||s.location?.name)||'Üzlet';
+  return `${label}  •  ${loc}  •  ${clean(s.code)}`;
+}
+function basicRows(title,head) {
+  return [
+    {row:1,height:24,cells:[txt('A',title,1)]},
+    {row:2,height:26,cells:head.map(([name],i)=>txt(columnName(i),name,3))},
   ];
+}
+function itemSheet(detail,data){
+  const header=HEADER;
+  const rows=basicRows(commonTitle(detail,'LELTÁR'),header);
   data.forEach((x,i)=>{
-    const r=FIRST_DATA_ROW+i;
-    const alternate=i%2===1;
-    const t=alternate?5:4;
-    const n=alternate?7:6;
-    const money=alternate?9:8;
-    const hasCount=x.effective!==null;
-    const status=x.price===null&&hasCount?`${x.state} / ÁR HIÁNYZIK`:x.state;
+    const r=FIRST_DATA_ROW+i, alt=i%2===1;
+    const t=alt?5:4, n=alt?7:6, m=alt?9:8;
     const stateStyle=x.state==='RENDBEN'?13:
       x.state==='NEM SZÁMOLT'||x.state==='ÚJRASZÁMOLANDÓ'?12:
       x.state==='HIÁNY'?10:x.state==='TÖBBLET'?11:t;
     rows.push({row:r,height:23,cells:[
       numCell('A',i+1,n),txt('B',x.brand,t),txt('C',x.sn,t),
       txt('D',x.productCode,t),txt('E',x.barcode,t),txt('F',x.title,t),
-      txt('G',x.category,t),txt('H',x.subcategory,t),txt('I',x.color,t),
-      txt('J',x.size,t),numCell('K',x.effective,n),numCell('L',x.current,n),
+      txt('G',x.color,t),txt('H',x.size,t),
+      numCell('I',x.physical,n),numCell('J',x.afterMovement,n),
+      numCell('K',x.effective,n),numCell('L',x.current,n),
       numCell('M',x.delta,x.delta===null?n:x.delta<0?10:x.delta>0?11:n,
-        x.delta===null?null:`K${r}-L${r}`),
-      numCell('N',x.price,money),
-      numCell('O',x.effectiveValue,money,
-        x.effectiveValue===null?null:`K${r}*N${r}`),
-      txt('P',status,stateStyle),
+        x.delta===null?null:`K${r}-L${r}`),numCell('N',x.price,m),
+      txt('O',x.state,stateStyle),
     ]});
   });
-  const end=FIRST_DATA_ROW+data.length-1;
-  const totalRow=Math.max(FIRST_DATA_ROW, end+1);
-  // A teljesítés képlettel számol, a még nem számolt mező üres marad.
-  rows.push({row:totalRow,height:27,cells:[
+  const end=FIRST_DATA_ROW+data.length-1, totalRow=Math.max(FIRST_DATA_ROW,end+1);
+  rows.push({row:totalRow,height:25,cells:[
     txt('F','ÖSSZESEN',18),
+    numCell('I',sum(data.map(x=>x.physical)),19,data.length?`SUM(I${FIRST_DATA_ROW}:I${end})`:null),
+    numCell('J',sum(data.map(x=>x.afterMovement)),19,data.length?`SUM(J${FIRST_DATA_ROW}:J${end})`:null),
     numCell('K',sum(data.map(x=>x.effective)),19,data.length?`SUM(K${FIRST_DATA_ROW}:K${end})`:null),
     numCell('L',sum(data.map(x=>x.current)),19,data.length?`SUM(L${FIRST_DATA_ROW}:L${end})`:null),
     numCell('M',sum(data.map(x=>x.delta)),19,data.length?`SUM(M${FIRST_DATA_ROW}:M${end})`:null),
-    numCell('O',Math.round(sum(data.map(x=>x.effectiveValue))*100)/100,14,
-      data.length?`SUM(O${FIRST_DATA_ROW}:O${end})`:null),
   ]});
-  rows.push({row:totalRow+2,height:26,cells:[
-    txt('A','A DB (LELTÁR) a leltár utáni készletmozgásokat is figyelembe veszi. A NEM SZÁMOLT termék nem nulla: a DB és az eltérés üres.',17),
-  ]});
+  rows.push({row:totalRow+1,height:23,cells:[txt('A',
+    'BEOLVASOTT: tényleges fizikai számolás • KÖZBENI MOZGÁS: későbbi eladás/visszáru • EGYEZTETETT DB: csak a mozgásokkal korrigált összehasonlítás. A nem számolt sor nem 0.',17)]});
+  const unknown=(detail.unknown||[]).filter(x=>nz(x.qty)>0 && !x.resolved_at);
   if(unknown.length){
-    const head=totalRow+4;
-    rows.push({row:head,height:26,cells:[txt('A','AZONOSÍTANDÓ BÁRKÓDOK (NEM SZÁMÍTANAK BELE AZ ÖSSZESEN SORBA)',18)]});
-    rows.push({row:head+1,height:26,cells:[txt('A','NR.',3),txt('B','BARCODE',3),txt('E','DB',3),txt('F','ÁLLAPOT',3)]});
-    unknown.forEach((x,i)=>{
-      rows.push({row:head+2+i,height:22,cells:[
-        numCell('A',i+1,i%2?7:6),txt('B',clean(x.scan_code),i%2?5:4),
-        numCell('E',nz(x.qty),i%2?7:6),
-        txt('F',x.resolved_at?'Azonosítva':'ELLENŐRZENDŐ',x.resolved_at?13:12),
-      ]});
-    });
+    const start=totalRow+3;
+    rows.push({row:start,height:24,cells:[txt('A','ELLENŐRZENDŐ BEOLVASÁSOK (NEM SZÁMÍTANAK A LELTÁR ÖSSZESENBE)',18)]});
+    rows.push({row:start+1,height:23,cells:[txt('A','#',3),txt('B','Vonalkód',3),txt('E','DB',3)]});
+    unknown.forEach((x,i)=>rows.push({row:start+2+i,height:22,cells:[numCell('A',i+1,i%2?7:6),txt('B',clean(x.scan_code),i%2?5:4),numCell('E',nz(x.qty),i%2?7:6)]}));
   }
-  return worksheetXml({columnWidths:HEADER.map(([,w])=>w),rows,
-    merges:['A1:P1',`A${totalRow+2}:P${totalRow+2}`,
-      ...(unknown.length?[`A${totalRow+4}:P${totalRow+4}`]:[])],
-    autoFilter:`A2:P${Math.max(2,end)}`,freeze:2});
+  const merges=[`A1:O1`,`A${totalRow+1}:O${totalRow+1}`,...(unknown.length?[`A${totalRow+3}:O${totalRow+3}`]:[])];
+  return worksheetXml({columnWidths:header.map(([,w])=>w),rows,merges,autoFilter:`A2:O${Math.max(2,end)}`,freeze:2});
+}
+const CREDIT_HEADER=[
+  ['#',6],['HITEL BIZONYLAT',23],['KLIENS',30],['ELADÁS',18],
+  ['TERMÉK',43],['VONALKÓD',20],['MÉRET',12],['ELVITT DB',13],
+  ['VISSZAHOZTA',17],['KLIENSNÉL DB',18],['EGYSÉGÁR',17],
+  ['TERMÉKÉRTÉK',20],['BIZONYLAT TARTOZÁS',23],['MEGJEGYZÉS',45],
+];
+function creditSheet(detail,custody){
+  const data=custody.credit?.items||[],head=CREDIT_HEADER;
+  const rows=basicRows(commonTitle(detail,'HITELES • NYITOTT'),head);
+  data.forEach((x,i)=>{
+    const r=FIRST_DATA_ROW+i, alt=i%2===1,t=alt?5:4,n=alt?7:6,m=alt?9:8;
+    rows.push({row:r,height:25,cells:[
+      numCell('A',i+1,n),txt('B',x.saleNumber,t),txt('C',x.customerName,t),
+      numCell('D',excelDate(x.soldAt),15),txt('E',x.productTitle,t),
+      txt('F',x.barcode,t),txt('G',x.size,t),numCell('H',x.originalQty,n),
+      numCell('I',x.returnedQty,n),numCell('J',x.outsideQty,n,`H${r}-I${r}`),
+      numCell('K',x.unitPrice,m),numCell('L',x.lineTotal,m),
+      numCell('M',x.saleBalanceDisplay,m),txt('N',x.note,t),
+    ]});
+  });
+  const end=FIRST_DATA_ROW+data.length-1,total=Math.max(FIRST_DATA_ROW,end+1);
+  rows.push({row:total,height:25,cells:[txt('E','ÖSSZESEN',18),
+    numCell('J',custody.credit?.totalQtyOutside||0,19,data.length?`SUM(J${FIRST_DATA_ROW}:J${end})`:null),
+    numCell('M',custody.credit?.totalDue||0,14,data.length?`SUM(M${FIRST_DATA_ROW}:M${end})`:null)]});
+  rows.push({row:total+1,height:24,cells:[txt('A',
+    'A hiteles áru nincs a bolt polckészletében. A tartozás bizonylatonként egyszer szerepel; pénzügyi összeg NEM készletérték.',17)]});
+  return worksheetXml({columnWidths:head.map(([,w])=>w),rows,
+    merges:[`A1:N1`,`A${total+1}:N${total+1}`],autoFilter:`A2:N${Math.max(2,end)}`,freeze:2});
+}
+const RESERVED_HEADER=[
+  ['#',6],['FOGLALÁS',22],['KLIENS',30],['LEJÁRAT',17],
+  ['TERMÉK',43],['VONALKÓD',20],['MÉRET',12],['FOGLALT DB',15],
+  ['EGYSÉGÁR',17],['ÉRTÉK',19],['FÉLRETETTE',22],['BOLT DB',13],
+  ['RENDSZER FOGLALT',20],['MEGJEGYZÉS',52],
+];
+function reservedSheet(detail,custody){
+  const data=custody.reserved?.items||[],head=RESERVED_HEADER;
+  const rows=basicRows(commonTitle(detail,'FÉLRETETT • AKTÍV'),head);
+  data.forEach((x,i)=>{
+    const r=FIRST_DATA_ROW+i, alt=i%2===1,t=alt?5:4,n=alt?7:6,m=alt?9:8;
+    const expires=clean(x.expiresOn).slice(0,10);
+    rows.push({row:r,height:24,cells:[
+      numCell('A',i+1,n),txt('B',x.reservationNumber,t),txt('C',x.customerName,t),
+      txt('D',expires,t),txt('E',x.productTitle,t),txt('F',x.barcode,t),
+      txt('G',x.size,t),numCell('H',x.qty,n),numCell('I',x.unitPrice,m),
+      numCell('J',(nz(x.qty)*nz(x.unitPrice)),m,`H${r}*I${r}`),
+      txt('K',x.createdBy,t),numCell('L',x.stockQty,n),numCell('M',x.stockReservedQty,n),
+      txt('N',x.note,t),
+    ]});
+  });
+  const end=FIRST_DATA_ROW+data.length-1,total=Math.max(FIRST_DATA_ROW,end+1);
+  rows.push({row:total,height:25,cells:[txt('E','ÖSSZESEN',18),
+    numCell('H',custody.reserved?.totalQty||0,19,data.length?`SUM(H${FIRST_DATA_ROW}:H${end})`:null),
+    numCell('J',sum(data.map(x=>nz(x.qty)*nz(x.unitPrice))),14,data.length?`SUM(J${FIRST_DATA_ROW}:J${end})`:null)]});
+  rows.push({row:total+1,height:23,cells:[txt('A',
+    'A félretett termék a boltban fizikailag jelen van, ezért a LELTÁR munkalap készletében MÁR szerepel. Kétszer hozzáadni tilos.',17)]});
+  return worksheetXml({columnWidths:head.map(([,w])=>w),rows,
+    merges:[`A1:N1`,`A${total+1}:N${total+1}`],autoFilter:`A2:N${Math.max(2,end)}`,freeze:2});
+}
+function warningsSheet(detail,custody){
+  const warnings=[...(custody.credit?.warnings||[]),...(custody.reserved?.warnings||[])];
+  const rows=basicRows(commonTitle(detail,'EGYEZTETENDŐ'),[['#',6],['FIGYELMEZTETÉS',100]]);
+  warnings.forEach((warning,index)=>rows.push({row:index+3,height:26,cells:[numCell('A',index+1,6),txt('B',warning,12)]}));
+  return worksheetXml({columnWidths:[6,100],rows,merges:['A1:B1'],autoFilter:`A2:B${Math.max(2,2+warnings.length)}`,freeze:2});
 }
 
 function crc32(buffer){
@@ -238,22 +292,38 @@ function zip(files){
   end.writeUInt32LE(centralBuffer.length,12);end.writeUInt32LE(offset,16);
   return Buffer.concat([...locals,centralBuffer,end]);
 }
-export function buildOpeningInventoryXlsx(detail){
-  if(!detail?.session||!Array.isArray(detail.lines)) throw new Error('Hiányos leltáradatok az XLSX exporthoz.');
-  const data=productRows(detail);
+export function buildOpeningInventoryXlsx(detail, options={}){
+  if(!detail?.session) throw new Error('Hiányos leltáradatok az XLSX exporthoz.');
+  const sections=Array.isArray(options.sections)&&options.sections.length
+    ? options.sections.filter(item=>['inventory','credit','reserved'].includes(item)) : ['inventory'];
+  const custody=options.custody||{};
+  const selected=[...new Set(sections)];
+  const sheets=[];
+  if(selected.includes('inventory')) {
+    if(!Array.isArray(detail.lines)) throw new Error('Hiányoznak a fizikai leltársorok.');
+    sheets.push({name:'Leltár',xml:itemSheet(detail,productRows(detail))});
+  }
+  if(selected.includes('credit')) sheets.push({name:'Hiteles',xml:creditSheet(detail,custody)});
+  if(selected.includes('reserved')) sheets.push({name:'Félretett',xml:reservedSheet(detail,custody)});
+  if([...(custody.credit?.warnings||[]),...(custody.reserved?.warnings||[])].length)
+    sheets.push({name:'Ellenőrizendő',xml:warningsSheet(detail,custody)});
+  if(!sheets.length) throw new Error('Nincs kiválasztott exportadat.');
+  const types=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
   const files={
-    '[Content_Types].xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+    '[Content_Types].xml':types,
     '_rels/.rels':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`,
-    'xl/workbook.xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets><sheet name="Leltár" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
-    'xl/_rels/workbook.xml.rels':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-    'xl/worksheets/sheet1.xml':itemSheet(detail,data),
+    'xl/workbook.xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${sheets.map((sheet,i)=>`<sheet name="${xmlEscape(sheet.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
+    'xl/_rels/workbook.xml.rels':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
     'xl/styles.xml':stylesXml(),
-    'docProps/core.xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>AllInFashion</dc:creator><cp:lastModifiedBy>AllInFashion</cp:lastModifiedBy></cp:coreProperties>`,
+    'docProps/core.xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>AllInFashion</dc:creator></cp:coreProperties>`,
     'docProps/app.xml':`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>AllInFashion</Application></Properties>`,
   };
+  sheets.forEach((sheet,i)=>{files[`xl/worksheets/sheet${i+1}.xml`]=sheet.xml;});
   return zip(files);
 }
-export function openingInventoryXlsxFilename(session){
+export function openingInventoryXlsxFilename(session, sections=['inventory']){
   const date=clean(session?.started_at||session?.created_at).slice(0,10)||new Date().toISOString().slice(0,10);
-  return `AllInFashion_Leltar_${safeName(session?.location_name||session?.location?.name)}_${date}_${safeName(session?.code)}.xlsx`;
+  const modes=Array.isArray(sections)?sections:['inventory'];
+  const suffix=modes.map(s=>({inventory:'Leltar',credit:'Hiteles',reserved:'Felretett'}[s]||s)).join('_');
+  return `AllInFashion_${suffix}_${safeName(session?.location_name||session?.location?.name)}_${date}_${safeName(session?.code)}.xlsx`;
 }
