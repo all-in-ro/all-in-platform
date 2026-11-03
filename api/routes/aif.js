@@ -30554,7 +30554,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         .filter((item) => item.legacyBarcodeAlias)
         .map((item) => [String(item.variantId), item]));
 
-      if (openingInventory) {
+      if (openingInventory && String(openingInventory.inventory_mode || "recovery").toLowerCase() !== "standard") {
         const [discoveryItems, openingItems] = await Promise.all([
           aifOpeningInventoryDiscoveryCatalogRows(pool, openingInventory, location, search, limit),
           aifOpeningInventoryCatalogRows(pool, openingInventory, location, search, limit),
@@ -34483,6 +34483,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // időbélyeggel rávezetjük a leltárra, ezért nem fagyasztjuk be az üzletet.
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_opening_inventory_stock:${location.id}`]);
       const openingInventory = await aifActiveOpeningInventorySession(client, location.id);
+      // Rendes leltárnál a kassza nem írhatja át a már megszámolt
+      // darabszámot az élő stockba. A helyreállító mód régi hídját megtartjuk.
+      const recoverySaleBridge = Boolean(openingInventory && String(openingInventory.inventory_mode || "recovery").toLowerCase() !== "standard");
 
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
       await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
@@ -34518,7 +34521,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Aktív leltár alatt a fizikailag előkerülő terméket akkor is
       // el kell tudni adni, ha az üzlet stock-sora eddig nem létezett vagy 0 volt.
       // A 0-s sor csak ugyanebben a tranzakcióban készül el; sikertelen eladásnál rollbackel.
-      if (openingInventory) {
+      if (recoverySaleBridge) {
         await client.query(
           `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
            SELECT $1,v.id,0,0,now()
@@ -34578,12 +34581,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw error;
       }
 
-      const openingEffective = openingInventory
+      const openingEffective = recoverySaleBridge
         ? await aifOpeningInventoryEffectiveMap(client, openingInventory, location.id, variantIds)
         : new Map();
 
       const openingLineState = new Map();
-      if (openingInventory) {
+      if (recoverySaleBridge) {
         const openingLinesResult = await client.query(
           `SELECT id,variant_id,counted_qty,last_scanned_at,auto_zeroed
            FROM aif_opening_inventory_lines
@@ -34657,7 +34660,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       // Ilyenkor csak annyi átmeneti készletet nyitunk meg, amennyi az adott eladáshoz kell.
       // Ez NEM lesz leltári darabszám: a bridge mozgást a leltár számításai kizárják,
       // a valódi sale mozgás viszont időbélyeggel megmarad az auditban.
-      if (openingInventory) {
+      if (recoverySaleBridge) {
         for (const input of preparedInput) {
           if (openingEffective.has(input.variantId)) continue;
           const stock = stockByVariant.get(input.variantId);
