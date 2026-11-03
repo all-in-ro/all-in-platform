@@ -472,7 +472,7 @@ function HungarianDatePicker({
 type MessageTone = "info" | "error" | "success";
 type CountStatus = "draft" | "counting" | "review" | "committed" | "cancelled";
 type LineFilter = "all" | "uncounted" | "ok" | "missing" | "extra";
-type PrintMode = "sheet" | "result";
+type PrintMode = "sheet" | "result" | "summary";
 type InventoryExportSection = "inventory" | "credit" | "reserved";
 type InventoryExportChoice = "inventory" | "credit" | "reserved" | "inventory,credit" | "inventory,reserved" | "credit,reserved" | "inventory,credit,reserved";
 type InventoryExportDialogState = { id: string; format: "excel" | "pdf"; pdfMode: PrintMode };
@@ -2149,13 +2149,19 @@ export default function AllInInventory() {
         const link = document.createElement("a");
         link.href=href;link.download=fileName;document.body.appendChild(link);link.click();link.remove();
         window.setTimeout(()=>URL.revokeObjectURL(href),1000);
+      } else if (dialog.pdfMode === "summary") {
+        if (!printWindow) throw new Error("Az összesítő PDF ablaka nem érhető el.");
+        // Az új backend HTML-je teljes, A4-es, egylapos nyomtatási nézet.
+        // Közvetlen navigáció: a böngésző a bejelentkezési sütit is átadja.
+        // A részletes leltár és az Excel export működése változatlan.
+        printWindow.location.replace(`${AIF_BASE}/opening-inventory/admin/sessions/${encodeURIComponent(dialog.id)}/export-summary`);
       } else {
         const payload = await fetchAifJSON<InventoryExportData>(`/opening-inventory/admin/sessions/${encodeURIComponent(dialog.id)}/export-data?${params.toString()}`);
         if (!printWindow) throw new Error("A PDF ablak nem érhető el.");
         printInventoryExportReport(printWindow, payload, dialog.pdfMode);
       }
       setExportDialog(null);
-      setMessage({tone:"success",text:"Az export összeállt. A három állomány külön szerepel, készletduplázás nélkül."});
+      setMessage({tone:"success",text:dialog.pdfMode === "summary" && dialog.format === "pdf" ? "Az egylapos, aláírható összesítő megnyílt. A böngésző Nyomtatás menüjében menthető PDF-ként." : "Az export összeállt. A három állomány külön szerepel, készletduplázás nélkül."});
     } catch (error) {
       if (printWindow && !printWindow.closed) printWindow.close();
       setMessage({tone:"error",text:error instanceof Error?error.message:"Nem sikerült az exportálás."});
@@ -2547,6 +2553,7 @@ export default function AllInInventory() {
             {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés</button> : activeReview ? <button className={btnSoft} type="button" onClick={requestReopen}><RotateCcw size={15} /> Újranyitás</button> : <button className={btnSoft} type="button" disabled>Lezárt</button>}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
+            <button className={primaryBtn} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "summary")}><ExportFileIcon kind="pdf" /> Összesítő PDF</button>
             <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
             {canEditActive && currentInventoryMode === "recovery"
               ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre</button>
@@ -2950,6 +2957,7 @@ export default function AllInInventory() {
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
                         <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" compact /> Teljes XLS</button>
+                        <button className={headerPrimaryBtn} type="button" onClick={() => openExportDialog(count.id, "pdf", "summary")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> Összesítő PDF</button>
                         <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> PDF</button>
                       </div>
                     </div>
@@ -2984,6 +2992,7 @@ export default function AllInInventory() {
                 <div className="mt-1 text-xs text-white/58">{active.item.location_name} · indítva: {formatDateTime(active.item.started_at || active.item.created_at)}</div>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button className={primaryBtn} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "summary")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" /> Összesítő PDF</button>
                 <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "sheet")}><ExportFileIcon kind="pdf" /> Leltárív PDF</button>
                 <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
                 {openingDetail ? <button className={btnSoft} type="button" onClick={() => openExportDialog(openingDetail.session.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" /> Teljes XLS</button> : null}
@@ -3278,7 +3287,26 @@ export default function AllInInventory() {
                 <button type="button" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.05] text-white hover:bg-white/10 disabled:opacity-40" aria-label="Exportablak bezárása" disabled={exportBusy} onClick={() => setExportDialog(null)}><X size={17}/></button>
               </header>
               <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
-                <div className="grid gap-2 sm:grid-cols-2">
+                {exportDialog.format === "pdf" ? (
+                  <div className="mb-4">
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.12em] text-white/60">PDF típusa</p>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {([
+                        ["summary", "Egylapos összesítő", "A4-es vezetői kimutatás, bruttó értékekkel és aláírásokkal. Nincs terméklista."],
+                        ["result", "Részletes eredmény", "Teljes leltár és kiválasztott állományok, terméksoronként."],
+                        ["sheet", "Üres leltárív", "Nyomtatható terméklista, kézi számláláshoz."],
+                      ] as const).map(([mode, title, description]) => (
+                        <button key={mode} type="button" disabled={exportBusy} aria-pressed={exportDialog.pdfMode === mode}
+                          onClick={() => setExportDialog(prev => prev ? { ...prev, pdfMode: mode } : prev)}
+                          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-50 ${exportDialog.pdfMode === mode ? "border-[#b7f4ef]/75 bg-[#237c7a]/55" : "border-white/14 bg-[#354357] hover:border-[#7bd7d4]/40"}`}>
+                          <div className="flex items-center gap-2 text-xs text-white">{exportDialog.pdfMode === mode ? <CheckCircle2 size={14} className="text-[#bafff7]" /> : <FileText size={14} className="text-white/55" />}{title}</div>
+                          <p className="mt-1.5 text-[10px] leading-4 text-white/58">{description}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {exportDialog.pdfMode !== "summary" || exportDialog.format === "excel" ? <div className="grid gap-2 sm:grid-cols-2">
                   {INVENTORY_EXPORT_CHOICES.map((option) => {
                     const chosen=exportChoice===option.value;
                     return (
@@ -3292,18 +3320,11 @@ export default function AllInInventory() {
                       </button>
                     );
                   })}
-                </div>
-                {exportDialog.format==="pdf" && exportChoice.split(",").includes("inventory") ? (
-                  <div className="mt-4 border-t border-white/12 pt-3">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/52">A leltár PDF-változata</p>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      {([ ["sheet","Üres leltárív"], ["result","Leltáreredmény"] ] as const).map(([value,caption])=>(
-                        <button key={value} type="button" disabled={exportBusy} onClick={()=>setExportDialog(v=>v?{...v,pdfMode:value}:v)}
-                          className={`h-9 rounded-lg border text-xs transition ${exportDialog.pdfMode===value ? "border-[#a7f2ed]/55 bg-[#2a8d8b] text-white" : "border-white/15 bg-white/[0.04] text-white/70 hover:bg-white/10"}`}>{caption}</button>
-                      ))}
-                    </div>
+                </div> : (
+                  <div className="rounded-xl border border-[#8ce7e2]/25 bg-[#244c51]/70 px-3 py-3 text-xs leading-relaxed text-white/85">
+                    Az egylapos összesítő automatikusan tartalmazza a leltár, a hiteles és a félretett állomány fő darabszám- és bruttó értékadatait. Nem tartalmaz terméksorokat. Az aláírás nem végez készletműveletet.
                   </div>
-                ) : null}
+                )}
                 <p className="mt-4 rounded-xl border border-[#8ce7e2]/25 bg-[#244c51]/70 px-3 py-2.5 text-[11px] leading-relaxed text-[#defdf9]/85">
                   A hitelben lévő termék <strong className="font-normal text-white">nincs a bolti polckészletben</strong>. A félretett termék <strong className="font-normal text-white">már benne van</strong> a fizikai készletben. A dokumentum külön mutatja az állományokat, nem adja össze őket kétszer.
                 </p>
