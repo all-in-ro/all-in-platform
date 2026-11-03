@@ -199,7 +199,7 @@ function unifiedRows(detail,sections,custody){
     variantId:clean(entry.variantId),barcode:identifier(entry.barcode),
     title:clean(entry.productTitle)||'Névtelen termék',brand:clean(entry.brandName),
     color:identifier(entry.colorName),size:identifier(entry.size),
-    productCode:identifier(entry.productCode),
+    productCode:identifier(entry.productCode),sn:identifier(entry.snCod),
   });
   function findOrAdd(entry){
     const id=identity(entry);
@@ -211,13 +211,16 @@ function unifiedRows(detail,sections,custody){
       if(safe.length===1) row=safe[0];
     }
     if(!row){
-      row={...id,category:'',subcategory:'',sn:'',baseline:null,current:null,reserved:null,
+      row={...id,category:'',subcategory:'',baseline:null,current:null,reserved:null,
         physical:null,afterMovement:null,effective:null,delta:null,price:num(entry.unitPrice),
         state:included.has('inventory')?'KÜLÖN NYILVÁNTARTVA':'',
         physicalValue:null,effectiveValue:null,deltaValue:null,
         duringQty:0,duringEvents:0,date:null,scannedBy:'',note:'',creditQty:0,reservedQty:0};
       rows.push(row);
       addIndex(row);
+    } else if(!row.sn && id.sn) {
+      // Meglévő leltársornál csak az üres export SN mezőt egészítjük ki.
+      row.sn=id.sn;
     }
     return row;
   }

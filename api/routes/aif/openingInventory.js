@@ -953,6 +953,8 @@ export default function createAifOpeningInventoryRouter({
           : Number(archivedAudit.physicalCountedQty || 0);
         const archivedProduct = archivedAudit.product && typeof archivedAudit.product === "object"
           ? { ...productPayload(row), ...archivedAudit.product,
+              // A régi snapshot hiányzó SN mezője nem takarhatja el a jelenlegi törzsadatot.
+              snCod: archivedAudit.product.snCod || row.sn_cod || null,
               subcategoryName: archivedAudit.product.subcategoryName || row.subcategory_name || null }
           : productPayload(row);
         const decorated = {
@@ -2066,9 +2068,11 @@ export default function createAifOpeningInventoryRouter({
                sl.id AS line_id, sl.variant_id, sl.line_no, sl.product_title,
                sl.product_code, sl.barcode, sl.brand_name, sl.color_name,
                sl.size, sl.quantity, sl.unit_price, sl.line_total,
+               v.sn_cod AS variant_sn_cod,
                COALESCE(ret.returned_qty,0)::integer AS returned_qty
         FROM aif_shop_sales s
         JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
         LEFT JOIN LATERAL (
           SELECT COALESCE(SUM(e.returned_qty),0) AS returned_qty
           FROM aif_shop_exchanges e
@@ -2102,6 +2106,7 @@ export default function createAifOpeningInventoryRouter({
           lineId: String(row.line_id), variantId: String(row.variant_id || ""),
           productTitle: row.product_title || row.product_code || "Ismeretlen termék",
           productCode: row.product_code || "", barcode: row.barcode || "",
+          snCod: row.variant_sn_cod || null,
           brandName: row.brand_name || "", colorName: row.color_name || "", size: row.size || "",
           originalQty, returnedQty, outsideQty,
           unitPrice: Number(row.unit_price || 0), lineTotal: Number(row.line_total || 0),
@@ -2120,10 +2125,12 @@ export default function createAifOpeningInventoryRouter({
                rl.id AS line_id, rl.variant_id, rl.product_title, rl.product_code,
                rl.barcode, rl.brand_name, rl.color_name, rl.size,
                rl.quantity, rl.unit_price_snapshot,
+               v.sn_cod AS variant_sn_cod,
                COALESCE(st.qty,0) AS stock_qty,
                COALESCE(st.reserved_qty,0) AS stock_reserved_qty
         FROM aif_shop_reservations r
         JOIN aif_shop_reservation_lines rl ON rl.reservation_id=r.id
+        LEFT JOIN aif_product_variants v ON v.id=rl.variant_id
         LEFT JOIN aif_stock st ON st.location_id=r.location_id AND st.variant_id=rl.variant_id
         WHERE r.location_id=$1 AND r.status='active'
         ORDER BY r.expires_on,r.reservation_number,rl.line_no`,[session.location_id]);
@@ -2147,6 +2154,7 @@ export default function createAifOpeningInventoryRouter({
           lineId: String(row.line_id), variantId: vid,
           productTitle: row.product_title || row.product_code || "Ismeretlen termék",
           productCode: row.product_code || "", barcode: row.barcode || "",
+          snCod: row.variant_sn_cod || null,
           brandName: row.brand_name || "", colorName: row.color_name || "", size: row.size || "",
           qty, unitPrice: Number(row.unit_price_snapshot || 0),
           stockQty: Number(row.stock_qty || 0), stockReservedQty: Number(row.stock_reserved_qty || 0),
