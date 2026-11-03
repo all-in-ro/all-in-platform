@@ -80,6 +80,11 @@ export default function AllInOpeningInventoryShop({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scanTimerRef = useRef<number | null>(null);
   const scanInFlightRef = useRef(false);
+  const scanQueueRef = useRef<Array<{ code: string; clientScanId: string }>>([]);
+  const scanSessionRef = useRef("");
+  const failedScanRef = useRef(false);
+  const [failedScan, setFailedScan] = useState<{ code: string; clientScanId: string } | null>(null);
+  const [queuedScanCount, setQueuedScanCount] = useState(0);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -117,6 +122,35 @@ export default function AllInOpeningInventoryShop({
   const recent = data?.recent || [];
   const session = data?.session || null;
   const editable = Boolean(session?.editable);
+  const pendingQueueKey = session?.id ? `allinfashion:inventory-scan-pending:${session.id}` : "";
+
+  function persistQueue() {
+    if (!pendingQueueKey) return;
+    try {
+      if (scanQueueRef.current.length) window.sessionStorage.setItem(pendingQueueKey, JSON.stringify(scanQueueRef.current));
+      else window.sessionStorage.removeItem(pendingQueueKey);
+    } catch { /* a szerveroldali scan-napló a hiteles adat */ }
+    setQueuedScanCount(scanQueueRef.current.length);
+  }
+
+  useEffect(() => {
+    if (!session?.id || scanSessionRef.current === session.id) return;
+    scanSessionRef.current = session.id;
+    scanQueueRef.current = [];
+    failedScanRef.current = false;
+    setFailedScan(null);
+    try {
+      const previous = JSON.parse(window.sessionStorage.getItem(pendingQueueKey) || "[]");
+      if (Array.isArray(previous)) scanQueueRef.current = previous
+        .filter((item) => item && typeof item.code === "string" && /^[a-zA-Z0-9_-]{12,128}$/.test(String(item.clientScanId || "")))
+        .slice(0, 300);
+    } catch {}
+    setQueuedScanCount(scanQueueRef.current.length);
+    if (scanQueueRef.current.length && session.editable) {
+      setNotice({ tone: "info", text: `${scanQueueRef.current.length} korábbi félbemaradt beolvasást ugyanazzal azonosítóval újraellenőrzünk. Nem lesz dupla darabszám.` });
+      void drainScanQueue();
+    }
+  }, [session?.id, session?.editable]);
 
   function updateRecent(line: AifOpeningInventoryShopLine) {
     setLastLine(line);
@@ -131,38 +165,81 @@ export default function AllInOpeningInventoryShop({
     } : current);
   }
 
-  async function scan(raw = scanValue) {
-    const code = String(raw || "").replace(/[\r\n\t]+/g, "").trim();
-    if (!code || scanInFlightRef.current || !editable) return;
+  async function drainScanQueue() {
+    if (scanInFlightRef.current || failedScanRef.current || !editable) return;
     scanInFlightRef.current = true;
     setScanning(true);
-    setNotice(null);
     try {
-      const response = await apiAifOpeningInventoryScan({ location: location || undefined, code, qty: 1 });
-      setScanValue("");
-      updateRecent(response.line);
-      setNotice({ tone: "success", text: `${response.line.product.title}: ${response.line.countedQty} db talált.` });
-      window.setTimeout(() => inputRef.current?.focus(), 0);
-    } catch (caught) {
-      const error = caught as Error & { payload?: any };
-      const payload = error?.payload;
-      setScanValue("");
-      setNotice({
-        tone: payload?.unknownRecorded ? "info" : "error",
-        text: error instanceof Error ? error.message : "A beolvasás nem sikerült.",
-      });
-      window.setTimeout(() => inputRef.current?.focus(), 0);
+      while (scanQueueRef.current.length) {
+        const queued = scanQueueRef.current[0];
+        try {
+          const response = await apiAifOpeningInventoryScan({
+            location: location || undefined,
+            code: queued.code,
+            qty: 1,
+            clientScanId: queued.clientScanId,
+          });
+          if (!response.duplicate) updateRecent(response.line);
+          setNotice({
+            tone: response.duplicate ? "info" : "success",
+            text: response.duplicate
+              ? `${response.line.product.title}: a korábbi beolvasás már mentve volt, nem dupláztuk.`
+              : `${response.line.product.title}: ${response.line.countedQty} db talált.`,
+          });
+          scanQueueRef.current.shift();
+          persistQueue();
+        } catch (caught) {
+          const error = caught as Error & { payload?: any };
+          if (error?.payload?.unknownRecorded) {
+            // Az ismeretlen vagy ütköző kódot a backend már az auditba mentette.
+            scanQueueRef.current.shift();
+            persistQueue();
+            setNotice({ tone: "info", text: error.message });
+            continue;
+          }
+          // Nem tudjuk, a hálózati hiba előtt mentette-e a szerver. Megőrizzük
+          // ugyanazt az azonosítót, hogy az Újrapróbálás NE számoljon kétszer.
+          failedScanRef.current = true;
+          setFailedScan(queued);
+          setNotice({ tone: "error", text: `${queued.code}: ${error.message || "Nem sikerült rögzíteni."} Az ellenőrizetlen kódot megőriztük, ne csippantsd újra külön!` });
+          break;
+        }
+      }
     } finally {
       scanInFlightRef.current = false;
       setScanning(false);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
     }
+  }
+
+  function scan(raw = scanValue) {
+    const code = String(raw || "").replace(/[\r\n\t]+/g, "").trim();
+    if (!code || !editable || failedScanRef.current) return;
+    if (scanTimerRef.current !== null) {
+      window.clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+    const clientScanId = typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `scan-${Date.now()}-${Math.random().toString(36).slice(2, 13)}`;
+    scanQueueRef.current.push({ code, clientScanId });
+    persistQueue();
+    setScanValue("");
+    void drainScanQueue();
+  }
+
+  function retryFailedScan() {
+    if (scanInFlightRef.current) return;
+    failedScanRef.current = false;
+    setFailedScan(null);
+    void drainScanQueue();
   }
 
   function changeScanValue(value: string) {
     setScanValue(value);
     if (scanTimerRef.current !== null) window.clearTimeout(scanTimerRef.current);
     const code = value.trim();
-    if (!editable || code.length < 8 || /\s/.test(code)) return;
+    if (!editable || failedScanRef.current || code.length < 8 || /\s/.test(code)) return;
     scanTimerRef.current = window.setTimeout(() => {
       scanTimerRef.current = null;
       void scan(code);
@@ -170,7 +247,7 @@ export default function AllInOpeningInventoryShop({
   }
 
   async function setLineQty(line: AifOpeningInventoryShopLine, nextQty: number) {
-    if (!editable || editingLineId) return;
+    if (!editable || editingLineId || scanInFlightRef.current || failedScanRef.current) return;
     const safe = Math.max(0, Math.trunc(nextQty));
     setEditingLineId(line.id);
     try {
@@ -260,6 +337,7 @@ export default function AllInOpeningInventoryShop({
                     <input
                       ref={inputRef}
                       autoFocus
+                      disabled={Boolean(failedScan)}
                       value={scanValue}
                       onChange={(event) => changeScanValue(event.target.value)}
                       autoComplete="off"
@@ -270,6 +348,19 @@ export default function AllInOpeningInventoryShop({
                     {scanning ? <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-[#8ee6e2]" size={22} /> : null}
                   </label>
                 </form>
+              ) : null}
+
+              {queuedScanCount > 0 ? (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#263244] px-3 py-2 text-xs text-white/72">
+                  <span>Várakozó / még nem visszaigazolt beolvasás: <strong className="text-white">{queuedScanCount} db</strong></span>
+                  <span>{scanning ? "Mentés folyamatban" : failedScan ? "Ellenőrzés szükséges" : "Sorban mentés"}</span>
+                </div>
+              ) : null}
+              {failedScan ? (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300/40 bg-red-950/20 px-3 py-3">
+                  <span className="text-xs text-red-100">Nem visszaigazolt kód: <strong>{failedScan.code}</strong>. A következő beolvasásokat most szüneteltetjük.</span>
+                  <button type="button" onClick={retryFailedScan} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-200/40 bg-red-600 px-3 text-xs text-white hover:bg-red-500"><RefreshCw size={14} /> Ugyanazon kérés újrapróbálása</button>
+                </div>
               ) : null}
 
               {notice ? (
@@ -329,11 +420,11 @@ export default function AllInOpeningInventoryShop({
                     <div className="flex flex-wrap items-center justify-end gap-3 sm:flex-nowrap">
                       <div className="flex items-center gap-2">
                         {editable ? (
-                          <button type="button" disabled={editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
+                          <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
                         ) : null}
                         <div className="min-w-[82px] rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/16 px-3 py-2 text-center text-lg text-[#d7fffd]">{line.countedQty} db</div>
                         {editable ? (
-                          <button type="button" disabled={editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
+                          <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
                         ) : null}
                       </div>
                       <div className="min-w-[136px] sm:border-l sm:border-white/10 sm:pl-3">

@@ -535,6 +535,8 @@ type OpeningInventoryLine = {
   live_out_qty?: number | string | null;
   movement_after_count_qty?: number | string | null;
   movement_after_count_count?: number | string | null;
+  movement_during_count_count?: number | string | null;
+  movement_during_count_qty?: number | string | null;
   current_system_qty?: number | string | null;
   current_reserved_qty?: number | string | null;
   observation_at?: string | null;
@@ -574,6 +576,8 @@ type OpeningInventorySummary = {
   live_in_qty?: number | string;
   live_out_qty?: number | string;
   live_movement_lines?: number | string;
+  movement_during_count_lines?: number | string;
+  movement_during_count_events?: number | string;
   unknown_rows: number | string;
   unknown_qty: number | string;
   legacy_retail_value?: number | string | null;
@@ -771,7 +775,7 @@ type CountValueSnapshot = {
 };
 
 type ConfirmDialog = {
-  kind: "close" | "reopen" | "checkpoint" | "apply" | "cancel";
+  kind: "close" | "reopen" | "checkpoint" | "apply" | "zero" | "cancel";
   title: string;
   description: string;
   confirmLabel: string;
@@ -1065,6 +1069,7 @@ function mapOpeningDetail(detail: OpeningInventoryDetail): InventoryCountDetail 
 }
 
 function openingLineStatusLabel(line: OpeningInventoryLine, mode: InventoryMode) {
+  if (Number(line.movement_during_count_count || 0) > 0) return "ÚJRASZÁMOLANDÓ (KÖZBEN MOZGOTT)";
   if (line.status === "missing") return mode === "recovery" ? "BIZTOS HIÁNY" : "HIÁNY";
   if (line.status === "awaiting_known") return "MÉG NEM TALÁLTÁK";
   if (line.status === "untracked") return mode === "recovery" ? "RÉGI / NEM NYILVÁNTARTOTT" : "TÖBBLET";
@@ -1079,82 +1084,6 @@ function safeFilePart(value: unknown) {
     .replace(/[^a-zA-Z0-9_-]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 90) || "leltar";
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
-function downloadOpeningCsv(detail: OpeningInventoryDetail) {
-  const session = detail.session;
-  const summary = detail.summary;
-  const mode = openingMode(session);
-  const expectedLabel = mode === "recovery" ? "Igazolható minimum" : "Elvárt";
-  const missingLabel = mode === "recovery" ? "Biztos hiány" : "Hiány";
-  const extraLabel = mode === "recovery" ? "Régi / nem nyilvántartott" : "Többlet";
-  const rows: unknown[][] = [
-    ["ALL IN - Üzleti leltár"],
-    ["Kód", session.code],
-    ["Helyszín", session.location_name || session.location?.name || ""],
-    ["Állapot", statusLabel(openingStatusToCountStatus(session.status))],
-    ["Típus", openingModeLabel(mode)],
-    ["Indítva", formatDateTime(session.started_at || session.startedAt || session.created_at)],
-    ["Beolvasás lezárva", formatDateTime(session.counting_closed_at)],
-    ["Készletre alkalmazva", formatDateTime(session.applied_at)],
-    ["Megjegyzés", session.note || ""],
-    [],
-    ["Összesítő"],
-    ["Leltár szerint", `${formatQty(summary.counted_qty)} db`],
-    [expectedLabel, `${formatQty(summary.known_min_qty)} db`],
-    [missingLabel, `${formatQty(summary.definite_missing_qty)} db`],
-    [extraLabel, `${formatQty(summary.untracked_qty)} db`],
-    ["Készletkorrekció", `${n(summary.system_correction_qty) > 0 ? "+" : ""}${formatQty(summary.system_correction_qty)} db`],
-    ["Leltárérték", `${formatMoney(summary.counted_retail_value)} RON`],
-    [],
-    ["Termék", "Márka", "Kategória", "Szín", "Méret", "Termékkód", "Vonalkód", "Rendszer induláskor", "Rendszer most", "Mozgás", expectedLabel, "Fizikailag számolt", "Leltár szerint", "Számolás utáni mozgás", missingLabel, extraLabel, "Készletkorrekció", "Eladási ár", "Állapot", "Utolsó beolvasás", "Beolvasta", "Megjegyzés"],
-  ];
-  for (const line of detail.lines || []) {
-    rows.push([
-      line.product.title,
-      line.product.brandName || "",
-      line.product.categoryName || "",
-      line.product.colorName || line.product.colorCode || "",
-      line.product.size || "",
-      line.product.productCode || line.product.modelCode || line.product.internalSku || "",
-      line.product.barcode || "",
-      formatQty(line.system_qty_start),
-      formatQty(line.current_system_qty ?? line.system_qty_start),
-      `${n(line.trusted_net_qty) > 0 ? "+" : ""}${formatQty(line.trusted_net_qty)}`,
-      formatQty(line.known_min_qty),
-      line.physical_counted_qty === null || line.physical_counted_qty === undefined ? "" : formatQty(line.physical_counted_qty),
-      line.counted_qty === null || line.counted_qty === undefined ? "" : formatQty(line.counted_qty),
-      `${n(line.movement_after_count_qty) > 0 ? "+" : ""}${formatQty(line.movement_after_count_qty || 0)}`,
-      line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "" : formatQty(line.definite_missing_qty),
-      line.untracked_qty === null || line.untracked_qty === undefined ? "" : formatQty(line.untracked_qty),
-      line.system_correction_qty === null || line.system_correction_qty === undefined ? "" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${formatQty(line.system_correction_qty)}`,
-      formatMoney(line.sell_price),
-      openingLineStatusLabel(line, mode),
-      formatDateTime(line.last_scanned_at),
-      line.last_scanned_by || "",
-      line.note || "",
-    ]);
-  }
-  const unresolved = (detail.unknown || []).filter((item) => !item.resolved_at && n(item.qty) > 0);
-  if (unresolved.length) {
-    rows.push([], ["Ellenőrzendő kódok"], ["Kód", "Darab", "Utolsó beolvasás", "Beolvasta"]);
-    for (const item of unresolved) rows.push([item.scan_code, formatQty(item.qty), formatDateTime(item.last_scanned_at), item.last_scanned_by || ""]);
-  }
-  const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(";")).join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const date = String(session.started_at || session.created_at || "").slice(0, 10) || localDateInput();
-  a.href = url;
-  a.download = `${safeFilePart(session.location_name || session.location?.name)}_${date}_${safeFilePart(session.code)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function printOpeningReport(detail: OpeningInventoryDetail) {
@@ -1351,6 +1280,7 @@ export default function AllInInventory() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: MessageTone; text: string } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
+  const [criticalConfirmText, setCriticalConfirmText] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualBarcode, setManualBarcode] = useState("");
   const [scannerStatus, setScannerStatus] = useState("");
@@ -1927,17 +1857,47 @@ export default function AllInInventory() {
     });
   }
 
+  function requestZeroUncounted() {
+    if (!active || !activeReview || currentInventoryMode !== "standard") return;
+    const missing = Math.max(0, n(openingDetail?.summary.line_count) - n(openingDetail?.summary.counted_lines));
+    if (!missing) return;
+    setCriticalConfirmText("");
+    setConfirmDialog({
+      kind: "zero",
+      tone: "red",
+      title: "Nem talált termékek külön megerősítése",
+      description: `A megmaradt ${missing} NEM SZÁMOLT terméksort a leltárban külön, tudatos döntéssel 0 darabnak jelölöd. CSAK akkor használd, amikor az egész üzlet teljes fizikai számlálása megtörtént. Ez a művelet önmagában sem az éles készletet, sem az eladásokat, sem a hiteleket nem módosítja.`,
+      confirmLabel: "Nem találtak jelölése 0-nak",
+      details: [
+        `Leltár: ${active.item.title}`,
+        `Üzlet: ${active.item.location_name || currentLocation?.name || "-"}`,
+        `Érintett NEM SZÁMOLT cikkszám: ${missing}`,
+        "Ezután is külön jóváhagyás kell az éles készlet módosításához.",
+      ],
+    });
+  }
+
   function requestApply() {
     if (!active || !activeReview) return;
+    const uncountedCount = Math.max(0, n(openingDetail?.summary.line_count) - n(openingDetail?.summary.counted_lines));
+    if (currentInventoryMode === "standard" && uncountedCount > 0) {
+      setMessage({ tone: "error", text: `Még ${uncountedCount} sor nincs ténylegesen megszámolva vagy külön 0-nak megerősítve. A készlethez nem nyúlunk.` });
+      return;
+    }
+    if (currentInventoryMode === "standard" && n(openingDetail?.summary.movement_during_count_lines) > 0) {
+      setMessage({ tone: "error", text: `${formatQty(openingDetail?.summary.movement_during_count_lines)} cikkszám számlálása közben eladás vagy mozgás történt. Ezeket újra kell számolni a készlet módosítása előtt.` });
+      return;
+    }
     if (unresolvedUnknown.length) {
       setMessage({ tone: "error", text: `${unresolvedUnknown.length} ismeretlen vagy ütköző kód még nincs rendezve.` });
       return;
     }
+    setCriticalConfirmText("");
     setConfirmDialog({
       kind: "apply",
-      tone: "green",
+      tone: "red",
       title: "Készlet végleges alkalmazása",
-      description: "A rendszer a fizikailag megszámolt mennyiségeket és a közben történt eladásokat/mozgásokat együtt veszi figyelembe, majd auditált készletkorrekciót készít.",
+      description: "FIGYELEM: ez az egyetlen lépés, amely megváltoztatja az éles készletet. Csak a teljes fizikai számlálás, minden eltérés kivizsgálása és a vezetői jóváhagyás után végezhető el.",
       confirmLabel: "Készlet alkalmazása",
       details: [
         `Leltár: ${active.item.title}`,
@@ -1972,14 +1932,28 @@ export default function AllInInventory() {
     setMessage(null);
     try {
       if ((action === "close" || action === "checkpoint") && dirtyLineIdsRef.current.size) await saveLines(true);
-      const raw = action === "close"
+      const raw = action === "zero"
+        ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/confirm-unobserved-zero`, {
+            method: "POST",
+            body: JSON.stringify({
+              confirmation: "NEM_TALALT_NULLA",
+              expectedUncountedCount: Math.max(0, n(openingDetail?.summary.line_count) - n(openingDetail?.summary.counted_lines)),
+            }),
+          })
+        : action === "close"
         ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/close`, { method: "POST", body: "{}" })
         : action === "reopen"
           ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/reopen`, { method: "POST", body: "{}" })
           : action === "checkpoint"
             ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/recovery-checkpoint`, { method: "POST", body: "{}" })
             : action === "apply"
-              ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/apply`, { method: "POST", body: "{}" })
+              ? await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/apply`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    confirmation: "LELTAR_ELLENORIZVE",
+                    expectedCountedLines: n(openingDetail?.summary.counted_lines),
+                  }),
+                })
               : null;
 
       if (action === "cancel") {
@@ -1999,7 +1973,8 @@ export default function AllInInventory() {
         setDrafts(nextDrafts);
         setDirtyLineIds([]);
         dirtyLineIdsRef.current.clear();
-        if (action === "close") setMessage({ tone: "success", text: "Beolvasás lezárva. Az üzlet továbbra is árulhat; most ellenőrizheted az eredményt." });
+        if (action === "close") setMessage({ tone: "success", text: "Beolvasás lezárva. A nem számolt sorok NEM lettek nullázva. Az éles készlet változatlan; ellenőrizheted az eredményt." });
+        if (action === "zero") setMessage({ tone: "success", text: `A korábban nem számolt sorok a LELTÁRBAN külön 0-nak lettek jelölve. Az éles készlet nem változott. Ellenőrizd az eltéréseket!` });
         if (action === "reopen") setMessage({ tone: "success", text: "Leltár újranyitva. A bolti számlálás folytatható." });
         if (action === "checkpoint") {
           notifyStockMovesChanged({ source: "opening_inventory_recovery_checkpoint", inventoryCountId: detail.item.id });
@@ -2027,6 +2002,8 @@ export default function AllInInventory() {
 
   function confirmDialogAction() {
     if (!confirmDialog || saving) return;
+    if (confirmDialog.kind === "apply" && criticalConfirmText.trim().toUpperCase() !== "ALKALMAZOM") return;
+    if (confirmDialog.kind === "zero" && criticalConfirmText.trim().toUpperCase() !== "NULLA") return;
     void runConfirmedAction();
   }
 
@@ -2056,13 +2033,36 @@ export default function AllInInventory() {
     window.location.hash = "openinginventoryshop";
   }
 
-  async function downloadArchiveCsv(id: string) {
+  async function downloadArchiveExcel(id: string) {
+    if (saving) return;
     setSaving(true);
     try {
-      const raw = await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}`);
-      downloadOpeningCsv(raw);
+      const response = await fetch(
+        `${AIF_BASE}/opening-inventory/admin/sessions/${encodeURIComponent(id)}/export.xlsx`,
+        { credentials: "include", cache: "no-store" },
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error || `A leltár Excel-letöltése nem sikerült (HTTP ${response.status}).`);
+      }
+      const buffer = await response.arrayBuffer();
+      const first = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+      if (buffer.byteLength < 100 || first[0] !== 0x50 || first[1] !== 0x4B || first[2] !== 0x03 || first[3] !== 0x04) {
+        throw new Error("Nem Excel-fájl érkezett a szervertől. A letöltés megszakítva.");
+      }
+      const suggested = response.headers.get("content-disposition")?.match(/filename="([^"\/]+\.xlsx)"/i)?.[1];
+      const filename = suggested || `AllInFashion_Leltar_${safeFilePart(id)}.xlsx`;
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      setMessage({ tone: "error", text: e instanceof Error ? e.message : "A CSV nem készíthető el." });
+      setMessage({ tone: "error", text: e instanceof Error ? e.message : "Az XLSX nem készíthető el." });
     } finally {
       setSaving(false);
     }
@@ -2532,7 +2532,7 @@ export default function AllInInventory() {
             ))}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
-            <button className={btnSoft} type="button" onClick={setVisibleToExpected} disabled={!canEditActive || currentInventoryMode === "recovery"} title={currentInventoryMode === "recovery" ? "Helyreállító leltárnál nem töltjük ki automatikusan a talált mennyiséget." : undefined}>Látható = rendszer</button>
+            <button className={btnSoft} type="button" disabled title="Biztonsági okból kikapcsolva: a rendszer készletadata nem bizonyítja a tényleges fizikai számlálást.">Látható = rendszer</button>
             <button className={btnSoft} type="button" onClick={clearVisible} disabled={!canEditActive}>Látható ürítés</button>
           </div>
         </div>
@@ -2605,16 +2605,6 @@ export default function AllInInventory() {
         </div>
       </section>
     );
-  }
-
-  function setVisibleToExpected() {
-    const ids = visibleInventoryLines.map((line) => line.id);
-    setDrafts((prev) => {
-      const next = { ...prev };
-      for (const line of visibleInventoryLines) next[line.id] = { ...(next[line.id] || { note: "" }), countedQty: String(Math.trunc(n(line.expected_qty))) };
-      return next;
-    });
-    setDirtyLineIds((prev) => Array.from(new Set([...prev, ...ids])));
   }
 
   function clearVisible() {
@@ -2736,7 +2726,10 @@ export default function AllInInventory() {
                   <button className={headerBtnSoft} type="button" onClick={requestReopen} disabled={saving}>
                     <RotateCcw size={15} /> Újranyitás
                   </button>
-                  <button className={headerPrimaryBtn} type="button" onClick={requestApply} disabled={saving || unresolvedUnknown.length > 0}>
+                  {currentInventoryMode === "standard" && n(openingDetail?.summary.line_count) > n(openingDetail?.summary.counted_lines) ? (
+                    <button className={headerBtnSoft} type="button" onClick={requestZeroUncounted} disabled={saving} title="Csak a TELJES fizikai ellenőrzés után!">Nem találtak: 0</button>
+                  ) : null}
+                  <button className={headerPrimaryBtn} type="button" onClick={requestApply} disabled={saving || unresolvedUnknown.length > 0 || (currentInventoryMode === "standard" && (n(openingDetail?.summary.line_count) > n(openingDetail?.summary.counted_lines) || n(openingDetail?.summary.movement_during_count_lines) > 0))}>
                     <CheckCircle2 size={15} /> Készlet alkalmazása
                   </button>
                 </>
@@ -2814,10 +2807,9 @@ export default function AllInInventory() {
                 onChange={(value) => setInventoryMode(value as InventoryMode)}
                 disabled={Boolean(active && !activeFinal)}
                 placeholder="Leltár típusa"
-                options={[
-                  { value: "standard", label: "Rendes leltár" },
-                  { value: "recovery", label: "Helyreállító leltár" },
-                ]}
+                options={active && !activeFinal && currentInventoryMode === "recovery"
+                  ? [{ value: "recovery", label: "Helyreállító leltár (korábbi)" }]
+                  : [{ value: "standard", label: "Rendes leltár • éles üzlet" }]}
               />
             </label>
             {inventoryMode === "recovery" ? (
@@ -2837,7 +2829,7 @@ export default function AllInInventory() {
               </>
             ) : (
               <div className="lg:col-span-2 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs text-white/68">
-                Rendes leltár: a rendszerben nyilvántartott készlet az összehasonlítás alapja. Az eladás közben is működik.
+                Rendes leltár: a meglévő élő készlet és minden korábbi eladás változatlan marad. A számlálás külön tárolódik; a kintlévő hiteles eladások nem fizikai készlet. A készletet csak teljes, utólagos vezetői jóváhagyás módosíthatja.
               </div>
             )}
           </div>
@@ -2933,7 +2925,7 @@ export default function AllInInventory() {
                       </button>
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
-                        <button className={headerBtnSoft} type="button" disabled title="Hamarosan Excel export"><Download size={13} /> CSV</button>
+                        <button className={headerBtnSoft} type="button" onClick={() => void downloadArchiveExcel(count.id)} disabled={saving} title="Teljes leltár Excel (.xlsx), összesítés és részletes tételek"><Download size={13} /> Teljes XLS</button>
                         <button className={headerBtnSoft} type="button" onClick={() => void printArchivePdf(count.id)} disabled={saving}><Printer size={13} /> PDF</button>
                       </div>
                     </div>
@@ -2970,13 +2962,14 @@ export default function AllInInventory() {
               <div className="flex flex-wrap gap-2">
                 <button className={btnSoft} type="button" onClick={() => printPdf("sheet")}><Printer size={15} /> Leltárív PDF</button>
                 <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><Download size={15} /> Eredmény PDF</button>
-                {openingDetail ? <button className={btnSoft} type="button" disabled title="Hamarosan Excel export"><Download size={15} /> CSV</button> : null}
+                {openingDetail ? <button className={btnSoft} type="button" onClick={() => void downloadArchiveExcel(openingDetail.session.id)} disabled={saving} title="Teljes leltár Excel (.xlsx)"><Download size={15} /> Teljes XLS</button> : null}
                 {!activeFinal ? <button className={btnSoft} type="button" onClick={openShopView}><Eye size={15} /> Bolti nézet</button> : null}
                 {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés{dirtyLineIds.length ? ` (${dirtyLineIds.length})` : ""}</button> : null}
                 {canEditActive && currentInventoryMode === "recovery" ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre vezetés</button> : null}
                 {canEditActive ? <button className={currentInventoryMode === "recovery" ? btnSoft : primaryBtn} type="button" onClick={commitCount} disabled={saving}><ClipboardCheck size={15} /> {currentInventoryMode === "recovery" ? "Végleges lezárás" : "Beolvasás lezárása"}</button> : null}
                 {activeReview ? <button className={btnSoft} type="button" onClick={requestReopen} disabled={saving}><RotateCcw size={15} /> Újranyitás</button> : null}
-                {activeReview ? <button className={primaryBtn} type="button" onClick={requestApply} disabled={saving || unresolvedUnknown.length > 0}><CheckCircle2 size={15} /> Készlet alkalmazása</button> : null}
+                {activeReview && currentInventoryMode === "standard" && n(openingDetail?.summary.line_count) > n(openingDetail?.summary.counted_lines) ? <button className={btnSoft} type="button" onClick={requestZeroUncounted} disabled={saving}><AlertTriangle size={15} /> Nem találtak: 0</button> : null}
+                {activeReview ? <button className={primaryBtn} type="button" onClick={requestApply} disabled={saving || unresolvedUnknown.length > 0 || (currentInventoryMode === "standard" && (n(openingDetail?.summary.line_count) > n(openingDetail?.summary.counted_lines) || n(openingDetail?.summary.movement_during_count_lines) > 0))}><CheckCircle2 size={15} /> Készlet alkalmazása</button> : null}
                 {!activeFinal ? <button className={redBtn} type="button" onClick={deleteCount} disabled={saving}><X size={15} /> Megszakítás</button> : null}
               </div>
             </div>
@@ -3002,6 +2995,20 @@ export default function AllInInventory() {
               <StatCard label="Készletkorrekció" value={`${n(openingDetail?.summary.system_correction_qty) > 0 ? "+" : ""}${formatQty(openingDetail?.summary.system_correction_qty || 0)}`} hint={`${formatMoney(openingDetail?.summary.system_correction_retail_value || 0)} RON`} icon={<SlidersHorizontal size={18} />} tone={n(openingDetail?.summary.system_correction_qty) < 0 ? "red" : n(openingDetail?.summary.system_correction_qty) > 0 ? "green" : "neutral"} />
               <StatCard label="Leltárérték" value={`${formatMoney(openingDetail?.summary.counted_retail_value ?? activeStats.countedSellValue)} RON`} hint={openingDetail?.summary.book_expected_retail_value === null || openingDetail?.summary.book_expected_retail_value === undefined ? "Aktuális listaáron" : `Könyv szerint: ${formatMoney(openingDetail.summary.book_expected_retail_value)} RON`} icon={<FileText size={18} />} tone="blue" />
             </div>
+
+            {currentInventoryMode === "standard" ? (
+              <div className="mx-4 mb-4 grid gap-2 rounded-2xl border border-[#7bd7d4]/28 bg-[#254955]/45 px-4 py-3 text-xs leading-relaxed text-white/88 md:grid-cols-[1fr_auto] md:items-center">
+                <div>
+                  <p className="mb-1 text-sm text-[#b8f7f4]">Rendes leltár • éles készlet védve</p>
+                  A vonalkódos számlálás külön adatbázisszerkezetbe mentődik. Az üzlet közben tovább árulhat; a hitelbe elvitt ruha eladásként már nincs a polcon, a későbbi befizetés nem új készletmozgás. A nem számolt termék NEM nulla darab.
+                  {n(openingDetail?.summary.movement_during_count_lines) > 0 ? <p className="mt-2 text-red-200">Figyelem: {formatQty(openingDetail?.summary.movement_during_count_lines)} terméknél mozgás történt a többszöri számlálás közben. Nyisd újra a leltárt, ürítsd az érintett terméksor számlálását és számold újra a darabokat!</p> : null}
+                </div>
+                <div className="rounded-xl border border-white/14 bg-[#263246] px-3 py-2 text-center">
+                  <p className="text-[10px] text-white/50">Még nem számolt</p>
+                  <p className="text-xl tabular-nums text-white">{formatQty(Math.max(0, n(openingDetail?.summary.line_count) - n(openingDetail?.summary.counted_lines)))}</p>
+                </div>
+              </div>
+            ) : null}
 
             {canEditActive && currentInventoryMode === "recovery" ? (
               <div className="mx-4 mb-4 rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/12 px-4 py-3 text-sm text-white/82">
@@ -3052,7 +3059,7 @@ export default function AllInInventory() {
                 ))}
               </div>
               <div className="flex flex-wrap gap-2">
-                <button className={btnSoft} type="button" onClick={setVisibleToExpected} disabled={!canEditActive || currentInventoryMode === "recovery"} title={currentInventoryMode === "recovery" ? "Helyreállító leltárnál nem töltjük ki automatikusan a talált mennyiséget." : undefined}>Látható sorok = rendszer</button>
+                <button className={btnSoft} type="button" disabled title="Fizikai leltárban tilos a rendszer szerinti mennyiséget valós számlálás nélkül találtként másolni.">Rendszeradat nem másolható</button>
                 <button className={btnSoft} type="button" onClick={clearVisible} disabled={!canEditActive}>Látható ürítés</button>
               </div>
             </div>
@@ -3093,6 +3100,7 @@ export default function AllInInventory() {
                             <div>
                               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#9ee4e2]">{line.brand_name || "-"} <span className="text-white/50 normal-case">{line.category_name_ro || ""}</span></div>
                               <div className="font-semibold text-white">{productTitle(line)}</div>
+                              {n(line.opening?.movement_during_count_count) > 0 ? <div className="mt-1 inline-flex rounded-lg border border-red-300/35 bg-red-600/20 px-2 py-1 text-[10px] text-red-100"><AlertTriangle size={11} className="mr-1" /> ÚJRA SZÁMOLANDÓ • {formatQty(line.opening?.movement_during_count_count)} közbeni mozgás</div> : null}
                               <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2 py-0.5 text-[11px] text-white/74"><Barcode size={12} /> {line.display_barcode || line.barcode || "-"}</div>
                             </div>
                           </div>
@@ -3271,12 +3279,27 @@ export default function AllInInventory() {
                 </div>
               ) : null}
 
+              {(confirmDialog.kind === "apply" || confirmDialog.kind === "zero") ? (
+                <label className="mx-5 mb-4 block rounded-xl border border-rose-300/30 bg-rose-950/20 p-3 text-xs leading-relaxed text-white/80">
+                  <span className="block">A jóváhagyáshoz írd be: <span className="font-semibold text-white">{confirmDialog.kind === "apply" ? "ALKALMAZOM" : "NULLA"}</span></span>
+                  <input
+                    className={`${input} mt-2 w-full border-rose-300/30`}
+                    value={criticalConfirmText}
+                    onChange={(event) => setCriticalConfirmText(event.target.value.toUpperCase())}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={confirmDialog.kind === "apply" ? "ALKALMAZOM" : "NULLA"}
+                    aria-label="Kritikus leltárművelet megerősítése"
+                  />
+                </label>
+              ) : null}
+
               <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-[#354153] px-5 py-4 sm:flex-row sm:justify-end">
                 <button className={btnSoft} type="button" onClick={() => setConfirmDialog(null)} disabled={saving}>
                   Mégse
                 </button>
-                <button className={confirmDialog.tone === "red" ? redBtn : primaryBtn} type="button" onClick={confirmDialogAction} disabled={saving}>
-                  {confirmDialog.tone === "red" ? <Trash2 size={15} /> : <CheckCircle2 size={15} />} {confirmDialog.confirmLabel}
+                <button className={confirmDialog.tone === "red" ? redBtn : primaryBtn} type="button" onClick={confirmDialogAction} disabled={saving || (confirmDialog.kind === "apply" && criticalConfirmText.trim().toUpperCase() !== "ALKALMAZOM") || (confirmDialog.kind === "zero" && criticalConfirmText.trim().toUpperCase() !== "NULLA")}>
+                  {confirmDialog.kind === "zero" ? <AlertTriangle size={15} /> : confirmDialog.tone === "red" ? <Trash2 size={15} /> : <CheckCircle2 size={15} />} {confirmDialog.confirmLabel}
                 </button>
               </div>
             </div>
