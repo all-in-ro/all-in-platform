@@ -68,6 +68,7 @@ function productRows(detail){
     const price=num(line.sell_price);
     const delta=effective===null?null:effective-current;
     return {
+      variantId: clean(line.variant_id || p.variantId),
       barcode:identifier(p.barcode),title:clean(p.title)||'Névtelen termék',brand:clean(p.brandName),
       category:clean(p.categoryName),subcategory:clean(p.subcategoryName),
       color:identifier(p.colorName||p.colorCode),size:identifier(p.size),sn:identifier(p.snCod),
@@ -95,16 +96,18 @@ function productRows(detail){
 // 8/9 money, 10 negative, 11 positive, 12 warning, 13 success, 14 KPI,
 // 15/16 datetime, 17 muted/note, 18 section header.
 function stylesXml(){
+  // Kért tipográfia: az egész XLSX 9 pontos, sehol nincs félkövér.
+  // A sorok eddigi magassága változatlan marad.
   const fonts=[
-    '<font><sz val="10"/><color rgb="FF243449"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="12"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
-    '<font><sz val="10"/><color rgb="FFDCFDF9"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="11"/><color rgb="FF184D4C"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="10"/><color rgb="FFB91C1C"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="10"/><color rgb="FF047857"/><name val="Aptos"/></font>',
-    '<font><b/><sz val="10"/><color rgb="FF92400E"/><name val="Aptos"/></font>',
-    '<font><sz val="10"/><color rgb="FF64748B"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FF243449"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FFDCFDF9"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FF184D4C"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FFB91C1C"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FF047857"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FF92400E"/><name val="Aptos"/></font>',
+    '<font><sz val="9"/><color rgb="FF64748B"/><name val="Aptos"/></font>',
   ];
   const fills=[
     '<fill><patternFill patternType="none"/></fill>',
@@ -172,37 +175,121 @@ function basicRows(title,head) {
     {row:2,height:26,cells:head.map(([name],i)=>txt(columnName(i),name,3))},
   ];
 }
-function itemSheet(detail,data){
-  const header=HEADER;
-  const rows=basicRows(commonTitle(detail,'LELTÁR'),header);
-  data.forEach((x,i)=>{
+// Vezetői közös nézet: minden kiválasztott kategória AZONOS TERMÉKSORBAN.
+// A hiteles áru KÜLÖN helyen van, a félretett a fizikai bolti készlet RÉSZE.
+// Ez a funkció csak exportadatokat rendez: készletet, eladást, foglalást nem módosít.
+function unifiedRows(detail,sections,custody){
+  const included=new Set(sections);
+  const rows=included.has('inventory')?productRows(detail).map(x=>({...x,creditQty:0,reservedQty:0})):[];
+  const byVariant=new Map();
+  const byBarcode=new Map();
+  const key=(v)=>identifier(v).toLowerCase();
+  const barcodeSize=(v,size)=>`${key(v)}|${key(size)}`;
+  const addIndex=(row)=>{
+    if(row.variantId) byVariant.set(key(row.variantId),row);
+    if(row.barcode){
+      const k=barcodeSize(row.barcode,row.size);
+      const list=byBarcode.get(k)||[];
+      list.push(row);byBarcode.set(k,list);
+    }
+  };
+  rows.forEach(addIndex);
+  const identity=(entry)=>({
+    variantId:clean(entry.variantId),barcode:identifier(entry.barcode),
+    title:clean(entry.productTitle)||'Névtelen termék',brand:clean(entry.brandName),
+    color:identifier(entry.colorName),size:identifier(entry.size),
+    productCode:identifier(entry.productCode),
+  });
+  function findOrAdd(entry){
+    const id=identity(entry);
+    let row=id.variantId?byVariant.get(key(id.variantId)):null;
+    if(!row&&id.barcode){
+      const candidates=byBarcode.get(barcodeSize(id.barcode,id.size))||[];
+      // Vonalkód+méret csak egyértelmű egyezéskor elfogadható.
+      const safe=candidates.filter(x=>!id.variantId||!x.variantId||key(id.variantId)===key(x.variantId));
+      if(safe.length===1) row=safe[0];
+    }
+    if(!row){
+      row={...id,category:'',subcategory:'',sn:'',baseline:null,current:null,reserved:null,
+        physical:null,afterMovement:null,effective:null,delta:null,price:num(entry.unitPrice),
+        state:included.has('inventory')?'KÜLÖN NYILVÁNTARTVA':'',
+        physicalValue:null,effectiveValue:null,deltaValue:null,
+        duringQty:0,duringEvents:0,date:null,scannedBy:'',note:'',creditQty:0,reservedQty:0};
+      rows.push(row);
+      addIndex(row);
+    }
+    return row;
+  }
+  if(included.has('credit')) for(const entry of custody.credit?.items||[]){
+    const count=Math.max(0,nz(entry.outsideQty));
+    if(count>0) findOrAdd(entry).creditQty+=count;
+  }
+  if(included.has('reserved')) for(const entry of custody.reserved?.items||[]){
+    const count=Math.max(0,nz(entry.qty));
+    if(count>0) findOrAdd(entry).reservedQty+=count;
+  }
+  const collator=new Intl.Collator('hu-HU',{numeric:true,sensitivity:'base'});
+  if(!included.has('inventory')) rows.sort((a,b)=>{
+    for(const field of ['brand','title','color','size','barcode']){
+      const x=collator.compare(a[field]||'',b[field]||'');if(x) return x;
+    }
+    return 0;
+  });
+  return rows;
+}
+function itemSheet(detail, data, sections=['inventory'], custody={}){
+  const included=new Set(sections);
+  const extras=[
+    ...(included.has('credit')?[['KLIENSNÉL DB',16,'creditQty']]:[]),
+    ...(included.has('reserved')?[['FÉLRETETT DB',16,'reservedQty']]:[]),
+  ];
+  const head=[...HEADER.slice(0,9),...extras.map(([name,width])=>[name,width]),...HEADER.slice(9)];
+  const allRows=extras.length?unifiedRows(detail,sections,custody):data;
+  const cols=Object.fromEntries(head.map(([name],i)=>[name,columnName(i)]));
+  const rows=basicRows(commonTitle(detail,'LELTÁR'),head);
+  allRows.forEach((x,i)=>{
     const r=FIRST_DATA_ROW+i, alt=i%2===1;
     const t=alt?5:4, n=alt?7:6, m=alt?9:8;
     const stateStyle=x.state==='RENDBEN'?13:
       x.state==='NEM SZÁMOLT'||x.state==='ÚJRASZÁMOLANDÓ'?12:
       x.state==='HIÁNY'?10:x.state==='TÖBBLET'?11:t;
+    const put=(label,value,style,formula)=>({c:cols[label],v:value,s:style,f:formula});
+    const deltaFormula=x.delta===null?null:`${cols['EGYEZTETETT DB']}${r}-${cols['RENDSZER MOST']}${r}`;
     rows.push({row:r,height:23,cells:[
-      numCell('A',i+1,n),txt('B',x.brand,t),txt('C',x.sn,t),
-      txt('D',x.productCode,t),txt('E',x.barcode,t),txt('F',x.title,t),
-      txt('G',x.color,t),txt('H',x.size,t),
-      numCell('I',x.physical,n),numCell('J',x.afterMovement,n),
-      numCell('K',x.effective,n),numCell('L',x.current,n),
-      numCell('M',x.delta,x.delta===null?n:x.delta<0?10:x.delta>0?11:n,
-        x.delta===null?null:`K${r}-L${r}`),numCell('N',x.price,m),
-      txt('O',x.state,stateStyle),
+      put('#',i+1,n),put('MÁRKA',x.brand,t),put('S/N KÓD',x.sn,t),
+      put('TERMÉKKÓD',x.productCode,t),put('VONALKÓD',x.barcode,t),
+      put('TERMÉK',x.title,t),put('SZÍN',x.color,t),put('MÉRET',x.size,t),
+      put('BEOLVASOTT',x.physical,n),
+      ...extras.map(([label,,prop])=>put(label,nz(x[prop]),n)),
+      put('KÖZBENI MOZGÁS',x.afterMovement,n),
+      put('EGYEZTETETT DB',x.effective,n),put('RENDSZER MOST',x.current,n),
+      put('ELTÉRÉS',x.delta,x.delta===null?n:x.delta<0?10:x.delta>0?11:n,deltaFormula),
+      put('ELADÁSI ÁR',x.price,m),put('ÁLLAPOT',x.state,stateStyle),
     ]});
   });
-  const end=FIRST_DATA_ROW+data.length-1, totalRow=Math.max(FIRST_DATA_ROW,end+1);
+  const end=FIRST_DATA_ROW+allRows.length-1;
+  const totalRow=Math.max(FIRST_DATA_ROW,end+1);
+  const totals=[
+    'BEOLVASOTT',...extras.map(([label])=>label),
+    'KÖZBENI MOZGÁS','EGYEZTETETT DB','RENDSZER MOST','ELTÉRÉS',
+  ];
   rows.push({row:totalRow,height:25,cells:[
-    txt('F','ÖSSZESEN',18),
-    numCell('I',sum(data.map(x=>x.physical)),19,data.length?`SUM(I${FIRST_DATA_ROW}:I${end})`:null),
-    numCell('J',sum(data.map(x=>x.afterMovement)),19,data.length?`SUM(J${FIRST_DATA_ROW}:J${end})`:null),
-    numCell('K',sum(data.map(x=>x.effective)),19,data.length?`SUM(K${FIRST_DATA_ROW}:K${end})`:null),
-    numCell('L',sum(data.map(x=>x.current)),19,data.length?`SUM(L${FIRST_DATA_ROW}:L${end})`:null),
-    numCell('M',sum(data.map(x=>x.delta)),19,data.length?`SUM(M${FIRST_DATA_ROW}:M${end})`:null),
+    txt(cols['TERMÉK'],'ÖSSZESEN',18),
+    ...totals.map(label=>{
+      const field=label==='BEOLVASOTT'?'physical':
+        label==='KÖZBENI MOZGÁS'?'afterMovement':
+        label==='EGYEZTETETT DB'?'effective':
+        label==='RENDSZER MOST'?'current':
+        label==='ELTÉRÉS'?'delta':
+        label==='KLIENSNÉL DB'?'creditQty':'reservedQty';
+      const c=cols[label];
+      return numCell(c,sum(allRows.map(x=>x[field])),19,allRows.length?`SUM(${c}${FIRST_DATA_ROW}:${c}${end})`:null);
+    }),
   ]});
-  rows.push({row:totalRow+1,height:23,cells:[txt('A',
-    'BEOLVASOTT: tényleges fizikai számolás • KÖZBENI MOZGÁS: későbbi eladás/visszáru • EGYEZTETETT DB: csak a mozgásokkal korrigált összehasonlítás. A nem számolt sor nem 0.',17)]});
+  const note=extras.length
+    ? 'BEOLVASOTT: csak a boltban fizikailag megszámolt db. KLIENSNÉL: külön, hitelben elvitt db. FÉLRETETT: a bolti darab része, NEM adható hozzá még egyszer. A későbbi mozgás az eredeti beolvasást nem írja át.'
+    : 'BEOLVASOTT: tényleges fizikai számolás • KÖZBENI MOZGÁS: későbbi eladás/visszáru • EGYEZTETETT DB: csak a mozgásokkal korrigált összehasonlítás. A nem számolt sor nem 0.';
+  rows.push({row:totalRow+1,height:23,cells:[txt('A',note,17)]});
   const unknown=(detail.unknown||[]).filter(x=>nz(x.qty)>0 && !x.resolved_at);
   if(unknown.length){
     const start=totalRow+3;
@@ -210,8 +297,43 @@ function itemSheet(detail,data){
     rows.push({row:start+1,height:23,cells:[txt('A','#',3),txt('B','Vonalkód',3),txt('E','DB',3)]});
     unknown.forEach((x,i)=>rows.push({row:start+2+i,height:22,cells:[numCell('A',i+1,i%2?7:6),txt('B',identifier(x.scan_code),i%2?5:4),numCell('E',nz(x.qty),i%2?7:6)]}));
   }
-  const merges=[`A1:O1`,`A${totalRow+1}:O${totalRow+1}`,...(unknown.length?[`A${totalRow+3}:O${totalRow+3}`]:[])];
-  return worksheetXml({columnWidths:header.map(([,w])=>w),rows,merges,autoFilter:`A2:O${Math.max(2,end)}`,freeze:2});
+  const last=columnName(head.length-1);
+  const merges=[`A1:${last}1`,`A${totalRow+1}:${last}${totalRow+1}`,...(unknown.length?[`A${totalRow+3}:${last}${totalRow+3}`]:[])];
+  return worksheetXml({columnWidths:head.map(([,w])=>w),rows,merges,autoFilter:`A2:${last}${Math.max(2,end)}`,freeze:2});
+}
+function unifiedOverviewSheet(detail,sections,custody){
+  // Például „Hiteles + félretett”: nincs kiválasztott fizikai leltár,
+  // így ahhoz nem mutatunk megtévesztő, vélelmezett 0 darabot.
+  const data=unifiedRows(detail,sections,custody);
+  const extras=[
+    ...(sections.includes('credit')?[['KLIENSNÉL DB',16,'creditQty']]:[]),
+    ...(sections.includes('reserved')?[['FÉLRETETT DB',16,'reservedQty']]:[]),
+  ];
+  const head=[['#',6],['MÁRKA',18],['TERMÉKKÓD',32],['VONALKÓD',23],
+    ['TERMÉK',48],['SZÍN',20],['MÉRET',13],...extras.map(([label,width])=>[label,width])];
+  const rows=basicRows(commonTitle(detail,'ÖSSZESÍTÉS'),head);
+  data.forEach((x,i)=>{
+    const alt=i%2===1,t=alt?5:4,n=alt?7:6;
+    rows.push({row:i+FIRST_DATA_ROW,height:23,cells:[
+      numCell('A',i+1,n),txt('B',x.brand,t),txt('C',x.productCode,t),
+      txt('D',x.barcode,t),txt('E',x.title,t),txt('F',x.color,t),txt('G',x.size,t),
+      ...extras.map(([,,prop],index)=>numCell(columnName(7+index),nz(x[prop]),n)),
+    ]});
+  });
+  const end=FIRST_DATA_ROW+data.length-1,total=Math.max(FIRST_DATA_ROW,end+1);
+  rows.push({row:total,height:25,cells:[
+    txt('E','ÖSSZESEN',18),
+    ...extras.map(([,,prop],index)=>{
+      const c=columnName(7+index);
+      return numCell(c,sum(data.map(x=>x[prop])),19,data.length?`SUM(${c}${FIRST_DATA_ROW}:${c}${end})`:null);
+    }),
+  ]});
+  rows.push({row:total+1,height:23,cells:[txt('A',
+    'KLIENSNÉL: nem bolti készlet. FÉLRETETT: a boltban van, de nem eladható. A két szám külön nyilvántartás; ebből a kimutatásból bolti fizikai darabszám nem következtethető.',17)]});
+  const last=columnName(head.length-1);
+  return worksheetXml({columnWidths:head.map(([,w])=>w),rows,
+    merges:[`A1:${last}1`,`A${total+1}:${last}${total+1}`],
+    autoFilter:`A2:${last}${Math.max(2,end)}`,freeze:2});
 }
 const CREDIT_HEADER=[
   ['#',6],['HITEL BIZONYLAT',23],['KLIENS',30],['ELADÁS',18],
@@ -316,7 +438,9 @@ export function buildOpeningInventoryXlsx(detail, options={}){
   const sheets=[];
   if(selected.includes('inventory')) {
     if(!Array.isArray(detail.lines)) throw new Error('Hiányoznak a fizikai leltársorok.');
-    sheets.push({name:'Leltár',xml:itemSheet(detail,productRows(detail))});
+    sheets.push({name:'Leltár',xml:itemSheet(detail,productRows(detail),selected,custody)});
+  } else if(selected.length>1) {
+    sheets.push({name:'Áttekintés',xml:unifiedOverviewSheet(detail,selected,custody)});
   }
   if(selected.includes('credit')) sheets.push({name:'Hiteles',xml:creditSheet(detail,custody)});
   if(selected.includes('reserved')) sheets.push({name:'Félretett',xml:reservedSheet(detail,custody)});
