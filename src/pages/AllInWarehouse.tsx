@@ -2078,6 +2078,20 @@ type VariantHistoryEvent = {
   movement_type?: string | null;
   source_type?: string | null;
   source_id?: string | null;
+  location_id?: string | null;
+  sale_id?: string | null;
+  sale_number?: string | null;
+  sale_customer_name?: string | null;
+  sale_type?: string | null;
+  sale_payment_status?: string | null;
+  sale_actor?: string | null;
+  sale_note?: string | null;
+  return_number?: string | null;
+  return_customer_name?: string | null;
+  return_actor?: string | null;
+  reservation_number?: string | null;
+  reservation_customer_name?: string | null;
+  reservation_relation?: "fulfilled" | "name_time_match_only" | string | null;
   qty_delta?: number | string | null;
   qty_before?: number | string | null;
   qty_after?: number | string | null;
@@ -2117,6 +2131,7 @@ type VariantHistorySummary = {
   availableQty?: number | string | null;
   stockLocationCount?: number | string | null;
   totalIncomingQty?: number | string | null;
+  automaticBridgeQty?: number | string | null;
   totalOutgoingQty?: number | string | null;
   totalTransferredQty?: number | string | null;
   netMovementQty?: number | string | null;
@@ -5561,6 +5576,28 @@ function mergeVariantHistoryPriceEvents(data: VariantHistoryResponse): VariantHi
   return { ...data, events };
 }
 
+function historyIsReservationEvent(event: VariantHistoryEvent) {
+  return event.event_type === "reservation" || event.source_type === "shop_reservation";
+}
+
+function historyIsReservedAudit(event: VariantHistoryEvent) {
+  const raw = event.raw || {};
+  return event.source_type === "stock_table_audit" &&
+    raw.reservedBefore !== undefined && raw.reservedAfter !== undefined &&
+    n(raw.reservedBefore) !== n(raw.reservedAfter) && n(event.qty_delta) === 0;
+}
+
+function historyReservationActionLabel(value: unknown) {
+  const action = String(value || "").trim().toLowerCase();
+  if (action === "created") return "Félretéve";
+  if (action === "released") return "Foglalás feloldva";
+  if (action === "fulfilled") return "Foglalásból kiadva";
+  if (action === "expired") return "Foglalás lejárt";
+  if (action === "cancelled" || action === "canceled") return "Foglalás törölve";
+  if (action === "updated") return "Foglalás módosítva";
+  return "Foglalás esemény";
+}
+
 function historyEventMeta(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const direction = String(event.direction || "").toLowerCase();
@@ -5572,6 +5609,47 @@ function historyEventMeta(event: VariantHistoryEvent) {
   const isInventory = type === "inventory" || source.includes("inventory");
   const isIncoming = type === "incoming" || direction === "in";
   const isOutgoing = type === "outgoing" || direction === "out";
+
+  if (historyIsReservationEvent(event)) {
+    return {
+      label: historyReservationActionLabel(event.raw?.reservationAction),
+      cls: "border-indigo-300/70 bg-indigo-100 text-indigo-800",
+      dot: "bg-indigo-500", stripe: "bg-indigo-400",
+      card: "bg-indigo-50/90 border-indigo-200",
+    };
+  }
+  if (historyIsReservedAudit(event)) {
+    return {
+      label: "Foglalási készletjelzés",
+      cls: "border-indigo-300/70 bg-indigo-100 text-indigo-800",
+      dot: "bg-indigo-500", stripe: "bg-indigo-400",
+      card: "bg-indigo-50/90 border-indigo-200",
+    };
+  }
+  if (reason === "opening_inventory_sale_bridge") {
+    return {
+      label: "Automatikus +készlet",
+      cls: "border-amber-400 bg-amber-100 text-amber-900",
+      dot: "bg-amber-500", stripe: "bg-amber-400",
+      card: "bg-amber-50/90 border-amber-300",
+    };
+  }
+  if (source === "shop_customer_credit_return") {
+    return {
+      label: "Visszahozott termék",
+      cls: "border-emerald-300 bg-emerald-100 text-emerald-800",
+      dot: "bg-emerald-500", stripe: "bg-emerald-400",
+      card: "bg-emerald-50/90 border-emerald-200",
+    };
+  }
+  if (source === "stock_correction" || source === "manual_stock_correction") {
+    return {
+      label: "Készletkorrekció",
+      cls: "border-amber-300/80 bg-amber-100 text-amber-900",
+      dot: "bg-amber-500", stripe: "bg-amber-400",
+      card: "bg-amber-50/90 border-amber-200",
+    };
+  }
 
   if (warehouseIsShopifyMovement(event)) {
     if (reason === "shopify_order_fulfilled") return {
@@ -5645,6 +5723,10 @@ function historySourceLabel(event: VariantHistoryEvent) {
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
   const movement = String(event.movement_type || "").toLowerCase();
+  if (historyIsReservationEvent(event)) return "Névre szóló félretétel";
+  if (historyIsReservedAudit(event)) return "Foglalt mennyiség változott";
+  if (reason === "opening_inventory_sale_bridge") return "Leltár alatti eladási készletnyitás";
+  if (source === "shop_customer_credit_return") return "Hiteles visszáru";
   if (warehouseIsShopifyMovement(event)) {
     return String(event.raw?.reason||"")==="shopify_order_fulfilled" ? "Shopify rendelés teljesítve" :
       `Shopify rendelés: ${firstWarehouseText(event.raw?.shopifyOrderNumber,event.raw?.documentNumber)}`;
@@ -5664,7 +5746,7 @@ function historySourceLabel(event: VariantHistoryEvent) {
 
 function historyEventNote(event: VariantHistoryEvent) {
   if (historyIsPriceEvent(event)) return "Árváltozás rögzítve a termékadatlapon.";
-  const note = firstWarehouseText(event.raw?.title, event.raw?.note);
+  const note = firstWarehouseText(event.raw?.reasonText, event.raw?.title, event.raw?.note);
   const key = normalizeSearch(note);
   if (!note) return "";
   if (
@@ -5730,6 +5812,19 @@ function priceChangeRowsForHistory(event: VariantHistoryEvent): WarehousePriceCh
 }
 
 function HistoryPriceBox({ event, pricesVisible }: { event: VariantHistoryEvent; pricesVisible: boolean }) {
+  if (historyIsReservationEvent(event) || historyIsReservedAudit(event)) {
+    const action = String(event.raw?.reservationAction || "").toLowerCase();
+    const reservationQty = n(event.raw?.reservationQty);
+    return (
+      <div className="rounded-2xl border border-indigo-200 bg-white px-3 py-2 text-[11px] leading-snug text-slate-600 shadow-sm">
+        <div className="text-indigo-700">Foglalási esemény</div>
+        <div className="mt-1 text-slate-800">{historyIsReservedAudit(event)
+          ? `Foglalt: ${historyQty(event.raw?.reservedBefore)} → ${historyQty(event.raw?.reservedAfter)}`
+          : `${historyQty(reservationQty)} • ${historyReservationActionLabel(action)}`}</div>
+        <div className="mt-1 text-[10px] text-slate-500">A teljes készletet nem módosítja.</div>
+      </div>
+    );
+  }
   const isPriceEvent = historyIsPriceEvent(event);
   if (isPriceEvent) {
     const rows = priceChangeRowsForHistory(event);
@@ -5840,7 +5935,8 @@ function VariantHistoryPanel({
 
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
             <HistoryMiniCard tone="green" label="Jelenlegi készlet" value={currentQtyText} hint={`${availableQtyText} elérhető`} />
-            <HistoryMiniCard tone="green" label="Összes bejött" value={historyQty(summary.totalIncomingQty)} hint={`${historyQty(summary.totalPurchasedQty)} importból`} />
+            <HistoryMiniCard tone="green" label="Bejött készlet" value={historyQty(summary.totalIncomingQty)} hint={`${historyQty(summary.totalPurchasedQty)} importból, automatikus készletnyitás nélkül`} />
+            {n(summary.automaticBridgeQty) > 0 ? <HistoryMiniCard tone="gold" label="Leltári készletnyitás" value={historyQty(summary.automaticBridgeQty, true)} hint="Eladás előtti automatikus +db" /> : null}
             <HistoryMiniCard tone="red" label="Összes kiment" value={historyQty(summary.totalOutgoingQty)} hint="Eladás / kivétel / leltár" />
             <HistoryMiniCard tone="blue" label="Átmozgatva" value={historyQty(summary.totalTransferredQty)} hint="Üzletek / raktár között" />
             <HistoryMiniCard tone="gold" label="Utolsó vételár" value={lastBuy} hint="Utolsó bevételezés alapján" />
@@ -5890,6 +5986,15 @@ function VariantHistoryPanel({
                 const shopifyCustomer = firstWarehouseText(event.raw?.shopifyCustomerName);
                 const isPriceEvent = historyIsPriceEvent(event);
                 const isTransferEvent = historyIsTransferEvent(event);
+                const isReservationEvent = historyIsReservationEvent(event);
+                const isReservedAudit = historyIsReservedAudit(event);
+                const isBridge = event.raw?.reason === "opening_inventory_sale_bridge";
+                const saleNumber = firstWarehouseText(event.sale_number, event.raw?.saleNumber);
+                const saleCustomer = firstWarehouseText(event.sale_customer_name, event.raw?.customerName);
+                const returnNumber = firstWarehouseText(event.return_number);
+                const returnCustomer = firstWarehouseText(event.return_customer_name);
+                const reservationNumber = firstWarehouseText(event.raw?.reservationNumber, event.reservation_number);
+                const reservationCustomer = firstWarehouseText(event.raw?.reservationCustomerName, event.reservation_customer_name);
                 const priceChangedFields = priceChangeRowsForHistory(event).map((row) => row.label).join(", ");
                 return (
                   <div key={event.id} className={`relative overflow-hidden rounded-2xl border p-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ${meta.card}`}>
@@ -5904,7 +6009,7 @@ function VariantHistoryPanel({
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}>
                             {isShopifyEvent ? <img src={AIF_SHOPIFY_STOCK_MOVEMENT_ICON} alt="" className="h-4 w-4 object-contain" /> : <span className={`h-2 w-2 rounded-full ${meta.dot}`} />}{meta.label}
                           </span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, !isTransferEvent)}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : isReservationEvent ? historyQty(event.raw?.reservationQty) + " foglalva" : historyQty(event.qty_delta, !isTransferEvent)}</span>
                           <span className="rounded-full border border-slate-200 bg-white/100 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
                         <div className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-600 sm:grid-cols-2">
@@ -5912,6 +6017,16 @@ function VariantHistoryPanel({
                             <>
                               <div className="rounded-xl bg-white px-3 py-2">Módosított mező: <span className="text-slate-800">{priceChangedFields || "Ár"}</span></div>
                               <div className="rounded-xl bg-white px-3 py-2">Művelet: <span className="text-slate-800">Ár módosítás</span></div>
+                            </>
+                          ) : isReservationEvent ? (
+                            <>
+                              <div className="rounded-xl bg-white px-3 py-2">Hely: <span className="text-slate-800">{transferText}</span></div>
+                              <div className="rounded-xl bg-white px-3 py-2">Félretett mennyiség: <span className="text-slate-800">{historyQty(event.raw?.reservationQty)}</span></div>
+                            </>
+                          ) : isReservedAudit ? (
+                            <>
+                              <div className="rounded-xl bg-white px-3 py-2">Hely: <span className="text-slate-800">{transferText}</span></div>
+                              <div className="rounded-xl bg-white px-3 py-2">Foglalt: <span className="text-slate-800">{historyQty(event.raw?.reservedBefore)} → {historyQty(event.raw?.reservedAfter)}</span></div>
                             </>
                           ) : isTransferEvent ? (
                             <>
@@ -5924,6 +6039,33 @@ function VariantHistoryPanel({
                               <div className="rounded-xl bg-white px-3 py-2">Előtte / utána: <span className="text-slate-800">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
                             </>
                           )}
+                          {reservationNumber ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Foglalás: </span><span className="text-slate-900">{reservationNumber}</span></div>
+                          ) : null}
+                          {reservationCustomer ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Félretéve: </span><span className="text-slate-900">{reservationCustomer}</span></div>
+                          ) : null}
+                          {saleNumber ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Eladás: </span><span className="text-slate-900">{saleNumber}</span></div>
+                          ) : null}
+                          {saleCustomer && !isReservationEvent ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Vevő: </span><span className="text-slate-900">{saleCustomer}</span></div>
+                          ) : null}
+                          {event.sale_type === "credit" ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Eladás típusa: </span><span className="text-slate-900">Hiteles elvitel</span></div>
+                          ) : null}
+                          {returnNumber ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Visszáru: </span><span className="text-slate-900">{returnNumber}</span></div>
+                          ) : null}
+                          {returnCustomer ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Visszahozta: </span><span className="text-slate-900">{returnCustomer}</span></div>
+                          ) : null}
+                          {event.raw?.fulfilledSaleId && isReservationEvent ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Kiadás eladásazonosítója: </span><span className="break-all text-slate-900">{String(event.raw.fulfilledSaleId)}</span></div>
+                          ) : null}
+                          {event.actor && !["stock-audit", "system"].includes(String(event.actor).toLowerCase()) ? (
+                            <div className="rounded-xl bg-white px-3 py-2"><span className="text-slate-500">Rögzítette: </span><span className="text-slate-900">{warehouseActorDisplay(event.actor)}</span></div>
+                          ) : null}
                           {isShopifyEvent && shopifyAvizNumber ? (
                             <div className="rounded-xl bg-white px-3 py-2 text-slate-800"><span className="text-slate-500">Shopify Aviz: </span>{shopifyAvizNumber}</div>
                           ) : null}
@@ -5938,6 +6080,12 @@ function VariantHistoryPanel({
                           {event.reception_date ? <div className="rounded-xl bg-white px-3 py-2">Receptió: <span className="text-slate-800">{dateShort(event.reception_date)}</span></div> : null}
                           {file ? <div className="truncate rounded-xl bg-white px-3 py-2 text-slate-500" title={file}>{file}</div> : null}
                         </div>
+                        {event.reservation_relation === "name_time_match_only" ? (
+                          <p className="mt-1.5 rounded-xl border border-amber-200 bg-white/80 px-3 py-2 text-[11px] text-amber-900">Név és időpont alapján egyező foglalás, de az eladás nem a foglaláson keresztül történt.</p>
+                        ) : null}
+                        {isBridge ? (
+                          <p className="mt-1.5 rounded-xl border border-amber-300 bg-white/80 px-3 py-2 text-[11px] text-amber-900">Automatikus készletnyitás eladás előtt. Nem új bevételezés, ellenőrizendő készletmozgás.</p>
+                        ) : null}
                         {note ? <p className="mt-1.5 rounded-xl bg-white/75 px-3 py-2 text-xs leading-snug text-slate-500">{note}</p> : null}
                       </div>
                       <HistoryPriceBox event={event} pricesVisible={pricesVisible} />
