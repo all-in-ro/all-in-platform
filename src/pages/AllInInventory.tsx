@@ -473,6 +473,18 @@ type MessageTone = "info" | "error" | "success";
 type CountStatus = "draft" | "counting" | "review" | "committed" | "cancelled";
 type LineFilter = "all" | "uncounted" | "ok" | "missing" | "extra";
 type PrintMode = "sheet" | "result";
+type InventoryExportSection = "inventory" | "credit" | "reserved";
+type InventoryExportChoice = "inventory" | "credit" | "reserved" | "inventory,credit" | "inventory,reserved" | "credit,reserved" | "inventory,credit,reserved";
+type InventoryExportDialogState = { id: string; format: "excel" | "pdf"; pdfMode: PrintMode };
+const INVENTORY_EXPORT_CHOICES: Array<{ value: InventoryExportChoice; label: string; subtitle: string }> = [
+  { value: "inventory", label: "Csak leltár", subtitle: "Fizikai beolvasás, közbeni mozgások, eltérések" },
+  { value: "credit", label: "Csak hiteles", subtitle: "Kliensnél lévő, még nyitott hiteles tételek" },
+  { value: "reserved", label: "Csak félretett", subtitle: "Aktív, boltban félretett termékek" },
+  { value: "inventory,credit", label: "Leltár + hiteles", subtitle: "A bolti állomány és a kliensnél lévő áru külön" },
+  { value: "inventory,reserved", label: "Leltár + félretett", subtitle: "A foglalt áru külön listán, duplázás nélkül" },
+  { value: "credit,reserved", label: "Hiteles + félretett", subtitle: "A két elkülönített állomány, bolti leltár nélkül" },
+  { value: "inventory,credit,reserved", label: "Mindhárom együtt", subtitle: "Teljes, külön bontott vezetői áttekintés" },
+];
 type InventoryMode = "standard" | "recovery";
 type OpeningInventoryStatus = "draft" | "counting" | "review" | "applied" | "cancelled";
 
@@ -697,6 +709,9 @@ type InventoryCountSummary = {
   counted_lines?: number | string | null;
   expected_qty?: number | string | null;
   counted_qty?: number | string | null;
+  physical_counted_qty?: number | string | null;
+  movement_after_count_qty?: number | string | null;
+  effective_counted_qty?: number | string | null;
   diff_qty?: number | string | null;
   missing_qty?: number | string | null;
   extra_qty?: number | string | null;
@@ -938,7 +953,9 @@ function draftCountedValue(draft?: DraftLine) {
 function lineDiff(line: InventoryCountLine, drafts: Record<string, DraftLine>) {
   const counted = draftCountedValue(drafts[line.id]);
   if (counted === null) return null;
-  return counted - n(line.expected_qty);
+  // A beolvasás rögzített fizikai darabszám. Az utána történt visszáru
+  // vagy eladás csak az ÖSSZEHASONLÍTÁS számába kerül, nem az inputba.
+  return Math.max(0, counted + n(line.movement_after_count_qty)) - n(line.expected_qty);
 }
 
 function barcodeKey(value: unknown) {
@@ -1039,7 +1056,10 @@ function mapOpeningLine(line: OpeningInventoryLine, session: OpeningInventorySes
     variant_id: String(line.variant_id || product.variantId || ""),
     expected_qty: expected,
     expected_reserved_qty: line.system_reserved_start ?? 0,
-    counted_qty: counted,
+    counted_qty: line.physical_counted_qty === null || line.physical_counted_qty === undefined ? counted : n(line.physical_counted_qty),
+    physical_counted_qty: line.physical_counted_qty ?? null,
+    movement_after_count_qty: line.movement_after_count_qty ?? 0,
+    effective_counted_qty: counted,
     diff_qty: counted === null ? null : counted - expected,
     missing_qty: line.definite_missing_qty ?? null,
     extra_qty: line.untracked_qty ?? null,
@@ -1099,36 +1119,68 @@ function safeFilePart(value: unknown) {
     .slice(0, 90) || "leltar";
 }
 
-function printOpeningReport(detail: OpeningInventoryDetail) {
-  const session = detail.session;
-  const summary = detail.summary;
-  const mode = openingMode(session);
-  const expectedLabel = mode === "recovery" ? "Igazolható minimum" : "Elvárt";
-  const missingLabel = mode === "recovery" ? "Biztos hiány" : "Hiány";
-  const extraLabel = mode === "recovery" ? "Régi / plusz" : "Többlet";
-  const rows = (detail.lines || []).map((line, index) => `<tr>
-    <td class="c">${index + 1}</td>
-    <td><b>${escapeHtml(line.product.title)}</b><br><span>${escapeHtml([line.product.brandName, line.product.colorName, line.product.size].filter(Boolean).join(" • "))}</span><br><span>${escapeHtml(line.product.barcode || line.product.productCode || "")}</span></td>
-    <td class="r">${formatQty(line.current_system_qty ?? line.system_qty_start)}</td>
-    <td class="r">${formatQty(line.known_min_qty)}</td>
-    <td class="r">${line.counted_qty === null || line.counted_qty === undefined ? "–" : formatQty(line.counted_qty)}</td>
-    <td class="r neg">${line.definite_missing_qty === null || line.definite_missing_qty === undefined ? "–" : formatQty(line.definite_missing_qty)}</td>
-    <td class="r pos">${line.untracked_qty === null || line.untracked_qty === undefined ? "–" : formatQty(line.untracked_qty)}</td>
-    <td class="r">${line.system_correction_qty === null || line.system_correction_qty === undefined ? "–" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${formatQty(line.system_correction_qty)}`}</td>
-    <td>${escapeHtml(openingLineStatusLabel(line, mode))}</td>
-  </tr>`).join("");
-  const target = window.open("", "_blank", "width=1200,height=850");
-  if (!target) return;
-  target.document.open();
-  target.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(session.code)}</title><style>
-    @page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;color:#111827;margin:0;font-size:10px}header{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111827;padding-bottom:8px;margin-bottom:10px}h1{font-size:18px;margin:0 0 3px}.muted,span{color:#6b7280;font-size:9px}.sum{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:10px}.sum div{border:1px solid #d1d5db;border-radius:6px;padding:6px}.sum b{display:block;font-size:12px;margin-top:3px}table{width:100%;border-collapse:collapse}th{background:#1f2937;color:#fff;padding:5px;border:1px solid #1f2937;text-align:left}td{padding:4px;border:1px solid #d1d5db;vertical-align:top}.r{text-align:right}.c{text-align:center}.neg{color:#b91c1c}.pos{color:#047857}footer{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:18px}footer div{border-top:1px solid #111827;padding-top:5px;text-align:center}</style></head><body>
-    <header><div><h1>Üzleti leltár • ${escapeHtml(session.code)}</h1><div class="muted">${escapeHtml(session.location_name || session.location?.name || "")} • ${escapeHtml(openingModeLabel(mode))} • ${escapeHtml(formatDateTime(session.started_at || session.created_at))}</div></div><div class="muted">${escapeHtml(statusLabel(openingStatusToCountStatus(session.status)))}</div></header>
-    <div class="sum"><div>Leltár szerint<b>${formatQty(summary.counted_qty)} db</b></div><div>${escapeHtml(expectedLabel)}<b>${formatQty(summary.known_min_qty)} db</b></div><div>${escapeHtml(missingLabel)}<b>${formatQty(summary.definite_missing_qty)} db</b></div><div>${escapeHtml(extraLabel)}<b>${formatQty(summary.untracked_qty)} db</b></div><div>Korrekció<b>${n(summary.system_correction_qty)>0?"+":""}${formatQty(summary.system_correction_qty)} db</b></div><div>Leltárérték<b>${formatMoney(summary.counted_retail_value)} RON</b></div></div>
-    <table><thead><tr><th>#</th><th>Termék</th><th class="r">Rendszer most</th><th class="r">${escapeHtml(expectedLabel)}</th><th class="r">Leltár</th><th class="r">${escapeHtml(missingLabel)}</th><th class="r">${escapeHtml(extraLabel)}</th><th class="r">Korrekció</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
-    <footer><div>Számolta</div><div>Ellenőrizte</div><div>Jóváhagyta</div></footer><script>window.onload=()=>{window.focus();setTimeout(()=>window.print(),250)}</script></body></html>`);
-  target.document.close();
-}
+type InventoryCreditExportRow = {
+  saleNumber: string; customerName: string; soldAt?: string | null;
+  productTitle: string; barcode?: string; size?: string;
+  originalQty: number; returnedQty: number; outsideQty: number;
+  unitPrice: number; saleBalanceDisplay?: number | null; note?: string;
+};
+type InventoryReservedExportRow = {
+  reservationNumber: string; customerName: string; expiresOn?: string | null;
+  productTitle: string; barcode?: string; size?: string; qty: number;
+  unitPrice: number; createdBy?: string; stockQty?: number;
+  stockReservedQty?: number; note?: string;
+};
+type InventoryExportData = {
+  ok: true;
+  sections: InventoryExportSection[];
+  session: OpeningInventorySession;
+  summary: OpeningInventorySummary | null;
+  lines: OpeningInventoryLine[];
+  unknown: OpeningUnknownScan[];
+  custody: {
+    snapshotAt?: string;
+    credit: { items: InventoryCreditExportRow[]; saleCount: number; totalDue: number; totalQtyOutside: number; warnings: string[] };
+    reserved: { items: InventoryReservedExportRow[]; reservationCount: number; totalQty: number; warnings: string[] };
+  };
+};
 
+/** PDF nézet: a fizikai leltár, a hiteles és a foglalt tételek nem összevont számok. */
+function printInventoryExportReport(target: Window, data: InventoryExportData, mode: PrintMode) {
+  const sections = data.sections || [];
+  const money = (v: unknown) => `${formatMoney(v)} RON`;
+  const trs: string[] = [];
+  const sheet = mode === "sheet";
+  const header = (cells: string[]) => `<thead><tr>${cells.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
+  const td = (v: unknown, cls = "") => `<td class="${cls}">${escapeHtml(v ?? "")}</td>`;
+  if (sections.includes("inventory")) {
+    const rows = (data.lines || []).map((line, i) => {
+      const p = line.product || ({} as OpeningInventoryProduct);
+      const physical = line.physical_counted_qty === null || line.physical_counted_qty === undefined ? "–" : formatQty(line.physical_counted_qty);
+      const movement = line.physical_counted_qty === null || line.physical_counted_qty === undefined ? "–" : `${n(line.movement_after_count_qty) > 0 ? "+" : ""}${formatQty(line.movement_after_count_qty)}`;
+      const effective = line.counted_qty === null || line.counted_qty === undefined ? "–" : formatQty(line.counted_qty);
+      const current = formatQty(line.current_system_qty ?? line.system_qty_start);
+      const delta = line.system_correction_qty === null || line.system_correction_qty === undefined ? "–" : `${n(line.system_correction_qty) > 0 ? "+" : ""}${formatQty(line.system_correction_qty)}`;
+      return `<tr>${td(i + 1,"num")}${td(p.title,"wide")}${td(p.barcode || p.productCode || "")}${td(p.colorName || p.colorCode || "")}${td(p.size || "")}${td(sheet ? "" : physical,"num")}${td(sheet ? "" : movement,"num")}${td(sheet ? "" : effective,"num")}${td(current,"num")}${td(sheet ? "" : delta,"num")}</tr>`;
+    });
+    trs.push(`<section><h2>1. Fizikai leltár</h2><p>A beolvasott mennyiség nem változik utólagos visszárutól. A mozgás külön oszlop.</p><table>${header(["#","Termék","Vonalkód","Szín","Méret","Beolvasott","Mozgás utána","Egyeztetett","Rendszer most","Eltérés"])}<tbody>${rows.join("")}</tbody></table></section>`);
+  }
+  if (sections.includes("credit")) {
+    const c = data.custody?.credit || { items: [], saleCount: 0, totalDue: 0, totalQtyOutside: 0, warnings: [] };
+    trs.push(`<section><h2>2. Hiteles tételek • jelenleg nyitott</h2><p>${c.saleCount} bizonylat • ${formatQty(c.totalQtyOutside)} db kliensnél • tényleges tartozás: ${money(c.totalDue)}. NEM bolti polckészlet.</p><table>${header(["#","Bizonylat","Kliens","Termék","Vonalkód","Méret","Elvitt","Visszahozva","Kliensnél","Bizonylat tartozás"])}<tbody>${(c.items||[]).map((x,i)=>`<tr>${td(i+1,"num")}${td(x.saleNumber)}${td(x.customerName)}${td(x.productTitle,"wide")}${td(x.barcode||"")}${td(x.size||"")}${td(x.originalQty,"num")}${td(x.returnedQty,"num")}${td(x.outsideQty,"num")}${td(x.saleBalanceDisplay===null||x.saleBalanceDisplay===undefined?"":money(x.saleBalanceDisplay),"num")}</tr>`).join("")}</tbody></table></section>`);
+  }
+  if (sections.includes("reserved")) {
+    const r = data.custody?.reserved || { items: [], reservationCount: 0, totalQty: 0, warnings: [] };
+    trs.push(`<section><h2>3. Félretett tételek • aktív</h2><p>${r.reservationCount} foglalás • ${formatQty(r.totalQty)} db. A bolt fizikai készletében már szerepelnek, ezért nem adhatók hozzá újra.</p><table>${header(["#","Foglalás","Kliens","Termék","Vonalkód","Méret","Foglalt db","Lejárat","Rögzítő"])}<tbody>${(r.items||[]).map((x,i)=>`<tr>${td(i+1,"num")}${td(x.reservationNumber)}${td(x.customerName)}${td(x.productTitle,"wide")}${td(x.barcode||"")}${td(x.size||"")}${td(x.qty,"num")}${td(String(x.expiresOn||"").slice(0,10))}${td(x.createdBy||"")}</tr>`).join("")}</tbody></table></section>`);
+  }
+  const warnings = [...(data.custody?.credit?.warnings || []), ...(data.custody?.reserved?.warnings || [])];
+  if (warnings.length) trs.push(`<section><h2>Egyeztetendő adat</h2>${warnings.map(x=>`<p class="warning">${escapeHtml(x)}</p>`).join("")}</section>`);
+  const caption = `${data.session.location_name || data.session.location?.name || "Üzlet"} · ${data.session.code}`;
+  const html = `<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>${escapeHtml(caption)} • export</title><style>
+    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font:10px Arial,sans-serif;color:#233246;margin:0}h1{font-weight:600;font-size:16px;margin:0 0 4px}h2{font-size:12px;font-weight:600;color:#116a69;margin:0 0 4px}header{border-bottom:2px solid #108d8b;margin-bottom:12px;padding-bottom:8px}header p{color:#64748b;margin:0}section{break-before:page;margin-bottom:14px}section:first-of-type{break-before:auto}section>p{margin:5px 0 9px;color:#64748b;font-size:9px}table{width:100%;border-collapse:collapse;table-layout:fixed}th{font-size:9px;background:#354153;color:white;text-align:left;padding:5px 4px;border:1px solid #354153}td{font-size:9px;vertical-align:top;padding:5px 4px;border-bottom:1px solid #dfe5ea;overflow-wrap:anywhere}tr:nth-child(2n){background:#f5f8f9}tr{break-inside:avoid}thead{display:table-header-group}.num{text-align:right;white-space:nowrap}.wide{width:26%;}.warning{color:#a61223!important}footer{margin-top:10px;color:#64748b;font-size:9px}
+    </style></head><body><header><h1>${escapeHtml(caption)}</h1><p>${escapeHtml(sections.join(' + '))} · exportálva: ${escapeHtml(formatDateTime(data.custody?.snapshotAt || new Date().toISOString()))}</p></header>${trs.join("")}<footer>AllInFashion • A hiteles és félretett állományok külön kimutatások, nem összeadható bolti polckészletek.</footer><script>window.onload=()=>{window.focus();setTimeout(()=>window.print(),300);};</script></body></html>`;
+  target.document.open(); target.document.write(html); target.document.close();
+}
 
 function StatCard({
   label,
@@ -1293,6 +1345,9 @@ export default function AllInInventory() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: MessageTone; text: string } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
+  const [exportDialog, setExportDialog] = useState<InventoryExportDialogState | null>(null);
+  const [exportChoice, setExportChoice] = useState<InventoryExportChoice>("inventory");
+  const [exportBusy, setExportBusy] = useState(false);
   const [criticalConfirmText, setCriticalConfirmText] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualBarcode, setManualBarcode] = useState("");
@@ -1416,6 +1471,13 @@ export default function AllInInventory() {
     const handle = window.setTimeout(() => void loadStockAndCounts(location, search), 180);
     return () => window.clearTimeout(handle);
   }, [location, search, loadStockAndCounts]);
+
+  useEffect(() => {
+    if (!exportDialog || exportBusy) return;
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setExportDialog(null); };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [exportDialog, exportBusy]);
 
   useEffect(() => {
     if (!confirmDialog) return;
@@ -1600,6 +1662,8 @@ export default function AllInInventory() {
       const sell = n(line.sell_price);
       expectedSellValue += expectedQty * sell;
       if (countedValue !== null) {
+        // A backend counted_qty mezője már tartalmazza a számlálás UTÁNI
+        // naplózott mozgásokat. Ismét hozzáadni dupla készletet okozna.
         countedSellValue += countedValue * sell;
         countedLines++;
         counted += countedValue;
@@ -2046,50 +2110,57 @@ export default function AllInInventory() {
     window.location.hash = "openinginventoryshop";
   }
 
-  async function downloadArchiveExcel(id: string) {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const response = await fetch(
-        `${AIF_BASE}/opening-inventory/admin/sessions/${encodeURIComponent(id)}/export.xlsx`,
-        { credentials: "include", cache: "no-store" },
-      );
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.error || `A leltár Excel-letöltése nem sikerült (HTTP ${response.status}).`);
-      }
-      const buffer = await response.arrayBuffer();
-      const first = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
-      if (buffer.byteLength < 100 || first[0] !== 0x50 || first[1] !== 0x4B || first[2] !== 0x03 || first[3] !== 0x04) {
-        throw new Error("Nem Excel-fájl érkezett a szervertől. A letöltés megszakítva.");
-      }
-      const suggested = response.headers.get("content-disposition")?.match(/filename="([^"\/]+\.xlsx)"/i)?.[1];
-      const filename = suggested || `AllInFashion_Leltar_${safeFilePart(id)}.xlsx`;
-      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) {
-      setMessage({ tone: "error", text: e instanceof Error ? e.message : "Az XLSX nem készíthető el." });
-    } finally {
-      setSaving(false);
-    }
+  function openExportDialog(id: string, format: "excel" | "pdf", pdfMode: PrintMode = "result") {
+    if (saving || exportBusy) return;
+    setExportChoice("inventory");
+    setExportDialog({ id, format, pdfMode });
   }
 
-  async function printArchivePdf(id: string) {
-    setSaving(true);
+  async function submitInventoryExport() {
+    const dialog = exportDialog;
+    if (!dialog || exportBusy) return;
+    const params = new URLSearchParams({ sections: exportChoice });
+    // Böngészők az aszinkron window.open-t gyakran blokkolják.
+    // A PDF nyomtatóablakot ezért közvetlen felhasználói kattintásra nyitjuk.
+    const printWindow = dialog.format === "pdf" ? window.open("", "_blank", "width=1250,height=870") : null;
+    if (dialog.format === "pdf" && !printWindow) {
+      setMessage({ tone: "error", text: "A böngésző letiltotta a PDF-ablakot. Engedélyezd az új ablakokat ehhez az oldalhoz." });
+      return;
+    }
+    if (printWindow) {
+      printWindow.document.write('<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px Arial;padding:32px">Leltári PDF előkészítése…</body></html>');
+      printWindow.document.close();
+    }
+    setExportBusy(true);
     try {
-      const raw = await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(id)}`);
-      printOpeningReport(raw);
-    } catch (e) {
-      setMessage({ tone: "error", text: e instanceof Error ? e.message : "A PDF nézet nem készíthető el." });
+      if (dialog.format === "excel") {
+        const response = await fetch(`${AIF_BASE}/opening-inventory/admin/sessions/${encodeURIComponent(dialog.id)}/export.xlsx?${params.toString()}`, { credentials:"include", cache:"no-store" });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.error || `Az Excel exportálása sikertelen (HTTP ${response.status}).`);
+        }
+        const bytes = await response.arrayBuffer();
+        const sig = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4));
+        if (bytes.byteLength < 100 || sig[0]!==0x50 || sig[1]!==0x4B || sig[2]!==0x03 || sig[3]!==0x04) throw new Error("Érvénytelen Excel-tartalom érkezett.");
+        const suggested = response.headers.get("content-disposition")?.match(/filename="([^"\/]+\.xlsx)"/i)?.[1];
+        const fileName = suggested || `AllInFashion_Leltar_${safeFilePart(dialog.id)}.xlsx`;
+        const file = new Blob([bytes], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+        const href = URL.createObjectURL(file);
+        const link = document.createElement("a");
+        link.href=href;link.download=fileName;document.body.appendChild(link);link.click();link.remove();
+        window.setTimeout(()=>URL.revokeObjectURL(href),1000);
+      } else {
+        const payload = await fetchAifJSON<InventoryExportData>(`/opening-inventory/admin/sessions/${encodeURIComponent(dialog.id)}/export-data?${params.toString()}`);
+        if (!printWindow) throw new Error("A PDF ablak nem érhető el.");
+        printInventoryExportReport(printWindow, payload, dialog.pdfMode);
+      }
+      setExportDialog(null);
+      setMessage({tone:"success",text:"Az export összeállt. A három állomány külön szerepel, készletduplázás nélkül."});
+    } catch (error) {
+      if (printWindow && !printWindow.closed) printWindow.close();
+      setMessage({tone:"error",text:error instanceof Error?error.message:"Nem sikerült az exportálás."});
     } finally {
-      setSaving(false);
+      setExportBusy(false);
     }
   }
 
@@ -2476,7 +2547,7 @@ export default function AllInInventory() {
             {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés</button> : activeReview ? <button className={btnSoft} type="button" onClick={requestReopen}><RotateCcw size={15} /> Újranyitás</button> : <button className={btnSoft} type="button" disabled>Lezárt</button>}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
-            <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
+            <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
             {canEditActive && currentInventoryMode === "recovery"
               ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre</button>
               : canEditActive
@@ -2628,73 +2699,6 @@ export default function AllInInventory() {
       return next;
     });
     setDirtyLineIds((prev) => Array.from(new Set([...prev, ...ids])));
-  }
-
-  function printPdf(mode: PrintMode) {
-    if (!active) return;
-    const rows = filteredLines.length ? filteredLines : active.lines;
-    const locationName = active.item.location_name || currentLocation?.name || "-";
-    const isResult = mode === "result";
-    const titleText = isResult ? `Leltár eredmény - ${active.item.code}` : `Leltárív - ${active.item.code}`;
-    const subtitle = `${locationName} · ${formatDateTime(active.item.started_at || active.item.created_at)}`;
-    const tableRows = rows.map((line, index) => {
-      const draft = drafts[line.id];
-      const counted = draftCountedValue(draft);
-      const diff = counted === null ? null : counted - n(line.expected_qty);
-      const image = getImageSrc(line);
-      const badge = diff === null ? "" : diff < 0 ? "HIÁNY" : diff > 0 ? "TÖBBLET" : "OK";
-      const badgeClass = diff === null ? "" : diff < 0 ? "red" : diff > 0 ? "green" : "ok";
-      return `<tr>
-        <td class="center">${index + 1}</td>
-        <td>${image ? `<img src="${escapeHtml(image)}" />` : ""}</td>
-        <td><strong>${escapeHtml(productTitle(line))}</strong><br/><span>${escapeHtml(line.brand_name || "")} ${escapeHtml(line.category_name_ro || "")}</span><br/><span>Vonalkód: ${escapeHtml(line.display_barcode || line.barcode || "-")}</span></td>
-        <td>${escapeHtml(line.color_name || line.color_code || "-")}</td>
-        <td class="center">${escapeHtml(line.size || "-")}</td>
-        ${isResult ? `<td class="right">${formatQty(line.expected_qty)}</td><td class="right">${counted === null ? "-" : formatQty(counted)}</td><td class="right ${diff && diff < 0 ? "neg" : diff && diff > 0 ? "pos" : ""}">${diff === null ? "-" : (diff > 0 ? "+" : "") + formatQty(diff)}</td><td><span class="badge ${badgeClass}">${badge}</span></td><td class="right">${formatMoney((diff || 0) * n(line.sell_price))}</td>` : `<td class="manual"></td><td class="check"></td><td class="note"></td>`}
-      </tr>`;
-    }).join("");
-    const summary = isResult ? `<div class="summary">
-      <div><b>Rendszer szerint:</b> ${formatQty(activeStats.expected)} db</div>
-      <div><b>Számolt:</b> ${formatQty(activeStats.counted)} db</div>
-      <div><b>Hiány:</b> ${formatQty(activeStats.missing)} db</div>
-      <div><b>Többlet:</b> ${formatQty(activeStats.extra)} db</div>
-      <div><b>Eltérés eladási értéken:</b> ${formatMoney(activeStats.diffSell)} RON</div>
-    </div>` : `<div class="summary"><div><b>Sorok:</b> ${rows.length}</div><div><b>Helyszín:</b> ${escapeHtml(locationName)}</div><div><b>Megjegyzés:</b> ${escapeHtml(active.item.note || "")}</div></div>`;
-
-    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(titleText)}</title><style>
-      @page { size: A4; margin: 12mm; }
-      body { font-family: Arial, sans-serif; color: #111827; margin: 0; }
-      header { display:flex; justify-content:space-between; gap:16px; border-bottom:2px solid #111827; padding-bottom:10px; margin-bottom:12px; }
-      h1 { font-size:20px; margin:0 0 4px; }
-      .muted, span { color:#6b7280; font-size:11px; }
-      .summary { display:grid; grid-template-columns: repeat(5, 1fr); gap:8px; margin: 10px 0 12px; font-size:11px; }
-      .summary div { border:1px solid #d1d5db; border-radius:8px; padding:8px; }
-      table { width:100%; border-collapse: collapse; font-size:10px; }
-      th { background:#1f2937; color:white; text-align:left; padding:7px; border:1px solid #1f2937; }
-      td { padding:6px; border:1px solid #d1d5db; vertical-align:middle; }
-      img { width:34px; height:42px; object-fit:contain; border:1px solid #d1d5db; border-radius:6px; }
-      .center { text-align:center; } .right { text-align:right; }
-      .manual { height:28px; width:62px; } .check { width:48px; } .note { width:120px; }
-      .badge { display:inline-block; min-width:45px; border-radius:999px; padding:3px 7px; color:white; font-weight:700; text-align:center; }
-      .badge.red { background:#dc2626; } .badge.green { background:#2a8d8b; } .badge.ok { background:#374151; }
-      .neg { color:#dc2626; font-weight:700; } .pos { color:#047857; font-weight:700; }
-      footer { display:grid; grid-template-columns: repeat(3, 1fr); gap:18px; margin-top:20px; font-size:11px; }
-      footer div { border-top:1px solid #111827; padding-top:6px; text-align:center; }
-    </style></head><body>
-      <header><div><h1>${escapeHtml(titleText)}</h1><div class="muted">${escapeHtml(subtitle)}</div></div><div class="muted">Nyomtatva: ${escapeHtml(formatDateTime(new Date().toISOString()))}</div></header>
-      ${summary}
-      <table><thead><tr>
-        <th>#</th><th>Kép</th><th>Termék</th><th>Szín</th><th>Méret</th>
-        ${isResult ? "<th>Rendszer</th><th>Talált</th><th>Eltérés</th><th>Állapot</th><th>Érték RON</th>" : "<th>Talált db</th><th>Pipa</th><th>Megjegyzés</th>"}
-      </tr></thead><tbody>${tableRows}</tbody></table>
-      <footer><div>Számolta</div><div>Ellenőrizte</div><div>Bevezette</div></footer>
-      <script>window.onload = () => { window.focus(); setTimeout(() => window.print(), 250); };</script>
-    </body></html>`;
-    const printWindow = window.open("", "_blank", "width=1100,height=800");
-    if (!printWindow) return;
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
   }
 
   const messageClass = message?.tone === "error" ? "border-red-300/35 bg-red-500/12 text-red-50" : message?.tone === "success" ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/14 text-white" : "border-white/14 bg-white/[0.06] text-white/78";
@@ -2945,8 +2949,8 @@ export default function AllInInventory() {
                       </button>
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
-                        <button className={headerBtnSoft} type="button" onClick={() => void downloadArchiveExcel(count.id)} disabled={saving} title="Egyszerű, egylapos leltár Excel (.xlsx)"><ExportFileIcon kind="excel" compact /> Teljes XLS</button>
-                        <button className={headerBtnSoft} type="button" onClick={() => void printArchivePdf(count.id)} disabled={saving}><ExportFileIcon kind="pdf" compact /> PDF</button>
+                        <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" compact /> Teljes XLS</button>
+                        <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> PDF</button>
                       </div>
                     </div>
                   );
@@ -2980,9 +2984,9 @@ export default function AllInInventory() {
                 <div className="mt-1 text-xs text-white/58">{active.item.location_name} · indítva: {formatDateTime(active.item.started_at || active.item.created_at)}</div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button className={btnSoft} type="button" onClick={() => printPdf("sheet")}><ExportFileIcon kind="pdf" /> Leltárív PDF</button>
-                <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
-                {openingDetail ? <button className={btnSoft} type="button" onClick={() => void downloadArchiveExcel(openingDetail.session.id)} disabled={saving} title="Teljes leltár Excel (.xlsx)"><ExportFileIcon kind="excel" /> Teljes XLS</button> : null}
+                <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "sheet")}><ExportFileIcon kind="pdf" /> Leltárív PDF</button>
+                <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
+                {openingDetail ? <button className={btnSoft} type="button" onClick={() => openExportDialog(openingDetail.session.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" /> Teljes XLS</button> : null}
                 {!activeFinal ? <button className={btnSoft} type="button" onClick={openShopView}><Eye size={15} /> Bolti nézet</button> : null}
                 {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés{dirtyLineIds.length ? ` (${dirtyLineIds.length})` : ""}</button> : null}
                 {canEditActive && currentInventoryMode === "recovery" ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre vezetés</button> : null}
@@ -2996,7 +3000,7 @@ export default function AllInInventory() {
 
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-7">
               <StatCard label={currentInventoryMode === "recovery" ? "Igazolható minimum" : "Rendszer szerint"} value={formatQty(openingDetail?.summary.known_min_qty ?? activeStats.expected)} hint={`${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<ClipboardList size={18} />} tone="blue" />
-              <StatCard label="Leltár szerint most" value={formatQty(openingDetail?.summary.counted_qty ?? activeStats.counted)} hint={`${formatQty(openingDetail?.summary.counted_lines ?? activeStats.countedLines)} / ${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
+              <StatCard label="Leltár most (mozgásokkal)" value={formatQty(openingDetail?.summary.counted_qty ?? activeStats.counted)} hint={`${formatQty(activeStats.physicallyCounted)} db beolvasva • ${formatQty(openingDetail?.summary.counted_lines ?? activeStats.countedLines)} / ${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
               <StatCard
                 label={currentInventoryMode === "recovery" ? "Biztos hiány" : "Hiány"}
                 value={formatQty(openingDetail?.summary.definite_missing_qty ?? activeStats.missing)}
@@ -3260,6 +3264,59 @@ export default function AllInInventory() {
             <div className="grid gap-3 p-4 lg:hidden">{filteredStockRows.map((row) => <div key={`${row.location_id}-${row.variant_id}`} className="rounded-2xl border border-white/14 bg-white/[0.05] p-3"><div className="font-semibold">{productTitle(row)}</div><div className="mt-1 text-xs text-white/60">{row.brand_name || "-"} · {row.color_name || "-"} · {row.size || "-"}</div><div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Készlet</div><b>{formatQty(row.qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Foglalt</div><b>{formatQty(row.reserved_qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Elérhető</div><b>{formatQty(row.available_qty)}</b></div></div></div>)}</div>
           </section>
         )}
+
+        {exportDialog ? createPortal(
+          <div className="fixed inset-0 z-[2200] flex items-center justify-center overflow-y-auto bg-[#061521]/78 p-4 backdrop-blur-[7px]" role="presentation"
+            onMouseDown={(event) => { if (event.target===event.currentTarget && !exportBusy) setExportDialog(null); }}>
+            <section role="dialog" aria-modal="true" aria-labelledby="inventory-export-title" className="w-full max-w-[720px] overflow-hidden rounded-[24px] border border-[#8ce7e2]/35 bg-[#303c4e] shadow-[0_32px_100px_rgba(0,0,0,0.55)]">
+              <header className="flex items-start justify-between gap-4 border-b border-white/12 bg-gradient-to-r from-[#254c54] to-[#2c5861] px-5 py-4">
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-[#d5f5f1]/65">AllInFashion • Leltári export</p>
+                  <h2 id="inventory-export-title" className="mt-1 text-xl text-white">{exportDialog.format==="excel" ? "Excel export összeállítása" : "PDF export összeállítása"}</h2>
+                  <p className="mt-1 text-xs text-white/60">Jelöld ki, mely állományok kerüljenek a dokumentumba. A kimutatás nem módosít készletet.</p>
+                </div>
+                <button type="button" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.05] text-white hover:bg-white/10 disabled:opacity-40" aria-label="Exportablak bezárása" disabled={exportBusy} onClick={() => setExportDialog(null)}><X size={17}/></button>
+              </header>
+              <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {INVENTORY_EXPORT_CHOICES.map((option) => {
+                    const chosen=exportChoice===option.value;
+                    return (
+                      <button key={option.value} type="button" disabled={exportBusy} onClick={()=>setExportChoice(option.value)}
+                        aria-pressed={chosen}
+                        className={`flex min-h-[78px] items-start gap-3 rounded-xl border p-3 text-left transition disabled:opacity-50 ${chosen ? "border-[#a7f2ed]/65 bg-[#207b79]/52 shadow-[inset_0_0_0_1px_rgba(170,241,238,0.10)]" : "border-white/14 bg-[#354357] hover:border-[#7bd7d4]/40 hover:bg-[#3d4c60]"}`}>
+                        <span className={`mt-1 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border ${chosen ? "border-white bg-[#d9fffb]" : "border-white/45 bg-transparent"}`}>
+                          {chosen ? <span className="h-2 w-2 rounded-full bg-[#177775]" /> : null}
+                        </span>
+                        <span className="min-w-0"><span className="block text-sm text-white">{option.label}</span><span className="mt-1 block text-[11px] leading-4 text-white/55">{option.subtitle}</span></span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {exportDialog.format==="pdf" && exportChoice.split(",").includes("inventory") ? (
+                  <div className="mt-4 border-t border-white/12 pt-3">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-white/52">A leltár PDF-változata</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {([ ["sheet","Üres leltárív"], ["result","Leltáreredmény"] ] as const).map(([value,caption])=>(
+                        <button key={value} type="button" disabled={exportBusy} onClick={()=>setExportDialog(v=>v?{...v,pdfMode:value}:v)}
+                          className={`h-9 rounded-lg border text-xs transition ${exportDialog.pdfMode===value ? "border-[#a7f2ed]/55 bg-[#2a8d8b] text-white" : "border-white/15 bg-white/[0.04] text-white/70 hover:bg-white/10"}`}>{caption}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <p className="mt-4 rounded-xl border border-[#8ce7e2]/25 bg-[#244c51]/70 px-3 py-2.5 text-[11px] leading-relaxed text-[#defdf9]/85">
+                  A hitelben lévő termék <strong className="font-normal text-white">nincs a bolti polckészletben</strong>. A félretett termék <strong className="font-normal text-white">már benne van</strong> a fizikai készletben. A dokumentum külön mutatja az állományokat, nem adja össze őket kétszer.
+                </p>
+              </div>
+              <footer className="flex items-center justify-end gap-2 border-t border-white/10 bg-[#293648] px-5 py-4">
+                <button type="button" className={btnSoft} disabled={exportBusy} onClick={()=>setExportDialog(null)}>Mégse</button>
+                <button type="button" className={primaryBtn} disabled={exportBusy} onClick={()=>void submitInventoryExport()}>
+                  {exportBusy ? <RefreshCw size={15} className="animate-spin"/> : <ExportFileIcon kind={exportDialog.format}/>} {exportBusy ? "Összeállítás…" : "Exportálás"}
+                </button>
+              </footer>
+            </section>
+          </div>, document.body
+        ) : null}
 
         {confirmDialog ? (
           <div className="fixed inset-0 z-50 grid place-items-center px-4 py-6">
