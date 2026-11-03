@@ -1991,6 +1991,150 @@ export default function createAifOpeningInventoryRouter({
     }
   });
 
+  // A leltár és a kliensnél/félretéve lévő áru KÜLÖN állomány.
+  // Pénzügyi tartozás soha nem módosíthatja a már megszámolt fizikai leltárt.
+  const EXPORT_SECTION_NAMES = new Set(["inventory", "credit", "reserved"]);
+
+  function requestedExportSections(value) {
+    const raw = String(value === undefined || value === null ? "inventory" : value);
+    const wanted = raw.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+    if (!wanted.length || wanted.some((item) => !EXPORT_SECTION_NAMES.has(item))) return null;
+    return [...new Set(wanted)];
+  }
+
+  async function inventoryCustodyExport(client, session, selectedSections) {
+    const result = {
+      snapshotAt: new Date().toISOString(),
+      credit: { items: [], saleCount: 0, totalDue: 0, totalQtyOutside: 0, warnings: [] },
+      reserved: { items: [], reservationCount: 0, totalQty: 0, warnings: [] },
+    };
+    // Nem készlet: már elvitt, de még nyitott pénzügyi tartozással rendelkező
+    // hiteles eladások. A jelenlegi tartozást minden bizonylatnál CSAK EGYSZER
+    // összegezzük, terméksoronként nem duplázzuk meg.
+    if (selectedSections.includes("credit")) {
+      const sql = `
+        SELECT s.id AS sale_id, s.sale_number, s.customer_name, s.customer_phone,
+               s.sold_at, s.balance_due, s.paid_total, s.total,
+               sl.id AS line_id, sl.variant_id, sl.line_no, sl.product_title,
+               sl.product_code, sl.barcode, sl.brand_name, sl.color_name,
+               sl.size, sl.quantity, sl.unit_price, sl.line_total,
+               COALESCE(ret.returned_qty,0)::integer AS returned_qty
+        FROM aif_shop_sales s
+        JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(e.returned_qty),0) AS returned_qty
+          FROM aif_shop_exchanges e
+          WHERE e.source_sale_line_id=sl.id AND e.status='completed'
+        ) ret ON true
+        WHERE s.location_id=$1 AND s.status='completed'
+          AND s.sale_type='credit' AND s.balance_due>0.005
+        ORDER BY s.sold_at, s.id, sl.line_no`;
+      const query = await client.query(sql,[session.location_id]);
+      const seen = new Set();
+      for (const row of query.rows) {
+        const saleId = String(row.sale_id);
+        const firstLineOfSale = !seen.has(saleId);
+        if (firstLineOfSale) {
+          seen.add(saleId);
+          result.credit.totalDue += Number(row.balance_due || 0);
+        }
+        const originalQty = Number(row.quantity || 0);
+        const returnedQty = Number(row.returned_qty || 0);
+        const outsideQty = Math.max(0, originalQty - returnedQty);
+        if (returnedQty > originalQty) {
+          result.credit.warnings.push(`${row.sale_number}: a visszahozott mennyiség meghaladja az eladottat.`);
+        }
+        if (outsideQty > 0) result.credit.totalQtyOutside += outsideQty;
+        result.credit.items.push({
+          saleId, saleNumber: row.sale_number, customerName: row.customer_name || "Nincs kliensnév",
+          customerPhone: row.customer_phone || "", soldAt: row.sold_at,
+          saleBalanceDue: Number(row.balance_due || 0),
+          saleBalanceDisplay: firstLineOfSale ? Number(row.balance_due || 0) : null,
+          saleTotal: Number(row.total || 0), salePaidTotal: Number(row.paid_total || 0),
+          lineId: String(row.line_id), variantId: String(row.variant_id || ""),
+          productTitle: row.product_title || row.product_code || "Ismeretlen termék",
+          productCode: row.product_code || "", barcode: row.barcode || "",
+          brandName: row.brand_name || "", colorName: row.color_name || "", size: row.size || "",
+          originalQty, returnedQty, outsideQty,
+          unitPrice: Number(row.unit_price || 0), lineTotal: Number(row.line_total || 0),
+          note: outsideQty === 0 ? "Már teljesen visszahozva; a pénzügyi egyenleg még nyitott" : "Kliensnél, nem bolti készlet",
+        });
+      }
+      result.credit.saleCount = seen.size;
+      result.credit.totalDue = Math.round((result.credit.totalDue + Number.EPSILON)*100)/100;
+    }
+    // A félretett áru a fizikai bolti készlet RÉSZE. Itt csak külön
+    // megjelölést adunk; a készletösszeghez tilos másodszor hozzáadni.
+    if (selectedSections.includes("reserved")) {
+      const query = await client.query(`
+        SELECT r.id AS reservation_id, r.reservation_number, r.customer_name,
+               r.customer_phone, r.expires_on, r.created_at, r.created_by,
+               rl.id AS line_id, rl.variant_id, rl.product_title, rl.product_code,
+               rl.barcode, rl.brand_name, rl.color_name, rl.size,
+               rl.quantity, rl.unit_price_snapshot,
+               COALESCE(st.qty,0) AS stock_qty,
+               COALESCE(st.reserved_qty,0) AS stock_reserved_qty
+        FROM aif_shop_reservations r
+        JOIN aif_shop_reservation_lines rl ON rl.reservation_id=r.id
+        LEFT JOIN aif_stock st ON st.location_id=r.location_id AND st.variant_id=rl.variant_id
+        WHERE r.location_id=$1 AND r.status='active'
+        ORDER BY r.expires_on,r.reservation_number,rl.line_no`,[session.location_id]);
+      const seen = new Set();
+      const totalByVariant = new Map();
+      for (const row of query.rows) {
+        seen.add(String(row.reservation_id));
+        const qty = Number(row.quantity || 0);
+        result.reserved.totalQty += qty;
+        const vid = String(row.variant_id);
+        totalByVariant.set(vid, {
+          qty: (totalByVariant.get(vid)?.qty || 0) + qty,
+          system: Number(row.stock_reserved_qty || 0),
+          barcode: row.barcode || vid,
+        });
+        result.reserved.items.push({
+          reservationId: String(row.reservation_id), reservationNumber: row.reservation_number,
+          customerName: row.customer_name || "Név nélküli félretétel",
+          customerPhone: row.customer_phone || "", expiresOn: row.expires_on,
+          createdAt: row.created_at, createdBy: row.created_by || "",
+          lineId: String(row.line_id), variantId: vid,
+          productTitle: row.product_title || row.product_code || "Ismeretlen termék",
+          productCode: row.product_code || "", barcode: row.barcode || "",
+          brandName: row.brand_name || "", colorName: row.color_name || "", size: row.size || "",
+          qty, unitPrice: Number(row.unit_price_snapshot || 0),
+          stockQty: Number(row.stock_qty || 0), stockReservedQty: Number(row.stock_reserved_qty || 0),
+          note: "Boltban félretett; a bolti készletben már benne van",
+        });
+      }
+      result.reserved.reservationCount = seen.size;
+      for (const value of totalByVariant.values()) {
+        if (Math.abs(value.qty - value.system) > 0.001) {
+          result.reserved.warnings.push(`${value.barcode}: aktív félretétel ${value.qty} db, a foglalt készletmező ${value.system} db. Egyeztetendő!`);
+        }
+      }
+    }
+    return result;
+  }
+
+  // 7 lehetséges exportkombináció: 3 önálló állomány, illetve ezek együtt.
+  // Mindegyik az aktuális sessionhez és annak üzletéhez tartozik.
+  router.get("/admin/sessions/:id/export-data", requireAdminOrSecret, async (req,res) => {
+    const sections=requestedExportSections(req.query.sections);
+    if(!sections) return res.status(400).json({error:"Érvénytelen export-összeállítás.",code:"inventory_export_sections_invalid"});
+    const client=await pool.connect();
+    try {
+      await ensureSchema();
+      const session=await sessionById(client,req.params.id);
+      if(!session) return res.status(404).json({error:"A leltár nem található."});
+      const detail=sections.includes("inventory") ? await adminDetail(client,session) : {session,summary:null,lines:[],unknown:[]};
+      const custody=await inventoryCustodyExport(client,session,sections);
+      res.setHeader("Cache-Control","private, no-store");
+      return res.json({ok:true,sections,...detail,custody});
+    } catch(error) {
+      console.error("AIF inventory export data error:",error);
+      return res.status(500).json({error:error?.message||"Az export adatai nem tölthetők be."});
+    } finally {client.release();}
+  });
+
   // Egyetlen, teljes, formázott XLSX, az admin felületen látható leltáradatokból.
   // GET-only export: nem hagy jóvá, és nem alkalmaz készletkorrekciót.
   router.get("/admin/sessions/:id/export.xlsx", requireAdminOrSecret, async (req, res) => {
@@ -1999,10 +2143,15 @@ export default function createAifOpeningInventoryRouter({
       await ensureSchema();
       const session = await sessionById(client, req.params.id);
       if (!session) return res.status(404).json({ error: "A leltár nem található." });
-      const detail = await adminDetail(client, session);
-      const workbook = buildOpeningInventoryXlsx(detail);
+      const sections = requestedExportSections(req.query.sections);
+      if (!sections) return res.status(400).json({ error: "Érvénytelen export-összeállítás.", code: "inventory_export_sections_invalid" });
+      const detail = sections.includes("inventory")
+        ? await adminDetail(client, session)
+        : { session, summary: null, lines: [], unknown: [] };
+      const custody = await inventoryCustodyExport(client, session, sections);
+      const workbook = buildOpeningInventoryXlsx(detail, { sections, custody });
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      res.setHeader("Content-Disposition", `attachment; filename="${openingInventoryXlsxFilename(session)}"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${openingInventoryXlsxFilename(session, sections)}"`);
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Content-Length", String(workbook.length));
       return res.status(200).send(workbook);
