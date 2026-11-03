@@ -257,7 +257,7 @@ function isPaymentSettlement(sale: AifAdminShopRecentSale) {
 }
 
 function settlementTypeLabel(sale: AifAdminShopRecentSale) {
-  return isPaymentSettlement(sale) ? "Korábbi vásárlás fizetése" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue);
+  return isPaymentSettlement(sale) ? "Hitelbefizetés" : saleTypeDisplayLabel(sale.saleType, sale.balanceDue);
 }
 
 function SalePriceBreakdown({
@@ -282,7 +282,7 @@ function SalePriceBreakdown({
   return (
     <div className={`${compact ? "w-[184px]" : "w-[210px]"} ml-auto overflow-hidden rounded-xl border border-white/10 bg-[#293548]/72 text-[10px] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]`}>
       <div className="flex items-center justify-between gap-3 px-2.5 py-1.5">
-        <span className="uppercase tracking-[0.08em] text-white/38">Rendes eladási ár</span>
+        <span className="uppercase tracking-[0.08em] text-white/50" title="Rendes eladási ár kedvezmény előtt">Listaár</span>
         <span className="whitespace-nowrap tabular-nums text-white/88">{money(regularTotal)}</span>
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-white/7 px-2.5 py-1.5">
@@ -1170,59 +1170,47 @@ function MetricCard({
   return <article className={baseClass}>{content}</article>;
 }
 
+// Compact, single-purpose statistic tiles. The header, value and switch hint
+// have their own rows, so narrow six-column dashboards cannot overlap them.
 function SalesVolumeMetricButton({
-    label,
-    icon: MetricIcon,
-    view,
-    value,
-    delta,
-    onClick,
-    title,
-  }: {
-    label: string;
-    icon: LucideIcon;
-    view: "value" | "percent";
-    value: string | number;
-    delta: number;
-    onClick: () => void;
-    title: string;
+  label, icon: MetricIcon, view, value, delta, onClick, title,
+}: {
+  label: string;
+  icon: LucideIcon;
+  view: "value" | "percent";
+  value: string | number;
+  delta: number;
+  onClick: () => void;
+  title: string;
 }) {
-  const signedPercent = (value: number) => `${value > 0.01 ? "+" : ""}${value.toFixed(1)}%`;
-  const percentTone = (value: number) => value > 0.01
-    ? "text-emerald-100"
-    : value < -0.01
-      ? "text-rose-100"
-      : "text-white";
+  const signedPercent = (n: number) => `${n > 0.01 ? "+" : ""}${n.toFixed(1)}%`;
+  const color = delta > 0.01 ? "text-emerald-100" : delta < -0.01 ? "text-rose-100" : "text-white";
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex min-h-[90px] min-w-0 flex-col rounded-xl border border-white/12 bg-black/10 px-2 py-2 text-left transition hover:border-[#7bd7d4]/40 hover:bg-[#2a8d8b]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/45 active:scale-[0.985]"
+      className="group flex min-w-0 flex-col rounded-xl border border-white/14 bg-[#253448]/45 px-2 py-2 text-left transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/16 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/45 active:scale-[0.985]"
       title={title}
+      aria-label={`${label}: ${view === "value" ? value : signedPercent(delta)}. Kattintás a váltáshoz.`}
     >
-      <div className="flex min-h-[26px] min-w-0 items-start gap-1.5">
-        <MetricIcon size={11} className="mt-0.5 shrink-0 text-[#8ee6e2]" />
-        <span className="min-w-0 break-words text-[9px] uppercase leading-[1.3] tracking-[0.03em] text-white/60">{label}</span>
+      <div className="flex min-h-[27px] min-w-0 items-start gap-1.5">
+        <MetricIcon size={12} className="mt-px shrink-0 text-[#8ee6e2]" />
+        <span className="min-w-0 text-[9px] uppercase leading-[1.35] tracking-[0.005em] text-white/75">{label}</span>
       </div>
-      <div className="mt-1 flex min-h-[26px] items-end">
-        {view === "value" ? (
-          <span className="break-words text-[1.16rem] leading-none text-white">{value}</span>
-        ) : (
-          <span className={`break-words text-[1.08rem] leading-none ${percentTone(delta)}`}>{signedPercent(delta)}</span>
-        )}
+      <div className="flex min-h-[28px] min-w-0 items-end pt-1">
+        <span className={`block max-w-full break-words text-[clamp(0.96rem,1.2vw,1.2rem)] leading-none tabular-nums ${view === "value" ? "text-white" : color}`}>
+          {view === "value" ? value : signedPercent(delta)}
+        </span>
       </div>
-      <div className="mt-auto flex items-center justify-end gap-1 border-t border-white/9 pt-1.5">
-        <span className="truncate text-[9px] leading-none text-white/42">{view === "value" ? "Váltás: %" : "Váltás: db"}</span>
+      <div className="mt-2 flex min-h-[16px] items-center justify-end border-t border-white/12 pt-1.5">
+        <span className="text-[9px] leading-none text-[#d7fffd]/70">{view === "value" ? "Mutasd: %" : "Mutasd: db"}</span>
       </div>
     </button>
   );
 }
 
 function SalesVolumeCard({
-  transactions,
-  itemsSold,
-  previousTransactions,
-  previousItemsSold,
+  transactions, itemsSold, previousTransactions, previousItemsSold,
 }: {
   transactions: number;
   itemsSold: number;
@@ -1231,37 +1219,85 @@ function SalesVolumeCard({
 }) {
   const [transactionsView, setTransactionsView] = useState<"value" | "percent">("value");
   const [itemsView, setItemsView] = useState<"value" | "percent">("value");
-  const transactionsDelta = percentChange(transactions, previousTransactions);
-  const itemsDelta = percentChange(itemsSold, previousItemsSold);
   return (
-    <article className="relative flex min-h-[144px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
+    <article className="relative flex h-full min-h-[174px] min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
-      <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
-      <div className="relative flex min-h-[36px] items-start justify-between gap-3">
-        <p className="pt-0.5 text-[9px] uppercase leading-[1.15] tracking-[0.14em] text-white/60">Eladások / termék</p>
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-          <ShoppingBag size={17} />
+      <div className="relative grid min-w-0 grid-cols-[minmax(0,1fr)_32px] items-start gap-2.5">
+        <p className="min-w-0 pt-1 text-[9px] uppercase leading-4 tracking-[0.06em] text-white/70" title="Eladások / termék">Eladások / termék</p>
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd]">
+          <ShoppingBag size={16} />
         </span>
       </div>
-      <div className="relative mt-auto grid grid-cols-2 gap-2.5">
+      <div className="relative mt-auto grid min-w-0 grid-cols-2 gap-2 pt-2">
         <SalesVolumeMetricButton
           label="Eladások"
           icon={ReceiptText}
           view={transactionsView}
           value={integer(transactions)}
-          delta={transactionsDelta}
+          delta={percentChange(transactions, previousTransactions)}
           onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
-          title="Kattintás: eladások száma / változás százalék"
+          title="Eladások darabszáma / százalékos változás"
         />
         <SalesVolumeMetricButton
           label="Eladott termékek"
           icon={ShoppingBag}
           view={itemsView}
           value={`${integer(itemsSold)} db`}
-          delta={itemsDelta}
+          delta={percentChange(itemsSold, previousItemsSold)}
           onClick={() => setItemsView((current) => current === "value" ? "percent" : "value")}
-          title="Kattintás: eladott darab / változás százalék"
+          title="Eladott darabszám / százalékos változás"
         />
+      </div>
+    </article>
+  );
+}
+
+// The main card is a PERIOD filter, the separate client button is navigation.
+// Using two sibling buttons (rather than nested buttons) preserves both actions.
+function DebtOverviewCard({
+  periodValue, periodLabel, allTimeValue, allTimeError, allTimeYear,
+  filterActive, onToggleFilter, onOpenClients,
+}: {
+  periodValue: number;
+  periodLabel: string;
+  allTimeValue: number | null;
+  allTimeError: string;
+  allTimeYear: number | null;
+  filterActive: boolean;
+  onToggleFilter: () => void;
+  onOpenClients: () => void;
+}) {
+  return (
+    <article className="relative flex h-full min-h-[174px] min-w-0 flex-col overflow-hidden rounded-[20px] border border-rose-300/55 bg-gradient-to-br from-[#df1b31] via-[#ca152a] to-[#961627] p-3 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
+      <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-rose-100/60 to-transparent" />
+      <div className="relative grid min-w-0 grid-cols-[minmax(0,1fr)_32px] items-start gap-2">
+        <p className="min-w-0 pt-1 text-[9px] uppercase leading-4 tracking-[0.055em] text-white/85">Kintlévőség</p>
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-100/50 bg-white/10 text-white"><WalletCards size={16} /></span>
+      </div>
+      <button
+        type="button"
+        onClick={onToggleFilter}
+        aria-pressed={filterActive}
+        title="Kattintás: a kiválasztott nap/időszak hiteles eladásainak megjelenítése az eseménynaplóban"
+        className={`relative mt-1 min-w-0 rounded-lg px-1 py-1.5 text-left transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/55 ${filterActive ? "bg-white/13 ring-1 ring-white/35" : ""}`}
+      >
+        <span className="block text-[9px] leading-tight text-white/78">{periodLabel}</span>
+        <span className="mt-1 block break-words text-[clamp(1rem,1.30vw,1.35rem)] leading-tight tracking-tight tabular-nums text-white">{money(periodValue)}</span>
+        <span className="mt-1 block text-[9px] leading-tight text-white/70">{filterActive ? "Hitelnapló aktív · kattints a visszaállításhoz" : "Kattints a napi hiteles eladásokhoz"}</span>
+      </button>
+      <div className="relative mt-auto flex min-w-0 items-end justify-between gap-1.5 border-t border-white/24 pt-2">
+        <div className="min-w-0 flex-1" title={allTimeValue === null ? allTimeError : "Az üzlet összes jelenleg fennálló tartozása, a dátumszűrőtől függetlenül"}>
+          <span className="block text-[9px] leading-tight text-white/75">Összes jelenlegi {allTimeYear ? `(${allTimeYear})` : ""}</span>
+          <span className="block break-words text-[11px] leading-snug tabular-nums text-white">{allTimeValue === null ? "Ellenőrzendő" : money(allTimeValue)}</span>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenClients}
+          className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg border border-white/60 bg-white/13 px-2 text-[10px] text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65"
+          title="Üzleti kliensek és tartozásaik megnyitása"
+        >
+          <UserRound size={12} /> Kliensek
+        </button>
       </div>
     </article>
   );
@@ -2451,19 +2487,17 @@ export default function AllInAdminMagazinDashboard({
             onClick={() => setDiscountView((current) => current === "money" ? "percent" : "money")}
             actionLabel={discountView === "percent" ? "RON" : "%"}
           />
-          <MetricCard
-            title="Jelenlegi kintlévőség"
-            value={liveDebt ? money(liveDebt.amount) : "Ellenőrzendő"}
-            hint={liveDebt
-              ? `${locationName} • ma is nyitott tartozások • ${liveDebt.year} • dátumszűrőtől független`
-              : liveDebtError || "A jelenlegi tartozás lekérése folyamatban"}
-            icon={WalletCards}
-            current={liveDebt?.amount ?? 0}
-            previous={liveDebt?.amount ?? 0}
-            showDelta={false}
-            tone={liveDebt ? (liveDebt.amount > 0.005 ? "danger" : "normal") : "warning"}
-            onClick={() => { window.location.hash = "#allinadminclients"; }}
-            actionLabel="Kliensek"
+          <DebtOverviewCard
+            periodValue={numberValue(summary?.currentUnpaidTotal)}
+            periodLabel={applied.from === applied.to
+              ? (applied.to === localIsoDate(new Date()) ? "Mai kintlévőség" : "A kiválasztott napból még nyitott")
+              : "Az időszakból még nyitott"}
+            allTimeValue={liveDebt?.amount ?? null}
+            allTimeError={liveDebtError}
+            allTimeYear={liveDebt?.year ?? null}
+            filterActive={showHistoricalCreditRows}
+            onToggleFilter={() => setShowHistoricalCreditRows((current) => !current)}
+            onOpenClients={() => { window.location.hash = "#allinadminclients"; }}
           />
           <MetricCard
             title="Becsült árrés"
@@ -2487,7 +2521,7 @@ export default function AllInAdminMagazinDashboard({
           <div className="min-w-[160px] flex-1 border-l border-white/12 pl-3">
             <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">Ebből ma is nyitott</p>
             <p className="mt-1 text-[15px] tabular-nums text-[#d7fffd]">{historyComplete ? money(periodOpenDebt) : "Ellenőrzendő"}</p>
-            <p className="mt-1 text-[10px] text-white/45">Csak a kiválasztott időszakban eladott tételek</p>
+            <p className="mt-1 text-[10px] text-white/45">A kiválasztott időszak eladásainak jelenlegi tartozása</p>
           </div>
           <div className="min-w-[145px] flex-1 border-l border-white/12 pl-3">
             <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">Azóta csökkent</p>
@@ -2643,7 +2677,7 @@ export default function AllInAdminMagazinDashboard({
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1160px] border-collapse text-xs">
+              <table className="w-full min-w-[1280px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="w-[54px] min-w-[54px] px-2 py-3 text-center">
@@ -2660,11 +2694,11 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-left">Termék</th>
                     <th className="whitespace-nowrap px-3 py-3 text-left">Időpont</th>
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
-                    <th className="px-3 py-3 text-center">Típus</th>
+                    <th className="min-w-[130px] px-2 py-3 text-center">Típus</th>
                     <th className="px-3 py-3 text-center">Darab</th>
                     <th className="min-w-[205px] px-3 py-3 text-right">Árazás</th>
                     <th className="px-3 py-3 text-right">{showHistoricalCreditRows ? "Aznap fennálló / most" : "Hátralévő"}</th>
-                    <th className="min-w-[132px] px-2 py-3 text-center">Állapot</th>
+                    <th className="min-w-[142px] px-2 py-3 text-center">Állapot</th>
                     <th className="sticky right-0 z-20 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#293548] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)]">
                       <span className="sr-only">Műveletek</span>
                     </th>
@@ -2675,7 +2709,8 @@ export default function AllInAdminMagazinDashboard({
                     const settlement = isPaymentSettlement(sale);
                     const settlementMeta = settlementInfo(sale);
                     const lineNoteThread = !settlement ? saleLineNoteThreads[String(sale.lineId || "")] || null : null;
-                    const hasProductNote = Boolean(lineNoteThread?.saleNote || lineNoteThread?.notes?.length);
+                    const productNoteText = String(lineNoteThread?.notes?.slice(-1)[0]?.note || lineNoteThread?.saleNote || "").trim();
+                    const hasProductNote = Boolean(productNoteText || lineNoteThread?.notes?.length);
                     const rowNumber = settlement
                       ? null
                       : eventLogRowNumbers.get(String(sale.lineId || sale.id || index)) ?? null;
@@ -2724,16 +2759,26 @@ export default function AllInAdminMagazinDashboard({
                               {[sale.productCode ? `Kód: ${sale.productCode}` : "", sale.barcode ? `Vonalkód: ${sale.barcode}` : ""].filter(Boolean).join(" • ") || ""}
                             </p>
                             {settlement ? (
-                              <p className="mt-1 max-w-[275px] truncate text-[10px] text-[#cfe5ff]/80">
-                                Korábbi vásárlás • készletmozgás nélkül
-                              </p>
+                              <div className="mt-2 flex max-w-[268px] items-start gap-1.5 rounded-lg border border-[#9bc8ff]/25 bg-[#3978b9]/12 px-2 py-1.5 text-[10px] leading-[1.45] text-[#d9ecff]">
+                                <WalletCards size={12} className="mt-0.5 shrink-0 text-[#9bc8ff]" />
+                                <span className="min-w-0 break-words">Korábbi vásárlás befizetése. Nem új eladás, nincs készletmozgás.</span>
+                              </div>
                             ) : sale.dailyCategory === "credit" ? (
-                              <p className="mt-1 max-w-[275px] text-[10px] text-rose-100/80">
-                                Hiteles elvitel · aznapi állapot
-                                {numberValue(sale.returnedLaterQty) > 0 ? ` · később ${integer(sale.returnedLaterQty)} db visszahozva` : ""}
-                                {sale.paidLaterAt ? " · később rendezve" : ""}
-                                {sale.historyComplete === false ? " · audit ellenőrzendő" : ""}
-                              </p>
+                              <div className="mt-2 flex max-w-[268px] items-start gap-1.5 rounded-lg border border-rose-200/22 bg-rose-500/8 px-2 py-1.5 text-[10px] leading-[1.45] text-rose-100/85">
+                                <WalletCards size={12} className="mt-0.5 shrink-0" />
+                                <span className="min-w-0 break-words">
+                                  Hiteles elvitel · aznapi állapot
+                                  {numberValue(sale.returnedLaterQty) > 0 ? ` · később ${integer(sale.returnedLaterQty)} db visszahozva` : ""}
+                                  {sale.paidLaterAt ? " · később rendezve" : ""}
+                                  {sale.historyComplete === false ? " · audit ellenőrzendő" : ""}
+                                </span>
+                              </div>
+                            ) : null}
+                            {hasProductNote ? (
+                              <div className="mt-2 flex max-w-[268px] items-start gap-1.5 rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/12 px-2 py-1.5 text-[10px] leading-[1.4] text-[#d7fffd]/90" title={productNoteText}>
+                                <Mail size={12} className="mt-0.5 shrink-0" />
+                                <span className="min-w-0 line-clamp-2 break-words">{productNoteText || "Megjegyzés"}</span>
+                              </div>
                             ) : null}
                           </div>
                         </div>
@@ -2761,12 +2806,13 @@ export default function AllInAdminMagazinDashboard({
                         ) : null}
                         <p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p>
                       </td>
-                      <td className="px-3 py-3 text-center">
-                        <span className={`rounded-full border px-2 py-1 text-[10px] ${
-                          settlement
-                            ? "border-[#9bc8ff]/42 bg-[#3978b9]/18 text-[#d9ecff]"
-                            : saleTypeBadge(sale.saleType, sale.balanceDue)
-                        }`}>
+                      <td className="min-w-[130px] px-2 py-3 text-center align-middle">
+                        <span
+                          className={`inline-flex max-w-full items-center justify-center rounded-lg border px-2 py-1.5 text-[10px] leading-tight ${settlement
+                            ? "whitespace-nowrap border-[#9bc8ff]/35 bg-[#3978b9]/15 text-[#d9ecff]"
+                            : saleTypeBadge(sale.saleType, sale.balanceDue)}`}
+                          title={settlement ? "Korábbi vásárlás tartozásának befizetése" : settlementTypeLabel(sale)}
+                        >
                           {settlementTypeLabel(sale)}
                         </span>
                       </td>
@@ -2775,7 +2821,7 @@ export default function AllInAdminMagazinDashboard({
                         {settlement ? (
                           <div className="ml-auto w-[184px] overflow-hidden rounded-xl border border-[#9bc8ff]/22 bg-[#31506a]/24">
                             <div className="flex items-center justify-between gap-3 px-2.5 py-2">
-                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55" title={settlementMeta.settlementApproximate ? "Régi befizetés: terméksori allokáció hiányában arányosan felosztva" : "Termékszinten rögzített befizetés"}>{settlementMeta.settlementApproximate ? "Felosztott befizetés" : "Befizetés"}</span>
+                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55" title={settlementMeta.settlementApproximate ? "Régi befizetés: terméksori allokáció hiányában arányosan felosztva" : "Termékszinten rögzített befizetés"}>{settlementMeta.settlementApproximate ? "Arányos rész" : "Befizetés"}</span>
                               <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</span>
                             </div>
                           </div>
@@ -2791,35 +2837,36 @@ export default function AllInAdminMagazinDashboard({
                           </span>
                         ) : null}
                       </td>
-                      <td className="min-w-[132px] px-2 py-3">
-                        <div className="flex items-center justify-center gap-1.5">
+                      <td className="w-[142px] min-w-[142px] px-2 py-3 align-middle">
+                        <div className="flex min-w-0 flex-col items-center justify-center gap-2">
                           {settlement ? (
-                            <span className="rounded-full border border-[#9bc8ff]/40 bg-[#3978b9]/16 px-2 py-1 text-[10px] text-[#d9ecff]">
-                              Fizetési esemény
+                            <span className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#9bc8ff]/38 bg-[#3978b9]/14 px-2 py-1 text-center text-[10px] leading-[1.3] text-[#d9ecff]" title="Korábbi vásárlás befizetési eseménye, nem új eladás">
+                              <CheckCircle2 size={12} className="shrink-0" /> Rögzítve
                             </span>
                           ) : (
-                            <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
+                            <span className={`inline-flex items-center justify-center rounded-lg border px-2 py-1 text-center text-[10px] leading-[1.3] ${statusBadge(sale.status)}`}>
+                              {saleStatusLabel(sale.status)}
+                            </span>
                           )}
                           {(() => {
                             const method = String(
                               (sale as AifAdminShopRecentSale & { paymentMethod?: string | null }).paymentMethod
-                                || sale.settlementMethod
-                                || ""
+                                || sale.settlementMethod || ""
                             ).trim().toLowerCase();
 
                             if (sale.dailyCategory === "credit") {
                               return (
-                                <span className="rounded-full border border-red-300/45 bg-[#E21C2A] px-2 py-1 text-[10px] text-white">
+                                <span className="inline-flex items-center justify-center rounded-lg border border-red-300/40 bg-[#E21C2A] px-2 py-1 text-center text-[10px] leading-[1.3] text-white">
                                   {sale.historyComplete === false ? "Ellenőrzendő" : "Hitel aznap"}
                                 </span>
                               );
                             }
-                            if (sale.paymentStatus === "paid" && method) {
+                            // The payment icon gets its own row; it must not push the status off screen.
+                            if (method && (settlement || sale.paymentStatus === "paid")) {
                               return <PaymentMethodIcon method={method} />;
                             }
-
                             return (
-                              <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>
+                              <span className={`inline-flex items-center justify-center rounded-lg border px-2 py-1 text-center text-[10px] leading-[1.3] ${paymentBadge(sale.paymentStatus)}`}>
                                 {paymentLabel(sale.paymentStatus)}
                               </span>
                             );
