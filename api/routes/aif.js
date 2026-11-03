@@ -34667,12 +34667,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           if (!stock) continue;
           const beforeBridge = aifNumber(stock.qty);
           const reserved = aifNumber(stock.reserved_qty);
-          const available = beforeBridge - reserved;
-          // Pozitív, ismert készletből soha nem gyártunk pluszt. A bridge kizárólag
-          // a régi rendszer miatt 0 / nem eladható állapotú, még nem számolt terméket menti meg.
-          if (available > 0) continue;
+          // A 0 db SZABAD keszlet nem 0 db TENYLEGES keszlet:
+          // peldaul 1 db keszlet - 1 db felretetel = 0 db szabad.
+          // A regi helyreallito leltar hida csak tenyleg ures, foglalas nelkuli
+          // keszletsorhoz nyithat atmeneti mennyiseget. Foglalt, letezo vagy
+          // hibas (negativ) stockot nem tolthet fel egy normal eladas.
+          if (beforeBridge !== 0 || reserved !== 0) continue;
 
-          const bridgeQty = input.quantity - available;
+          const bridgeQty = input.quantity;
           const afterBridge = beforeBridge + bridgeQty;
           await client.query(
             `UPDATE aif_stock
@@ -34720,7 +34722,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const stock = stockByVariant.get(input.variantId);
         const available = Number(stock.qty || 0) - Number(stock.reserved_qty || 0);
         if (available < input.quantity) {
-          const error = new Error(`${stock.title || "A termék"}: csak ${Math.max(0, available)} db eladható készlet van.`);
+          const reserved = Math.max(0, Number(stock.reserved_qty || 0));
+          const error = reserved > 0
+            ? new Error(`${stock.title || "A termék"}: ${reserved} db félretett/foglalt. Szabadon csak ${Math.max(0, available)} db adható el. A névre félretett terméket a Félretett termékek felületén add ki.`)
+            : new Error(`${stock.title || "A termék"}: csak ${Math.max(0, available)} db eladható készlet van.`);
           error.statusCode = 409;
           error.code = "insufficient_stock";
           throw error;
