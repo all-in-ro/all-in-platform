@@ -62,7 +62,7 @@ export function buildOpeningInventorySummaryHtml(detail, custody={}) {
   const final=clean(s.status)==='applied';
   const partial=x.pendingVariants>0 || x.unknownLines>0 || x.issueVariants>0;
   const value=(number,missing)=>missing?`${money(number)}*`:money(number);
-  const metric=(label,main,sub,extra='')=>`<div class="metric ${extra}"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-number">${escapeHtml(main)}</div><div class="metric-sub">${escapeHtml(sub)}</div></div>`;
+  const metric=(label,main,sub,extra='')=>`<div class="metric ${extra}"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-number">${escapeHtml(main)}</div>${sub?`<div class="metric-sub">${escapeHtml(sub)}</div>`:''}</div>`;
   const tr=(name,qty,val,comment='')=>`<tr><td>${escapeHtml(name)}${comment?`<small>${escapeHtml(comment)}</small>`:''}</td><td class="n">${escapeHtml(qty)}</td><td class="n">${escapeHtml(val)}</td></tr>`;
   const exportDate=new Date();
   return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>AllInFashion – Leltár összesítő – ${escapeHtml(s.code)}</title>
@@ -79,21 +79,21 @@ h2{font-size:11px;color:#26364b;font-weight:600;margin:15px 0 7px;padding-bottom
 <div class="toolbar"><span>Egylapos leltárösszesítő · ${escapeHtml(location)}</span><button type="button" onclick="window.print()">PDF mentése / nyomtatás</button></div>
 <main class="paper"><header class="top"><div><div class="brand">ALLINFASHION</div><h1 class="heading">LELTÁR ÖSSZESÍTŐ</h1></div><div class="meta">${escapeHtml(location)}<br>${escapeHtml(s.code||'')}<br>Export: ${escapeHtml(date(exportDate))}<br><span class="status">${escapeHtml(status)}</span></div></header>
 <p class="description">Leltár indítása: ${escapeHtml(date(s.started_at||s.created_at))} · Lezárás: ${escapeHtml(date(s.counting_closed_at||s.applied_at))} · Típus: ${clean(s.inventory_mode)==='recovery'?'Helyreállító':'Rendes'} leltár</p>
-<section class="metrics">${metric('Rendszerkészlet · üzlet',integer(x.systemQty)+' db',integer(x.variants)+' termékváltozat')}${metric('Bruttó eladási készletérték',value(x.systemValue,x.systemMissingPrice),'Aktuális rendszerkészlet × eladási egységár','primary')}${metric('Fizikailag beolvasott',integer(x.countedQty)+' db',integer(x.countedVariants)+' számolt · '+integer(x.pendingVariants)+' még nem számolt')}${metric('Egyeztetett érték',value(x.countedValue,x.countedMissingPrice),'Csak megszámolt tételek, mozgásokkal korrigálva')}</section>
+<section class="metrics">${metric('Rendszerkészlet · üzlet',integer(x.systemQty)+' db',integer(x.variants)+' termékváltozat')}${metric('Bruttó eladási készletérték',value(x.systemValue,x.systemMissingPrice),'','primary')}${metric('Fizikailag beolvasott',integer(x.countedQty)+' db',integer(x.countedVariants)+' számolt · '+integer(x.pendingVariants)+' még nem számolt')}${metric('Egyeztetett érték',value(x.countedValue,x.countedMissingPrice),'')}</section>
 <h2>Mennyiségi és értékbeli egyeztetés</h2><table><thead><tr><th>Megnevezés</th><th class="n" style="width:23%">Darab</th><th class="n" style="width:32%">Bruttó eladási érték</th></tr></thead><tbody>
-${tr('Összehasonlított rendszerkészlet',integer(x.comparedSystemQty),value(x.comparedSystemValue,x.comparedSystemMissingPrice),'Csak a már számolt termékek rendszermennyisége')}
+${tr('Összehasonlított rendszerkészlet',integer(x.comparedSystemQty),value(x.comparedSystemValue,x.comparedSystemMissingPrice),'')}
 ${tr('Egyeztetett leltári mennyiség',integer(x.countedVariants?x.comparedSystemQty+x.diffQty:0),value(x.countedValue,x.countedMissingPrice))}
 ${tr('Hiány',integer(x.shortageQty),value(x.shortageValue,x.diffMissingPrice))}
 ${tr('Többlet',integer(x.surplusQty),value(x.surplusValue,x.diffMissingPrice))}
 <tr class="total"><td>Nettó eltérés az egyeztetett sorokon</td><td class="n">${escapeHtml((x.diffQty>0?'+':'')+integer(x.diffQty))} db</td><td class="n">${escapeHtml(value(x.diffValue,x.diffMissingPrice))}</td></tr>
 </tbody></table>
 <h2>Külön nyilvántartott állomány</h2><table><thead><tr><th>Megnevezés</th><th class="n" style="width:23%">Darab</th><th class="n" style="width:32%">Bruttó eladási érték</th></tr></thead><tbody>
-${tr('Kliensnél lévő áru',integer(x.creditQty),value(x.creditValue,x.creditMissingPrice),integer(x.creditDocs)+' nyitott hiteles bizonylat · nem bolti készlet')}
-${tr('Félretett termék',integer(x.reservedQty),value(x.reservedValue,x.reservedMissingPrice),integer(x.reservedDocs)+' aktív foglalás · a bolti készletben már benne van')}
-${tr('Nyitott pénzügyi követelés','—',money(x.creditDue),'Nem azonos a kliensnél lévő áru készletértékével')}
+${tr('Kliensnél lévő áru',integer(x.creditQty),value(x.creditValue,x.creditMissingPrice),integer(x.creditDocs)+' hiteles bizonylat')}
+${tr('Félretett termék',integer(x.reservedQty),value(x.reservedValue,x.reservedMissingPrice),integer(x.reservedDocs)+' foglalás')}
+${tr('Nyitott pénzügyi követelés','—',money(x.creditDue),'')}
 </tbody></table>
-${partial?`<div class="warn">FIGYELEM: A leltár még nem teljesen egyeztetett. ${x.pendingVariants?'Nem számolt termékváltozat: '+integer(x.pendingVariants)+'. ':''}${x.unknownLines?'Ismeretlen beolvasás: '+integer(x.unknownLines)+' ('+integer(x.unknownQty)+' db). ':''}${x.issueVariants?'Újraszámolandó sor: '+integer(x.issueVariants)+'. ':''}Az üres / nem számolt mennyiség nem nulla, az értékelt eltérés csak a megszámolt tételekre vonatkozik.</div>`:''}
-<p class="legal">${final?'Véglegesített leltár alapján készült összesítő.':'Munkaközi összesítő: az export és az aláírás nem zárja le, nem hagyja jóvá és nem vezeti készletre a leltárt.'} Bruttó érték: a rendszerben tárolt eladási ár szerinti értékelés, nem beszerzési / számviteli készletérték. A félretett árut nem számoljuk kétszer. ${x.systemMissingPrice||x.countedMissingPrice||x.creditMissingPrice||x.reservedMissingPrice?'* Egyes tételek ára hiányzik; az érintett pénzösszegek részlegesek.':''}</p>
+${partial?`<div class="warn">Leltár folyamatban${x.pendingVariants?' · Nem számolt: '+integer(x.pendingVariants):''}${x.unknownLines?' · Ismeretlen: '+integer(x.unknownLines):''}${x.issueVariants?' · Újraszámolandó: '+integer(x.issueVariants):''}</div>`:''}
+${x.systemMissingPrice||x.countedMissingPrice||x.creditMissingPrice||x.reservedMissingPrice?'<p class="legal">* Hiányzó árak miatt részleges értékek.</p>':''}
 <div class="signatures"><div class="sig">Leltározó 1<span>Név / aláírás / dátum</span></div><div class="sig">Leltározó 2<span>Név / aláírás / dátum</span></div><div class="sig">Ellenőrző / vezető<span>Név / aláírás / dátum</span></div></div>
 <footer class="footer"><span>AllInFashion · Leltár összesítő</span><span>${escapeHtml(s.code||'')} · 1 / 1 oldal</span></footer></main></body></html>`;
 }
