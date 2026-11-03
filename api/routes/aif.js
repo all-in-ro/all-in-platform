@@ -15905,7 +15905,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (galleryPreflight.rowCount) await aifGalleryModelLock(client, galleryPreflight.rows[0].model_id);
       }
       const current = await client.query(
-        `SELECT v.id, v.model_id, v.barcode, v.buy_price, v.sell_price, v.compare_at_price,
+        `SELECT v.id, v.model_id, v.barcode, v.sn_cod, v.buy_price, v.sell_price, v.compare_at_price,
                 v.status AS variant_status, v.size, v.image_url, v.images,
                 m.status AS model_status, m.title_ro
          FROM aif_product_variants v
@@ -16015,7 +16015,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
         addVariant("barcode", nextBarcode || null);
       }
-      if (body.snCod !== undefined || body.sn_cod !== undefined) addVariant("sn_cod", emptyToNull(body.snCod ?? body.sn_cod));
+      if (body.snCod !== undefined || body.sn_cod !== undefined) {
+        const requestedSnCod = emptyToNull(body.snCod) || emptyToNull(body.sn_cod);
+        const existingSnCod = emptyToNull(current.rows[0].sn_cod);
+        const clearConfirmed = body.confirmSnCodClear === true || body.confirm_sn_cod_clear === true;
+
+        // Az admin termekszerkeszto rendszerint a teljes urlapot elkuldi.
+        // Ha az S/N mezot hibasan uresen tolti vissza, a meglevot NEM torolhetjuk.
+        // Szandekos torles csak kifejezett, kulon megerositessel engedelyezett.
+        if (existingSnCod && !requestedSnCod && !clearConfirmed) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            error: `A meglévő S/N/COD (${existingSnCod}) nem törölhető üres mező mentésekor. Szándékos törléshez külön megerősítés szükséges. A termék nem módosult.`,
+            code: "sn_cod_clear_confirmation_required",
+            existingSnCod,
+          });
+        }
+        if (requestedSnCod !== existingSnCod) addVariant("sn_cod", requestedSnCod);
+      }
       if (body.colorCode !== undefined || body.color_code !== undefined) addVariant("color_code", emptyToNull(body.colorCode ?? body.color_code));
       if (body.colorName !== undefined || body.color_name !== undefined) {
         const normalizedColor = await normalizeColorName(client, body.colorName ?? body.color_name);
