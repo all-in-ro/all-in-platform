@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   ClipboardCheck,
   ClipboardList,
-  Download,
   Eye,
   FileText,
   Filter,
@@ -20,7 +19,6 @@ import {
   ImageIcon,
   MapPin,
   PackageCheck,
-  Printer,
   RefreshCw,
   RotateCcw,
   Save,
@@ -48,6 +46,21 @@ const chipBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl
 const chipActive = `${chipBase} border-[#2a8d8b]/60 bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.18)]`;
 const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hover:bg-white/[0.10]`;
 const qtyInput = "h-10 w-24 rounded-xl border border-white/18 bg-[#303a4c] px-3 text-center text-sm text-white outline-none focus:border-[#2a8d8b]/70";
+
+// AllInFashion egységes exportikonok (R2); a gombok felirata megmarad.
+const ALLIN_EXCEL_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg";
+const ALLIN_PDF_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp";
+function ExportFileIcon({ kind, compact = false }: { kind: "excel" | "pdf"; compact?: boolean }) {
+  return (
+    <img
+      src={kind === "excel" ? ALLIN_EXCEL_ICON : ALLIN_PDF_ICON}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className={`${compact ? "h-4 w-4" : "h-5 w-5"} shrink-0 rounded-[3px] object-contain`}
+    />
+  );
+}
 
 const AIF_BASE = "/api/aif";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
@@ -2463,7 +2476,7 @@ export default function AllInInventory() {
             {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés</button> : activeReview ? <button className={btnSoft} type="button" onClick={requestReopen}><RotateCcw size={15} /> Újranyitás</button> : <button className={btnSoft} type="button" disabled>Lezárt</button>}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
-            <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><Download size={15} /> Eredmény PDF</button>
+            <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
             {canEditActive && currentInventoryMode === "recovery"
               ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre</button>
               : canEditActive
@@ -2925,8 +2938,8 @@ export default function AllInInventory() {
                       </button>
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
-                        <button className={headerBtnSoft} type="button" onClick={() => void downloadArchiveExcel(count.id)} disabled={saving} title="Teljes leltár Excel (.xlsx), összesítés és részletes tételek"><Download size={13} /> Teljes XLS</button>
-                        <button className={headerBtnSoft} type="button" onClick={() => void printArchivePdf(count.id)} disabled={saving}><Printer size={13} /> PDF</button>
+                        <button className={headerBtnSoft} type="button" onClick={() => void downloadArchiveExcel(count.id)} disabled={saving} title="Egyszerű, egylapos leltár Excel (.xlsx)"><ExportFileIcon kind="excel" compact /> Teljes XLS</button>
+                        <button className={headerBtnSoft} type="button" onClick={() => void printArchivePdf(count.id)} disabled={saving}><ExportFileIcon kind="pdf" compact /> PDF</button>
                       </div>
                     </div>
                   );
@@ -2960,9 +2973,9 @@ export default function AllInInventory() {
                 <div className="mt-1 text-xs text-white/58">{active.item.location_name} · indítva: {formatDateTime(active.item.started_at || active.item.created_at)}</div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button className={btnSoft} type="button" onClick={() => printPdf("sheet")}><Printer size={15} /> Leltárív PDF</button>
-                <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><Download size={15} /> Eredmény PDF</button>
-                {openingDetail ? <button className={btnSoft} type="button" onClick={() => void downloadArchiveExcel(openingDetail.session.id)} disabled={saving} title="Teljes leltár Excel (.xlsx)"><Download size={15} /> Teljes XLS</button> : null}
+                <button className={btnSoft} type="button" onClick={() => printPdf("sheet")}><ExportFileIcon kind="pdf" /> Leltárív PDF</button>
+                <button className={btnSoft} type="button" onClick={() => openingDetail ? printOpeningReport(openingDetail) : printPdf("result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
+                {openingDetail ? <button className={btnSoft} type="button" onClick={() => void downloadArchiveExcel(openingDetail.session.id)} disabled={saving} title="Teljes leltár Excel (.xlsx)"><ExportFileIcon kind="excel" /> Teljes XLS</button> : null}
                 {!activeFinal ? <button className={btnSoft} type="button" onClick={openShopView}><Eye size={15} /> Bolti nézet</button> : null}
                 {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés{dirtyLineIds.length ? ` (${dirtyLineIds.length})` : ""}</button> : null}
                 {canEditActive && currentInventoryMode === "recovery" ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre vezetés</button> : null}
