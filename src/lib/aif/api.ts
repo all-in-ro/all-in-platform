@@ -1473,9 +1473,10 @@ export function apiAifOpeningInventoryActive(location?: string) {
   return fetchAifJSON<AifOpeningInventoryActiveResponse>(`/opening-inventory/active${suffix}`);
 }
 
-export function apiAifOpeningInventoryScan(input: { location?: string; code: string; qty?: number }) {
+export function apiAifOpeningInventoryScan(input: { location?: string; code: string; qty?: number; clientScanId?: string }) {
   return fetchAifJSON<{
     ok: true;
+    duplicate?: boolean;
     session: AifOpeningInventorySession;
     line: AifOpeningInventoryShopLine;
   }>("/opening-inventory/scan", {
