@@ -1,5 +1,6 @@
 import express from "express";
 import { buildOpeningInventoryXlsx, openingInventoryXlsxFilename } from "./openingInventoryXlsx.js";
+import { buildOpeningInventorySummaryHtml } from "./openingInventorySummary.js";
 
 /**
  * ALL IN - store inventory / physical stock count
@@ -2189,6 +2190,29 @@ export default function createAifOpeningInventoryRouter({
       console.error("AIF inventory export data error:",error);
       return res.status(500).json({error:error?.message||"Az export adatai nem tölthetők be."});
     } finally {client.release();}
+  });
+
+  // Egylapos, alairhato leltar osszesito. GET-only, nem alkalmaz keszletkorrekciot.
+  // A bongeszo Nyomtatas / Mentes PDF-kent funkciojaval PDF-be exportalhato.
+  router.get("/admin/sessions/:id/export-summary", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureSchema();
+      const session = await sessionById(client, req.params.id);
+      if (!session) return res.status(404).send("A leltár nem található.");
+      const detail = await adminDetail(client, session);
+      const custody = await inventoryCustodyExport(client, session, ["inventory", "credit", "reserved"]);
+      const html = buildOpeningInventorySummaryHtml(detail, custody);
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).send(html);
+    } catch (error) {
+      console.error("AIF inventory summary export error:", error);
+      return res.status(500).send("A leltár összesítője nem készíthető el.");
+    } finally {
+      client.release();
+    }
   });
 
   // Egyetlen, teljes, formázott XLSX, az admin felületen látható leltáradatokból.
