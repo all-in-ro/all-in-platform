@@ -2425,7 +2425,7 @@ export default function AllInAdminMagazinDashboard({
                 ["Készlet", `${integer(stock?.totalQty)} db`, Boxes],
                 ["Elérhető", `${integer(stock?.availableQty)} db`, PackageCheck],
                 ["Foglalt", `${integer(stock?.reservedQty)} db`, Clock3],
-                [`${data?.location.name || locationName} készletértéke`, money(stock?.retailValue), CircleDollarSign],
+                ["Szabad készletérték", money(stock?.retailValue), CircleDollarSign],
                 ["Alacsony készlet", integer(stock?.lowStockVariants), AlertTriangle],
               ].map(([title, value, Icon]) => (
                 <div key={String(title)} className="rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
@@ -2434,6 +2434,11 @@ export default function AllInAdminMagazinDashboard({
                     <Icon size={14} className="text-[#8ee6e2]" />
                   </div>
                   <p className="mt-2 text-lg text-white">{String(value)}</p>
+                  {String(title) === "Szabad készletérték" ? (
+                    <p className="mt-1 text-[10px] leading-4 text-white/52" title="A foglalt darabok nélkül, az üzlet könyv szerinti eladási értékén számolva.">
+                      Könyvérték • foglalt nélkül
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </div>

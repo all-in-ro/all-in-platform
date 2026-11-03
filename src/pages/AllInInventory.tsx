@@ -2854,7 +2854,14 @@ export default function AllInInventory() {
           <StatCard label={sourceLabel(currentLocation)} value={currentLocation?.name || "-"} hint="Kiválasztott helyszín" icon={<MapPin size={18} />} tone="blue" />
           <StatCard label="Készletsor" value={formatQty(stockStats.lines)} hint={`${formatQty(stockStats.qty)} db rendszer szerint`} icon={<PackageCheck size={18} />} />
           <StatCard label="Elérhető" value={formatQty(stockStats.available)} hint="Készlet mínusz foglalt" icon={<ShieldCheck size={18} />} tone="green" />
-          <StatCard label="Becsült eladási érték" value={`${formatMoney(stockStats.sellValue)} RON`} hint="A kiválasztott készleten" icon={<FileText size={18} />} />
+          <StatCard
+            label={search.trim() || categoryFilter !== "all" || sizeFilter !== "all"
+              ? "Szűrt készletérték"
+              : "Teljes készletérték"}
+            value={`${formatMoney(stockStats.sellValue)} RON`}
+            hint="Bruttó eladási áron • foglaltakkal"
+            icon={<FileText size={18} />}
+          />
         </section>
         ) : null}
 
@@ -3006,7 +3013,7 @@ export default function AllInInventory() {
               <StatCard label={currentInventoryMode === "recovery" ? "Régi / nem nyilvántartott" : "Többlet"} value={formatQty(openingDetail?.summary.untracked_qty ?? activeStats.extra)} hint={`${formatMoney(openingDetail?.summary.untracked_retail_value ?? activeStats.extraSell)} RON`} icon={<PackageCheck size={18} />} tone="green" />
               <StatCard label="Közbeni mozgás" value={`${n(openingDetail?.summary.live_net_qty) > 0 ? "+" : ""}${formatQty(openingDetail?.summary.live_net_qty || 0)}`} hint={`be ${formatQty(openingDetail?.summary.live_in_qty || 0)} · ki ${formatQty(openingDetail?.summary.live_out_qty || 0)}`} icon={<SlidersHorizontal size={18} />} />
               <StatCard label="Készletkorrekció" value={`${n(openingDetail?.summary.system_correction_qty) > 0 ? "+" : ""}${formatQty(openingDetail?.summary.system_correction_qty || 0)}`} hint={`${formatMoney(openingDetail?.summary.system_correction_retail_value || 0)} RON`} icon={<SlidersHorizontal size={18} />} tone={n(openingDetail?.summary.system_correction_qty) < 0 ? "red" : n(openingDetail?.summary.system_correction_qty) > 0 ? "green" : "neutral"} />
-              <StatCard label="Leltárérték" value={`${formatMoney(openingDetail?.summary.counted_retail_value ?? activeStats.countedSellValue)} RON`} hint={openingDetail?.summary.book_expected_retail_value === null || openingDetail?.summary.book_expected_retail_value === undefined ? "Aktuális listaáron" : `Könyv szerint: ${formatMoney(openingDetail.summary.book_expected_retail_value)} RON`} icon={<FileText size={18} />} tone="blue" />
+              <StatCard label="Számolt készletérték" value={`${formatMoney(openingDetail?.summary.counted_retail_value ?? activeStats.countedSellValue)} RON`} hint={openingDetail?.summary.book_expected_retail_value === null || openingDetail?.summary.book_expected_retail_value === undefined ? "Számolt db × bruttó ár" : `Könyv szerint: ${formatMoney(openingDetail.summary.book_expected_retail_value)} RON`} icon={<FileText size={18} />} tone="blue" />
             </div>
 
             {currentInventoryMode === "standard" ? (
