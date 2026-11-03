@@ -56,6 +56,8 @@ import {
   apiAifShopDailyAuditPdfUrl,
   apiAifDownloadShopDailyAuditExcel,
   apiAifAdminShopOverview,
+  apiAifAdminCustomersOverview,
+  type AifAdminCustomersOverviewResponse,
   apiAifCreateShopSaleLineNote,
   apiAifDeleteShopSaleLineNote,
   apiAifShopSaleLineNotes,
@@ -1101,6 +1103,7 @@ function MetricCard({
   tone = "normal",
   onClick,
   actionLabel,
+  showDelta = true,
 }: {
   title: string;
   value: string;
@@ -1111,6 +1114,7 @@ function MetricCard({
   tone?: "normal" | "warning" | "danger" | "success" | "accent";
   onClick?: () => void;
   actionLabel?: string;
+  showDelta?: boolean;
 }) {
   const toneClass =
     tone === "danger"
@@ -1145,7 +1149,7 @@ function MetricCard({
               {actionLabel}
             </span>
           ) : null}
-          <DeltaBadge current={current} previous={previous} />
+          {showDelta ? <DeltaBadge current={current} previous={previous} /> : null}
         </span>
       </div>
     </>
@@ -1166,6 +1170,54 @@ function MetricCard({
   return <article className={baseClass}>{content}</article>;
 }
 
+function SalesVolumeMetricButton({
+    label,
+    icon: MetricIcon,
+    view,
+    value,
+    delta,
+    onClick,
+    title,
+  }: {
+    label: string;
+    icon: LucideIcon;
+    view: "value" | "percent";
+    value: string | number;
+    delta: number;
+    onClick: () => void;
+    title: string;
+}) {
+  const signedPercent = (value: number) => `${value > 0.01 ? "+" : ""}${value.toFixed(1)}%`;
+  const percentTone = (value: number) => value > 0.01
+    ? "text-emerald-100"
+    : value < -0.01
+      ? "text-rose-100"
+      : "text-white";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex min-h-[90px] min-w-0 flex-col rounded-xl border border-white/12 bg-black/10 px-2 py-2 text-left transition hover:border-[#7bd7d4]/40 hover:bg-[#2a8d8b]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/45 active:scale-[0.985]"
+      title={title}
+    >
+      <div className="flex min-h-[26px] min-w-0 items-start gap-1.5">
+        <MetricIcon size={11} className="mt-0.5 shrink-0 text-[#8ee6e2]" />
+        <span className="min-w-0 break-words text-[9px] uppercase leading-[1.3] tracking-[0.03em] text-white/60">{label}</span>
+      </div>
+      <div className="mt-1 flex min-h-[26px] items-end">
+        {view === "value" ? (
+          <span className="break-words text-[1.16rem] leading-none text-white">{value}</span>
+        ) : (
+          <span className={`break-words text-[1.08rem] leading-none ${percentTone(delta)}`}>{signedPercent(delta)}</span>
+        )}
+      </div>
+      <div className="mt-auto flex items-center justify-end gap-1 border-t border-white/9 pt-1.5">
+        <span className="truncate text-[9px] leading-none text-white/42">{view === "value" ? "Váltás: %" : "Váltás: db"}</span>
+      </div>
+    </button>
+  );
+}
+
 function SalesVolumeCard({
   transactions,
   itemsSold,
@@ -1181,56 +1233,6 @@ function SalesVolumeCard({
   const [itemsView, setItemsView] = useState<"value" | "percent">("value");
   const transactionsDelta = percentChange(transactions, previousTransactions);
   const itemsDelta = percentChange(itemsSold, previousItemsSold);
-  const signedPercent = (value: number) => `${value > 0.01 ? "+" : ""}${value.toFixed(1)}%`;
-  const percentTone = (value: number) => value > 0.01
-    ? "text-emerald-100"
-    : value < -0.01
-      ? "text-rose-100"
-      : "text-white";
-
-  const MetricButton = ({
-    label,
-    icon: MetricIcon,
-    view,
-    value,
-    delta,
-    onClick,
-    title,
-    helper,
-  }: {
-    label: string;
-    icon: LucideIcon;
-    view: "value" | "percent";
-    value: string | number;
-    delta: number;
-    onClick: () => void;
-    title: string;
-    helper: string;
-  }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group min-w-0 rounded-xl border border-white/9 bg-black/10 px-2.5 py-2.5 text-left transition hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/10 active:scale-[0.985]"
-      title={title}
-    >
-      <div className="flex min-w-0 items-start gap-1.5">
-        <MetricIcon size={11} className="mt-0.5 shrink-0 text-[#8ee6e2]" />
-        <span className="min-w-0 text-[8px] uppercase leading-[1.25] tracking-[0.11em] text-white/42">{label}</span>
-      </div>
-      <div className="mt-2 flex min-h-[28px] items-end">
-        {view === "value" ? (
-          <span className="break-words text-[1.16rem] leading-none text-white">{value}</span>
-        ) : (
-          <span className={`break-words text-[1.08rem] leading-none ${percentTone(delta)}`}>{signedPercent(delta)}</span>
-        )}
-      </div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="min-w-0 text-[8px] leading-none text-white/38">{view === "value" ? helper : "Változás"}</span>
-        <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[8px] uppercase text-white/42">{view === "value" ? "db" : "%"}</span>
-      </div>
-    </button>
-  );
-
   return (
     <article className="relative flex min-h-[144px] h-full min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d] p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)]">
       <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
@@ -1242,7 +1244,7 @@ function SalesVolumeCard({
         </span>
       </div>
       <div className="relative mt-auto grid grid-cols-2 gap-2.5">
-        <MetricButton
+        <SalesVolumeMetricButton
           label="Eladások"
           icon={ReceiptText}
           view={transactionsView}
@@ -1250,9 +1252,8 @@ function SalesVolumeCard({
           delta={transactionsDelta}
           onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
           title="Kattintás: eladások száma / változás százalék"
-          helper="Darabszám"
         />
-        <MetricButton
+        <SalesVolumeMetricButton
           label="Eladott termékek"
           icon={ShoppingBag}
           view={itemsView}
@@ -1260,7 +1261,6 @@ function SalesVolumeCard({
           delta={itemsDelta}
           onClick={() => setItemsView((current) => current === "value" ? "percent" : "value")}
           title="Kattintás: eladott darab / változás százalék"
-          helper="Darabszám"
         />
       </div>
     </article>
@@ -1594,6 +1594,10 @@ export default function AllInAdminMagazinDashboard({
   });
   const [applied, setApplied] = useState(draft);
   const [data, setData] = useState<AifAdminShopOverviewResponse | null>(null);
+  // A fő kintlévőség az Üzleti kliensek oldal aktuális összesítését használja,
+  // nem az időszaki hiteles eladások eladásnapi történeti értékét.
+  const [liveDebt, setLiveDebt] = useState<{ amount: number; year: number } | null>(null);
+  const [liveDebtError, setLiveDebtError] = useState("");
   const [shiftDay, setShiftDay] = useState<AifShopShiftDayOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1654,7 +1658,8 @@ export default function AllInAdminMagazinDashboard({
     setLoading(true);
     setError("");
     try {
-      const [response, shiftResponse] = await Promise.all([
+      const debtYear = Number(localIsoDate(new Date()).slice(0, 4));
+      const [response, shiftResponse, customerResult] = await Promise.all([
         apiAifAdminShopOverview({
           location: locationCode,
           ...applied,
@@ -1663,10 +1668,48 @@ export default function AllInAdminMagazinDashboard({
           location: locationCode,
           date: applied.to || localIsoDate(new Date()),
         }).catch(() => null),
+        // Ugyanaz az API és summary.currentOpenBalance mező, mint az Üzleti kliensekben.
+        // A főösszeg szándékosan NEM követi a dashboard napi/termékszűrőit.
+        apiAifAdminCustomersOverview({
+          location: locationCode,
+          year: debtYear,
+          activity: "all",
+          topTen: false,
+          limit: 1000,
+        }).then((result: AifAdminCustomersOverviewResponse) => ({
+          result,
+          error: "",
+        })).catch((caught: unknown) => ({
+          result: null as AifAdminCustomersOverviewResponse | null,
+          error: caught instanceof Error ? caught.message : "A kliens-kintlévőség lekérése sikertelen.",
+        })),
       ]);
       setData(response);
       setShiftDay(shiftResponse);
+
+      const total = customerResult.result?.summary?.currentOpenBalance;
+      const validTotal = total !== null && total !== undefined &&
+        Number.isFinite(Number(total)) && Number(total) >= 0;
+      // Az éves kliens-összesítő nem lehet kisebb, mint az abba tartozó
+      // részidőszaki, MA IS nyitott adósság. Eltérés esetén nincs hamis 0.
+      const sameYearPeriod = applied.from >= `${debtYear}-01-01` &&
+        applied.to <= `${debtYear}-12-31`;
+      const periodOpen = Number(response.summary?.currentUnpaidTotal ?? 0);
+      const mismatch = validTotal && sameYearPeriod && Number.isFinite(periodOpen) &&
+        periodOpen > Number(total) + 0.01;
+      if (validTotal && !mismatch) {
+        setLiveDebt({ amount: Number(total), year: debtYear });
+        setLiveDebtError("");
+      } else {
+        setLiveDebt(null);
+        setLiveDebtError(mismatch
+          ? "Az éves kliensösszesítő és az időszaki nyitott tartozás eltér. Ellenőrzés szükséges."
+          : customerResult.error || "A jelenlegi tartozás adata nem ellenőrizhető.");
+      }
     } catch (loadError: any) {
+      setData(null);
+      setLiveDebt(null);
+      setLiveDebtError("A jelenlegi tartozás lekérése sikertelen.");
       setError(loadError?.message || "Az üzleti vezérlőpult adatai nem tölthetők be.");
     } finally {
       setLoading(false);
@@ -1922,6 +1965,8 @@ export default function AllInAdminMagazinDashboard({
   // The backend uses exactly the same audited, selected-day reconstruction as
   // the seller's daily summary. Never calculate historical debt from current line totals.
   const historicalCreditTotal = numberValue(summary?.unpaidTotal);
+  const periodOpenDebt = numberValue(summary?.currentUnpaidTotal);
+  const periodDebtDecrease = Math.max(0, Math.round((historicalCreditTotal - periodOpenDebt) * 100) / 100);
   const historicalCreditItems = numberValue(data?.history?.creditItems ??
     historicalCreditSales.reduce((sum, sale) => sum + numberValue(sale.quantity), 0));
   const historicalCreditSalesCount = numberValue(data?.history?.creditSales ?? historicalCreditSaleNumbers.size);
@@ -2407,17 +2452,18 @@ export default function AllInAdminMagazinDashboard({
             actionLabel={discountView === "percent" ? "RON" : "%"}
           />
           <MetricCard
-            title="Kintlévőség"
-            value={historyComplete ? money(historicalCreditTotal) : "Ellenőrzendő"}
-            hint={creditFilterActive
-              ? "Napi hiteles lista aktív • kattints a teljes nap visszanézéséhez"
-              : `${historicalCreditSalesCount} hiteles bizonylat • ${integer(historicalCreditItems)} termék • jelenleg nyitott: ${money(summary?.currentUnpaidTotal)}`}
+            title="Jelenlegi kintlévőség"
+            value={liveDebt ? money(liveDebt.amount) : "Ellenőrzendő"}
+            hint={liveDebt
+              ? `${locationName} • ma is nyitott tartozások • ${liveDebt.year} • dátumszűrőtől független`
+              : liveDebtError || "A jelenlegi tartozás lekérése folyamatban"}
             icon={WalletCards}
-            current={historicalCreditTotal}
-            previous={numberValue(previous?.unpaidTotal)}
-            tone={historicalCreditTotal > 0.005 || numberValue(summary?.unpaidTotal) > 0.005 ? "danger" : "normal"}
-            onClick={() => setShowHistoricalCreditRows((current) => !current)}
-            actionLabel={creditFilterActive ? "Lista ki" : "Hitel lista"}
+            current={liveDebt?.amount ?? 0}
+            previous={liveDebt?.amount ?? 0}
+            showDelta={false}
+            tone={liveDebt ? (liveDebt.amount > 0.005 ? "danger" : "normal") : "warning"}
+            onClick={() => { window.location.hash = "#allinadminclients"; }}
+            actionLabel="Kliensek"
           />
           <MetricCard
             title="Becsült árrés"
@@ -2430,6 +2476,32 @@ export default function AllInAdminMagazinDashboard({
             onClick={() => setMarginView((current) => current === "percent" ? "money" : "percent")}
             actionLabel={marginView === "percent" ? "RON" : "%"}
           />
+        </section>
+
+        <section className={`${card} flex flex-wrap items-center gap-3 px-4 py-3`} aria-label="Hitelállomány időszaki egyeztetése">
+          <div className="min-w-[160px] flex-1">
+            <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">Időszaki hiteles elvitel</p>
+            <p className="mt-1 text-[15px] tabular-nums text-white/90">{historyComplete ? money(historicalCreditTotal) : "Ellenőrzendő"}</p>
+            <p className="mt-1 text-[10px] text-white/45">Eladásnapon fennálló tartozás • nem a mai kintlévőség</p>
+          </div>
+          <div className="min-w-[160px] flex-1 border-l border-white/12 pl-3">
+            <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">Ebből ma is nyitott</p>
+            <p className="mt-1 text-[15px] tabular-nums text-[#d7fffd]">{historyComplete ? money(periodOpenDebt) : "Ellenőrzendő"}</p>
+            <p className="mt-1 text-[10px] text-white/45">Csak a kiválasztott időszakban eladott tételek</p>
+          </div>
+          <div className="min-w-[145px] flex-1 border-l border-white/12 pl-3">
+            <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">Azóta csökkent</p>
+            <p className="mt-1 text-[15px] tabular-nums text-white/90">{historyComplete ? money(periodDebtDecrease) : "Ellenőrzendő"}</p>
+            <p className="mt-1 text-[10px] text-white/45">Későbbi fizetés, visszáru vagy engedmény</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowHistoricalCreditRows((current) => !current)}
+            className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-xl border border-[#8ce7e2]/35 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/35"
+            title="A kiválasztott időszak történeti hiteles eladásai az eseménynaplóban"
+          >
+            <ReceiptText size={14} /> {creditFilterActive ? "Hitelnapló bezárása" : "Időszaki hitelnapló"}
+          </button>
         </section>
 
         <section className="grid gap-3 lg:grid-cols-[1.35fr_1fr]">
@@ -2536,7 +2608,7 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-center">Eladás</th>
                     <th className="px-3 py-3 text-center">Darab</th>
                     <th className="px-3 py-3 text-right">Kedvezmény</th>
-                    <th className="px-3 py-3 text-right">Kintlévőség</th>
+                    <th className="px-3 py-3 text-right" title="Az eladás napján fennálló időszaki hitel, nem a mai tényleges kintlévőség">Eladásnapi hitel</th>
                   </tr>
                 </thead>
                 <tbody>
