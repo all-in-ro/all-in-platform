@@ -14700,7 +14700,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const movementTotals = await pool.query(
         `SELECT
-           COALESCE(sum(CASE WHEN sm.qty_delta > 0 AND NOT (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') THEN sm.qty_delta ELSE 0 END),0)::numeric AS total_incoming_qty,
+           COALESCE(sum(CASE WHEN sm.qty_delta > 0 AND NOT (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer')
+             AND COALESCE(sm.raw->>'reason','') NOT IN ('opening_inventory_sale_bridge','opening_inventory_live_sale_sync')
+             THEN sm.qty_delta ELSE 0 END),0)::numeric AS total_incoming_qty,
+           COALESCE(sum(CASE WHEN sm.raw->>'reason'='opening_inventory_sale_bridge' AND sm.qty_delta > 0
+             THEN sm.qty_delta ELSE 0 END),0)::numeric AS automatic_bridge_qty,
            COALESCE(sum(CASE WHEN sm.qty_delta < 0 AND NOT (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') THEN abs(sm.qty_delta) ELSE 0 END),0)::numeric AS total_outgoing_qty,
            COALESCE(sum(CASE WHEN (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') AND sm.qty_delta < 0 THEN abs(sm.qty_delta) ELSE 0 END),0)::numeric AS total_transferred_qty,
            COALESCE(sum(sm.qty_delta),0)::numeric AS net_movement_qty,
@@ -14765,6 +14769,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 sm.raw->>'toLocationId' AS to_location_id,
                 sm.raw->>'toLocationCode' AS to_location_code,
                 sm.raw->>'toLocationName' AS to_location_name,
+                sale.id AS sale_id, sale.sale_number, sale.customer_name AS sale_customer_name,
+                sale.sale_type, sale.payment_status AS sale_payment_status,
+                sale.actor AS sale_actor, sale.note AS sale_note,
+                return_exchange.exchange_number AS return_number,
+                return_exchange.customer_name AS return_customer_name,
+                return_exchange.actor AS return_actor,
                 im.import_row_id, im.import_row_no, im.import_qty, im.buy_price, im.buy_price_ron,
                 im.sell_price, im.sell_price_ron, im.import_batch_id, im.source_file_name,
                 im.invoice_number, im.invoice_date, im.reception_date, im.currency_code,
@@ -14804,21 +14814,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FROM aif_stock_movements sm
          JOIN aif_locations l ON l.id=sm.location_id
          JOIN aif_product_variants v ON v.id=sm.variant_id
+         -- A bizonylatot UUID-kulccsal keressük, nem sale_id::text szkenneléssel.
+         LEFT JOIN aif_shop_sales sale ON sale.id=(CASE
+           WHEN (sm.source_type='shop_sale' OR sm.raw->>'reason'='shop_sale')
+             AND COALESCE(NULLIF(sm.raw->>'saleId',''), sm.source_id, '')
+                 ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN COALESCE(NULLIF(sm.raw->>'saleId',''), sm.source_id)::uuid
+           ELSE NULL END)
+         LEFT JOIN aif_shop_exchanges return_exchange ON return_exchange.id=(CASE
+           WHEN sm.source_type='shop_customer_credit_return'
+             AND COALESCE(sm.source_id,'')
+                 ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN sm.source_id::uuid ELSE NULL END)
          LEFT JOIN LATERAL (
-           SELECT
-             sl.list_price,
-             sl.unit_price,
-             sl.line_total,
-             sl.buy_price_snapshot
+           SELECT sl.list_price, sl.unit_price, sl.line_total, sl.buy_price_snapshot
            FROM aif_shop_sale_lines sl
-           WHERE sl.sale_id::text=COALESCE(NULLIF(sm.raw->>'saleId',''), sm.source_id)
-             AND sl.variant_id=sm.variant_id
-           ORDER BY sl.line_no ASC
-           LIMIT 1
-         ) sale_line ON (
-           sm.source_type='shop_sale'
-           OR sm.raw->>'reason'='shop_sale'
-         )
+           WHERE sl.sale_id=sale.id AND sl.variant_id=sm.variant_id
+           ORDER BY sl.line_no ASC LIMIT 1
+         ) sale_line ON true
          LEFT JOIN LATERAL (
            SELECT rw.id AS import_row_id, rw.row_no AS import_row_no,
                   rw.qty AS import_qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron,
@@ -14852,6 +14865,138 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [variantId, limit]
       );
 
+      // A félretételek nem készletmozgások: külön idővonalat kapnak, 0 db
+      // készletváltozással. A korábban feloldott foglalások is látszanak.
+      const reservationLines = await pool.query(
+        `SELECT r.id AS reservation_id, r.reservation_number, r.customer_name,
+                r.location_id, r.status, r.created_by, r.fulfilled_by, r.released_by,
+                r.fulfilled_sale_id, r.created_at, r.fulfilled_at, r.released_at,
+                rl.id AS reservation_line_id, rl.line_no, rl.quantity,
+                loc.name AS location_name
+         FROM aif_shop_reservation_lines rl
+         JOIN aif_shop_reservations r ON r.id=rl.reservation_id
+         LEFT JOIN aif_locations loc ON loc.id=r.location_id
+         WHERE rl.variant_id=$1
+         ORDER BY r.created_at DESC, rl.line_no ASC LIMIT 200`,
+        [variantId]
+      );
+      const reservationById = new Map((reservationLines.rows || []).map((r) => [String(r.reservation_id), r]));
+      const reservationIds = Array.from(reservationById.keys());
+      const reservationLog = reservationIds.length ? await pool.query(
+        `SELECT id, reservation_id, event_type, actor, payload, created_at
+         FROM aif_shop_reservation_events
+         WHERE reservation_id=ANY($1::uuid[])
+         ORDER BY created_at ASC, id ASC LIMIT 500`,
+        [reservationIds]
+      ) : { rows: [] };
+      const reservationHistory = [];
+      const loggedActions = new Set();
+      function addReservationEvent(reservation, action, at, actor, id) {
+        if (!at) return;
+        const key = `${reservation.reservation_id}:${action}`;
+        loggedActions.add(key);
+        const qty = Number(reservation.quantity || 0);
+        reservationHistory.push({
+          id, created_at: at, event_type: 'reservation', direction: 'adjust',
+          movement_type: 'reservation', source_type: 'shop_reservation',
+          source_id: String(reservation.reservation_id),
+          location_id: reservation.location_id,
+          location_name: reservation.location_name,
+          qty_delta: 0, qty_before: null, qty_after: null,
+          actor: actor || null,
+          raw: {
+            reason: 'shop_reservation', reservationAction: action,
+            reservationId: String(reservation.reservation_id),
+            reservationNumber: reservation.reservation_number,
+            reservationCustomerName: reservation.customer_name,
+            reservationQty: qty, reservationStatus: reservation.status,
+            reservationLineId: String(reservation.reservation_line_id),
+            reservedBy: reservation.created_by,
+            releasedBy: reservation.released_by,
+            fulfilledBy: reservation.fulfilled_by,
+            fulfilledSaleId: reservation.fulfilled_sale_id ? String(reservation.fulfilled_sale_id) : null,
+          },
+        });
+      }
+      for (const log of reservationLog.rows || []) {
+        const reservation = reservationById.get(String(log.reservation_id));
+        if (!reservation) continue;
+        addReservationEvent(reservation, String(log.event_type || 'updated').toLowerCase(),
+          log.created_at, log.actor || reservation.created_by,
+          `reservation-event:${log.id}`);
+      }
+      for (const reservation of reservationLines.rows || []) {
+        for (const [action, at, actor] of [
+          ['created', reservation.created_at, reservation.created_by],
+          ['released', reservation.released_at, reservation.released_by],
+          ['fulfilled', reservation.fulfilled_at, reservation.fulfilled_by],
+        ]) {
+          if (at && !loggedActions.has(`${reservation.reservation_id}:${action}`)) {
+            addReservationEvent(reservation, action, at, actor,
+              `reservation-fallback:${reservation.reservation_id}:${action}`);
+          }
+        }
+      }
+      // A normál eladás és az ugyanazon vevőhöz tartozó nyitott foglalás
+      // összefügghet, de bizonylati hivatkozás nélkül nem állítjuk, hogy a
+      // foglalásból lett kiadva. A név + időpont csak tájékoztató egyezés.
+      const sameName = (a, b) => text(a).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase().replace(/\s+/g, ' ') === text(b).normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
+      function associateSaleWithReservation(row) {
+        if (!row.sale_id || !row.sale_customer_name || !row.created_at) return;
+        const moment = new Date(row.created_at).getTime();
+        const matches = (reservationLines.rows || []).filter((r) =>
+          String(r.location_id) === String(row.location_id) &&
+          sameName(r.customer_name, row.sale_customer_name) &&
+          new Date(r.created_at).getTime() <= moment &&
+          (!r.released_at || new Date(r.released_at).getTime() >= moment - 2000) &&
+          (!r.fulfilled_at || new Date(r.fulfilled_at).getTime() >= moment - 2000));
+        if (matches.length !== 1) return;
+        const reservation = matches[0];
+        row.reservation_number = reservation.reservation_number;
+        row.reservation_customer_name = reservation.customer_name;
+        row.reservation_relation = String(reservation.fulfilled_sale_id || '') === String(row.sale_id)
+          ? 'fulfilled' : 'name_time_match_only';
+      }
+      for (const row of events.rows || []) {
+        associateSaleWithReservation(row);
+      }
+      // Az időben pontosan párba állítható 0 db-os készlet-auditokat
+      // összefűzzük a foglalási eseménnyel, hogy ne legyen két egyforma kártya.
+      const pairedAuditMovementIds = new Set();
+      for (const row of events.rows || []) {
+        if (row.source_type !== 'stock_table_audit' || Number(row.qty_delta || 0) !== 0) continue;
+        const before = Number(row.raw?.reservedBefore);
+        const after = Number(row.raw?.reservedAfter);
+        if (!Number.isFinite(before) || !Number.isFinite(after) || before === after) continue;
+        const candidates = reservationHistory.filter((r) =>
+          String(r.location_id) === String(row.location_id) &&
+          Math.abs(new Date(r.created_at).getTime() - new Date(row.created_at).getTime()) < 3000 &&
+          ((after > before && r.raw?.reservationAction === 'created') ||
+           (after < before && ['released','fulfilled','cancelled','expired'].includes(r.raw?.reservationAction))));
+        if (candidates.length !== 1) continue;
+        candidates[0].raw = { ...candidates[0].raw, stockAuditId: String(row.id),
+          reservedBefore: before, reservedAfter: after };
+        pairedAuditMovementIds.add(String(row.id));
+      }
+      // A leltárhíd közvetlenül az eladás előtti +db, nem import vagy
+      // fizikai leltártalálat. A hozzá tartozó eladást az időpont köti össze.
+      for (const row of events.rows || []) {
+        if (row.raw?.reason !== 'opening_inventory_sale_bridge') continue;
+        const nearSales = (events.rows || []).filter((other) =>
+          other.sale_id && String(other.location_id) === String(row.location_id) &&
+          Math.abs(new Date(other.created_at).getTime() - new Date(row.created_at).getTime()) < 1500);
+        if (nearSales.length !== 1) continue;
+        const sale = nearSales[0];
+        row.sale_id = sale.sale_id;
+        row.sale_number = sale.sale_number;
+        row.sale_customer_name = sale.sale_customer_name;
+        row.reservation_number = sale.reservation_number;
+        row.reservation_customer_name = sale.reservation_customer_name;
+        row.reservation_relation = sale.reservation_relation;
+      }
+
       const stockRows = stock.rows || [];
       const movement = movementTotals.rows[0] || {};
       const imports = importStats.rows[0] || {};
@@ -14874,6 +15019,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const historyEvents = [];
       const seenHistoryEvents = new Set();
       for (const row of events.rows || []) {
+        if (pairedAuditMovementIds.has(String(row.id))) continue;
         const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
         const isPrice = row.event_type === "price_change" || row.source_type === "price_change" || raw.reason === "price_change";
         const key = isPrice
@@ -14894,6 +15040,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         historyEvents.push(row);
       }
 
+      historyEvents.push(...reservationHistory);
+      historyEvents.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime() || String(b.id).localeCompare(String(a.id)));
       res.json({
         item: variant.rows[0],
         stock: stockRows,
@@ -14903,6 +15051,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           availableQty,
           stockLocationCount: stockRows.filter((row) => Number(row.qty || 0) > 0).length,
           totalIncomingQty: Number(movement.total_incoming_qty || 0),
+          automaticBridgeQty: Number(movement.automatic_bridge_qty || 0),
           totalOutgoingQty: Number(movement.total_outgoing_qty || 0),
           totalTransferredQty: Number(movement.total_transferred_qty || 0),
           netMovementQty: Number(movement.net_movement_qty || 0),
