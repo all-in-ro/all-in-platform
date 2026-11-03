@@ -6,8 +6,8 @@ import { deflateRawSync } from 'node:zlib';
 // Rövid fejléc és üzletileg értelmezhető, külön kezelt állományok.
 // A fizikai beolvasást soha nem mossuk össze a későbbi visszáruval.
 const HEADER = [
-  ['#',6], ['MÁRKA',16], ['S/N KÓD',19], ['TERMÉK KÓD',19],
-  ['VONALKÓD',20], ['TERMÉK',43], ['SZÍN',18], ['MÉRET',12],
+  ['#',6], ['MÁRKA',18], ['S/N KÓD',23], ['TERMÉKKÓD',32],
+  ['VONALKÓD',23], ['TERMÉK',48], ['SZÍN',20], ['MÉRET',13],
   ['BEOLVASOTT',15], ['KÖZBENI MOZGÁS',18], ['EGYEZTETETT DB',18],
   ['RENDSZER MOST',17], ['ELTÉRÉS',13], ['ELADÁSI ÁR',17], ['ÁLLAPOT',22],
 ];
@@ -16,6 +16,19 @@ const MONEY='#,##0.00 "RON";[Red](#,##0.00 "RON")';
 const INT='#,##0;[Red](#,##0)';
 const xmlEscape=(v)=>String(v??'').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;').slice(0,32767);
 const clean=(v)=>String(v??'').trim();
+// Csak a régi Excel-ből átvett, numerikus kódok elé írt szövegesítő
+// aposztrófot távolítjuk el. Minden azonosító valódi szöveg marad.
+const identifier=(v)=>clean(v).replace(/^['\u2019](?=[0-9])/, '');
+const syntheticModelCode=(v)=>/^[a-z0-9_]+:[^\s:]+$/i.test(clean(v));
+const readableProductCode=(p)=>{
+  const direct=identifier(p.productCode);
+  if(direct&&!syntheticModelCode(direct)) return direct;
+  const sn=identifier(p.snCod);
+  if(sn) return sn;
+  const model=identifier(p.modelCode);
+  if(model) return syntheticModelCode(model)?model.split(':').pop():model;
+  return identifier(p.internalSku);
+};
 const num=(v)=>v===null||v===undefined||v===''?null:(Number.isFinite(Number(v))?Number(v):null);
 const nz=(v)=>num(v)??0;
 const sum=(a)=>a.reduce((x,y)=>x+nz(y),0);
@@ -55,10 +68,10 @@ function productRows(detail){
     const price=num(line.sell_price);
     const delta=effective===null?null:effective-current;
     return {
-      barcode:clean(p.barcode),title:clean(p.title)||'Névtelen termék',brand:clean(p.brandName),
+      barcode:identifier(p.barcode),title:clean(p.title)||'Névtelen termék',brand:clean(p.brandName),
       category:clean(p.categoryName),subcategory:clean(p.subcategoryName),
-      color:clean(p.colorName||p.colorCode),size:clean(p.size),sn:clean(p.snCod),
-      productCode:clean(p.productCode||p.modelCode||p.internalSku),
+      color:identifier(p.colorName||p.colorCode),size:identifier(p.size),sn:identifier(p.snCod),
+      productCode:readableProductCode(p),
       baseline:nz(line.system_qty_start),current,reserved:nz(line.current_reserved_qty??line.system_reserved_start),
       physical,afterMovement:physical===null?null:nz(line.movement_after_count_qty),
       effective,delta,price,physicalValue:physical===null||price===null?null:physical*price,
@@ -109,10 +122,12 @@ function stylesXml(){
   const border='<border><left style="hair"><color rgb="FFE0E7EE"/></left><right style="hair"><color rgb="FFE0E7EE"/></right><top style="hair"><color rgb="FFE0E7EE"/></top><bottom style="hair"><color rgb="FFE0E7EE"/></bottom><diagonal/></border>';
   const xs=[
     [0,5,0,0,0], [1,2,0,0,0], [2,3,0,0,0], [3,4,0,1,1],
-    [0,5,0,1,0], [0,6,0,1,0], [0,5,165,1,2], [0,6,165,1,2],
-    [0,5,164,1,2], [0,6,164,1,2], [5,7,165,1,2], [6,8,165,1,2],
-    [7,9,0,1,1], [6,8,0,1,1], [4,10,164,1,2], [0,5,166,1,1],
-    [0,6,166,1,1], [8,6,0,1,0], [3,3,0,1,0], [4,10,165,1,2],
+    // Minden kód szövegként és középre igazítva; mennyiségek szintén középen.
+    // Kizárólag pénzösszegek jobbra igazítva. A fejlécek mindenütt középen.
+    [0,5,49,1,1], [0,6,49,1,1], [0,5,165,1,1], [0,6,165,1,1],
+    [0,5,164,1,2], [0,6,164,1,2], [5,7,165,1,1], [6,8,165,1,1],
+    [7,9,49,1,1], [6,8,49,1,1], [4,10,164,1,2], [0,5,166,1,1],
+    [0,6,166,1,1], [8,6,0,1,0], [3,3,0,1,0], [4,10,165,1,1],
     [5,7,164,1,2], [6,8,164,1,2],
   ];
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
@@ -144,7 +159,7 @@ function worksheetXml({columnWidths,rows,merges=[],autoFilter=null,freeze=0,prin
   const freezePane=freeze?`<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="${freeze}" topLeftCell="A${freeze+1}" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A${freeze+1}" sqref="A${freeze+1}"/></sheetView></sheetViews>`:'<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>';
   const mergeXml=merges.length?`<mergeCells count="${merges.length}">${merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:'';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxCol}${end}"/>${freezePane}<sheetFormatPr defaultRowHeight="19"/><cols>${cols}</cols><sheetData>${rows.map(r=>rowXml(r.row,r.cells,{height:r.height})).join('')}</sheetData>${autoFilter?`<autoFilter ref="${autoFilter}"/>`:''}${mergeXml}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${printLandscape?'landscape':'portrait'}"/></worksheet>`;
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxCol}${end}"/>${freezePane}<sheetFormatPr defaultRowHeight="19"/><cols>${cols}</cols><sheetData>${rows.map(r=>rowXml(r.row,r.cells,{height:r.height})).join('')}</sheetData>${autoFilter?`<autoFilter ref="${autoFilter}"/>`:''}${mergeXml}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${printLandscape?'landscape':'portrait'}"/><ignoredErrors><ignoredError sqref="A3:${maxCol}${end}" numberStoredAsText="1"/></ignoredErrors></worksheet>`;
 }
 function commonTitle(detail, label) {
   const s=detail.session||{};
@@ -193,7 +208,7 @@ function itemSheet(detail,data){
     const start=totalRow+3;
     rows.push({row:start,height:24,cells:[txt('A','ELLENŐRZENDŐ BEOLVASÁSOK (NEM SZÁMÍTANAK A LELTÁR ÖSSZESENBE)',18)]});
     rows.push({row:start+1,height:23,cells:[txt('A','#',3),txt('B','Vonalkód',3),txt('E','DB',3)]});
-    unknown.forEach((x,i)=>rows.push({row:start+2+i,height:22,cells:[numCell('A',i+1,i%2?7:6),txt('B',clean(x.scan_code),i%2?5:4),numCell('E',nz(x.qty),i%2?7:6)]}));
+    unknown.forEach((x,i)=>rows.push({row:start+2+i,height:22,cells:[numCell('A',i+1,i%2?7:6),txt('B',identifier(x.scan_code),i%2?5:4),numCell('E',nz(x.qty),i%2?7:6)]}));
   }
   const merges=[`A1:O1`,`A${totalRow+1}:O${totalRow+1}`,...(unknown.length?[`A${totalRow+3}:O${totalRow+3}`]:[])];
   return worksheetXml({columnWidths:header.map(([,w])=>w),rows,merges,autoFilter:`A2:O${Math.max(2,end)}`,freeze:2});
@@ -212,7 +227,7 @@ function creditSheet(detail,custody){
     rows.push({row:r,height:25,cells:[
       numCell('A',i+1,n),txt('B',x.saleNumber,t),txt('C',x.customerName,t),
       numCell('D',excelDate(x.soldAt),15),txt('E',x.productTitle,t),
-      txt('F',x.barcode,t),txt('G',x.size,t),numCell('H',x.originalQty,n),
+      txt('F',identifier(x.barcode),t),txt('G',identifier(x.size),t),numCell('H',x.originalQty,n),
       numCell('I',x.returnedQty,n),numCell('J',x.outsideQty,n,`H${r}-I${r}`),
       numCell('K',x.unitPrice,m),numCell('L',x.lineTotal,m),
       numCell('M',x.saleBalanceDisplay,m),txt('N',x.note,t),
@@ -241,8 +256,8 @@ function reservedSheet(detail,custody){
     const expires=clean(x.expiresOn).slice(0,10);
     rows.push({row:r,height:24,cells:[
       numCell('A',i+1,n),txt('B',x.reservationNumber,t),txt('C',x.customerName,t),
-      txt('D',expires,t),txt('E',x.productTitle,t),txt('F',x.barcode,t),
-      txt('G',x.size,t),numCell('H',x.qty,n),numCell('I',x.unitPrice,m),
+      txt('D',expires,t),txt('E',x.productTitle,t),txt('F',identifier(x.barcode),t),
+      txt('G',identifier(x.size),t),numCell('H',x.qty,n),numCell('I',x.unitPrice,m),
       numCell('J',(nz(x.qty)*nz(x.unitPrice)),m,`H${r}*I${r}`),
       txt('K',x.createdBy,t),numCell('L',x.stockQty,n),numCell('M',x.stockReservedQty,n),
       txt('N',x.note,t),

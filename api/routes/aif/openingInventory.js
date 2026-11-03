@@ -590,13 +590,43 @@ export default function createAifOpeningInventoryRouter({
     };
   }
 
+  // A raktárban szereplő beszállítói/örökölt/importált termékkód külön
+  // adatforrásból jöhet. A márka:modell alak belső azonosító, nem termékkód.
+  function openingInventoryProductCode(row) {
+    const candidates = [
+      row.supplier_product_code,
+      row.legacy_product_code,
+      row.legacy_original_product_code,
+      row.import_supplier_product_code,
+      row.import_normalized_supplier_code,
+      row.import_normalized_product_code,
+      row.import_raw_product_code,
+    ];
+    const looksSynthetic = (value) => {
+      const model = String(row.model_code || '').trim();
+      return /^[a-z0-9_]+:[^\s:]+$/i.test(value) &&
+        (!model || value.toLowerCase() === model.toLowerCase() ||
+          value.split(':')[0].toLowerCase() === String(row.brand_code || '').toLowerCase());
+    };
+    const actual = candidates.map(value => String(value || '').trim())
+      .find(value => value && !looksSynthetic(value));
+    if (actual) return actual;
+    // Nincs megbízható külön termékkód: inkább az azonosítható S/N-t
+    // mutatjuk, sosem a kitalált adidas:aq4128 / mayo_chix:21620 formát.
+    const sn = String(row.sn_cod || '').trim();
+    if (sn) return sn;
+    const model = String(row.model_code || '').trim();
+    if (model) return model.includes(':') ? model.split(':').pop() : model;
+    return String(row.internal_sku || '').trim() || null;
+  }
+
   function productPayload(row) {
     return {
       variantId: String(row.variant_id || ""),
       title: row.title_ro || row.shopify_title || "Névtelen termék",
       internalSku: row.internal_sku || null,
       modelCode: row.model_code || null,
-      productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
+      productCode: openingInventoryProductCode(row),
       barcode: row.barcode || row.supplier_barcode || null,
       snCod: row.sn_cod || null,
       brandName: row.brand_name || null,
@@ -817,7 +847,13 @@ export default function createAifOpeningInventoryRouter({
          b.name AS brand_name, b.code AS brand_code,
          cat.name_ro AS category_name,
          COALESCE(NULLIF(btrim(subcat.name_hu),''), NULLIF(btrim(subcat.name_ro),'')) AS subcategory_name,
-         sc.supplier_product_code, sc.supplier_barcode, sc.supplier_sku
+         sc.supplier_product_code, sc.supplier_barcode, sc.supplier_sku,
+         v.attributes->>'legacyProductCode' AS legacy_product_code,
+         v.attributes->>'legacyOriginalProductCode' AS legacy_original_product_code,
+         imp.supplier_product_code AS import_supplier_product_code,
+         imp.normalized->>'supplierProductCode' AS import_normalized_supplier_code,
+         imp.normalized->>'productCode' AS import_normalized_product_code,
+         COALESCE(NULLIF(imp.raw->>'CODPRODUS',''),NULLIF(imp.raw->>'COD PRODUS','')) AS import_raw_product_code
        FROM aif_opening_inventory_lines l
        JOIN aif_product_variants v ON v.id=l.variant_id
        JOIN aif_product_models m ON m.id=v.model_id
@@ -832,6 +868,18 @@ export default function createAifOpeningInventoryRouter({
          ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
          LIMIT 1
        ) sc ON true
+       -- A 2100+ soros leltárnál nem kérdezünk rá külön-külön minden
+       -- variáns összes importjára. Az érintett leltársorokból egyszer
+       -- képezzük a legutóbbi hiteles importkódot.
+       LEFT JOIN (
+         SELECT DISTINCT ON (rw.variant_id)
+           rw.variant_id, rw.supplier_product_code, rw.normalized, rw.raw
+         FROM aif_import_rows rw
+         JOIN aif_opening_inventory_lines ol
+           ON ol.variant_id=rw.variant_id AND ol.session_id=$1
+         WHERE rw.status='committed'
+         ORDER BY rw.variant_id, rw.updated_at DESC NULLS LAST, rw.row_no DESC
+       ) imp ON imp.variant_id=v.id
        WHERE l.session_id=$1
        ORDER BY
          l.last_scanned_at DESC NULLS LAST,
