@@ -3282,7 +3282,7 @@ export default function AllInInventory() {
                 <div className="min-w-0">
                   <p className="text-[10px] uppercase tracking-[0.15em] text-[#d5f5f1]/65">AllInFashion • Leltári export</p>
                   <h2 id="inventory-export-title" className="mt-1 text-xl text-white">{exportDialog.format==="excel" ? "Excel export összeállítása" : "PDF export összeállítása"}</h2>
-                  <p className="mt-1 text-xs text-white/60">Jelöld ki, mely állományok kerüljenek a dokumentumba. A kimutatás nem módosít készletet.</p>
+                  
                 </div>
                 <button type="button" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.05] text-white hover:bg-white/10 disabled:opacity-40" aria-label="Exportablak bezárása" disabled={exportBusy} onClick={() => setExportDialog(null)}><X size={17}/></button>
               </header>
@@ -3292,15 +3292,14 @@ export default function AllInInventory() {
                     <p className="mb-2 text-[10px] uppercase tracking-[0.12em] text-white/60">PDF típusa</p>
                     <div className="grid gap-2 sm:grid-cols-3">
                       {([
-                        ["summary", "Egylapos összesítő", "A4-es vezetői kimutatás, bruttó értékekkel és aláírásokkal. Nincs terméklista."],
-                        ["result", "Részletes eredmény", "Teljes leltár és kiválasztott állományok, terméksoronként."],
-                        ["sheet", "Üres leltárív", "Nyomtatható terméklista, kézi számláláshoz."],
-                      ] as const).map(([mode, title, description]) => (
+                        ["summary", "Egylapos összesítő"],
+                        ["result", "Részletes eredmény"],
+                        ["sheet", "Üres leltárív"],
+                      ] as const).map(([mode, title]) => (
                         <button key={mode} type="button" disabled={exportBusy} aria-pressed={exportDialog.pdfMode === mode}
                           onClick={() => setExportDialog(prev => prev ? { ...prev, pdfMode: mode } : prev)}
-                          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-50 ${exportDialog.pdfMode === mode ? "border-[#b7f4ef]/75 bg-[#237c7a]/55" : "border-white/14 bg-[#354357] hover:border-[#7bd7d4]/40"}`}>
+                          className={`rounded-xl border px-3 py-3.5 text-left transition disabled:opacity-50 ${exportDialog.pdfMode === mode ? "border-[#b7f4ef]/75 bg-[#237c7a]/55" : "border-white/14 bg-[#354357] hover:border-[#7bd7d4]/40"}`}>
                           <div className="flex items-center gap-2 text-xs text-white">{exportDialog.pdfMode === mode ? <CheckCircle2 size={14} className="text-[#bafff7]" /> : <FileText size={14} className="text-white/55" />}{title}</div>
-                          <p className="mt-1.5 text-[10px] leading-4 text-white/58">{description}</p>
                         </button>
                       ))}
                     </div>
@@ -3320,14 +3319,7 @@ export default function AllInInventory() {
                       </button>
                     );
                   })}
-                </div> : (
-                  <div className="rounded-xl border border-[#8ce7e2]/25 bg-[#244c51]/70 px-3 py-3 text-xs leading-relaxed text-white/85">
-                    Az egylapos összesítő automatikusan tartalmazza a leltár, a hiteles és a félretett állomány fő darabszám- és bruttó értékadatait. Nem tartalmaz terméksorokat. Az aláírás nem végez készletműveletet.
-                  </div>
-                )}
-                <p className="mt-4 rounded-xl border border-[#8ce7e2]/25 bg-[#244c51]/70 px-3 py-2.5 text-[11px] leading-relaxed text-[#defdf9]/85">
-                  A hitelben lévő termék <strong className="font-normal text-white">nincs a bolti polckészletben</strong>. A félretett termék <strong className="font-normal text-white">már benne van</strong> a fizikai készletben. A dokumentum külön mutatja az állományokat, nem adja össze őket kétszer.
-                </p>
+                </div> : null}
               </div>
               <footer className="flex items-center justify-end gap-2 border-t border-white/10 bg-[#293648] px-5 py-4">
                 <button type="button" className={btnSoft} disabled={exportBusy} onClick={()=>setExportDialog(null)}>Mégse</button>
