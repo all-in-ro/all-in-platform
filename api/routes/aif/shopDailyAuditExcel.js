@@ -5,13 +5,14 @@
 // Missing subcategories remain blank; no inference from title, code or brand.
 import express from 'express';
 import { buildAifDailyAuditXlsx } from './shopAuditXlsxWriter.js';
+import { ensureAifVoucherFinanceSchema } from '../vouchers.js';
 
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/;
 const round = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 const cents = (value) => Math.round(Number(value || 0) * 100);
 const normalize = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('hu-HU');
 const text = (v) => String(v ?? '').trim();
-const METHODS = { cash: 'Készpénz', card: 'Bankkártya', bank_transfer: 'Átutalás', voucher: 'Utalvány', other: 'Egyéb' };
+const METHODS = { cash: 'Készpénz', card: 'Bankkártya', bank_transfer: 'Átutalás', voucher: 'Utalvány (nem új pénz)', other: 'Egyéb' };
 const methodName = (v) => METHODS[v] || text(v) || 'Ismeretlen';
 const fromCents = (v) => Math.round(v) / 100;
 function bookDateTime(value) {
@@ -234,20 +235,47 @@ async function loadPeriod(client, args) {
     WHERE e.location_id=$1 AND e.status='completed' AND ${dayFilter('e.created_at')} ${who('e.actor')}
     ORDER BY e.created_at,e.id LIMIT 50001`;
 
-  const [salesResult,paymentsResult,customerResult,allocResult,exchangeResult] = await Promise.all([
+  const voucherIssueQuery = `SELECT t.id::text,t.created_at,t.method,t.amount,t.actor,
+    v.code,v.language,COALESCE(v.buyer_name,'') AS buyer_name
+    FROM aif_gift_voucher_transactions t
+    JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+    WHERE t.kind='issue' AND t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
+    AND ${dayFilter('t.created_at')} ORDER BY t.created_at,t.id LIMIT 50001`;
+  const voucherRedeemQuery = `SELECT t.id::text,t.created_at,t.amount,t.sale_id::text AS sale_id,
+    t.actor,v.code FROM aif_gift_voucher_transactions t
+    JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+    WHERE t.kind='redeem' AND t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
+    AND ${dayFilter('t.created_at')} ORDER BY t.created_at,t.id LIMIT 50001`;
+  const [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult] = await Promise.all([
     client.query(salesQuery,args),client.query(paymentsQuery,args),client.query(customerPaymentsQuery,args),
     client.query(allocationsQuery,args),client.query(exchangeQuery,args),
+    client.query(voucherIssueQuery,args),client.query(voucherRedeemQuery,args),
   ]);
-  for (const r of [salesResult,paymentsResult,customerResult,allocResult,exchangeResult]) {
+  for (const r of [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult]) {
     if (r.rows.length>50000) throw Object.assign(new Error('Az időszaki export több mint 50 000 sort tartalmaz. Válassz rövidebb időszakot.'), {statusCode:413});
   }
+  // A bevaltas ugyanazon a napon szerepel a normal arufizetesek kozott.
+  // Ha a tranzakcionaplo es a bizonylat nem egyezik, nem exportalunk csendben.
+  const redeemed = new Map();
+  for(const p of paymentsResult.rows.filter(p=>p.method==='voucher')){
+    const id=text(p.sale_id);
+    redeemed.set(id,cents((redeemed.get(id)||0)/100)+cents(p.amount));
+  }
+  const journal = new Map();
+  for(const t of voucherRedeemsResult.rows){
+    const id=text(t.sale_id);
+    journal.set(id,(journal.get(id)||0)+cents(t.amount));
+  }
+  if(redeemed.size!==journal.size || [...redeemed].some(([id,n])=>journal.get(id)!==n))
+    throw Object.assign(new Error('Az utalvanybevaltasok es az eladasi fizetesi sorok nem egyeznek. Az export blokkolva.'),{statusCode:409});
   return { sales:salesResult.rows, payments:paymentsResult.rows, customerPayments:customerResult.rows,
-    allocations:allocResult.rows, exchanges:exchangeResult.rows };
+    allocations:allocResult.rows, exchanges:exchangeResult.rows,
+    voucherIssues:voucherIssuesResult.rows, voucherRedeems:voucherRedeemsResult.rows };
 }
 function excelEntries(data, employee = null) {
   const shouldInclude = (actor) => !employee || normalize(actor)===normalize(employee);
   const rows = [];
-  const totals = {collected:0,gross:0,discount:0,settled:0,creditValue:0,exchangeCash:0,cash:0,card:0,transfer:0,other:0};
+  const totals = {collected:0,gross:0,discount:0,settled:0,creditValue:0,exchangeCash:0,cash:0,card:0,transfer:0,other:0,voucher:0,voucherIssued:0,voucherRedeemed:0};
   const salesById=new Map();
   const customerPaysById=new Map(data.customerPayments.map(row=>[text(row.id),row]));
   const allocationsByPayment=new Map();
@@ -257,7 +285,7 @@ function excelEntries(data, employee = null) {
     allocationsByPayment.get(id).push(a);
   }
   const paymentGroups=new Map();
-  const totalMethod = method => method==='cash'?'cash':method==='card'?'card':method==='bank_transfer'?'transfer':'other';
+  const totalMethod = method => method==='cash'?'cash':method==='card'?'card':method==='bank_transfer'?'transfer':method==='voucher'?'voucher':'other';
   for (const p of data.payments) {
     const id=text(p.sale_id);
     if(!paymentGroups.has(id)) paymentGroups.set(id,[]);
@@ -305,7 +333,10 @@ function excelEntries(data, employee = null) {
         for(const [kind,value] of Object.entries(record.amounts))
           allocated[kind]=round(Number(allocated[kind]||0)+Number(value||0));
       }
-      const collected=round(Object.values(allocated).reduce((a,b)=>a+Number(b||0),0));
+      // A voucher egyenleg elkoltese tender, nem uj befolyt penz.
+      const tendered=round(Object.values(allocated).reduce((a,b)=>a+Number(b||0),0));
+      const collected=round(Object.entries(allocated).filter(([kind])=>kind!=='voucher')
+        .reduce((a,[,value])=>a+Number(value||0),0));
       for(const [kind,value] of Object.entries(allocated))totals[kind]=round(totals[kind]+Number(value||0));
       const qty=Number(r.quantity||0);
       const lineTotal=round(r.line_total);
@@ -328,15 +359,15 @@ function excelEntries(data, employee = null) {
           kind:credit?'Hitelre elvitt':saleFrom?'Eladás · másik eladótól átvéve':'Eladás',
           collected,originalDate:'',stockQty:-qty,note:noteParts.filter(Boolean).join(' ')});
         if(credit)totals.creditValue+=lineTotal;
-        if(!credit&&collected>0)totals.discount+=discount;
-        if(credit&&collected>0&&lineTotal>0)totals.discount+=round(discount*Math.min(1,collected/lineTotal));
-      }else if(collected>0){
+        if(!credit&&tendered>0)totals.discount+=discount;
+        if(credit&&tendered>0&&lineTotal>0)totals.discount+=round(discount*Math.min(1,tendered/lineTotal));
+      }else if(tendered>0){
         // Employee payment-only view: zero new sold units and zero stock delta.
         const financialActor=financialAllocations[0]?.actor||'';
         add({id:`financial:${r.line_id}`,at:r.sold_at,dateTime:bookDateTime(r.sold_at),
           brand:r.brand_name,sn:r.sn_code,productCode,barcode:r.export_barcode,subcategory:r.export_subcategory,
           color:r.color_name,size:r.size,customer:r.customer_name,qty:0,
-          listPrice:0,discountPercent:0,discount:0,lineTotal:collected,method:methods,
+          listPrice:0,discountPercent:0,discount:0,lineTotal:tendered,method:methods,
           document:r.sale_number,actor:financialActor,
           kind:moneyFrom?'Pénz átvezetése · jóváírás':'Másik eladó termékének pénzbevétele',
           collected,originalDate:bookDateTime(r.sold_at),stockQty:0,
@@ -354,11 +385,30 @@ function excelEntries(data, employee = null) {
       add({id:`legacy-payment:${p.id}`,at:p.paid_at,dateTime:bookDateTime(p.paid_at),
         customer:p.customer_name,qty:0,listPrice:0,discountPercent:0,discount:0,lineTotal:round(p.amount),
         method:methodName(p.method),document:p.sale_number,actor:p.actor,
-        kind:'Korábbi hitel befizetése',collected:round(p.amount),stockQty:0,
+        kind:'Korábbi hitel befizetése',collected:p.method==='voucher'?0:round(p.amount),stockQty:0,
         originalDate:bookDateTime(p.original_sold_at),
         note:'Régi befizetés, nincs biztonságosan visszafejthető terméksor-kapcsolat.',});
-      totals.settled+=round(p.amount);
+      if(p.method!=='voucher')totals.settled+=round(p.amount);
     }
+  }
+  // Fizikai, mar korabban bevetelezett papir eladasa: penz erkezik,
+  // de SEM termekdarab, SEM termekforgalom nem keletkezik. A 16 oszlopos
+  // sablon marad, a kategoriabol egyertelmuen felismerheto az esemeny.
+  for(const issue of data.voucherIssues || []){
+    if(!shouldInclude(issue.actor))continue;
+    const value=round(issue.amount);
+    const methodKey=totalMethod(text(issue.method));
+    if(methodKey==='voucher'||methodKey==='other')throw Object.assign(
+      new Error('Ismeretlen utalvany-ertekesitesi fizetesi mod.'),{statusCode:409});
+    totals[methodKey]=round(totals[methodKey]+value);
+    totals.voucherIssued=round(totals.voucherIssued+value);
+    add({id:`voucher-issue:${issue.id}`,at:issue.created_at,dateTime:bookDateTime(issue.created_at),
+      brand:'PENZUGY',sn:'',productCode:'UTALVANY',barcode:String(issue.code||''),
+      subcategory:`AJÁNDÉKUTALVÁNY KIADÁS • ${issue.language||'HU'} • NEM ÁRU`,
+      color:'',size:'',customer:issue.buyer_name||'',qty:0,listPrice:0,
+      discountPercent:0,discount:0,lineTotal:value,method:`${methodName(issue.method)} • utalvany ertekesites`,
+      actor:issue.actor,kind:'Ajándékutalvány értékesítés · nem termék',collected:value,
+      stockQty:0,note:'Uj penzbevetel; nem ruha- vagy aruertekesites, utalvany-kotelezettseg keletkezett.'});
   }
   // Customer payments: one receipt, zero or many linked ORIGINAL item lines.
   for(const cp of data.customerPayments) {
@@ -437,10 +487,11 @@ function excelEntries(data, employee = null) {
         collected:cash,stockQty:0,note:e.note||'Csere különbözet, nem termékeladás.'});
     }
   }
+  totals.voucherRedeemed=round(totals.voucher);
   totals.collected=round(rows.reduce((sum,r)=>sum+Number(r.collected||0),0));
   totals.discount=round(totals.discount);
   totals.gross=round(totals.collected+totals.discount);
-  for(const name of ['settled','creditValue','exchangeCash','cash','card','transfer','other']) totals[name]=round(totals[name]);
+  for(const name of ['settled','creditValue','exchangeCash','cash','card','transfer','other','voucherIssued','voucherRedeemed','voucher']) totals[name]=round(totals[name]);
   const paymentMethods=round(totals.cash+totals.card+totals.transfer+totals.other);
   if (Math.abs(paymentMethods-totals.collected)>0.02) {
     // Important: never download a plausible looking but false reconciliation.
@@ -460,6 +511,7 @@ export default function createAifShopDailyAuditExcelRouter({pool,requireAuthed,r
       if(!isAll&&!employee) return res.status(403).json({error:'A bejelentkezett eladó nem azonosítható.'});
       await ensureAifShopSalesSchema();
       await ensureAifSellerTransferSchema(); // DDL only before the read-only export transaction.
+      await ensureAifVoucherFinanceSchema(pool); // DDL only before the read-only export transaction.
       client=await pool.connect();
       await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');started=true;
       await client.query("SET LOCAL statement_timeout = '120000ms'");
