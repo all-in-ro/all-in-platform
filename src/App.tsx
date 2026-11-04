@@ -2,7 +2,9 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react
 import { LogOut, UserRound, X } from "lucide-react";
 import Login from "./pages/Login";
 import AllInHome from "./pages/AllInHome";
+import AllInVoucherLaunchButtons from "./components/AllInVoucherLaunchButtons";
 
+const AllInVouchers = lazy(() => import("./pages/AllInVouchers"));
 const AllInIncoming = lazy(() => import("./pages/AllInIncoming"));
 const AllInOrderHistory = lazy(() => import("./pages/AllInOrderHistory"));
 const AllInShopifyOrders = lazy(() => import("./pages/AllInShopifyOrders"));
@@ -43,6 +45,7 @@ type ShopId = string;
 type ScreenName =
   | "login"
   | "home"
+  | "vouchers"
   | "magazinciuc"
   | "magazintargu"
   | "magazinciucsale"
@@ -211,6 +214,7 @@ function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
   if (key === "home") return { name: "home" };
+  if (key === "vouchers" || key === "ajandekutalvanyok") return { name: "vouchers" };
   if (
     key === "magazinciuc" ||
     key === "allinmagazinciuc" ||
@@ -330,7 +334,7 @@ function shopHomeScreen(shopId: ShopId): ScreenName {
 }
 
 function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
-  if (screenName === "openinginventoryshop") return true;
+  if (screenName === "openinginventoryshop" || screenName === "vouchers") return true;
   if (shopId === "csikszereda") {
     return screenName === "magazinciuc" || screenName === "magazinciucsale";
   }
@@ -804,6 +808,7 @@ export default function App() {
     <>
       <Suspense fallback={<ScreenLoader />}>
         {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
+        {screen.name === "vouchers" && <AllInVouchers actor={session.actor} role={session.role} locationCode={session.role === "shop" ? (session.locationCode || (session.shopId === "kezdivasarhely" ? "magazin_targu_secuiesc" : "main_warehouse")) : undefined} />}
         {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
         {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
         {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
@@ -903,6 +908,14 @@ export default function App() {
         {screen.name === "carexpenses" && <AllInCarExpenses {...(commonProps as any)} />}
         {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
       </Suspense>
+      <AllInVoucherLaunchButtons visible={session.role === "admin" && screen.name === "home"} mode="admin-home" onOpen={() => {
+        try { window.sessionStorage.setItem("allin:vouchers:return", window.location.hash || "#allin"); } catch {}
+        go("vouchers");
+      }}/>
+      <AllInVoucherLaunchButtons visible={screen.name === "magazinciucsale" || screen.name === "magazintargusale"} mode="shop-sale" onOpen={() => {
+        try { window.sessionStorage.setItem("allin:vouchers:return", window.location.hash); } catch {}
+        go("vouchers");
+      }}/>
 
       {logoutOpen ? (
         <div
