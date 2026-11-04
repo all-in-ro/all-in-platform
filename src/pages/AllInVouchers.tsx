@@ -138,14 +138,33 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{if(tab==="receive-stock") window.setTimeout(()=>registerRef.current?.focus(),70);},[tab]);
 
-  function goBack(){
-    if((intakePending || receivePending) && !window.confirm("Vannak még feldolgozás alatt álló beolvasások. Biztosan elhagyod az oldalt?"))return;
-    const fallback = admin ? "#allin" : ownLocation==="magazin_targu_secuiesc" ? "#magazintargusale" : "#magazinciucsale";
-    let previous = fallback;
-    try {const from=window.sessionStorage.getItem("allin:vouchers:return");
-      if(from && /^#[a-z][a-z0-9-]{1,45}$/i.test(from) && from!=="#vouchers") previous=from;
+  function goBack() {
+    if ((intakePending || receivePending) &&
+        !window.confirm("Vannak még feldolgozás alatt álló beolvasások. Biztosan elhagyod az oldalt?")) return;
+
+    const returnKey = "allin:vouchers:return";
+    // A korabban eltarolt oldal egy masik bejelentkezesbol is megmaradhat.
+    // Adminnal soha nem lehet a bolti elado oldalara visszairanyitani.
+    if (admin) {
+      try { window.sessionStorage.removeItem(returnKey); } catch {}
+      window.location.hash = "home";
+      return;
+    }
+
+    // Az elado csak a sajat uzlete oldalaira lephet vissza.
+    const targu = ownLocation === "magazin_targu_secuiesc";
+    const fallback = targu ? "magazintargusale" : "magazinciucsale";
+    const allowed = targu
+      ? ["magazintargusale", "magazintargu", "shopsale", "shopadmin"]
+      : ["magazinciucsale", "magazinciuc", "shopsale", "shopadmin"];
+    let target = fallback;
+    try {
+      const stored = (window.sessionStorage.getItem(returnKey) || "")
+        .trim().replace(/^#/, "").toLowerCase();
+      if (allowed.includes(stored)) target = stored;
+      window.sessionStorage.removeItem(returnKey);
     } catch {}
-    window.location.hash=previous;
+    window.location.hash = target;
   }
   // A vonalkodolvaso gyorsabb lehet a Rendernel: a beolvasas nem blokkolodik
   // egyetlen valaszra. A szerveroldali UNIQUE esemeny az igazsag forrasa.
