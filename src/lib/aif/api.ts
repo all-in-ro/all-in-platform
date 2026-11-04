@@ -3542,6 +3542,7 @@ export type AifShopSaleResult = {
   lineCount: number;
   itemCount: number;
   soldAt: string;
+  voucher?: { code: string; used: number; balanceAfter: number; cashCollected: number };
 };
 
 export function apiAifShopSaleCatalog(options: {
@@ -3829,6 +3830,9 @@ export type AifShopDailySummaryResponse = {
     collectedTotal?: number;
     /** A collectedTotal azon része, amely korábbi hiteles vásárlások aznapi rendezése. */
     customerPaymentTotal?: number;
+    voucherIssuedTotal?: number;
+    voucherRedeemedTotal?: number;
+    voucherIssues?: Array<{method:string;amount:number;count:number}>;
     /** Kedvezmény előtti érték: aznapi eladások + rendezett korábbi termékek eredeti ára. */
     grossCollectedTotal?: number;
     /** Kedvezmény az aznapi eladásokon és a rendezett korábbi hitelsorokon. */
@@ -3989,6 +3993,8 @@ export type AifShopShiftPaymentItem = {
   salesAmount: number;
   customerPaymentAmount: number;
   exchangeAmount?: number;
+  voucherIssueAmount?: number;
+  voucherIssueTransactions?: number;
   transactions: number;
   customerPaymentTransactions: number;
   exchangeTransactions?: number;
@@ -4011,6 +4017,8 @@ export type AifShopShiftSnapshot = {
   unpaidTotal: number;
   unpaidSales: number;
   customerSales: number;
+  voucherIssuedTotal?: number;
+  voucherRedeemedTotal?: number;
   firstSaleAt?: string | null;
   lastSaleAt?: string | null;
   payments: AifShopShiftPaymentItem[];
@@ -4183,6 +4191,7 @@ export type AifShopCashBalance = {
   baselineAt?: string | null;
   baselineCash: number;
   saleCash: number;
+  voucherCash?: number;
   customerCash: number;
   exchangeCash: number;
   confirmedOut: number;
@@ -5021,6 +5030,8 @@ export function apiAifCompleteShopSale(input: {
   location: string;
   paymentMethod: AifShopSalePaymentMethod;
   idempotencyKey: string;
+  voucherCode?: string | null;
+  voucherAmount?: number;
   extraDiscountAmount?: number;
   couponCode?: string | null;
   couponExpectedDiscount?: number;
