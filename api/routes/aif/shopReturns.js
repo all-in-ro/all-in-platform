@@ -23,6 +23,159 @@ export default function createAifShopReturnsRouter({
   const tokenHash = (value) => createHash("sha256").update(String(value || "")).digest("hex");
   const oneTimeCode = () => String(randomInt(1000, 10000));
 
+  // A cserekent kiadott termek is onallo, ujra visszaveheto bizonylatsor.
+  // A gyoker-eladasra hivatkozas megmarad, de nem novelheti az eredeti
+  // eladas visszavett darabszamat. Ezert uj, kulon FK szukseges.
+  let chainSchemaPromise = null;
+  function ensureExchangeChainSchema() {
+    if (!chainSchemaPromise) {
+      chainSchemaPromise = (async () => {
+        await ensureAifShopSalesSchema();
+        const migration = await pool.connect();
+        try {
+          await migration.query('BEGIN');
+          await migration.query(`SELECT pg_advisory_xact_lock(hashtext('aif_shop_exchange_chain_schema_v1')::bigint)`);
+          await migration.query(`ALTER TABLE aif_shop_exchanges
+          ADD COLUMN IF NOT EXISTS source_exchange_line_id uuid NULL
+          REFERENCES aif_shop_exchange_lines(id) ON DELETE RESTRICT`);
+        await migration.query(`ALTER TABLE aif_shop_exchanges
+          ALTER COLUMN source_sale_line_id DROP NOT NULL`);
+        await migration.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchanges_source_exchange_line_idx
+          ON aif_shop_exchanges (source_exchange_line_id,status,created_at DESC)
+          WHERE source_exchange_line_id IS NOT NULL`);
+        await migration.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchange_lines_barcode_idx
+          ON aif_shop_exchange_lines ((lower(btrim(COALESCE(barcode,'')))))`);
+        await migration.query(`DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='aif_exchange_source_exactly_one_ck'
+            AND conrelid='aif_shop_exchanges'::regclass) THEN
+            ALTER TABLE aif_shop_exchanges ADD CONSTRAINT aif_exchange_source_exactly_one_ck
+            CHECK ((source_sale_line_id IS NOT NULL AND source_exchange_line_id IS NULL)
+                OR (source_sale_line_id IS NULL AND source_exchange_line_id IS NOT NULL));
+          END IF;
+        END $$`);
+        await migration.query(`ALTER TABLE aif_shop_return_authorizations
+          ADD COLUMN IF NOT EXISTS source_exchange_line_id uuid NULL
+          REFERENCES aif_shop_exchange_lines(id) ON DELETE CASCADE`);
+        await migration.query(`ALTER TABLE aif_shop_return_authorizations
+          ALTER COLUMN sale_line_id DROP NOT NULL`);
+        await migration.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_return_authorizations_chain_pending_uq
+          ON aif_shop_return_authorizations (source_exchange_line_id,requesting_location_id)
+          WHERE status='pending' AND source_exchange_line_id IS NOT NULL`);
+        await migration.query(`DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='aif_return_auth_source_exactly_one_ck'
+            AND conrelid='aif_shop_return_authorizations'::regclass) THEN
+            ALTER TABLE aif_shop_return_authorizations ADD CONSTRAINT aif_return_auth_source_exactly_one_ck
+            CHECK ((sale_line_id IS NOT NULL AND source_exchange_line_id IS NULL)
+                OR (sale_line_id IS NULL AND source_exchange_line_id IS NOT NULL));
+          END IF;
+        END $$`);
+          await migration.query('COMMIT');
+        } catch (error) {
+          try { await migration.query('ROLLBACK'); } catch {}
+          throw error;
+        } finally {
+          migration.release();
+        }
+        return true;
+      })().catch((error) => { chainSchemaPromise = null; throw error; });
+    }
+    return chainSchemaPromise;
+  }
+
+  function chainReturnRow(row, currentLocation, canSeeCrossStorePrice = false) {
+    const sameStore = String(row.sale_location_id || '') === String(currentLocation.id || '');
+    const priceVisible = sameStore || canSeeCrossStorePrice;
+    const quantity = aifNumber(row.quantity);
+    const returnedQty = aifNumber(row.returned_qty);
+    const amount = aifNumber(row.unit_price);
+    return {
+      sourceKind: 'exchange_line',
+      saleLineId: String(row.source_exchange_line_id),
+      sourceExchangeLineId: String(row.source_exchange_line_id),
+      saleId: String(row.parent_exchange_id),
+      saleNumber: row.sale_number,
+      rootSaleNumber: row.root_sale_number || null,
+      soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+      saleLocation: locationPayload(row, 'sale'),
+      sameStore, priceVisible,
+      actor: row.actor || null, customerName: row.customer_name || null,
+      customerPhone: null, paymentStatus: priceVisible ? 'paid' : null,
+      balanceDue: priceVisible ? 0 : null, eligible: true,
+      quantity, returnedQty, remainingQty: Math.max(0, quantity - returnedQty),
+      product: {
+        variantId: row.variant_id ? String(row.variant_id) : null,
+        title: row.product_title || 'Ismeretlen csere-termek',
+        productCode: row.product_code || null,
+        barcode: row.barcode || null, brandName: row.brand_name || null,
+        colorName: row.color_name || null, size: row.size || null,
+        imageUrl: row.image_url || null,
+      },
+      listPrice: priceVisible ? amount : null,
+      unitPrice: priceVisible ? amount : null,
+      discountAmount: priceVisible ? 0 : null,
+      discountPercent: priceVisible ? 0 : null,
+      lineTotal: priceVisible ? aifNumber(row.line_total) : null,
+      saleTotal: priceVisible ? aifNumber(row.sale_total) : null,
+    };
+  }
+
+  async function loadChainLine(client, chainLineId, { lock = false } = {}) {
+    const result = await client.query(
+      `SELECT
+         el.id AS source_exchange_line_id, el.exchange_id AS parent_exchange_id,
+         el.variant_id, el.quantity, el.unit_price, el.line_total, el.buy_price_snapshot,
+         COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),'Ismeretlen termek') AS product_title,
+         COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+         COALESCE(NULLIF(el.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+         COALESCE(NULLIF(el.brand_name,''),NULLIF(b.name,'')) AS brand_name,
+         COALESCE(NULLIF(el.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+         COALESCE(NULLIF(el.size,''),NULLIF(v.size,'')) AS size,
+         COALESCE(NULLIF(el.image_url,''),NULLIF(v.image_url,'')) AS image_url,
+         ex.source_sale_id, ex.exchange_number AS sale_number,
+         ex.created_at AS sold_at, ex.actor, ex.customer_name, ex.customer_phone,
+         ex.status AS sale_status, ex.location_id AS sale_location_id,
+         ex.replacement_total AS sale_total, ex.original_snapshot AS parent_snapshot,
+         root.sale_number AS root_sale_number, root.status AS root_sale_status,
+         l.code AS sale_location_code, l.name AS sale_location_name,
+         COALESCE(ret.returned_qty,0)::int AS returned_qty
+       FROM aif_shop_exchange_lines el
+       JOIN aif_shop_exchanges ex ON ex.id=el.exchange_id
+       JOIN aif_shop_sales root ON root.id=ex.source_sale_id
+       JOIN aif_locations l ON l.id=ex.location_id
+       LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+       LEFT JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(child.returned_qty),0)::int AS returned_qty
+         FROM aif_shop_exchanges child
+         WHERE child.source_exchange_line_id=el.id AND child.status='completed'
+       ) ret ON true
+       WHERE el.id::text=$1
+       LIMIT 1
+       ${lock ? 'FOR UPDATE OF el, ex' : ''}`,
+      [chainLineId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async function assertNoChainedReturns(client, exchangeIds) {
+    if (!exchangeIds.length) return;
+    const children = await client.query(
+      `SELECT child.exchange_number
+       FROM aif_shop_exchange_lines el
+       JOIN aif_shop_exchanges child ON child.source_exchange_line_id=el.id
+         AND child.status='completed'
+       WHERE el.exchange_id=ANY($1::uuid[]) LIMIT 1`,
+      [exchangeIds]
+    );
+    if (children.rowCount) {
+      const error = new Error(`Ezt a cseret nem lehet visszavonni, mert a kiadott termeket mar ujra csereltek (${children.rows[0].exchange_number}). Elobb a kesobbi cseret kell rendezni.`);
+      error.statusCode = 409;
+      error.code = 'exchange_has_followup_exchange';
+      throw error;
+    }
+  }
+
   function locationPayload(row, prefix = "sale") {
     const id = row?.[`${prefix}_location_id`];
     const code = row?.[`${prefix}_location_code`];
@@ -310,7 +463,148 @@ export default function createAifShopReturnsRouter({
     }
   });
 
+  // Kereso a korabbi cserek KIADOTT soraibol. Ezek nem eredeti eladasi
+  // sorok, es csak a sajat arukkal, sajat kiadott mennyisegukig vehetoek vissza.
+  router.get('/exchange-sales', requireAuthed, async (req, res) => {
+    try {
+      await ensureExchangeChainSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const search = normalizeSearch(req.query.q || req.query.search || req.query.code);
+      const limit = Math.min(400, Math.max(1, Number(req.query.limit || 80) || 80));
+      const saleDate = text(req.query.saleDate || req.query.sale_date || '');
+      const windowDays = Number(req.query.windowDays ?? req.query.window_days ?? 0);
+      const parsed = /^\d{4}-\d{2}-\d{2}$/.test(saleDate) ? new Date(`${saleDate}T12:00:00Z`) : null;
+      if (saleDate && (!parsed || !Number.isFinite(parsed.getTime()) ||
+          parsed.toISOString().slice(0,10)!==saleDate || ![0,3,7,30].includes(windowDays))) {
+        return res.status(400).json({ error:'Ervenytelen vasarlasi datum vagy idointervallum.' });
+      }
+      if (!search) return res.json({ ok:true, items:[], count:0 });
+      const results = await pool.query(
+        `SELECT el.id::text AS source_exchange_line_id, el.exchange_id AS parent_exchange_id,
+                el.variant_id, el.quantity, el.unit_price, el.line_total,
+                COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),'Ismeretlen termek') AS product_title,
+                COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+                COALESCE(NULLIF(el.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+                COALESCE(NULLIF(el.brand_name,''),NULLIF(b.name,'')) AS brand_name,
+                COALESCE(NULLIF(el.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+                COALESCE(NULLIF(el.size,''),NULLIF(v.size,'')) AS size,
+                COALESCE(NULLIF(el.image_url,''),NULLIF(v.image_url,'')) AS image_url,
+                ex.exchange_number AS sale_number, ex.created_at AS sold_at,
+                ex.actor, ex.customer_name, ex.location_id AS sale_location_id,
+                ex.replacement_total AS sale_total,
+                root.sale_number AS root_sale_number,
+                l.code AS sale_location_code, l.name AS sale_location_name,
+                COALESCE(ret.returned_qty,0)::int AS returned_qty
+         FROM aif_shop_exchange_lines el
+         JOIN aif_shop_exchanges ex ON ex.id=el.exchange_id AND ex.status='completed'
+         JOIN aif_shop_sales root ON root.id=ex.source_sale_id AND root.status='completed'
+         JOIN aif_locations l ON l.id=ex.location_id
+         LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(sum(child.returned_qty),0)::int AS returned_qty
+           FROM aif_shop_exchanges child
+           WHERE child.source_exchange_line_id=el.id AND child.status='completed'
+         ) ret ON true
+         WHERE COALESCE(ret.returned_qty,0) < el.quantity
+           AND (lower(btrim(COALESCE(el.barcode,'')))=lower(btrim($1))
+             OR lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+             OR lower(btrim(COALESCE(el.product_code,'')))=lower(btrim($1))
+             OR lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
+             OR COALESCE(el.product_title,'') ILIKE $2
+             OR COALESCE(el.product_code,'') ILIKE $2
+             OR COALESCE(el.barcode,'') ILIKE $2
+             OR ex.exchange_number ILIKE $2)
+           AND ($4::date IS NULL OR (ex.created_at AT TIME ZONE 'Europe/Bucharest')::date
+             BETWEEN $4::date-$5::int AND $4::date+$5::int)
+         ORDER BY CASE WHEN lower(btrim(COALESCE(el.barcode,'')))=lower(btrim($1)) THEN 0 ELSE 1 END,
+                  ex.created_at DESC,el.line_no ASC LIMIT $3`,
+        [search,`%${search}%`,limit,saleDate||null,saleDate?windowDays:0]
+      );
+      const canSeePrice = normCode(req.session?.role) === 'admin';
+      const items = results.rows.map(row => chainReturnRow(row,location,canSeePrice));
+      return res.json({ ok:true,location:{id:String(location.id),code:location.code,name:location.name},items,count:items.length });
+    } catch(error) {
+      console.error('AIF chained return search failed',error);
+      const status=Number(error?.statusCode||500);
+      return res.status(status>=400&&status<600?status:500).json({error:error?.message||'Csere-eladasok nem tolthetok be.',code:error?.code||null});
+    }
+  });
+
+  router.get('/exchange-sales/:exchangeId/lines',requireAuthed,async(req,res)=>{
+    const id=text(req.params.exchangeId);
+    if (!isUuidText(id)) return res.status(400).json({error:'Ervenytelen cserebizonylat.'});
+    try {
+      await ensureExchangeChainSchema();
+      const location=await aifResolveShopLocation(req,pool,req.query.location);
+      const parent=await pool.query(`SELECT id,exchange_number,status FROM aif_shop_exchanges WHERE id=$1::uuid`,[id]);
+      if (!parent.rowCount||parent.rows[0].status!=='completed') return res.status(404).json({error:'A cserebizonylat mar nem ervenyes.'});
+      const lineIds=await pool.query(`SELECT id::text FROM aif_shop_exchange_lines WHERE exchange_id=$1::uuid ORDER BY line_no,id`,[id]);
+      const items=[];
+      for(const line of lineIds.rows) {
+        const loaded=await loadChainLine(pool,line.id);
+        if(loaded) items.push(chainReturnRow(loaded,location,normCode(req.session?.role)==='admin'));
+      }
+      return res.json({ok:true,saleId:id,saleNumber:parent.rows[0].exchange_number,items,count:items.length});
+    } catch(error) {
+      console.error('AIF chained exchange receipt failed',error);
+      const status=Number(error?.statusCode||500);
+      return res.status(status>=400&&status<600?status:500).json({error:error?.message||'A cserebizonylat nem toltheto be.',code:error?.code||null});
+    }
+  });
+
+  async function requestExchangeLineAuthorization(req,res,id) {
+    if (!isUuidText(id)) return res.status(400).json({error:'Ervenytelen csere-termeksor.'});
+    let client;
+    try {
+      await ensureExchangeChainSchema();
+      client=await pool.connect();
+      await client.query('BEGIN');
+      const location=await aifResolveShopLocation(req,client,req.body?.location);
+      const line=await loadChainLine(client,id,{lock:true});
+      if(!line || line.sale_status!=='completed' || line.root_sale_status!=='completed' ||
+        aifNumber(line.quantity)<=aifNumber(line.returned_qty)) {
+        const error=new Error('A cserekent kiadott termek mar nem visszaveheto.');error.statusCode=409;throw error;
+      }
+      if(String(line.sale_location_id)===String(location.id)) {
+        await client.query('COMMIT');
+        return res.json({ok:true,required:false});
+      }
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,[`aif_return_auth_chain:${id}:${location.id}`]);
+      await client.query(`UPDATE aif_shop_return_authorizations SET status='expired',access_code=NULL,updated_at=now()
+        WHERE status='pending' AND expires_at<=now()`);
+      const old=await client.query(`SELECT * FROM aif_shop_return_authorizations
+        WHERE source_exchange_line_id=$1::uuid AND requesting_location_id=$2
+          AND status='pending' AND expires_at>now()
+        ORDER BY created_at DESC LIMIT 1`,[id,location.id]);
+      let auth=old.rows[0]||null;
+      if(!auth) {
+        const created=await client.query(`INSERT INTO aif_shop_return_authorizations
+          (sale_line_id,source_exchange_line_id,source_location_id,requesting_location_id,requested_by,
+           status,access_code,attempt_count,expires_at,created_at,updated_at)
+          VALUES (NULL,$1,$2,$3,$4,'pending',$5,0,now()+interval '5 minutes',now(),now()) RETURNING *`,
+          [id,line.sale_location_id,location.id,actorFrom(req),oneTimeCode()]);
+        auth=created.rows[0];
+      }
+      await client.query('COMMIT');
+      return res.json({ok:true,required:true,item:{
+        id:String(auth.id),status:auth.status,
+        expiresAt:auth.expires_at?new Date(auth.expires_at).toISOString():null,
+        sourceLocation:{id:String(line.sale_location_id),code:line.sale_location_code,name:line.sale_location_name},
+        requestingLocation:{id:String(location.id),code:location.code,name:location.name},
+      }});
+    } catch(error) {
+      try{await client?.query('ROLLBACK')}catch{}
+      console.error('AIF chained return authorization failed',error);
+      const status=Number(error?.statusCode||500);
+      return res.status(status>=400&&status<600?status:500).json({error:error?.message||'Csere-ar feloldas nem sikerult.',code:error?.code||null});
+    } finally{client?.release()}
+  }
+
   router.post("/authorizations", requireAuthed, async (req, res) => {
+    const exchangeLineId = text(req.body?.exchangeLineId || req.body?.sourceExchangeLineId);
+    if (exchangeLineId) return requestExchangeLineAuthorization(req,res,exchangeLineId);
     const saleLineId = text(req.body?.saleLineId || req.body?.sale_line_id);
     if (!isUuidText(saleLineId)) return res.status(400).json({ error: "Érvénytelen eladási tétel." });
     const client = await pool.connect();
@@ -388,7 +682,7 @@ export default function createAifShopReturnsRouter({
 
   router.get("/authorizations/inbox", requireAuthed, async (req, res) => {
     try {
-      await ensureAifShopSalesSchema();
+      await ensureExchangeChainSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       await pool.query(
         `UPDATE aif_shop_return_authorizations
@@ -400,21 +694,25 @@ export default function createAifShopReturnsRouter({
            a.id, a.status, a.access_code, a.requested_by, a.expires_at, a.created_at,
            req.id AS requesting_location_id, req.code AS requesting_location_code, req.name AS requesting_location_name,
            src.id AS source_location_id, src.code AS source_location_code, src.name AS source_location_name,
-           sl.id AS sale_line_id,
-           s.sale_number, s.sold_at, s.customer_name,
-           COALESCE(NULLIF(sl.product_title,''), NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS product_title,
-           COALESCE(NULLIF(sl.product_code,''), NULLIF(sc.supplier_product_code,''), NULLIF(m.model_code,''), NULLIF(v.internal_sku,'')) AS product_code,
-           COALESCE(NULLIF(sl.barcode,''), NULLIF(v.barcode,'')) AS barcode,
-           COALESCE(NULLIF(sl.brand_name,''), NULLIF(b.name,'')) AS brand_name,
-           COALESCE(NULLIF(sl.color_name,''), NULLIF(v.color_name,''), NULLIF(v.color_code,'')) AS color_name,
-           COALESCE(NULLIF(sl.size,''), NULLIF(v.size,'')) AS size,
-           COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url
+           COALESCE(sl.id,cel.id) AS sale_line_id,
+           COALESCE(parent.exchange_number,s.sale_number) AS sale_number,
+           COALESCE(parent.created_at,s.sold_at) AS sold_at,
+           COALESCE(parent.customer_name,s.customer_name) AS customer_name,
+           COALESCE(NULLIF(sl.product_title,''),NULLIF(cel.product_title,''),NULLIF(m.title_ro,''),'Ismeretlen termek') AS product_title,
+           COALESCE(NULLIF(sl.product_code,''),NULLIF(cel.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
+           COALESCE(NULLIF(sl.barcode,''),NULLIF(cel.barcode,''),NULLIF(v.barcode,'')) AS barcode,
+           COALESCE(NULLIF(sl.brand_name,''),NULLIF(cel.brand_name,''),NULLIF(b.name,'')) AS brand_name,
+           COALESCE(NULLIF(sl.color_name,''),NULLIF(cel.color_name,''),NULLIF(v.color_name,'')) AS color_name,
+           COALESCE(NULLIF(sl.size,''),NULLIF(cel.size,''),NULLIF(v.size,'')) AS size,
+           COALESCE(NULLIF(sl.image_url,''),NULLIF(cel.image_url,''),NULLIF(v.image_url,'')) AS image_url
          FROM aif_shop_return_authorizations a
          JOIN aif_locations req ON req.id=a.requesting_location_id
          JOIN aif_locations src ON src.id=a.source_location_id
-         JOIN aif_shop_sale_lines sl ON sl.id=a.sale_line_id
-         JOIN aif_shop_sales s ON s.id=sl.sale_id
-         LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+         LEFT JOIN aif_shop_sale_lines sl ON sl.id=a.sale_line_id
+         LEFT JOIN aif_shop_exchange_lines cel ON cel.id=a.source_exchange_line_id
+         LEFT JOIN aif_shop_exchanges parent ON parent.id=cel.exchange_id
+         LEFT JOIN aif_shop_sales s ON s.id=sl.sale_id
+         LEFT JOIN aif_product_variants v ON v.id=COALESCE(sl.variant_id,cel.variant_id)
          LEFT JOIN aif_product_models m ON m.id=v.model_id
          LEFT JOIN aif_brands b ON b.id=m.brand_id
          LEFT JOIN LATERAL (
@@ -571,14 +869,17 @@ export default function createAifShopReturnsRouter({
          WHERE id=$1`,
         [auth.id, tokenHash(token), unlockExpiresAt, actorFrom(req)]
       );
-      const saleLine = await loadSaleLine(client, auth.sale_line_id, { lock: false });
+      const exchangeSource=Boolean(auth.source_exchange_line_id);
+      const source=exchangeSource
+        ? await loadChainLine(client,String(auth.source_exchange_line_id))
+        : await loadSaleLine(client,String(auth.sale_line_id));
+      if (!source || source.sale_status!=='completed' || (exchangeSource && source.root_sale_status!=='completed')) {
+        throw Object.assign(new Error('A feloldott tetel mar nem ervenyes.'),{statusCode:409});
+      }
       await client.query("COMMIT");
-      if (!saleLine) return res.status(404).json({ error: "Az eladási tétel már nem található." });
       return res.json({
-        ok: true,
-        unlockToken: token,
-        unlockExpiresAt: unlockExpiresAt.toISOString(),
-        item: returnSaleRow(saleLine, location, true),
+        ok: true,unlockToken:token,unlockExpiresAt:unlockExpiresAt.toISOString(),
+        item: exchangeSource ? chainReturnRow(source,location,true) : returnSaleRow(source,location,true),
       });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
@@ -636,23 +937,24 @@ export default function createAifShopReturnsRouter({
 
   router.get("/history", requireAuthed, async (req, res) => {
     try {
-      await ensureAifShopSalesSchema();
+      await ensureExchangeChainSchema();
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const limit = Math.min(200, Math.max(1, Number(req.query.limit || 60)));
       const result = await pool.query(
         `SELECT
            e.*, src.code AS source_location_code, src.name AS source_location_name,
-           sl.product_title AS source_product_title,
-           sl.product_code AS source_product_code,
-           sl.barcode AS source_barcode,
-           sl.brand_name AS source_brand_name,
-           sl.color_name AS source_color_name,
-           sl.size AS source_size,
-           sl.image_url AS source_image_url,
+           COALESCE(sl.product_title,cel.product_title) AS source_product_title,
+           COALESCE(sl.product_code,cel.product_code) AS source_product_code,
+           COALESCE(sl.barcode,cel.barcode) AS source_barcode,
+           COALESCE(sl.brand_name,cel.brand_name) AS source_brand_name,
+           COALESCE(sl.color_name,cel.color_name) AS source_color_name,
+           COALESCE(sl.size,cel.size) AS source_size,
+           COALESCE(sl.image_url,cel.image_url) AS source_image_url,
            COALESCE(repl.lines, '[]'::jsonb) AS replacement_lines
          FROM aif_shop_exchanges e
          JOIN aif_locations src ON src.id=e.source_location_id
-         JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
+         LEFT JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
+         LEFT JOIN aif_shop_exchange_lines cel ON cel.id=e.source_exchange_line_id
          LEFT JOIN LATERAL (
            SELECT jsonb_agg(
              jsonb_build_object(
@@ -701,7 +1003,12 @@ export default function createAifShopReturnsRouter({
           customerName: row.customer_name || null,
           sourceLocation: { id: String(row.source_location_id), code: row.source_location_code, name: row.source_location_name },
           sourceSaleId: String(row.source_sale_id),
-          sourceSaleLineId: String(row.source_sale_line_id),
+          sourceSaleLineId: row.source_sale_line_id ? String(row.source_sale_line_id) : null,
+          sourceExchangeLineId: row.source_exchange_line_id ? String(row.source_exchange_line_id) : null,
+          parentExchangeId: row.original_snapshot?.parentExchangeId || null,
+          parentExchangeNumber: row.original_snapshot?.parentExchangeNumber || null,
+          sourceKind: row.source_exchange_line_id ? 'exchange_line' : 'sale_line',
+          chainDepth: row.original_snapshot?.chainDepth || (row.source_exchange_line_id ? 2 : 1),
           returnedQty: aifNumber(row.returned_qty),
           returnCredit: aifNumber(row.return_credit),
           replacementTotal: aifNumber(row.replacement_total),
@@ -1523,7 +1830,293 @@ export default function createAifShopReturnsRouter({
     }
   }
 
+  // Tetszoleges generacios lanc-csere: az elozo CSERE KIADOTT sorait vesszuk
+  // vissza, nem az eredeti eladas sorait. A korabbi cserek erintetlenek.
+  // Egy kozos tranzakcio, egy penzugyi elszamolas, soronkent pontos naplo.
+  async function completeExchangeLineReturns(req, res) {
+    const body = req.body || {};
+    const input = Array.isArray(body.returns) && body.returns.length
+      ? body.returns
+      : [{exchangeLineId:body.exchangeLineId||body.sourceExchangeLineId,returnedQty:body.returnedQty||1,
+          authorizationId:body.authorizationId,unlockToken:body.unlockToken}];
+    const replacementInput=Array.isArray(body.replacements)?body.replacements:[];
+    const key=text(req.get('Idempotency-Key')||body.idempotencyKey||body.idempotency_key).slice(0,200);
+    const method=normCode(body.settlementMethod||body.settlement_method||'');
+    const fail=(message,code='chain_return_invalid',status=409)=>Object.assign(new Error(message),{code,statusCode:status});
+    if(input.length<1||input.length>40||replacementInput.length>100||!key)
+      return res.status(400).json({error:'A lanc-csere sorai vagy azonositoja ervenytelen.'});
+    const wanted=[];
+    const seen=new Set();
+    for(const item of input){
+      const id=text(item.exchangeLineId||item.sourceExchangeLineId||item.saleLineId);
+      const qty=Number(item.returnedQty??item.returned_qty??1);
+      if(!isUuidText(id)||!Number.isSafeInteger(qty)||qty<=0||seen.has(id))
+        return res.status(400).json({error:'Ervenytelen vagy duplikalt csere-termeksor/darabszam.'});
+      seen.add(id);
+      wanted.push({id,qty,authorizationId:text(item.authorizationId||item.authorization_id),unlockToken:text(item.unlockToken||item.unlock_token)});
+    }
+    wanted.sort((a,b)=>a.id.localeCompare(b.id));
+    let client;
+    try{
+      await ensureExchangeChainSchema();
+      client=await pool.connect();
+      await client.query('BEGIN');
+      const location=await aifResolveShopLocation(req,client,body.location);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)',[`aif_shop_chain_request:${key}`]);
+      const previous=await client.query(`SELECT * FROM aif_shop_exchanges WHERE client_request_id=$1 LIMIT 1`,[key]);
+      if(previous.rowCount){
+        const e=previous.rows[0],snap=e.original_snapshot||{};
+        const previousLines=Array.isArray(snap.chainReturnLines)?snap.chainReturnLines:[];
+        const matches=JSON.stringify(previousLines.map(x=>[String(x.exchangeLineId),Number(x.returnedQty)]).sort())
+          ===JSON.stringify(wanted.map(x=>[x.id,x.qty]).sort());
+        if(!matches||!snap.chainBatchPrimary||String(e.location_id)!==String(location.id)||e.status!=='completed')
+          throw fail('A visszaruazonosito masik vagy visszavont cserehez tartozik.','chain_idempotency_collision');
+        const group=snap.returnBatchId
+          ? await client.query(`SELECT id,exchange_number,status FROM aif_shop_exchanges
+              WHERE original_snapshot->>'returnBatchId'=$1 ORDER BY exchange_number`,[String(snap.returnBatchId)])
+          : {rows:[e]};
+        if(group.rows.length!==Number(snap.chainBatchCount)||group.rows.some(x=>x.status!=='completed'))
+          throw fail('A korabbi lanc-csere vissza lett vonva.','chain_idempotency_cancelled');
+        await client.query('COMMIT');
+        return res.json({ok:true,duplicate:true,exchangeId:String(e.id),exchangeNumber:e.exchange_number,
+          exchangeIds:group.rows.map(x=>String(x.id)),returnedLines:previousLines,
+          returnedQty:previousLines.reduce((n,x)=>n+Number(x.returnedQty||0),0),
+          returnCredit:aifNumber(snap.chainBatchCredit),replacementTotal:aifNumber(e.replacement_total),
+          difference:aifNumber(e.difference),settlementDirection:e.settlement_direction,
+          settlementMethod:e.settlement_method||null,settlementAmount:aifNumber(e.settlement_amount)});
+      }
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)',[`aif_shop_shift:${location.id}`]);
+      await aifAssertNoPendingShopShiftHandover(client,location.id,actorFrom(req));
+      for(const w of wanted){
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)',[`aif_shop_return_exchange_line:${w.id}`]);
+      }
+      const sourceRows=[],authRows=[];
+      let parentId=null,rootSaleId=null,parentLocationId=null;
+      for(const w of wanted){
+        const line=await loadChainLine(client,w.id,{lock:true});
+        if(!line||line.sale_status!=='completed'||line.root_sale_status!=='completed'||!line.variant_id)
+          throw fail('Ez a cserekent kiadott termek mar nem ervenyes.','chain_source_invalid');
+        if(parentId&&String(line.parent_exchange_id)!==parentId)
+          throw fail('Egy lanc-cserehez ugyanannak a cserebizonylatnak a termekei jelolhetok ki.','chain_mixed_receipts',400);
+        parentId=String(line.parent_exchange_id);
+        rootSaleId=String(line.source_sale_id);
+        parentLocationId=String(line.sale_location_id);
+        const remaining=aifNumber(line.quantity)-aifNumber(line.returned_qty);
+        if(w.qty>remaining)throw fail(`${line.product_title}: legfeljebb ${Math.max(0,remaining)} db veheto vissza.`,'chain_quantity_exceeded');
+        let auth=null;
+        if(parentLocationId!==String(location.id)&&normCode(req.session?.role)!=='admin'){
+          if(!isUuidText(w.authorizationId)||!w.unlockToken)
+            throw fail('Masik uzlet csere-termekehez feloldokod szukseges.','chain_authorization_required',403);
+          const authQuery=await client.query(`SELECT * FROM aif_shop_return_authorizations WHERE id=$1::uuid FOR UPDATE`,[w.authorizationId]);
+          auth=authQuery.rows[0]||null;
+          if(!auth||auth.status!=='unlocked'||String(auth.source_exchange_line_id)!==w.id||
+             String(auth.source_location_id)!==parentLocationId||String(auth.requesting_location_id)!==String(location.id)||
+             !auth.unlock_expires_at||new Date(auth.unlock_expires_at).getTime()<=Date.now()||
+             text(auth.unlock_token_hash)!==tokenHash(w.unlockToken))
+            throw fail('A masik uzlet feloldasa ervenytelen vagy lejart.','chain_authorization_invalid',403);
+          authRows.push(auth);
+        }
+        const unit=aifRoundMoney(line.unit_price);
+        if(!Number.isFinite(unit)||unit<0)throw fail('A csere eredeti kiadasi ara hianyzik.','chain_price_invalid');
+        sourceRows.push({...w,line,auth,unit,credit:aifRoundMoney(unit*w.qty)});
+      }
+      const replacements=[];
+      const seenVariants=new Set();
+      for(const row of replacementInput){
+        const id=text(row.variantId||row.variant_id);
+        const qty=Number(row.quantity??row.qty??1);
+        if(!isUuidText(id)||!Number.isSafeInteger(qty)||qty<=0||seenVariants.has(id))
+          throw fail('Ervenytelen vagy ismetelt csere-termek.','chain_replacement_invalid',400);
+        seenVariants.add(id);
+        replacements.push({id,qty});
+      }
+      const returnsByVariant=new Map();
+      for(const r of sourceRows){
+        const id=String(r.line.variant_id);
+        returnsByVariant.set(id,(returnsByVariant.get(id)||0)+r.qty);
+      }
+      const variantIds=Array.from(new Set([...returnsByVariant.keys(),...replacements.map(r=>r.id)])).sort();
+      const vr=await client.query(`SELECT v.id AS variant_id,v.internal_sku,v.barcode,v.buy_price,v.sell_price,
+               v.size,v.color_name,v.color_code,v.image_url,v.status AS variant_status,m.status AS model_status,
+               m.model_code,COALESCE(NULLIF(m.title_ro,''),m.shopify_title,v.internal_sku) AS title,
+               b.name AS brand_name,sc.supplier_product_code
+             FROM aif_product_variants v
+             JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN LATERAL (SELECT supplier_product_code FROM aif_variant_supplier_codes sc
+               WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+               ORDER BY sc.updated_at DESC NULLS LAST,sc.created_at DESC NULLS LAST LIMIT 1) sc ON true
+             WHERE v.id=ANY($1::uuid[]) ORDER BY v.id FOR UPDATE OF v`,[variantIds]);
+      const stocks=await client.query(`SELECT variant_id,qty,reserved_qty FROM aif_stock
+            WHERE location_id=$1 AND variant_id=ANY($2::uuid[]) ORDER BY variant_id FOR UPDATE`,[location.id,variantIds]);
+      const byStock=new Map(stocks.rows.map(x=>[String(x.variant_id),x]));
+      const byVariant=new Map(vr.rows.map(x=>[String(x.variant_id),{
+        ...x,qty:aifNumber(byStock.get(String(x.variant_id))?.qty),
+        reserved_qty:aifNumber(byStock.get(String(x.variant_id))?.reserved_qty)
+      }]));
+      for(const id of returnsByVariant.keys()){
+        if(!byVariant.has(id))throw fail('Visszahozo termek torzsadata hianyzik.','chain_source_variant_missing');
+      }
+      for(const r of replacements){
+        const v=byVariant.get(r.id);
+        if(!v||v.variant_status!=='active'||v.model_status!=='active')
+          throw fail('A csere-termek nem aktiv.','chain_replacement_inactive');
+        const available=aifNumber(v.qty)-aifNumber(v.reserved_qty)+(returnsByVariant.get(r.id)||0);
+        if(r.qty>available)throw fail(`${v.title}: nem eleg a keszlet (${available} db).`,'chain_insufficient_stock');
+        const unit=Number(v.sell_price);
+        if(!Number.isFinite(unit)||unit<0)throw fail(`${v.title}: hianyzik az eladasi ar.`,'chain_missing_replacement_price');
+        r.product=v;r.unit=aifRoundMoney(unit);r.total=aifRoundMoney(r.unit*r.qty);
+        r.buy=v.buy_price==null?null:aifRoundMoney(v.buy_price);
+      }
+      const totalCredit=aifRoundMoney(sourceRows.reduce((n,r)=>n+r.credit,0));
+      const replacementTotal=aifRoundMoney(replacements.reduce((n,r)=>n+r.total,0));
+      const difference=aifRoundMoney(replacementTotal-totalCredit);
+      const direction=difference>0.005?'in':difference< -0.005?'out':'none';
+      const settle=direction==='none'?0:aifRoundMoney(Math.abs(difference));
+      if(direction!=='none'&&!['cash','card','bank_transfer'].includes(method))
+        throw fail('Valaszd ki a kulonbozet fizetesi modjat.','chain_settlement_required',400);
+      const actor=actorFrom(req),batchId=randomUUID();
+      const summary=sourceRows.map(r=>({
+        exchangeLineId:r.id,saleLineId:r.id,title:r.line.product_title,
+        returnedQty:r.qty,returnCredit:r.credit,parentExchangeId:parentId,
+      }));
+      const headers=[];
+      let index=0;
+      for(const r of sourceRows){
+        const primary=index++===0;
+        const exchangeNumber=await allocateExchangeNumber(client,location);
+        const parent=r.line.parent_snapshot||{};
+        const snap={
+          sourceKind:'exchange_line',sourceExchangeLineId:r.id,parentExchangeId:parentId,
+          parentExchangeNumber:r.line.sale_number,rootSaleNumber:r.line.root_sale_number,
+          chainDepth:Math.max(2,Number(parent.chainDepth||1)+1),
+          sourceLocation:{id:parentLocationId,code:r.line.sale_location_code,name:r.line.sale_location_name},
+          product:{variantId:String(r.line.variant_id),title:r.line.product_title,
+            productCode:r.line.product_code,barcode:r.line.barcode,colorName:r.line.color_name,size:r.line.size},
+          returnedQty:r.qty,unitPrice:r.unit,returnCredit:r.credit,
+          sourceBuyPrice:r.line.buy_price_snapshot==null?null:aifRoundMoney(r.line.buy_price_snapshot),
+          chainBatchPrimary:primary,chainBatchCount:sourceRows.length,
+          chainReturnLines:summary,chainBatchCredit:totalCredit,
+          ...(sourceRows.length>1?{returnBatchId:batchId,returnBatchPrimary:primary,
+            returnBatchCount:sourceRows.length,returnBatchLines:summary,returnBatchCredit:totalCredit}:{}),
+        };
+        const requestId=primary?key:`${key}:chain:${index}`;
+        const created=await client.query(`INSERT INTO aif_shop_exchanges
+           (exchange_number,location_id,source_location_id,source_sale_id,source_sale_line_id,
+            source_exchange_line_id,source_variant_id,returned_qty,return_unit_credit,return_credit,
+            replacement_total,difference,settlement_direction,settlement_method,settlement_amount,
+            customer_name,customer_phone,actor,note,authorization_id,
+            original_snapshot,replacement_snapshot,client_request_id,status,created_at,updated_at)
+          VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+                  $20::jsonb,$21::jsonb,$22,'completed',now(),now()) RETURNING *`,[
+          exchangeNumber,location.id,parentLocationId,rootSaleId,r.id,r.line.variant_id,
+          r.qty,r.unit,r.credit,primary?replacementTotal:0,primary?difference:0,
+          primary?direction:'none',primary&&direction!=='none'?method:null,primary?settle:0,
+          r.line.customer_name||null,r.line.customer_phone||null,actor,text(body.note)||null,
+          r.auth?.id || null,
+          JSON.stringify(snap),JSON.stringify(primary?replacements.map(x=>({
+            variantId:x.id,quantity:x.qty,unitPrice:x.unit,lineTotal:x.total,buyPrice:x.buy,
+          })):[]),requestId,
+        ]);
+        headers.push({header:created.rows[0],source:r});
+      }
+      const main=headers[0].header;
+      let lineNo=1;
+      for(const r of replacements){
+        const v=r.product;
+        await client.query(`INSERT INTO aif_shop_exchange_lines
+           (exchange_id,line_no,variant_id,quantity,unit_price,line_total,buy_price_snapshot,
+            product_title,product_code,barcode,brand_name,color_name,size,image_url,raw)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)`,[
+          main.id,lineNo++,r.id,r.qty,r.unit,r.total,r.buy,
+          v.title||null,v.supplier_product_code||v.model_code||v.internal_sku||null,
+          v.barcode||null,v.brand_name||null,v.color_name||v.color_code||null,v.size||null,v.image_url||null,
+          JSON.stringify({source:'shop_exchange_chain',parentExchangeId:parentId,rootSaleId}),
+        ]);
+      }
+      const running=new Map(Array.from(byVariant,([id,v])=>[id,aifNumber(v.qty)]));
+      for(const {header,source:r} of headers){
+        const id=String(r.line.variant_id),before=running.get(id),after=before+r.qty;
+        const v=byVariant.get(id);
+        await client.query(`INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
+          VALUES ($1,$2,$3,$4,now()) ON CONFLICT (location_id,variant_id)
+          DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,[location.id,id,after,v.reserved_qty]);
+        running.set(id,after);
+        const logged=await insertStockMovementSafe(client,{
+          movementType:'manual_adjustment',sourceType:'shop_exchange_return',sourcePrefix:'ex_return',
+          fallbackSourceType:'manual_stock_edit',sourceId:String(header.id),
+          locationId:location.id,variantId:id,qtyDelta:r.qty,qtyBefore:before,qtyAfter:after,actor,
+          raw:{reason:'shop_exchange_return',sourceKind:'exchange_line',
+            exchangeId:String(header.id),exchangeNumber:header.exchange_number,
+            parentExchangeId:parentId,sourceExchangeLineId:r.id,sourceSaleId:rootSaleId,
+            returnBatchId:sourceRows.length>1?batchId:null,returnedQty:r.qty,returnCredit:r.credit},
+        });
+        if(!logged)throw fail('A lanc-csere bevetele nem naplozhato.','chain_return_stock_log',500);
+      }
+      for(const r of replacements){
+        const v=byVariant.get(r.id),before=running.get(r.id),after=before-r.qty;
+        if(after<aifNumber(v.reserved_qty))throw fail('A csere-termek keszlete megvaltozott.','chain_insufficient_stock');
+        await client.query(`INSERT INTO aif_stock(location_id,variant_id,qty,reserved_qty,updated_at)
+          VALUES($1,$2,$3,$4,now()) ON CONFLICT(location_id,variant_id)
+          DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,[location.id,r.id,after,v.reserved_qty]);
+        running.set(r.id,after);
+        const logged=await insertStockMovementSafe(client,{
+          movementType:'sale',sourceType:'shop_exchange_out',sourcePrefix:'ex_out',
+          fallbackSourceType:'manual_stock_edit',sourceId:String(main.id),
+          locationId:location.id,variantId:r.id,qtyDelta:-r.qty,qtyBefore:before,qtyAfter:after,actor,
+          raw:{reason:'shop_exchange_out',exchangeId:String(main.id),exchangeNumber:main.exchange_number,
+            parentExchangeId:parentId,sourceSaleId:rootSaleId,quantity:r.qty,
+            unitPrice:r.unit,lineTotal:r.total},
+        });
+        if(!logged)throw fail('A lanc-csere kiadasa nem naplozhato.','chain_out_stock_log',500);
+      }
+      if(direction!=='none'){
+        await client.query(`INSERT INTO aif_shop_exchange_settlements
+          (exchange_id,location_id,method,direction,amount,actor,note,raw,created_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,now())`,[
+          main.id,location.id,method,direction,settle,actor,text(body.note)||null,
+          JSON.stringify({reason:'chain_exchange',parentExchangeId:parentId,
+            returnCredit:totalCredit,replacementTotal,difference}),
+        ]);
+      }
+      await client.query(`INSERT INTO aif_shop_sale_events(sale_id,event_type,actor,note,payload)
+        VALUES($1,'exchange_return',$2,$3,$4::jsonb)`,[
+        rootSaleId,actor,text(body.note)||null,JSON.stringify({
+          sourceKind:'exchange_line',parentExchangeId:parentId,exchangeId:String(main.id),
+          exchangeNumber:main.exchange_number,exchangeIds:headers.map(x=>String(x.header.id)),
+          returns:summary,returnCredit:totalCredit,replacementTotal,difference,
+          processedAtLocation:{id:String(location.id),code:location.code,name:location.name},
+        }),
+      ]);
+      for(const auth of authRows){
+        await client.query(`UPDATE aif_shop_return_authorizations
+          SET status='used',used_at=now(),used_by=$2,unlock_token_hash=NULL,updated_at=now()
+          WHERE id=$1`,[auth.id,actor]);
+      }
+      await client.query('COMMIT');
+      return res.json({ok:true,duplicate:false,exchangeId:String(main.id),exchangeNumber:main.exchange_number,
+        exchangeIds:headers.map(x=>String(x.header.id)),exchangeNumbers:headers.map(x=>x.header.exchange_number),
+        returnedLines:summary,returnedQty:sourceRows.reduce((n,r)=>n+r.qty,0),
+        returnCredit:totalCredit,replacementTotal,difference,settlementDirection:direction,
+        settlementMethod:direction==='none'?null:method,settlementAmount:settle,
+        createdAt:new Date(main.created_at||Date.now()).toISOString(),
+      });
+    } catch(error){
+      try{await client?.query('ROLLBACK')}catch{}
+      console.error('AIF chained shop exchange failed',error);
+      const status=Number(error?.statusCode||500);
+      return res.status(status>=400&&status<600?status:500).json({
+        error:error?.message||'A lanc-csere lezarasa sikertelen.',code:error?.code||null,
+      });
+    } finally{client?.release()}
+  }
+
   router.post("/exchanges", requireAuthed, async (req, res) => {
+    if (text(req.body?.sourceKind || req.body?.returnSource)==='exchange_line' ||
+        req.body?.sourceExchangeLineId || req.body?.exchangeLineId ||
+        (Array.isArray(req.body?.returns) && req.body.returns.some(x=>x.sourceKind==='exchange_line'||x.exchangeLineId))) {
+      return completeExchangeLineReturns(req,res);
+    }
     if (Array.isArray(req.body?.returns) && req.body.returns.length > 1) {
       return completeReceiptReturnBatch(req, res);
     }
@@ -2035,6 +2628,7 @@ export default function createAifShopReturnsRouter({
     if (members.some(x => x.status !== "completed")) {
       throw fail("A tobbteteles visszaru reszben mar vissza van vonva. Nem modositjuk a keszletet.", "return_batch_partial_cancelled");
     }
+    await assertNoChainedReturns(client,members.map(x=>x.id));
     const replacementRows = await client.query(
       `SELECT variant_id,quantity FROM aif_shop_exchange_lines
        WHERE exchange_id=$1 ORDER BY line_no FOR UPDATE`, [main.id]
@@ -2127,7 +2721,7 @@ export default function createAifShopReturnsRouter({
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await ensureAifShopSalesSchema();
+      await ensureExchangeChainSchema();
       const location = await aifResolveShopLocation(req, client, req.body?.location || req.query?.location);
       // Keresett elem helyett a teljes tobbteteles csoportot zaroljuk eloszor,
       // hogy masik resztetelre kuldott parhuzamos torles se okozzon holtpontot.
@@ -2179,6 +2773,7 @@ export default function createAifShopReturnsRouter({
         throw error;
       }
 
+      await assertNoChainedReturns(client,[exchange.id]);
       const linesResult = await client.query(
         `SELECT id, variant_id, quantity, product_title
          FROM aif_shop_exchange_lines
