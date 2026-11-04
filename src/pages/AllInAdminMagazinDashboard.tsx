@@ -29,6 +29,7 @@ import {
   Filter,
   Home,
   Landmark,
+  Gift,
   Layers3,
   Loader2,
   Mail,
@@ -141,6 +142,46 @@ function presetDates(preset: PeriodPreset) {
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// A penzugyi riport a voucher sajat naplojabol jon, NEM az aruforgalombol.
+// A jelentest csak admin szerezheti meg; a szurok az idoszakra, bolt-ra es eladora vonatkoznak.
+type VoucherFinanceReport = {
+  ok: true;
+  from: string;
+  to: string;
+  location: string;
+  employee: string | null;
+  issuedTotal: number;
+  redeemedTotal: number;
+  issuedByMethod: { cash: number; card: number; bank_transfer: number };
+  issuedCount: number;
+  redeemedCount: number;
+  outstandingAsOf: number;
+};
+
+async function loadVoucherFinanceReport(options: {
+  from: string; to: string; location: string; employee?: string;
+}): Promise<VoucherFinanceReport> {
+  const params = new URLSearchParams({ from: options.from, to: options.to, location: options.location });
+  if (options.employee) params.set('employee', options.employee);
+  const response = await fetch(`/api/aif/vouchers/finance-report?${params.toString()}`, {
+    credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' },
+  });
+  const data: unknown = await response.json().catch(() => null);
+  const payload = data as Partial<VoucherFinanceReport> & { error?: string } | null;
+  if (!response.ok || !payload || payload.ok !== true) {
+    throw new Error(String(payload?.error || `Az utalvány pénzügyi kimutatása nem érhető el (HTTP ${response.status}).`));
+  }
+  for (const field of ['issuedTotal', 'redeemedTotal', 'outstandingAsOf'] as const) {
+    if (!Number.isFinite(Number(payload[field]))) throw new Error(`Hiányos utalvány pénzügyi adat: ${field}.`);
+  }
+  for (const field of ['cash', 'card', 'bank_transfer'] as const) {
+    if (!payload.issuedByMethod || !Number.isFinite(Number(payload.issuedByMethod[field]))) {
+      throw new Error(`Hiányos utalvány fizetési bontás: ${field}.`);
+    }
+  }
+  return payload as VoucherFinanceReport;
 }
 
 function money(value: unknown) {
@@ -1635,6 +1676,8 @@ export default function AllInAdminMagazinDashboard({
   const [liveDebt, setLiveDebt] = useState<{ amount: number; year: number } | null>(null);
   const [liveDebtError, setLiveDebtError] = useState("");
   const [shiftDay, setShiftDay] = useState<AifShopShiftDayOverview | null>(null);
+  const [voucherReport, setVoucherReport] = useState<VoucherFinanceReport | null>(null);
+  const [voucherReportError, setVoucherReportError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dailyPdfChoice, setDailyPdfChoice] = useState<{from: string; to: string; employee: string | null} | null>(null);
@@ -1695,7 +1738,7 @@ export default function AllInAdminMagazinDashboard({
     setError("");
     try {
       const debtYear = Number(localIsoDate(new Date()).slice(0, 4));
-      const [response, shiftResponse, customerResult] = await Promise.all([
+      const [response, shiftResponse, customerResult, voucherResult] = await Promise.all([
         apiAifAdminShopOverview({
           location: locationCode,
           ...applied,
@@ -1719,9 +1762,17 @@ export default function AllInAdminMagazinDashboard({
           result: null as AifAdminCustomersOverviewResponse | null,
           error: caught instanceof Error ? caught.message : "A kliens-kintlévőség lekérése sikertelen.",
         })),
+        loadVoucherFinanceReport({
+          from: applied.from, to: applied.to, location: locationCode, employee: applied.employee || undefined,
+        }).then((result) => ({ result, error: "" })).catch((caught: unknown) => ({
+          result: null as VoucherFinanceReport | null,
+          error: caught instanceof Error ? caught.message : "A voucher napló nem ellenőrizhető.",
+        })),
       ]);
       setData(response);
       setShiftDay(shiftResponse);
+      setVoucherReport(voucherResult.result);
+      setVoucherReportError(voucherResult.error);
 
       const total = customerResult.result?.summary?.currentOpenBalance;
       const validTotal = total !== null && total !== undefined &&
@@ -1744,6 +1795,8 @@ export default function AllInAdminMagazinDashboard({
       }
     } catch (loadError: any) {
       setData(null);
+      setVoucherReport(null);
+      setVoucherReportError("A pénzügyi adatok lekérése nem sikerült.");
       setLiveDebt(null);
       setLiveDebtError("A jelenlegi tartozás lekérése sikertelen.");
       setError(loadError?.message || "Az üzleti vezérlőpult adatai nem tölthetők be.");
@@ -2510,6 +2563,39 @@ export default function AllInAdminMagazinDashboard({
             onClick={() => setMarginView((current) => current === "percent" ? "money" : "percent")}
             actionLabel={marginView === "percent" ? "RON" : "%"}
           />
+        </section>
+
+        <section className={`${card} p-4`} aria-label="Ajándékutalvány pénzügyi naplója">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-[#bff8f5]"><Gift size={19} /></span>
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.12em] text-white/48">Külön pénzügyi nyilvántartás</p>
+                <h2 className="mt-0.5 text-base text-white">Ajándékutalványok • {applied.employee || "minden eladó"}</h2>
+              </div>
+            </div>
+            <span className="rounded-lg border border-white/12 px-2.5 py-1.5 text-[10px] text-white/55">A ruhaforgalom nem változik</span>
+          </div>
+          {voucherReportError ? (
+            <div role="alert" className="mt-3 rounded-xl border border-rose-300/28 bg-rose-500/10 p-3 text-xs text-rose-50">{voucherReportError} • A hiányzó adatot nem mutatjuk nulla bevételnek.</div>
+          ) : voucherReport ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {[
+                ["Értékesített utalvány", money(voucherReport.issuedTotal), `${voucherReport.issuedCount} aktiválás`],
+                ["Beváltott érték", money(voucherReport.redeemedTotal), "Nem új pénzbevétel"],
+                ["Készpénzes kiadás", money(voucherReport.issuedByMethod.cash), "Kasszába befolyt"],
+                ["Kártyás / átutalásos", money(voucherReport.issuedByMethod.card + voucherReport.issuedByMethod.bank_transfer), "Banki pénzbevétel"],
+                ["Fennálló egyenleg", money(voucherReport.outstandingAsOf), `Az időszak végén • teljes üzlet`],
+              ].map(([label, value, hint]) => (
+                <div key={label} className="min-w-0 rounded-xl border border-white/10 bg-[#293548] p-3">
+                  <p className="text-[9px] uppercase tracking-[0.10em] text-white/48">{label}</p>
+                  <p className="mt-2 truncate text-[17px] tabular-nums text-white" title={value}>{value}</p>
+                  <p className="mt-1 text-[10px] text-white/45">{hint}</p>
+                </div>
+              ))}
+            </div>
+          ) : <p className="mt-3 text-xs text-white/55">Utalványadatok ellenőrzése…</p>}
+          <p className="mt-3 text-[10px] leading-5 text-white/46">A kiválasztott időszak és eladó szerinti kiadás/beváltás a külön utalványnaplóból származik. A fennálló egyenleg üzletszintű, az eladószűrőtől független. A beváltott összeg már része a termék eladási értékének, új befizetésnek nem számít.</p>
         </section>
 
         <section className={`${card} flex flex-wrap items-center gap-3 px-4 py-3`} aria-label="Hitelállomány időszaki egyeztetése">
