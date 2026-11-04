@@ -34,7 +34,7 @@ type Summary = {
 type Transfer = { id: string; from_location: string; to_location: string; status: string; note?: string | null;
   created_by?: string | null; created_at: string; total: number; received: number };
 type TransferLine = { code: string; language: Lang; accepted_at?: string | null; accepted_by?: string | null };
-type VoucherTxn = {id:string;code:string;language:Lang;kind:"issue"|"redeem";
+type VoucherTxn = {id:string;code:string;language:Lang;kind:"issue"|"redeem"|"restore";
   location_code:string;method:string|null;amount:number|string;sale_number?:string|null;
   reference?:string|null;actor:string;created_at:string;};
 type VoucherTxSummary = {kind:string;method:string;count:number;total:string|number};
@@ -568,9 +568,9 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           <label className="grid gap-1 text-xs text-white/60">Dátumig<input type="date" value={ledgerTo} onChange={e=>setLedgerTo(e.target.value)} className="h-11 rounded-lg border border-white/18 bg-[#293548] px-3"/></label>
         </div>
         {ledgerError&&<p role="alert" className="mt-3 text-xs text-rose-200">{ledgerError}</p>}
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{ledgerSummary.map(r=><Kpi key={r.kind+r.method} label={`${r.kind==='issue'?'Értékesítés':'Beváltás'} · ${r.method||'–'} · ${r.count} db`} value={money(r.total)}/>)}</div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{ledgerSummary.map(r=><Kpi key={r.kind+r.method} label={`${r.kind==='issue'?'Értékesítés':r.kind==='restore'?'Visszaírás':'Beváltás'} · ${r.method||'–'} · ${r.count} db`} value={money(r.total)}/>)}</div>
         <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[800px] text-sm"><thead><tr className="border-b border-white/20 text-left text-[10px] uppercase text-white/48">{['Dátum','Kód','Esemény','Üzlet','Mód / bizonylat','Összeg','Rögzítette'].map(x=><th key={x} className="px-3 py-2 font-normal">{x}</th>)}</tr></thead>
-          <tbody>{ledgerRows.map(r=><tr key={r.id} className="border-b border-white/10"><td className="px-3 py-3 text-xs">{date(r.created_at)}</td><td title={r.code} className="px-3 py-3 font-mono text-xs">{shortCode(r.code)}</td><td className="px-3 py-3">{r.kind==='issue'?'Eladás / aktiválás':'Beváltás'}</td><td className="px-3 py-3 text-xs">{STORE_LABELS[r.location_code]}</td><td className="px-3 py-3 text-xs">{r.sale_number||r.reference||r.method||'–'}</td><td className="px-3 py-3 text-right tabular-nums">{money(r.amount)}</td><td className="px-3 py-3 text-xs">{r.actor}</td></tr>)}</tbody></table>
+          <tbody>{ledgerRows.map(r=><tr key={r.id} className="border-b border-white/10"><td className="px-3 py-3 text-xs">{date(r.created_at)}</td><td title={r.code} className="px-3 py-3 font-mono text-xs">{shortCode(r.code)}</td><td className="px-3 py-3">{r.kind==='issue'?'Eladás / aktiválás':r.kind==='restore'?'Visszáru · jóváírás':'Beváltás'}</td><td className="px-3 py-3 text-xs">{STORE_LABELS[r.location_code]}</td><td className="px-3 py-3 text-xs">{r.sale_number||r.reference||r.method||'–'}</td><td className="px-3 py-3 text-right tabular-nums">{money(r.amount)}</td><td className="px-3 py-3 text-xs">{r.actor}</td></tr>)}</tbody></table>
           {!ledgerRows.length&&<p className="py-10 text-center text-sm text-white/45">{ledgerBusy?'Pénznapló betöltése…':'Nincs rögzített utalványtranzakció.'}</p>}</div>
       </section>}
 

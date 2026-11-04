@@ -154,9 +154,11 @@ type VoucherFinanceReport = {
   employee: string | null;
   issuedTotal: number;
   redeemedTotal: number;
+  restoredTotal: number;
   issuedByMethod: { cash: number; card: number; bank_transfer: number };
   issuedCount: number;
   redeemedCount: number;
+  restoredCount: number;
   outstandingAsOf: number;
 };
 
@@ -173,7 +175,7 @@ async function loadVoucherFinanceReport(options: {
   if (!response.ok || !payload || payload.ok !== true) {
     throw new Error(String(payload?.error || `Az utalvány pénzügyi kimutatása nem érhető el (HTTP ${response.status}).`));
   }
-  for (const field of ['issuedTotal', 'redeemedTotal', 'outstandingAsOf'] as const) {
+  for (const field of ['issuedTotal', 'redeemedTotal', 'restoredTotal', 'outstandingAsOf'] as const) {
     if (!Number.isFinite(Number(payload[field]))) throw new Error(`Hiányos utalvány pénzügyi adat: ${field}.`);
   }
   for (const field of ['cash', 'card', 'bank_transfer'] as const) {
@@ -2579,10 +2581,11 @@ export default function AllInAdminMagazinDashboard({
           {voucherReportError ? (
             <div role="alert" className="mt-3 rounded-xl border border-rose-300/28 bg-rose-500/10 p-3 text-xs text-rose-50">{voucherReportError} • A hiányzó adatot nem mutatjuk nulla bevételnek.</div>
           ) : voucherReport ? (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
               {[
                 ["Értékesített utalvány", money(voucherReport.issuedTotal), `${voucherReport.issuedCount} aktiválás`],
                 ["Beváltott érték", money(voucherReport.redeemedTotal), "Nem új pénzbevétel"],
+                ["Utalványra visszaírva", money(voucherReport.restoredTotal), `${voucherReport.restoredCount} visszáru · nem pénz`],
                 ["Készpénzes kiadás", money(voucherReport.issuedByMethod.cash), "Kasszába befolyt"],
                 ["Kártyás / átutalásos", money(voucherReport.issuedByMethod.card + voucherReport.issuedByMethod.bank_transfer), "Banki pénzbevétel"],
                 ["Fennálló egyenleg", money(voucherReport.outstandingAsOf), `Az időszak végén • teljes üzlet`],

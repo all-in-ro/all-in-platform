@@ -116,14 +116,17 @@ async function receiptReturnRequest<T>(path: string, init?: RequestInit): Promis
   return data as T;
 }
 
-type ReceiptSearchMatch = AifShopReturnSaleMatch & {
-  saleTotal?: number | null;
-  sourceKind?: "sale_line" | "exchange_line";
-  sourceExchangeLineId?: string;
-  rootSaleNumber?: string | null;
+type VoucherFundingPreview = {
+  ok: true; hasVoucher: boolean; enabled: boolean; consistent?: boolean; sameStore?: boolean;
+  restricted?: boolean; originalTotal?: number; voucherPaid?: number;
+  previousReturned?: number; previousRestored?: number;
+  externalMethod?: "cash" | "card" | "bank_transfer" | null;
 };
+type ReceiptSearchMatch = AifShopReturnSaleMatch & { saleTotal?: number | null };
 type ReturnAuthorization = { authorizationId: string; unlockToken: string };
 type ReceiptReturnResult = AifShopExchangeResult & {
+  voucherRefund?: {code: string;voucherRestored: number;voucherBalanceAfter?: number;
+    externalRefund: number; externalMethod?: string | null};
   exchangeIds?: string[];
   returnedLines?: Array<{ saleLineId: string; title: string; returnedQty: number; returnCredit: number }>;
 };
@@ -158,10 +161,11 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   const [authorization, setAuthorization] = useState<AuthorizationState | null>(null);
   const [authorizationBusy, setAuthorizationBusy] = useState(false);
 
-  const [selectedSource, setSelectedSource] = useState<ReceiptSearchMatch | null>(null);
-  const [receiptLines, setReceiptLines] = useState<ReceiptSearchMatch[]>([]);
+  const [selectedSource, setSelectedSource] = useState<AifShopReturnSaleMatch | null>(null);
+  const [receiptLines, setReceiptLines] = useState<AifShopReturnSaleMatch[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [receiptReady, setReceiptReady] = useState(false);
+  const [voucherFunding, setVoucherFunding] = useState<VoucherFundingPreview | null>(null);
   const [selectedReturns, setSelectedReturns] = useState<Record<string, number>>({});
   const [authorizedReturns, setAuthorizedReturns] = useState<Record<string, ReturnAuthorization>>({});
   const receiptRequestRef = useRef(0);
@@ -202,10 +206,9 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   const receiptMatches = useMemo(() => {
     const grouped = new Map<string, ReceiptSearchMatch[]>();
     for (const item of matches) {
-      const id = `${item.sourceKind || "sale_line"}:${item.saleId}`;
-      const list = grouped.get(id) || [];
+      const list = grouped.get(item.saleId) || [];
       list.push(item);
-      grouped.set(id, list);
+      grouped.set(item.saleId, list);
     }
     return Array.from(grouped.values());
   }, [matches]);
@@ -223,6 +226,18 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   );
   const difference = Math.round((replacementTotal - returnCredit + Number.EPSILON) * 100) / 100;
   const settlementDirection = difference > 0.005 ? "in" : difference < -0.005 ? "out" : "none";
+  const voucherRefundPreview = useMemo(() => {
+    if(!voucherFunding?.hasVoucher)return null;
+    const total=Math.round(numberValue(voucherFunding.originalTotal)*100);
+    const voucher=Math.round(numberValue(voucherFunding.voucherPaid)*100);
+    const prior=Math.round(numberValue(voucherFunding.previousReturned)*100);
+    const restored=Math.round(numberValue(voucherFunding.previousRestored)*100);
+    const current=Math.round(returnCredit*100);
+    if(total<=0||voucher<=0||prior+current>total||restored<0)return null;
+    const returnVoucher=Math.round((prior+current)*voucher/total)-restored;
+    if(returnVoucher<0||returnVoucher>current)return null;
+    return {voucher:returnVoucher/100,external:(current-returnVoucher)/100};
+  },[voucherFunding,returnCredit]);
 
   function cancelSearchTimer() {
     if (searchTimerRef.current !== null) {
@@ -277,21 +292,12 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
         params.set("saleDate", searchDate);
         params.set("windowDays", String(dateWindowDays));
       }
-      const [original, exchanged] = await Promise.all([
-        receiptReturnRequest<{ ok: true; items: ReceiptSearchMatch[]; count: number }>(
-          `/api/aif/shop-returns/sales?${params.toString()}`,
-        ),
-        receiptReturnRequest<{ ok: true; items: ReceiptSearchMatch[]; count: number }>(
-          `/api/aif/shop-returns/exchange-sales?${params.toString()}`,
-        ),
-      ]);
+      const response = await receiptReturnRequest<{ ok: true; items: ReceiptSearchMatch[]; count: number }>(
+        `/api/aif/shop-returns/sales?${params.toString()}`,
+      );
       if (request !== searchRequestRef.current) return;
-      const combined = [
-        ...(original.items || []).map((row) => ({ ...row, sourceKind: "sale_line" as const })),
-        ...(exchanged.items || []).map((row) => ({ ...row, sourceKind: "exchange_line" as const })),
-      ].sort((a,b) => new Date(b.soldAt || 0).getTime() - new Date(a.soldAt || 0).getTime());
-      setMatches(combined);
-      setSearchTruncated(Number(original.count || 0) >= limit || Number(exchanged.count || 0) >= limit);
+      setMatches(response.items || []);
+      setSearchTruncated(Number(response.count || 0) >= limit);
     } catch (caught) {
       if (request !== searchRequestRef.current) return;
       setError(caught instanceof Error ? caught.message : "A korábbi eladások nem tölthetők be.");
@@ -302,16 +308,20 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     }
   }
 
-  async function loadReceipt(item: ReceiptSearchMatch) {
+  async function loadReceipt(item: AifShopReturnSaleMatch) {
     const request = ++receiptRequestRef.current;
     setReceiptReady(false);
     setReceiptLoading(true);
     try {
       const query = new URLSearchParams({ location: locationCode });
-      const url = item.sourceKind === "exchange_line"
-        ? `/api/aif/shop-returns/exchange-sales/${encodeURIComponent(item.saleId)}/lines?${query.toString()}`
-        : `/api/aif/shop-returns/sales/${encodeURIComponent(item.saleId)}/lines?${query.toString()}`;
-      const result = await receiptReturnRequest<{ ok: true; items: ReceiptSearchMatch[]; count: number }>(url);
+      const [result,funding] = await Promise.all([
+        receiptReturnRequest<{ ok: true; items: AifShopReturnSaleMatch[]; count: number }>(
+          `/api/aif/shop-returns/sales/${encodeURIComponent(item.saleId)}/lines?${query.toString()}`,
+        ),
+        receiptReturnRequest<VoucherFundingPreview>(
+          `/api/aif/shop-returns/voucher-funding/${encodeURIComponent(item.saleId)}?${query.toString()}`,
+        ),
+      ]);
       if (request !== receiptRequestRef.current) return;
       if (!Array.isArray(result.items) || !result.items.some((row) => row.saleLineId === item.saleLineId)) {
         throw new Error("A bizonylaton nem talalhato a kivalasztott termek.");
@@ -329,6 +339,8 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
         };
       });
       setReceiptLines(merged);
+      setVoucherFunding(funding);
+      if(funding.hasVoucher && funding.externalMethod)setSettlementMethod(funding.externalMethod);
       const currentSource = merged.find((row) => row.saleLineId === item.saleLineId)!;
       setSelectedReturns(currentSource.priceVisible && currentSource.eligible !== false && currentSource.remainingQty > 0 && currentSource.product.variantId
         ? { [item.saleLineId]: 1 } : {});
@@ -338,13 +350,14 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
       setError(caught instanceof Error ? caught.message : "A bizonylat termekei nem tolthetok be.");
       // Nem engedunk reszleges visszarut, ha a teljes bizonylat nem ellenorizheto.
       setReceiptLines([]);
+      setVoucherFunding(null);
       setReceiptReady(false);
     } finally {
       if (request === receiptRequestRef.current) setReceiptLoading(false);
     }
   }
 
-  function setReturnLineQty(item: ReceiptSearchMatch, quantity: number) {
+  function setReturnLineQty(item: AifShopReturnSaleMatch, quantity: number) {
     if (!item.priceVisible || item.eligible === false || !item.product.variantId) return;
     invalidateRequest();
     setSelectedReturns((current) => ({
@@ -353,18 +366,12 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     }));
   }
 
-  async function requestAuthorization(item: ReceiptSearchMatch) {
+  async function requestAuthorization(item: AifShopReturnSaleMatch) {
     setAuthorizationBusy(true);
     setError("");
     setNotice("");
     try {
-      const response = item.sourceKind === "exchange_line"
-        ? await receiptReturnRequest<{ ok: true; required: boolean; item?: AifShopReturnAuthorizationRequest }>(
-            "/api/aif/shop-returns/authorizations", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ location: locationCode, exchangeLineId: item.saleLineId }),
-            })
-        : await apiAifRequestShopReturnAuthorization({ location: locationCode, saleLineId: item.saleLineId });
+      const response = await apiAifRequestShopReturnAuthorization({ location: locationCode, saleLineId: item.saleLineId });
       if (!response.required || !response.item) {
         if (selectedSource) {
           setReceiptLines((current) => current.map((row) => row.saleLineId === item.saleLineId ? item : row));
@@ -418,12 +425,13 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     }
   }
 
-  function selectSource(item: ReceiptSearchMatch, authorizationId: string | null = null, unlockToken: string | null = null) {
+  function selectSource(item: AifShopReturnSaleMatch, authorizationId: string | null = null, unlockToken: string | null = null) {
     if (item.eligible === false) {
       setError("Ehhez az eredeti eladáshoz még nyitott tartozás tartozik. A csere előtt előbb rendezd a tartozást.");
       return;
     }
     setSelectedSource(item);
+    setVoucherFunding(null);
     setReceiptLines([item]);
     setReceiptReady(false);
     setSelectedReturns(item.priceVisible && item.eligible !== false && item.remainingQty > 0 && item.product.variantId
@@ -447,6 +455,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   function resetWorkflow({ keepSearch = false } = {}) {
     receiptRequestRef.current += 1;
     setSelectedSource(null);
+    setVoucherFunding(null);
     setReceiptLines([]);
     setReceiptLoading(false);
     setReceiptReady(false);
@@ -474,6 +483,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   }
 
   async function searchReplacement(value = replacementQuery, autoAddExact = false) {
+    if(voucherFunding?.hasVoucher){setError('Utalvannyal fizetett vasarlasnal a csere-termek egyelore nem engedelyezett.');return;}
     const query = value.trim();
     cancelReplacementTimer();
     if (!query) {
@@ -503,6 +513,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   }
 
   function addReplacement(item: AifShopSaleCatalogItem) {
+    if(voucherFunding?.hasVoucher){setError('Utalvanyos visszarunal csak az eredeti fizetesi modokra torteno visszaterites engedelyezett.');return;}
     const available = numberValue(item.availableQty);
     if (available <= 0) {
       setError("Ebből a termékből nincs elérhető készlet ebben az üzletben.");
@@ -545,6 +556,11 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
         return;
       }
     }
+    if(voucherFunding?.hasVoucher && (!voucherFunding.enabled || voucherFunding.consistent===false ||
+       voucherFunding.sameStore===false || !voucherRefundPreview || replacementCart.length>0)) {
+      setError('Az utalvanyos visszaru meg nem aktivalhato, vagy penzugyi ellenorzest igenyel.');
+      return;
+    }
     setSubmitting(true);
     setError("");
     if (!requestKeyRef.current) requestKeyRef.current = createRequestKey();
@@ -562,25 +578,13 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
         note: note.trim() || null,
         idempotencyKey: requestKeyRef.current,
       };
-      // A cserebizonylat sorai sajat, tovabbcserelheto egysegek: a regi
-      // eladas sorazonositoinak ujrahasznalata hibas visszavett darabot adna.
-      const isChainedReturn = selectedSource.sourceKind === "exchange_line";
-      const result: ReceiptReturnResult = isChainedReturn
-        ? await receiptReturnRequest<ReceiptReturnResult>("/api/aif/shop-returns/exchanges", {
+      const result: ReceiptReturnResult = returns.length === 1
+        ? await apiAifCompleteShopExchange({ ...input, ...returns[0] })
+        : await receiptReturnRequest<ReceiptReturnResult>("/api/aif/shop-returns/exchanges", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Idempotency-Key": requestKeyRef.current },
-            body: JSON.stringify({
-              ...input, sourceKind: "exchange_line",
-              returns: returns.map((row) => ({ ...row, exchangeLineId: row.saleLineId, sourceKind: "exchange_line" })),
-            }),
-          })
-        : returns.length === 1
-          ? await apiAifCompleteShopExchange({ ...input, ...returns[0] })
-          : await receiptReturnRequest<ReceiptReturnResult>("/api/aif/shop-returns/exchanges", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "Idempotency-Key": requestKeyRef.current },
-              body: JSON.stringify({ ...input, returns }),
-            });
+            body: JSON.stringify({ ...input, returns }),
+          });
       setSuccess(result);
       requestKeyRef.current = "";
       await loadHistory();
@@ -740,9 +744,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                   return (
                     <div key={item.returnBatchId || item.id} className="grid gap-2 rounded-2xl border border-white/10 bg-[#293548] p-3 lg:grid-cols-[1.2fr_1fr_1fr_auto] lg:items-center">
                       <div className="min-w-0">
-                        <p className="truncate text-sm">{item.exchangeNumber} {group.length > 1 ? `• ${group.length} visszavett termék` : `• ${item.sourceProduct.title}`}
-                          {(item as typeof item & {sourceKind?: string;parentExchangeNumber?: string}).sourceKind === "exchange_line"
-                            ? ` • előző: ${(item as typeof item & {parentExchangeNumber?: string}).parentExchangeNumber || "csere"}` : ""}</p>
+                        <p className="truncate text-sm">{item.exchangeNumber} {group.length > 1 ? `• ${group.length} visszavett termék` : `• ${item.sourceProduct.title}`}</p>
                         {group.length > 1 ? <p className="mt-1 break-words text-[11px] text-white/68">{group.map((row) => `${row.sourceProduct.title} (${row.returnedQty} db)`).join(" • ")}</p> : null}
                         <p className="mt-1 text-[11px] text-white/45">{formatDateTime(item.createdAt)} • {item.actor || "–"} • Eredet: {item.sourceLocation.name}</p>
                       </div>
@@ -792,12 +794,12 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                 </div>
                 <div className="mt-3 flex flex-wrap items-end gap-2.5 rounded-2xl border border-white/10 bg-[#293548]/60 p-2.5 sm:px-3">
                   <label className="min-w-[176px] flex-1 sm:max-w-[245px]">
-                    <span className="mb-1.5 flex items-center gap-1.5 text-[11px] text-white/62"><CalendarDays size={14} className="text-[#9be9e5]"/> Vásárlás / csere dátuma</span>
+                    <span className="mb-1.5 flex items-center gap-1.5 text-[11px] text-white/62"><CalendarDays size={14} className="text-[#9be9e5]"/> Nyugta dátuma / kb. dátum</span>
                     <input type="date" value={searchDate} onChange={(event) => setSearchDate(event.target.value)}
                       className="h-11 w-full rounded-xl border border-white/18 bg-[#223044] px-3 text-[13px] text-white outline-none [color-scheme:dark] focus:border-[#92e8e4]"/>
                   </label>
                   <div className="min-w-0 flex-1">
-                    <span className="mb-1.5 block text-[11px] text-white/55">Időszak</span>
+                    <span className="mb-1.5 block text-[11px] text-white/55">Mennyire pontos?</span>
                     <div className="flex flex-wrap gap-1.5">
                       {([0, 3, 7, 30] as const).map((days) => (
                         <button key={days} type="button" disabled={!searchDate}
@@ -814,17 +816,17 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                 </div>
               </section>
 
-              {searchLoading ? <div className="flex min-h-[180px] items-center justify-center gap-3 text-sm text-white/55"><Loader2 className="animate-spin" size={18} /> Eladások és cserék keresése…</div> : receiptMatches.length ? (
+              {searchLoading ? <div className="flex min-h-[180px] items-center justify-center gap-3 text-sm text-white/55"><Loader2 className="animate-spin" size={18} /> Eladások keresése…</div> : receiptMatches.length ? (
                 <div className="mt-3 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-white/58">
-                    <span>{receiptMatches.length} eladás vagy korábbi csere</span>
+                    <span>{receiptMatches.length} korábbi vásárlás</span>
                     {searchTruncated ? <span className="text-amber-100">Sok találat. Szűkítsd a dátumot.</span> : null}
                   </div>
                   {receiptMatches.map((group) => {
                     const item = group[0];
                     const visibleTotal = (item as ReceiptSearchMatch).saleTotal;
                     return (
-                      <article key={`${item.sourceKind || "sale_line"}:${item.saleId}`} className={`rounded-[20px] border p-3 transition sm:p-3.5 ${item.sameStore ? "border-white/14 bg-[#374357]" : "border-amber-200/20 bg-[#3d414b]"}`}>
+                      <article key={item.saleId} className={`rounded-[20px] border p-3 transition sm:p-3.5 ${item.sameStore ? "border-white/14 bg-[#374357]" : "border-amber-200/20 bg-[#3d414b]"}`}>
                         <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
                           <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-[13px] border border-white/12 bg-white/95">
                             {item.product.imageUrl ? <img src={item.product.imageUrl} alt="" className="h-full w-full object-contain"/> : <PackageSearch size={23} className="text-[#526173]"/>}
@@ -836,14 +838,11 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                             </p>
                             <p className="mt-1.5 truncate text-[12px] text-white/88" title={group.map((row) => row.product.title).join(", ")}>{group.map((row) => row.product.title).join(" • ")}</p>
                             <p className="mt-1 text-[10px] text-white/50">{item.actor || "–"} • {group.length > 1 ? `${group.length} egyező terméksor` : `${item.remainingQty} db visszavehető`}</p>
-                            <p className="mt-0.5 truncate text-[10px] text-white/36">
-                              {item.sourceKind === "exchange_line" ? "Cserebizonylat" : "Bizonylat"}: {item.saleNumber}
-                              {item.sourceKind === "exchange_line" && item.rootSaleNumber ? ` • Eredeti: ${item.rootSaleNumber}` : ""}
-                            </p>
+                            <p className="mt-0.5 truncate text-[10px] text-white/36">Bizonylat: {item.saleNumber}</p>
                           </div>
                           <div className="flex w-full shrink-0 items-center justify-between gap-3 border-t border-white/10 pt-2.5 sm:w-[204px] sm:flex-col sm:items-stretch sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0 sm:text-right">
                             <div className="min-w-0">
-                              <p className="text-[9px] uppercase tracking-[0.07em] text-white/42">{item.sourceKind === "exchange_line" ? "Csere értéke" : "Vásárlás összege"}</p>
+                              <p className="text-[9px] uppercase tracking-[0.07em] text-white/42">Vásárlás összege</p>
                               <p className="mt-1 text-[17px] tabular-nums text-[#d7fffd]">{visibleTotal == null ? "Védett" : formatMoney(visibleTotal)}</p>
                             </div>
                             <button type="button" disabled={item.eligible === false} onClick={() => selectSource(item)}
@@ -857,25 +856,22 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                   })}
                 </div>
               ) : searchRan ? (
-                <div className="mt-4 flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/14 bg-[#273243]/40 text-center text-white/45"><PackageSearch size={40} /><p className="mt-3 text-base text-white/70">Nincs visszavehető vásárlás vagy csere.</p></div>
+                <div className="mt-4 flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/14 bg-[#273243]/40 text-center text-white/45"><PackageSearch size={40} /><p className="mt-3 text-base text-white/70">Ehhez a kódhoz nincs visszavehető korábbi eladás.</p></div>
               ) : (
                 <div className="mt-4 flex min-h-[280px] flex-col items-center justify-center rounded-[24px] border border-dashed border-[#7bd7d4]/18 bg-[#273243]/40 text-center"><Barcode size={44} className="text-[#8ee6e2]/55" /><p className="mt-3 text-lg text-white/75">A terméket kell először beolvasni</p><p className="mt-1 text-sm text-white/42">Nem kell bizonylatot keresgélni. A rendszer kilistázza, mikor és hol adták el.</p></div>
               )}
             </>
           ) : (
             <>
-              <button type="button" onClick={() => resetWorkflow({ keepSearch: true })} className="mb-3 inline-flex h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs hover:bg-white/[0.1]"><ArrowLeft size={15} /> Vissza a találatokhoz</button>
+              <button type="button" onClick={() => resetWorkflow({ keepSearch: true })} className="mb-3 inline-flex h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs hover:bg-white/[0.1]"><ArrowLeft size={15} /> Vissza az eladásokhoz</button>
 
               <div className="grid gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
                 <section className="min-w-0 rounded-[24px] border border-[#7bd7d4]/24 bg-[#374357] p-3.5 sm:p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-[10px] uppercase tracking-[0.1em] text-white/42">{selectedSource.sourceKind === "exchange_line" ? "Korábbi cserebizonylat" : "Eredeti bizonylat"}</p>
+                      <p className="text-[10px] uppercase tracking-[0.1em] text-white/42">Eredeti bizonylat</p>
                       <h3 className="mt-1 text-base text-white">{selectedSource.saleNumber}</h3>
                       <p className="mt-1 text-[11px] text-white/48">{formatDateTime(selectedSource.soldAt)} • {selectedSource.saleLocation.name}</p>
-                      {selectedSource.sourceKind === "exchange_line" && selectedSource.rootSaleNumber ? (
-                        <p className="mt-1 text-[10px] text-white/40">Eredeti eladás: {selectedSource.rootSaleNumber}</p>
-                      ) : null}
                     </div>
                     <span className="shrink-0 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/16 px-3 py-1.5 text-[11px] text-[#d7fffd]">{selectedCount} termék • {selectedQty} db</span>
                   </div>
@@ -956,10 +952,10 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                 </section>
 
                 <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
-                  <div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">2. lépés</p><h3 className="mt-1 text-lg">Mire cseréli?</h3><p className="mt-1 text-xs text-white/46">Olvasd be az új terméket. Több terméket is hozzáadhatsz.</p></div>
+                  <div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">2. lépés</p><h3 className="mt-1 text-lg">Mire cseréli?</h3><p className="mt-1 text-xs text-white/46">{voucherFunding?.hasVoucher ? 'Utalvánnyal fizetett vásárlásnál most csak visszatérítés engedélyezett, új terméket külön vásárlásként rögzíts.' : 'Olvasd be az új terméket. Több terméket is hozzáadhatsz.'}</p></div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <label className="relative block"><Barcode className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#91e5e1]" size={21} /><input ref={replacementInputRef} value={replacementQuery} onChange={(event) => setReplacementQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void searchReplacement(event.currentTarget.value, true); }} placeholder="Új termék vonalkódja…" className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-base outline-none placeholder:text-white/35 focus:border-[#72d8d4]" /></label>
-                    <button type="button" disabled={replacementLoading} onClick={() => void searchReplacement(replacementQuery, true)} className="inline-flex h-14 min-w-[130px] items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm disabled:opacity-50">{replacementLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
+                    <label className="relative block"><Barcode className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#91e5e1]" size={21} /><input disabled={Boolean(voucherFunding?.hasVoucher)} ref={replacementInputRef} value={replacementQuery} onChange={(event) => setReplacementQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void searchReplacement(event.currentTarget.value, true); }} placeholder="Új termék vonalkódja…" className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-base outline-none placeholder:text-white/35 focus:border-[#72d8d4]" /></label>
+                    <button type="button" disabled={replacementLoading || Boolean(voucherFunding?.hasVoucher)} onClick={() => void searchReplacement(replacementQuery, true)} className="inline-flex h-14 min-w-[130px] items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm disabled:opacity-50">{replacementLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
                   </div>
 
                   {replacementResults.length ? <div className="mt-3 grid max-h-[220px] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">{replacementResults.map((item) => <button key={item.variantId} type="button" onClick={() => addReplacement(item)} className="grid grid-cols-[58px_1fr_auto] items-center gap-2 rounded-2xl border border-white/10 bg-[#293548] p-2 text-left hover:border-[#72d8d4]/40"><span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{item.imageUrl ? <img src={item.imageUrl} alt="" className="h-full w-full object-contain" /> : <PackageSearch size={22} className="text-[#526173]" />}</span><span className="min-w-0"><span className="block truncate text-sm">{item.title}</span><span className="mt-1 block truncate text-[10px] text-white/45">{[item.colorName, item.size, productCode(item)].filter(Boolean).join(" • ")}</span></span><span className="text-right"><span className="block text-sm text-[#d7fffd]">{formatMoney(item.sellPrice)}</span><span className="mt-1 block text-[10px] text-white/40">{item.availableQty} db</span></span></button>)}</div> : null}
@@ -984,7 +980,23 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                   <div className={`rounded-2xl border p-3 ${difference > 0 ? "border-amber-200/25 bg-amber-400/10" : difference < 0 ? "border-sky-200/25 bg-sky-400/10" : "border-[#7bd7d4]/30 bg-[#2a8d8b]/16"}`}><p className="text-[9px] uppercase tracking-[0.1em] opacity-60">{difference > 0 ? "Még fizetendő" : difference < 0 ? "Visszajár" : "Különbözet"}</p><p className="mt-2 text-3xl">{formatMoney(Math.abs(difference))}</p></div>
                 </div>
 
-                {settlementDirection !== "none" ? (
+                {voucherFunding?.hasVoucher ? (
+                  <div className="mt-4 rounded-[20px] border border-[#8ce7e2]/36 bg-[#234f58] p-4">
+                    <p className="text-[10px] uppercase tracking-[0.13em] text-[#cffffd]/68">Ajándékutalványos visszáru • pénzügyi bontás</p>
+                    <p className="mt-1 text-xs text-white/75">Az eredeti utalvány: {formatMoney(voucherFunding.voucherPaid)}. A visszajáró összegből a korábbi fizetési módokra arányosan írunk jóvá, kétszeres visszatérítés nélkül.</p>
+                    {voucherRefundPreview ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-white/12 bg-[#2b3749] p-3"><p className="text-[10px] text-white/55">Vissza az utalványra · nem pénzkiadás</p><p className="mt-1 text-xl text-[#d7fffd]">{formatMoney(voucherRefundPreview.voucher)}</p></div>
+                        <div className="rounded-xl border border-white/12 bg-[#2b3749] p-3"><p className="text-[10px] text-white/55">Külső fizetés visszaadása</p><p className="mt-1 text-xl text-white">{formatMoney(voucherRefundPreview.external)}</p><p className="text-[10px] text-white/48">{voucherFunding.externalMethod === 'card' ? 'Bankkártyára' : voucherFunding.externalMethod === 'bank_transfer' ? 'Átutalással' : voucherFunding.externalMethod === 'cash' ? 'Készpénzben' : 'Nincs külső kifizetés'}</p></div>
+                      </div>
+                    ) : <p className="mt-2 text-xs text-rose-100">A visszatérítés felosztása nem ellenőrizhető.</p>}
+                    {!voucherFunding.enabled || voucherFunding.consistent===false || voucherFunding.sameStore===false ? (
+                      <p className="mt-3 rounded-xl border border-amber-200/20 bg-amber-400/12 px-3 py-2 text-xs text-amber-50">A pénzügyi funkció jelenleg zárolva van vagy adminisztrátori ellenőrzést igényel. A visszáru nem zárható le.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {settlementDirection !== "none" && (!voucherFunding?.hasVoucher || (voucherRefundPreview?.external||0)>0) ? (
                   <div className="mt-4">
                     <p className="text-[10px] uppercase tracking-[0.1em] text-white/45">{settlementDirection === "in" ? "A különbözet fizetési módja" : "A visszajáró rendezése"}</p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -996,14 +1008,14 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-4 py-3 text-sm text-[#d7fffd]"><CheckCircle2 size={19} /> Az érték pontosan egyezik, nincs pénzügyi különbözet.</div>
+                  <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-4 py-3 text-sm text-[#d7fffd]"><CheckCircle2 size={19} /> {voucherFunding?.hasVoucher ? "Nincs külső pénzvisszatérítés. A jóváírás teljes egészében az utalványra történik." : "Az érték pontosan egyezik, nincs pénzügyi különbözet."}</div>
                 )}
 
                 <input value={note} onChange={(event) => { invalidateRequest(); setNote(event.target.value); }} placeholder="Megjegyzés a visszáruhoz / cseréhez (opcionális)" className="mt-4 h-11 w-full rounded-xl border border-white/14 bg-[#293548] px-3 text-sm outline-none placeholder:text-white/32 focus:border-[#72d8d4]" />
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
                   <p className="max-w-3xl text-xs leading-relaxed text-white/45">A kijelölt tételek és a csere egy műveletként kerülnek mentésre.</p>
-                  <button type="button" disabled={submitting || !receiptReady || selectedCount === 0} onClick={() => void completeExchange()} className="inline-flex min-h-14 items-center gap-2 rounded-2xl border border-[#a4efeb]/50 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-6 text-base shadow-[0_12px_26px_rgba(42,141,139,0.22)] hover:brightness-110 disabled:opacity-55">
+                  <button type="button" disabled={submitting || !receiptReady || selectedCount === 0 || Boolean(voucherFunding?.hasVoucher && (!voucherFunding.enabled || voucherFunding.consistent===false || voucherFunding.sameStore===false || !voucherRefundPreview || replacementCart.length>0))} onClick={() => void completeExchange()} className="inline-flex min-h-14 items-center gap-2 rounded-2xl border border-[#a4efeb]/50 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-6 text-base shadow-[0_12px_26px_rgba(42,141,139,0.22)] hover:brightness-110 disabled:opacity-55">
                     {submitting ? <Loader2 className="animate-spin" size={21} /> : <Receipt size={21} />} {replacementCart.length ? "Csere lezárása" : "Visszáru lezárása"}
                   </button>
                 </div>
@@ -1031,6 +1043,12 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                 <div className="rounded-2xl border border-white/10 bg-[#293548] p-3"><p className="text-[9px] uppercase text-white/38">Új termék</p><p className="mt-1 text-lg">{formatMoney(success.replacementTotal)}</p></div>
                 <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 p-3"><p className="text-[9px] uppercase text-[#d7fffd]/55">Különbözet</p><p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(success.difference)}</p></div>
               </div>
+              {(success as ReceiptReturnResult).voucherRefund ? (
+                <div className="mt-3 grid grid-cols-2 gap-2 text-left">
+                  <div className="rounded-xl border border-[#8ce7e2]/25 bg-[#234f58] p-3"><p className="text-[10px] text-[#d7fffd]/70">Visszaírt utalványérték</p><p className="mt-1 text-lg text-white">{formatMoney((success as ReceiptReturnResult).voucherRefund!.voucherRestored)}</p></div>
+                  <div className="rounded-xl border border-white/12 bg-[#293548] p-3"><p className="text-[10px] text-white/52">Külső visszafizetés</p><p className="mt-1 text-lg text-white">{formatMoney((success as ReceiptReturnResult).voucherRefund!.externalRefund)}</p></div>
+                </div>
+              ) : null}
               <button type="button" onClick={() => { setSuccess(null); resetWorkflow(); }} className="mt-5 inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] text-base hover:bg-[#319c99]"><Plus size={20} /> Következő visszáru / csere</button>
             </div>
           </section>

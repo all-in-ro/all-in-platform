@@ -193,9 +193,11 @@ type VoucherFinanceReport = {
   employee: string | null;
   issuedTotal: number;
   redeemedTotal: number;
+  restoredTotal: number;
   issuedByMethod: { cash: number; card: number; bank_transfer: number };
   issuedCount: number;
   redeemedCount: number;
+  restoredCount: number;
   outstandingAsOf: number;
 };
 
@@ -212,7 +214,7 @@ async function loadVoucherFinanceReport(options: {
   if (!response.ok || !payload || payload.ok !== true) {
     throw new Error(String(payload?.error || `Az utalvány pénzügyi kimutatása nem érhető el (HTTP ${response.status}).`));
   }
-  for (const field of ['issuedTotal', 'redeemedTotal', 'outstandingAsOf'] as const) {
+  for (const field of ['issuedTotal', 'redeemedTotal', 'restoredTotal', 'outstandingAsOf'] as const) {
     if (!Number.isFinite(Number(payload[field]))) throw new Error(`Hiányos utalvány pénzügyi adat: ${field}.`);
   }
   for (const field of ['cash', 'card', 'bank_transfer'] as const) {
@@ -2748,10 +2750,11 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           {voucherError ? (
             <p role="alert" className="mt-3 rounded-xl border border-rose-300/25 bg-rose-500/10 p-3 text-xs text-rose-50">{voucherError} • Nem írunk nullát a hiányzó auditadat helyére.</p>
           ) : voucherReport ? (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
               {[
                 {name:"Értékesített utalvány",value:voucherReport.issuedTotal,previous:voucherCompare?.issuedTotal,info:`${voucherReport.issuedCount} aktiválás · új pénz`},
                 {name:"Beváltott érték",value:voucherReport.redeemedTotal,previous:voucherCompare?.redeemedTotal,info:`${voucherReport.redeemedCount} felhasználás · nem új pénz`},
+                {name:"Utalványra visszaírva",value:voucherReport.restoredTotal,previous:voucherCompare?.restoredTotal,info:`${voucherReport.restoredCount} visszáru · nem új pénz`},
                 {name:"Készpénzes utalványeladás",value:voucherReport.issuedByMethod.cash,previous:voucherCompare?.issuedByMethod.cash,info:"A tényleges kasszabevételben szerepel"},
                 {name:"Kártyás és átutalásos kiadás",value:voucherReport.issuedByMethod.card+voucherReport.issuedByMethod.bank_transfer,previous:voucherCompare ? voucherCompare.issuedByMethod.card+voucherCompare.issuedByMethod.bank_transfer:undefined,info:"Banki pénzmozgás"},
                 {name:"Fennálló utalványegyenleg",value:voucherReport.outstandingAsOf,previous:voucherCompare?.outstandingAsOf,info:"Az időszak végén, összes eladó"},
