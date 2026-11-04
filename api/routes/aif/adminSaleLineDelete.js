@@ -374,6 +374,38 @@ async function reconcileCustomerAllocationsForSale(client, {
   };
 }
 
+// A voucher-bevaltas nem teheto meg nem tortentte egy termeksor torlesevel.
+// A fizetesi sort ES a fuggetlen voucher tranzakcionaplot is vizsgaljuk,
+// mivel regies/hibas sorrekonstrukcio eseten csak az egyik maradhat meg.
+// A vizsgalat az eredeti sale-row FOR UPDATE zar utan, a KESZLET/PENZUGY
+// barmilyen modositasa elott fut. A penzugyi feature flagtol fuggetlen.
+async function assertAdminSaleHasNoVoucherFunding(client, saleId) {
+  const funding = await client.query(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM aif_shop_sale_payments p
+         WHERE p.sale_id=$1 AND p.method='voucher'
+       ) AS voucher_payment_exists,
+       EXISTS (
+         SELECT 1 FROM aif_gift_voucher_transactions t
+         WHERE t.sale_id=$1 AND t.kind='redeem'
+       ) AS voucher_ledger_exists`,
+    [saleId],
+  );
+  const info = funding.rows[0] || {};
+  if (info.voucher_payment_exists || info.voucher_ledger_exists) {
+    const error = new Error(
+      'Ez a vásárlás ajándékutalvánnyal is ki lett fizetve. ' +
+      'Sem a végleges törlés, sem a készlet-visszaállítással történő törlés nem engedélyezett, ' +
+      'mert az utalványegyenleg és a kassza elszámolása eltérne. ' +
+      'Az eladás változatlan maradt. Az utalványos visszáru pénzügyi rendezése még nincs engedélyezve.'
+    );
+    error.statusCode = 409;
+    error.code = 'voucher_funded_sale_line_delete_requires_settlement';
+    throw error;
+  }
+}
+
 function buildRouteHandler({ pool }) {
   if (!pool) throw new Error("adminSaleLineDelete: pool is required");
 
@@ -427,6 +459,10 @@ function buildRouteHandler({ pool }) {
       }
 
       const line = lineResult.rows[0];
+      // Fontos: ez a vedelmi pont minden torlesi modot lefed.
+      // A torles utani payment-reconcile a voucher fizetest is levagna,
+      // az eredeti voucher-tranzakciot es egyenleget azonban NEM irna vissza.
+      await assertAdminSaleHasNoVoucherFunding(client, line.sale_id);
       const actor = actorFrom(req);
       let restoredQty = 0;
       let stockRestoreEvidence = null;

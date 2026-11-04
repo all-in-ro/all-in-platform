@@ -159,9 +159,15 @@ export default function createAifShopReturnsRouter({
   }
 
   async function assertNotVoucherFunded(client, rootSaleId) {
-    const paid = await client.query(`SELECT 1 FROM aif_shop_sale_payments
-      WHERE sale_id=$1 AND method='voucher' LIMIT 1`, [rootSaleId]);
-    if (paid.rowCount) {
+    // Nem eleg csak a fizetesi tablaban keresni: a voucher onallo, megorizendo
+    // tranzakcionaploja akkor is ervenyes, ha egy regi fizetesi sor hianyzik.
+    // A vizsgalat a teljes eredeti eladasra vonatkozik (vegyes fizetesnel is).
+    const funding = await client.query(`SELECT
+        EXISTS (SELECT 1 FROM aif_shop_sale_payments
+                WHERE sale_id=$1 AND method='voucher') AS payment_found,
+        EXISTS (SELECT 1 FROM aif_gift_voucher_transactions
+                WHERE sale_id=$1 AND kind='redeem') AS ledger_found`, [rootSaleId]);
+    if (funding.rows[0]?.payment_found || funding.rows[0]?.ledger_found) {
       const error = new Error('Ehhez a vasarlashoz ajandekutalvanyt hasznaltak. A visszarut addig nem lehet lezarni, amig az egyenleg visszairasa es a penzugyi elszamolas nincs bevezetve. Fordulj az Adminhoz.');
       error.statusCode = 409;
       error.code = 'voucher_funded_return_requires_settlement';
@@ -2764,6 +2770,9 @@ export default function createAifShopReturnsRouter({
       }
 
       const exchange = exchangeResult.rows[0];
+      // Csere-csoport vagy egysoros csere visszavonasa sem kerulheti meg az
+      // eredeti voucher-finanszirozas penzugyi tiltását.
+      await assertNotVoucherFunded(client, exchange.source_sale_id);
       if (exchange.original_snapshot?.returnBatchId) {
         return cancelReceiptReturnBatch(client, req, res, location, exchange);
       }
