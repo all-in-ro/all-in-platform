@@ -184,6 +184,7 @@ function summarizeReservationDeadlines(items: AifShopReservation[]): Reservation
   };
 }
 
+const VOUCHER_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
 const SHOPIFY_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
 const SHOPIFY_SOURCE_LOCATION = "magazin_targu_secuiesc";
 const SHOPIFY_SOURCE_LOCATION_NAME = "Magazin - Târgu Secuiesc";
@@ -406,6 +407,11 @@ export default function AllInMagazinTargu({
     setNotice("");
   }
 
+  function openVouchers() {
+    try { window.sessionStorage.setItem("allin:vouchers:return", window.location.hash); } catch {}
+    window.location.hash = "vouchers";
+  }
+
   function returnToSale() {
     clearShopAdministrationUnlock();
     window.location.hash = "magazintargusale";
@@ -515,6 +521,14 @@ export default function AllInMagazinTargu({
               >
                 <ClipboardCheck size={18} />
                 Leltározás
+              </button>
+              <button
+                type="button"
+                onClick={openVouchers}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/20 bg-[#354153] px-4 text-sm text-white transition hover:border-[#93e7e1]/45 hover:bg-[#435267]"
+              >
+                <img src={VOUCHER_ICON_URL} alt="" className="h-6 w-6 object-contain" />
+                Ajándékutalvány
               </button>
               <button
                 type="button"
