@@ -9,6 +9,7 @@ import createCarsRouter from "./api/routes/cars.js";
 import createCarExpensesRouter from "./api/routes/car-expenses.js";
 import createVacationsRouter from "./api/routes/vacations.js";
 import createAifRouter from "./api/routes/aif.js";
+import createAifVoucherRouter from "./api/routes/vouchers.js";
 
 const { Pool } = pg;
 
@@ -326,6 +327,8 @@ app.use("/api/car-expenses", createCarExpensesRouter({ pool, requireAuthed, requ
 app.use("/api/admin/vacations", createVacationsRouter({ pool, requireAdminOrSecret }));
 
 // --- AllInFashion clean product system (AIF) ---
+// Az utalvanyok fizikai keszlete kulon router. Penzugyi eladas/bevaltas itt meg tiltva.
+app.use("/api/aif/vouchers", createAifVoucherRouter({ pool, requireAuthed, requireAdminOrSecret }));
 app.use("/api/aif", createAifRouter({ pool, requireAuthed, requireAdminOrSecret }));
 
 // --- encrypt/decrypt codes for admin resend (AES-256-GCM) ---
