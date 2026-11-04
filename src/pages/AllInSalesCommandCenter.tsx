@@ -24,6 +24,7 @@ import {
   Database,
   Filter,
   Gauge,
+  Gift,
   Home,
   Info,
   Layers3,
@@ -180,6 +181,46 @@ function nullableNumber(value: unknown) {
   }
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+// A penzugyi riport a voucher sajat naplojabol jon, NEM az aruforgalombol.
+// A jelentest csak admin szerezheti meg; a szurok az idoszakra, bolt-ra es eladora vonatkoznak.
+type VoucherFinanceReport = {
+  ok: true;
+  from: string;
+  to: string;
+  location: string;
+  employee: string | null;
+  issuedTotal: number;
+  redeemedTotal: number;
+  issuedByMethod: { cash: number; card: number; bank_transfer: number };
+  issuedCount: number;
+  redeemedCount: number;
+  outstandingAsOf: number;
+};
+
+async function loadVoucherFinanceReport(options: {
+  from: string; to: string; location: string; employee?: string;
+}): Promise<VoucherFinanceReport> {
+  const params = new URLSearchParams({ from: options.from, to: options.to, location: options.location });
+  if (options.employee) params.set('employee', options.employee);
+  const response = await fetch(`/api/aif/vouchers/finance-report?${params.toString()}`, {
+    credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' },
+  });
+  const data: unknown = await response.json().catch(() => null);
+  const payload = data as Partial<VoucherFinanceReport> & { error?: string } | null;
+  if (!response.ok || !payload || payload.ok !== true) {
+    throw new Error(String(payload?.error || `Az utalvány pénzügyi kimutatása nem érhető el (HTTP ${response.status}).`));
+  }
+  for (const field of ['issuedTotal', 'redeemedTotal', 'outstandingAsOf'] as const) {
+    if (!Number.isFinite(Number(payload[field]))) throw new Error(`Hiányos utalvány pénzügyi adat: ${field}.`);
+  }
+  for (const field of ['cash', 'card', 'bank_transfer'] as const) {
+    if (!payload.issuedByMethod || !Number.isFinite(Number(payload.issuedByMethod[field]))) {
+      throw new Error(`Hiányos utalvány fizetési bontás: ${field}.`);
+    }
+  }
+  return payload as VoucherFinanceReport;
 }
 
 function money(value: unknown) {
@@ -366,6 +407,7 @@ function paymentLabel(value?: string | null) {
   if (key === "bank_transfer") return "Banki átutalás";
   if (key === "credit") return "Hitel";
   if (key === "mixed") return "Vegyes";
+  if (key === "voucher") return "Ajándékutalvány";
   if (key === "exchange") return "Csere";
   return value || "Nincs adat";
 }
@@ -2315,6 +2357,9 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const [activePreset, setActivePreset] = useState<QuickPreset | "custom">("month");
   const [periodMode, setPeriodMode] = useState<PeriodMode>("month");
   const [data, setData] = useState<AifSalesCommandOverviewResponse | null>(null);
+  const [voucherReport, setVoucherReport] = useState<VoucherFinanceReport | null>(null);
+  const [voucherCompare, setVoucherCompare] = useState<VoucherFinanceReport | null>(null);
+  const [voucherError, setVoucherError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -2333,9 +2378,29 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     setLoading(true);
     setError("");
     try {
-      const response = await apiAifSalesCommandCenterOverview(applied);
+      const location = applied.location || "all";
+      const employee = applied.employee || undefined;
+      const [response, currentVoucher, compareVoucher] = await Promise.all([
+        apiAifSalesCommandCenterOverview(applied),
+        loadVoucherFinanceReport({from:applied.from,to:applied.to,location,employee})
+          .then((result) => ({result,error:""})).catch((caught: unknown) => ({
+            result: null as VoucherFinanceReport | null,
+            error: caught instanceof Error ? caught.message : "A voucher pénznapló hibás.",
+          })),
+        loadVoucherFinanceReport({from:applied.compareFrom,to:applied.compareTo,location,employee})
+          .then((result) => ({result,error:""})).catch((caught: unknown) => ({
+            result: null as VoucherFinanceReport | null,
+            error: caught instanceof Error ? caught.message : "Az előző évi voucher napló hibás.",
+          })),
+      ]);
       setData(response);
+      setVoucherReport(currentVoucher.result);
+      setVoucherCompare(compareVoucher.result);
+      setVoucherError(currentVoucher.error || compareVoucher.error);
     } catch (loadError: any) {
+      setVoucherReport(null);
+      setVoucherCompare(null);
+      setVoucherError("Az utalvány pénzügyi naplója nem érhető el.");
       setError(loadError?.message || "A vezetői eladási központ nem tölthető be.");
     } finally {
       setLoading(false);
@@ -2670,6 +2735,35 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="A tényleges eladási árból levont kedvezmény" active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} comparisonAvailable={comparisonAvailable} />
           <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} comparisonAvailable={comparisonAvailable} />
           <MetricCard title="Befizetendő TVA" value={money(currentTvaAmount)} comparison={money(comparisonTvaAmount)} delta={tvaDelta} icon={ReceiptText} hint={`Kedvezmény utáni eladási TVA (${integer(salesTvaRate)}%) • levonható beszerzési TVA nélkül`} comparisonAvailable={comparisonAvailable} />
+        </section>
+
+        <section className={`${panel} p-4`} aria-label="Ajándékutalványok pénzügyi kimutatása">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-[#bff8f5]"><Gift size={19} /></span>
+              <div><p className="text-[9px] uppercase tracking-[0.12em] text-white/45">Külön pénzügyi napló</p><h2 className="mt-1 text-base text-white">Ajándékutalványok</h2></div>
+            </div>
+            <span className="rounded-lg border border-white/12 px-2.5 py-1.5 text-[10px] text-white/48">Termékforgalomtól elkülönítve • csak asztali nézet</span>
+          </div>
+          {voucherError ? (
+            <p role="alert" className="mt-3 rounded-xl border border-rose-300/25 bg-rose-500/10 p-3 text-xs text-rose-50">{voucherError} • Nem írunk nullát a hiányzó auditadat helyére.</p>
+          ) : voucherReport ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {[
+                {name:"Értékesített utalvány",value:voucherReport.issuedTotal,previous:voucherCompare?.issuedTotal,info:`${voucherReport.issuedCount} aktiválás · új pénz`},
+                {name:"Beváltott érték",value:voucherReport.redeemedTotal,previous:voucherCompare?.redeemedTotal,info:`${voucherReport.redeemedCount} felhasználás · nem új pénz`},
+                {name:"Készpénzes utalványeladás",value:voucherReport.issuedByMethod.cash,previous:voucherCompare?.issuedByMethod.cash,info:"A tényleges kasszabevételben szerepel"},
+                {name:"Kártyás és átutalásos kiadás",value:voucherReport.issuedByMethod.card+voucherReport.issuedByMethod.bank_transfer,previous:voucherCompare ? voucherCompare.issuedByMethod.card+voucherCompare.issuedByMethod.bank_transfer:undefined,info:"Banki pénzmozgás"},
+                {name:"Fennálló utalványegyenleg",value:voucherReport.outstandingAsOf,previous:voucherCompare?.outstandingAsOf,info:"Az időszak végén, összes eladó"},
+              ].map(item => <div key={item.name} className="min-w-0 rounded-xl border border-white/10 bg-[#293548] px-3 py-3">
+                <p className="text-[9px] uppercase tracking-[0.08em] text-white/46">{item.name}</p>
+                <p className="mt-2 truncate text-[17px] tabular-nums text-white" title={money(item.value)}>{money(item.value)}</p>
+                <p className="mt-1 truncate text-[9px] text-white/40" title={item.previous===undefined?"":"Előző év: "+money(item.previous)}>{item.previous===undefined?"Előző év: nincs adat":"Előző év: "+money(item.previous)}</p>
+                <p className="mt-1.5 text-[9px] leading-4 text-white/48">{item.info}</p>
+              </div>)}
+            </div>
+          ) : <p className="mt-3 text-xs text-white/50">Utalványadatok ellenőrzése…</p>}
+          <p className="mt-3 text-[10px] leading-5 text-white/45">Az utalvány eladása pénzbevétel és utalványkötelezettség, nem új árueladás. A beváltás a megvásárolt áru teljes forgalmában már szerepel, új pénzbevételnek nem számít. A kártyás és készpénzes ráfizetést az eredeti eladás rögzíti. Csak az időszak, az üzlet és az eladó szűri az utalványeseményeket; a fennálló egyenlegre az eladószűrő nem hat.</p>
         </section>
 
         {data ? <CoverageStrip data={data} /> : null}
