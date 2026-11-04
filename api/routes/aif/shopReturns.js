@@ -1,4 +1,5 @@
 import express from "express";
+import { ensureAifVoucherFinanceSchema, voucherFinanceEnabled, prepareAifVoucherReturn, commitAifVoucherReturn } from "../vouchers.js";
 import { createHash, randomInt, randomUUID } from "node:crypto";
 
 export default function createAifShopReturnsRouter({
@@ -174,6 +175,46 @@ export default function createAifShopReturnsRouter({
       throw error;
     }
   }
+
+  // Penzugyi elonezet a penztarosnak. Semmilyen keszletet vagy egyenleget
+  // nem valtoztat, a vegleges osszeget az atomikus visszaru ujraszamolja.
+  router.get('/voucher-funding/:saleId', requireAuthed, async (req,res) => {
+    const saleId=text(req.params.saleId);
+    if(!isUuidText(saleId))return res.status(400).json({error:'Ervenytelen bizonylat.'});
+    try {
+      const location=await aifResolveShopLocation(req,pool,req.query.location);
+      const sale=await pool.query(`SELECT s.total,s.balance_due,s.status,s.sale_type,s.location_id,l.code
+        FROM aif_shop_sales s JOIN aif_locations l ON l.id=s.location_id WHERE s.id=$1`,[saleId]);
+      if(!sale.rowCount)return res.status(404).json({error:'A bizonylat nem talalhato.'});
+      if(sale.rows[0].code!==location.code && normCode(req.session?.role)!=='admin')
+        return res.json({ok:true,hasVoucher:false,restricted:true,enabled:false});
+      const [payments,ledger,previous,restored]=await Promise.all([
+        pool.query(`SELECT method,COALESCE(SUM(amount),0)::numeric AS amount
+          FROM aif_shop_sale_payments WHERE sale_id=$1 AND customer_payment_id IS NULL
+          GROUP BY method ORDER BY method`,[saleId]),
+        pool.query(`SELECT COALESCE(SUM(amount),0)::numeric AS amount FROM aif_gift_voucher_transactions
+          WHERE sale_id=$1 AND kind='redeem'`,[saleId]),
+        pool.query(`SELECT COALESCE(SUM(return_credit),0)::numeric AS amount FROM aif_shop_exchanges
+          WHERE source_sale_id=$1 AND status='completed'`,[saleId]),
+        pool.query(`SELECT COALESCE(SUM(amount),0)::numeric AS amount FROM aif_gift_voucher_transactions
+          WHERE sale_id=$1 AND kind='restore'`,[saleId]),
+      ]);
+      const voucherPaid=aifRoundMoney(payments.rows.filter(p=>p.method==='voucher').reduce((n,p)=>n+aifNumber(p.amount),0));
+      const originalTotal=aifRoundMoney(sale.rows[0].total);
+      const externalPayments=payments.rows.filter(p=>p.method!=='voucher'&&aifNumber(p.amount)>0);
+      const hasVoucher=voucherPaid>0||aifNumber(ledger.rows[0]?.amount)>0;
+      const consistent=(!hasVoucher)||(aifRoundMoney(ledger.rows[0]?.amount)===voucherPaid &&
+        aifRoundMoney(payments.rows.reduce((n,p)=>n+aifNumber(p.amount),0))===originalTotal &&
+        externalPayments.length<=1);
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({ok:true,hasVoucher,enabled:voucherFinanceEnabled(),consistent,
+        sameStore:sale.rows[0].code===location.code,
+        originalTotal,voucherPaid,previousReturned:aifRoundMoney(previous.rows[0]?.amount),
+        previousRestored:aifRoundMoney(restored.rows[0]?.amount),
+        externalMethod:externalPayments[0]?.method||null});
+    }catch(error){console.error('AIF voucher funding preview failed',error);
+      return res.status(500).json({error:'Az eredeti utalvanyfizetes ellenorzese nem sikerult.'});}
+  });
 
   async function assertNoChainedReturns(client, exchangeIds) {
     if (!exchangeIds.length) return;
@@ -1493,6 +1534,10 @@ export default function createAifShopReturnsRouter({
       });
     }
     wanted.sort((a, b) => a.saleLineId.localeCompare(b.saleLineId));
+    if (voucherFinanceEnabled()) {
+      try { await ensureAifVoucherFinanceSchema(pool); }
+      catch (error) { return res.status(500).json({error:'Az utalvany visszaru tabla nem ellenorizheto.',code:'voucher_return_schema_failed'}); }
+    }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -1528,6 +1573,11 @@ export default function createAifShopReturnsRouter({
           settlementDirection: prior.settlement_direction,
           settlementMethod: prior.settlement_method || null,
           settlementAmount: aifNumber(prior.settlement_amount),
+          ...(snap.voucherRefund ? {voucherRefund:{
+            code:snap.voucherRefund.code,voucherRestored:aifNumber(snap.voucherRefund.restored),
+            externalRefund:aifNumber(snap.voucherRefund.externalRefund),
+            externalMethod:snap.voucherRefund.externalMethod||null,
+          }} : {}),
         });
       }
 
@@ -1586,7 +1636,7 @@ export default function createAifShopReturnsRouter({
         sourceLines.push({ ...ret, source, auth, unitCredit, credit: aifRoundMoney(unitCredit * ret.returnedQty) });
       }
 
-      await assertNotVoucherFunded(client, saleId);
+      // Voucher-funded receipts are processed by the settlement plan below.
       const replacements = [];
       const seenVariants = new Set();
       for (const inputRow of replacementsInput) {
@@ -1663,7 +1713,14 @@ export default function createAifShopReturnsRouter({
       const difference = aifRoundMoney(replacementTotal - totalCredit);
       const direction = difference > 0.005 ? "in" : difference < -0.005 ? "out" : "none";
       const settle = direction === "none" ? 0 : aifRoundMoney(Math.abs(difference));
-      if (direction !== "none" && !allowedMethods.has(settlementMethod)) {
+      const voucherPlan = await prepareAifVoucherReturn(client, {
+        saleId, locationCode: location.code, returnCredit: totalCredit,
+        replacementTotal, settlementMethod,
+      });
+      const actualSettle = voucherPlan ? voucherPlan.externalRefund : settle;
+      const actualDirection = voucherPlan ? (actualSettle > 0.005 ? "out" : "none") : direction;
+      const actualMethod = voucherPlan ? voucherPlan.externalMethod : settlementMethod;
+      if (!voucherPlan && direction !== "none" && !allowedMethods.has(settlementMethod)) {
         throw errorResponse("Valaszd ki a kulonbozet fizetesi modjat.", "return_batch_settlement_required", 400);
       }
       const batchId = randomUUID();
@@ -1687,6 +1744,10 @@ export default function createAifShopReturnsRouter({
           returnBatchCount: sourceLines.length,
           returnBatchLines: primary ? summary : undefined,
           returnBatchCredit: primary ? totalCredit : undefined,
+          voucherRefund: primary && voucherPlan ? {
+            code: voucherPlan.code, restored: voucherPlan.voucherRefund,
+            externalRefund: voucherPlan.externalRefund, externalMethod: voucherPlan.externalMethod,
+          } : undefined,
           saleNumber: source.sale_number, soldAt: source.sold_at,
           sourceLocation: { id: String(source.sale_location_id), code: source.sale_location_code, name: source.sale_location_name },
           product: {
@@ -1711,8 +1772,8 @@ export default function createAifShopReturnsRouter({
           [
             exchangeNumber, location.id, source.sale_location_id, source.sale_id, source.sale_line_id, source.variant_id,
             row.returnedQty, row.unitCredit, row.credit, primary ? replacementTotal : 0,
-            primary ? difference : 0, primary ? direction : "none",
-            primary && direction !== "none" ? settlementMethod : null, primary ? settle : 0,
+            primary ? difference : 0, primary ? actualDirection : "none",
+            primary && actualDirection !== "none" ? actualMethod : null, primary ? actualSettle : 0,
             source.customer_name || null, source.customer_phone || null, actor,
             text(body.note) || null, row.auth?.id || null, JSON.stringify(snapshot),
             JSON.stringify(primary ? replacements.map(x => ({
@@ -1797,14 +1858,18 @@ export default function createAifShopReturnsRouter({
         });
         if (!logged) throw errorResponse("A csere-termek keszletnaploja nem mentheto.", "return_batch_stock_log_error", 500);
       }
-      if (direction !== "none") {
+      const voucherResult = await commitAifVoucherReturn(client, {
+        plan:voucherPlan,exchangeId:main.id,exchangeNumber:main.exchange_number,actor,
+      });
+      if (actualDirection !== "none") {
         await client.query(
           `INSERT INTO aif_shop_exchange_settlements (
              exchange_id,location_id,method,direction,amount,actor,note,raw,created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,now())`,
-          [main.id, location.id, settlementMethod, direction, settle, actor,
+          [main.id, location.id, actualMethod, actualDirection, actualSettle, actor,
            text(body.note) || null,
-           JSON.stringify({ returnBatchId: batchId, difference, returnCredit: totalCredit, replacementTotal })]
+           JSON.stringify({ returnBatchId: batchId, difference, returnCredit: totalCredit, replacementTotal,
+             voucherRefund:voucherResult })]
         );
       }
       await client.query(
@@ -1813,7 +1878,8 @@ export default function createAifShopReturnsRouter({
         [saleId, actor, text(body.note) || null, JSON.stringify({
           returnBatchId: batchId, exchangeId: String(main.id), exchangeNumber: main.exchange_number,
           exchangeIds: exchangeRows.map(x => String(x.header.id)), returns: summary,
-          returnCredit: totalCredit, replacementTotal, difference, direction, settlementMethod: direction === "none" ? null : settlementMethod,
+          returnCredit: totalCredit, replacementTotal, difference,
+          direction:actualDirection,settlementMethod:actualDirection==="none"?null:actualMethod,voucherRefund:voucherResult,
           processedAtLocation: { id: String(location.id), code: location.code, name: location.name },
         })]
       );
@@ -1832,8 +1898,8 @@ export default function createAifShopReturnsRouter({
         exchangeNumbers: exchangeRows.map(x => x.header.exchange_number),
         returnedLines: summary, returnedQty: summary.reduce((sum, x) => sum + x.returnedQty, 0),
         returnCredit: totalCredit, replacementTotal, difference,
-        settlementDirection: direction, settlementMethod: direction === "none" ? null : settlementMethod,
-        settlementAmount: settle,
+        settlementDirection: actualDirection, settlementMethod: actualDirection === "none" ? null : actualMethod,
+        settlementAmount: actualSettle, ...(voucherResult ? {voucherRefund:voucherResult} : {}),
         createdAt: main.created_at ? new Date(main.created_at).toISOString() : new Date().toISOString(),
       });
     } catch (error) {
@@ -2154,15 +2220,32 @@ export default function createAifShopReturnsRouter({
     if (replacementsInput.length > 100) return res.status(400).json({ error: "Egy cserében legfeljebb 100 csere-tétel lehet." });
     if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik a csere biztonsági azonosítója." });
 
+    if (voucherFinanceEnabled()) {
+      try { await ensureAifVoucherFinanceSchema(pool); }
+      catch (error) { return res.status(500).json({error:'Az utalvany visszaru tabla nem ellenorizheto.',code:'voucher_return_schema_failed'}); }
+    }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, client, body.location);
+      // Serialize repeated requests before looking up the idempotency key.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_return_request:${idempotencyKey}`]);
 
       const duplicate = await client.query(`SELECT * FROM aif_shop_exchanges WHERE client_request_id=$1 LIMIT 1`, [idempotencyKey]);
       if (duplicate.rowCount) {
         const row = duplicate.rows[0];
+        // An idempotency key must never make a different item, quantity or store
+        // appear to be refunded. Reject collisions before touching cash/stock.
+        if (String(row.source_sale_line_id) !== String(saleLineId) ||
+            Number(row.returned_qty) !== Number(returnedQty) ||
+            String(row.location_id) !== String(location.id) ||
+            String(row.status) !== "completed") {
+          const collision = new Error("Ez a visszáruazonosító már másik termékhez, mennyiséghez vagy üzlethez tartozik.");
+          collision.statusCode = 409;
+          collision.code = "return_idempotency_collision";
+          throw collision;
+        }
         await client.query("COMMIT");
         return res.json({
           ok: true,
@@ -2176,6 +2259,12 @@ export default function createAifShopReturnsRouter({
           settlementDirection: row.settlement_direction,
           settlementMethod: row.settlement_method || null,
           settlementAmount: aifNumber(row.settlement_amount),
+          ...(row.original_snapshot?.voucherRefund ? {voucherRefund:{
+            code:row.original_snapshot.voucherRefund.code,
+            voucherRestored:aifNumber(row.original_snapshot.voucherRefund.restored),
+            externalRefund:aifNumber(row.original_snapshot.voucherRefund.externalRefund),
+            externalMethod:row.original_snapshot.voucherRefund.externalMethod||null,
+          }} : {}),
         });
       }
 
@@ -2189,7 +2278,7 @@ export default function createAifShopReturnsRouter({
         error.statusCode = 404;
         throw error;
       }
-      await assertNotVoucherFunded(client, source.sale_id);
+      // Voucher settlement is checked after the full return value is calculated.
       if (aifNumber(source.balance_due) > 0.005) {
         const error = new Error("Ehhez az eredeti eladáshoz még nyitott tartozás tartozik. Visszáru vagy csere előtt a tartozást rendezni kell, különben a pénzügyi egyenleg hibás lenne.");
         error.statusCode = 409;
@@ -2347,7 +2436,13 @@ export default function createAifShopReturnsRouter({
       const difference = aifRoundMoney(replacementTotal - returnCredit);
       const settlementDirection = difference > 0.005 ? "in" : difference < -0.005 ? "out" : "none";
       const settlementAmount = settlementDirection === "none" ? 0 : aifRoundMoney(Math.abs(difference));
-      if (settlementDirection !== "none" && !allowedSettlementMethods.has(settlementMethod)) {
+      const voucherPlan = await prepareAifVoucherReturn(client, {
+        saleId:source.sale_id,locationCode:location.code,returnCredit,replacementTotal,settlementMethod,
+      });
+      const actualSettle = voucherPlan ? voucherPlan.externalRefund : settlementAmount;
+      const actualDirection = voucherPlan ? (actualSettle > 0.005 ? "out" : "none") : settlementDirection;
+      const actualMethod = voucherPlan ? voucherPlan.externalMethod : settlementMethod;
+      if (!voucherPlan && settlementDirection !== "none" && !allowedSettlementMethods.has(settlementMethod)) {
         const error = new Error(settlementDirection === "in" ? "Válaszd ki, hogyan fizeti a kliens a különbözetet." : "Válaszd ki, hogyan kapja vissza a kliens a különbözetet.");
         error.statusCode = 400;
         throw error;
@@ -2379,9 +2474,9 @@ export default function createAifShopReturnsRouter({
           returnCredit,
           replacementTotal,
           difference,
-          settlementDirection,
-          settlementDirection === "none" ? null : settlementMethod,
-          settlementAmount,
+          actualDirection,
+          actualDirection === "none" ? null : actualMethod,
+          actualSettle,
           source.customer_name || null,
           source.customer_phone || null,
           actorFrom(req),
@@ -2411,6 +2506,9 @@ export default function createAifShopReturnsRouter({
             sourceBuyPriceSource: source.buy_price_snapshot === null || source.buy_price_snapshot === undefined
               ? "current_variant_fallback"
               : "sale_snapshot",
+            ...(voucherPlan ? {voucherRefund:{code:voucherPlan.code,
+              restored:voucherPlan.voucherRefund,externalRefund:voucherPlan.externalRefund,
+              externalMethod:voucherPlan.externalMethod}} : {}),
             salesTvaRate: Number(exchangeTvaSettings?.salesTvaRate ?? 21),
             sellPriceIncludesTva: exchangeTvaSettings?.sellPriceIncludesTva !== false,
             salesPriceIncludesTva: exchangeTvaSettings?.sellPriceIncludesTva !== false,
@@ -2541,7 +2639,10 @@ export default function createAifShopReturnsRouter({
         if (!outLogged) throw Object.assign(new Error("A csere-termék készletmozgásának naplózása nem sikerült."), { statusCode: 500 });
       }
 
-      if (settlementDirection !== "none") {
+      const voucherResult = await commitAifVoucherReturn(client, {
+        plan:voucherPlan,exchangeId:exchange.id,exchangeNumber,actor:actorFrom(req),
+      });
+      if (actualDirection !== "none") {
         await client.query(
           `INSERT INTO aif_shop_exchange_settlements (
              exchange_id, location_id, method, direction, amount, actor, note, raw, created_at
@@ -2549,12 +2650,13 @@ export default function createAifShopReturnsRouter({
           [
             exchange.id,
             location.id,
-            settlementMethod,
-            settlementDirection,
-            settlementAmount,
+            actualMethod,
+            actualDirection,
+            actualSettle,
             actorFrom(req),
             text(body.note) || null,
-            JSON.stringify({ exchangeNumber, difference, returnCredit, replacementTotal }),
+            JSON.stringify({ exchangeNumber, difference, returnCredit, replacementTotal,
+              voucherRefund:voucherResult }),
           ]
         );
       }
@@ -2574,8 +2676,9 @@ export default function createAifShopReturnsRouter({
             returnCredit,
             replacementTotal,
             difference,
-            settlementDirection,
-            settlementMethod: settlementDirection === "none" ? null : settlementMethod,
+            settlementDirection:actualDirection,
+            settlementMethod:actualDirection==="none"?null:actualMethod,
+            voucherRefund:voucherResult,
           }),
         ]
       );
@@ -2599,9 +2702,10 @@ export default function createAifShopReturnsRouter({
         returnCredit,
         replacementTotal,
         difference,
-        settlementDirection,
-        settlementMethod: settlementDirection === "none" ? null : settlementMethod,
-        settlementAmount,
+        settlementDirection:actualDirection,
+        settlementMethod:actualDirection==="none"?null:actualMethod,
+        settlementAmount:actualSettle,
+        ...(voucherResult?{voucherRefund:voucherResult}:{}),
         createdAt: exchange.created_at ? new Date(exchange.created_at).toISOString() : new Date().toISOString(),
       });
     } catch (error) {

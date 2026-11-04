@@ -178,7 +178,7 @@ async function loadPeriod(client, args) {
     WHERE cp.location_id=$1 AND ${dayFilter('cp.paid_at')} ${who('cp.actor')}
     ORDER BY cp.paid_at,la.id LIMIT 50001`;
   const exchangeQuery = `
-    SELECT e.id::text AS id,e.exchange_number,e.created_at,e.actor,e.customer_name,
+    SELECT e.id::text AS id,e.exchange_number,e.created_at,e.actor,e.customer_name,e.original_snapshot,
       e.returned_qty,e.return_credit,e.replacement_total,e.difference,
       e.settlement_direction,e.settlement_method,e.settlement_amount,e.note,
       sl.product_title AS returned_product_title,
@@ -240,18 +240,24 @@ async function loadPeriod(client, args) {
     FROM aif_gift_voucher_transactions t
     JOIN aif_gift_vouchers v ON v.id=t.voucher_id
     WHERE t.kind='issue' AND t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
-    AND ${dayFilter('t.created_at')} ORDER BY t.created_at,t.id LIMIT 50001`;
+    AND ${dayFilter('t.created_at')} ${who('t.actor')} ORDER BY t.created_at,t.id LIMIT 50001`;
   const voucherRedeemQuery = `SELECT t.id::text,t.created_at,t.amount,t.sale_id::text AS sale_id,
     t.actor,v.code FROM aif_gift_voucher_transactions t
     JOIN aif_gift_vouchers v ON v.id=t.voucher_id
     WHERE t.kind='redeem' AND t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
     AND ${dayFilter('t.created_at')} ORDER BY t.created_at,t.id LIMIT 50001`;
-  const [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult] = await Promise.all([
+  const voucherRestoreQuery = `SELECT t.id::text,t.created_at,t.amount,t.actor,
+      t.exchange_id::text AS exchange_id,t.sale_id::text AS sale_id,v.code
+      FROM aif_gift_voucher_transactions t
+      JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+      WHERE t.kind='restore' AND t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
+        AND ${dayFilter('t.created_at')} ${who('t.actor')} ORDER BY t.created_at,t.id LIMIT 50001`;
+  const [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult,voucherRestoresResult] = await Promise.all([
     client.query(salesQuery,args),client.query(paymentsQuery,args),client.query(customerPaymentsQuery,args),
     client.query(allocationsQuery,args),client.query(exchangeQuery,args),
-    client.query(voucherIssueQuery,args),client.query(voucherRedeemQuery,args),
+    client.query(voucherIssueQuery,args),client.query(voucherRedeemQuery,args),client.query(voucherRestoreQuery,args),
   ]);
-  for (const r of [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult]) {
+  for (const r of [salesResult,paymentsResult,customerResult,allocResult,exchangeResult,voucherIssuesResult,voucherRedeemsResult,voucherRestoresResult]) {
     if (r.rows.length>50000) throw Object.assign(new Error('Az időszaki export több mint 50 000 sort tartalmaz. Válassz rövidebb időszakot.'), {statusCode:413});
   }
   // A bevaltas ugyanazon a napon szerepel a normal arufizetesek kozott.
@@ -268,14 +274,25 @@ async function loadPeriod(client, args) {
   }
   if(redeemed.size!==journal.size || [...redeemed].some(([id,n])=>journal.get(id)!==n))
     throw Object.assign(new Error('Az utalvanybevaltasok es az eladasi fizetesi sorok nem egyeznek. Az export blokkolva.'),{statusCode:409});
+  // A voucher-visszairas egy konkret, lezart visszaruhoz tartozik, es minden
+  // pozitiv osszeget pontosan egyetlen visszaru-fejlecnek kell igazolnia.
+  const restores=new Map(voucherRestoresResult.rows.map(t=>[text(t.exchange_id),cents(t.amount)]));
+  const observed=new Map();
+  for(const e of exchangeResult.rows){
+    const voucher=e.original_snapshot?.voucherRefund;
+    if(voucher && cents(voucher.restored)>0)observed.set(text(e.id),cents(voucher.restored));
+  }
+  if(observed.size!==restores.size || [...observed].some(([id,val])=>restores.get(id)!==val))
+    throw Object.assign(new Error('Az utalvany-visszairas es a visszaru naploja elter. Az Excel blokkolva.'),{statusCode:409});
   return { sales:salesResult.rows, payments:paymentsResult.rows, customerPayments:customerResult.rows,
     allocations:allocResult.rows, exchanges:exchangeResult.rows,
-    voucherIssues:voucherIssuesResult.rows, voucherRedeems:voucherRedeemsResult.rows };
+    voucherIssues:voucherIssuesResult.rows, voucherRedeems:voucherRedeemsResult.rows,
+    voucherRestores:voucherRestoresResult.rows };
 }
 function excelEntries(data, employee = null) {
   const shouldInclude = (actor) => !employee || normalize(actor)===normalize(employee);
   const rows = [];
-  const totals = {collected:0,gross:0,discount:0,settled:0,creditValue:0,exchangeCash:0,cash:0,card:0,transfer:0,other:0,voucher:0,voucherIssued:0,voucherRedeemed:0};
+  const totals = {collected:0,gross:0,discount:0,settled:0,creditValue:0,exchangeCash:0,cash:0,card:0,transfer:0,other:0,voucher:0,voucherIssued:0,voucherRedeemed:0,voucherRestored:0};
   const salesById=new Map();
   const customerPaysById=new Map(data.customerPayments.map(row=>[text(row.id),row]));
   const allocationsByPayment=new Map();
@@ -410,6 +427,19 @@ function excelEntries(data, employee = null) {
       actor:issue.actor,kind:'Ajándékutalvány értékesítés · nem termék',collected:value,
       stockQty:0,note:'Uj penzbevetel; nem ruha- vagy aruertekesites, utalvany-kotelezettseg keletkezett.'});
   }
+  // A jovairas nem uj keszpenz es nem uj termek, csak az eredeti
+  // utalvanyra visszatett ertek. Nem kerul a collected / cash totalsba.
+  for(const refund of data.voucherRestores || []){
+    if(!shouldInclude(refund.actor))continue;
+    const value=round(refund.amount);
+    totals.voucherRestored=round(totals.voucherRestored+value);
+    add({id:`voucher-restore:${refund.id}`,at:refund.created_at,dateTime:bookDateTime(refund.created_at),
+      brand:'PENZUGY',sn:'',productCode:'UTALVANY',barcode:text(refund.code),
+      subcategory:'AJÁNDÉKUTALVÁNY VISSZAÍRÁS • NEM ÚJ PÉNZ',color:'',size:'',customer:'',qty:0,
+      listPrice:0,discountPercent:0,discount:0,lineTotal:value,
+      method:'Utalvány-egyenleg jóváírása',actor:refund.actor,kind:'Utalvány visszáru-jóváírás',
+      collected:0,stockQty:0,note:'A visszáru erteke visszakerult a korabban kiadott utalvanyra, penzmozgas nelkul.'});
+  }
   // Customer payments: one receipt, zero or many linked ORIGINAL item lines.
   for(const cp of data.customerPayments) {
     const a=allocationsByPayment.get(text(cp.id))||[];
@@ -491,7 +521,7 @@ function excelEntries(data, employee = null) {
   totals.collected=round(rows.reduce((sum,r)=>sum+Number(r.collected||0),0));
   totals.discount=round(totals.discount);
   totals.gross=round(totals.collected+totals.discount);
-  for(const name of ['settled','creditValue','exchangeCash','cash','card','transfer','other','voucherIssued','voucherRedeemed','voucher']) totals[name]=round(totals[name]);
+  for(const name of ['settled','creditValue','exchangeCash','cash','card','transfer','other','voucherIssued','voucherRedeemed','voucherRestored','voucher']) totals[name]=round(totals[name]);
   const paymentMethods=round(totals.cash+totals.card+totals.transfer+totals.other);
   if (Math.abs(paymentMethods-totals.collected)>0.02) {
     // Important: never download a plausible looking but false reconciliation.
