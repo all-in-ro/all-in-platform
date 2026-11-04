@@ -525,10 +525,10 @@ export default function AllInMagazinCiuc({
               <button
                 type="button"
                 onClick={openVouchers}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/20 bg-[#354153] px-4 text-sm text-white transition hover:border-[#93e7e1]/45 hover:bg-[#435267]"
+                className="inline-flex min-h-12 items-center justify-center gap-2.5 rounded-2xl border border-white/18 bg-[#354153] px-3.5 text-sm font-normal text-white transition hover:border-white/35 hover:bg-[#3e4d63] active:scale-[0.98]"
               >
-                <img src={VOUCHER_ICON_URL} alt="" className="h-6 w-6 object-contain" />
-                Ajándékutalvány
+                <img src={VOUCHER_ICON_URL} alt="" className="block h-8 w-11 shrink-0 object-contain brightness-0 invert" />
+                <span className="whitespace-nowrap">Ajándékutalvány</span>
               </button>
               <button
                 type="button"

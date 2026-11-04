@@ -27,6 +27,11 @@ import AllInLegacyExport from "./AllInLegacyExport";
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
+const VOUCHER_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
+const VoucherMenuIcon = ({ className }: { className?: string }) => (
+  <img src={VOUCHER_ICON_URL} alt="" className={`${className || ""} block object-contain brightness-0 invert`} />
+);
+
 const ShopifyMenuIcon = ({className}:{className?:string}) => <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className={`${className||""} object-contain`} />;
 
 const LOGO_URL =
@@ -311,7 +316,7 @@ function MainMenuButton({
       type="button"
     >
       <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${iconToneClass}`}>
-        <Icon className="h-4 w-4" />
+        <Icon className={hash === "#vouchers" ? "h-6 w-7" : "h-4 w-4"} />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm uppercase tracking-[0.045em]">{label}</span>
       {badge ? (
@@ -548,6 +553,14 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             onToggle={() => toggleGroup("incoming")}
             items={incomingItems}
             onItemSelect={handleIncomingItem}
+          />
+
+          {/* Utalvanyok: onallo admin-oldal, az aru-bevetelezes alatt,
+              ugyanolyan stabil menugombbal, mint a tobbi fosori elem. */}
+          <MainMenuButton
+            label="Ajándékutalványok"
+            hash="#vouchers"
+            icon={VoucherMenuIcon}
           />
 
           <div className="my-3 border-t border-white/12" />
