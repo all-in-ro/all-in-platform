@@ -7,6 +7,12 @@ import {
   Banknote,
   Barcode,
   Boxes,
+  Images,
+  ImagePlus,
+  Star,
+  Trash2,
+  UploadCloud,
+  ShieldCheck,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -820,6 +826,409 @@ function ProductImage({ src, title, large = false, compact = false }: { src?: st
 
 
 
+// AIF_SELLER_SHARED_GALLERY_20261104
+// A bolti felulet ES a raktar ugyanazt az izolalt /variants/:id/gallery API-t
+// hasznalja. A feltoltes bolti, korlatozott R2 vegponton at tortenik.
+const SELLER_GALLERY_MAX = 60;
+const SELLER_GALLERY_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+
+type SellerGalleryResponse = {
+  ok: true;
+  variantId: string;
+  images: string[];
+  imageUrl: string | null;
+  imageCount: number;
+  siblingCount?: number;
+  updatedVariantIds?: string[];
+  galleryConflict?: boolean;
+  shopifySync?: "queued" | "processing" | "error" | "not_needed";
+  syncWarning?: string | null;
+};
+
+function sellerGalleryImages(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((url) => String(url || "").trim())
+    .filter((url) => /^https:\/\//i.test(url)))).slice(0, SELLER_GALLERY_MAX);
+}
+
+async function sellerGalleryFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { credentials: "include", cache: "no-store", ...init });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || payload.ok === false) {
+    const error = new Error(String(payload?.error || `HTTP ${response.status}: a képtár nem érhető el.`)) as Error & { code?: string; status?: number };
+    error.code = String(payload?.code || "");
+    error.status = response.status;
+    throw error;
+  }
+  return payload as T;
+}
+
+function sellerGalleryPendingKey(variantId: string) {
+  return `allin:shop-gallery:pending:${variantId}`;
+}
+
+function SellerProductGalleryModal({
+  item,
+  onClose,
+  onSaved,
+}: {
+  item: AifShopSaleCatalogItem;
+  onClose: () => void;
+  onSaved: (images: string[], affectedVariantIds: string[]) => void;
+}) {
+  const galleryUrl = `/api/aif/variants/${encodeURIComponent(item.variantId)}/gallery`;
+  const [images, setImages] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [urlInput, setUrlInput] = useState("");
+  const [dropActive, setDropActive] = useState(false);
+  const [siblingCount, setSiblingCount] = useState(1);
+  const [pendingImages, setPendingImages] = useState<string[]>(() => {
+    try { return sellerGalleryImages(JSON.parse(sessionStorage.getItem(sellerGalleryPendingKey(item.variantId)) || "[]")); }
+    catch { return []; }
+  });
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(false);
+  const currentServerRef = useRef<string[]>([]);
+
+  function rememberPending(urls: string[]) {
+    const next = sellerGalleryImages(urls);
+    setPendingImages(next);
+    try {
+      if (next.length) sessionStorage.setItem(sellerGalleryPendingKey(item.variantId), JSON.stringify(next));
+      else sessionStorage.removeItem(sellerGalleryPendingKey(item.variantId));
+    } catch { /* A sessionStorage tiltasa nem allithatja le a feltoltest. */ }
+  }
+
+  async function readGallery() {
+    return sellerGalleryFetch<SellerGalleryResponse>(`${galleryUrl}?_=${Date.now()}`, {
+      signal: AbortSignal.timeout(25_000),
+    });
+  }
+
+  async function reload() {
+    if (busyRef.current) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await readGallery();
+      const urls = sellerGalleryImages(data.images);
+      currentServerRef.current = urls;
+      setImages(urls);
+      setSiblingCount(Math.max(1, Number(data.siblingCount || 1)));
+      if (data.galleryConflict) setError("Egyes méretekhez eltérő régi képek vannak elmentve. A rendszer nem írja felül ezeket automatikusan; a főnöknek kell egyeztetnie.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A képek betöltése sikertelen.");
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => {
+    void reload();
+    // A megnyitott termek sajat allapotot kap, valtozatok kozott nem marad bent foto.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.variantId]);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Tab") {
+        const elements = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]'
+        ) || []).filter((element) => element.offsetWidth > 0 || element.offsetHeight > 0);
+        if (elements.length) {
+          const first = elements[0];
+          const last = elements[elements.length - 1];
+          if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (!busyRef.current) onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  async function persist(next: string[], expected: string[]) {
+    const saved = await sellerGalleryFetch<SellerGalleryResponse>(galleryUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images: next, expectedImages: expected }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (JSON.stringify(sellerGalleryImages(saved.images)) !== JSON.stringify(next) || saved.imageCount !== next.length) {
+      throw new Error("A szerver nem a teljes kért galériát igazolta vissza. Ellenőrizd a képeket.");
+    }
+    const checked = await readGallery();
+    if (JSON.stringify(sellerGalleryImages(checked.images)) !== JSON.stringify(next) || checked.imageCount !== next.length) {
+      throw new Error("A visszaolvasás eltérő képeket mutat. Nem tekintjük késznek a mentést.");
+    }
+    currentServerRef.current = [...next];
+    setImages([...next]);
+    setSiblingCount(Math.max(1, Number(saved.siblingCount || checked.siblingCount || 1)));
+    const affectedIds = Array.from(new Set([item.variantId, ...(saved.updatedVariantIds || [])]));
+    onSaved(next, affectedIds);
+    setNotice(`${next.length} kép mentve és ellenőrizve. ${Math.max(1, Number(saved.siblingCount || 1))} azonos modellű/színű méret galériája összehangolva.${saved.shopifySync === "queued" ? " Shopify-képszinkron sorba állítva." : saved.shopifySync === "processing" ? " Shopify-szinkron feldolgozás alatt." : ""}`);
+    if (saved.syncWarning || saved.shopifySync === "error") {
+      setError(saved.syncWarning || "A képek mentve vannak, de a Shopify-képszinkron várólistáját ellenőrizni kell.");
+    }
+    return saved;
+  }
+
+  // Fokep, sorrend, torles: azonnali mentes. A legutobb olvasott keplistat
+  // feltetelnek adjuk meg, ezert a fonok friss kepei nem irhatok felul veletlenul.
+  async function changeImages(next: string[]): Promise<boolean> {
+    if (busyRef.current || loading) return false;
+    const desired = sellerGalleryImages(next);
+    const expected = [...currentServerRef.current];
+    if (JSON.stringify(desired) === JSON.stringify(expected)) return true;
+    busyRef.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setImages(desired);
+    setProgress("Galéria mentése és ellenőrzése…");
+    try {
+      await persist(desired, expected);
+      return true;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "A képek mentése nem sikerült.";
+      setError(message);
+      try {
+        const refreshed = await readGallery();
+        currentServerRef.current = sellerGalleryImages(refreshed.images);
+        setImages(currentServerRef.current);
+      } catch {
+        setImages(expected);
+      }
+      return false;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setProgress("");
+    }
+  }
+
+  // Feltoltes kozben a legfrissebb kozponti kepeket olvassuk vissza, ES csak
+  // az uj R2 URL-eket fuzzuk hozza. Elavult helyi keplista nem torolheti mas
+  // dolgozo kepeit. 3 parhuzamos feltoltes / kor, akar 60 kepig.
+  async function uploadFiles(files: File[]) {
+    if (!files.length || loading || busyRef.current) return;
+    const invalid = files.find((file) => !SELLER_GALLERY_IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > 10 * 1024 * 1024);
+    if (invalid) {
+      setError(`Nem megfelelő kép: ${invalid.name}. JPG, PNG, WebP, GIF vagy AVIF, legfeljebb 10 MB/fájl.`);
+      return;
+    }
+    if (files.length + images.length + pendingImages.length > SELLER_GALLERY_MAX) {
+      setError(`Legfeljebb ${SELLER_GALLERY_MAX} kép tárolható egy termékhez. Most ${images.length} mentett és ${pendingImages.length} várakozó képed van.`);
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    setNotice("");
+    setError("");
+    const uploaded: string[] = [];
+    const failures: string[] = [];
+    try {
+      for (let i = 0; i < files.length; i += 3) {
+        const chunk = files.slice(i, i + 3);
+        setProgress(`Képek feltöltése: ${i + 1}–${Math.min(i + chunk.length, files.length)} / ${files.length}`);
+        const results = await Promise.allSettled(chunk.map(async (file) => {
+          const body = new FormData();
+          body.append("file", file);
+          body.append("variantId", item.variantId);
+          const result = await sellerGalleryFetch<{ ok: true; url: string }>("/api/uploads/r2/shop-gallery", {
+            method: "POST", body, signal: AbortSignal.timeout(95_000),
+          });
+          if (!/^https:\/\//i.test(result.url)) throw new Error("A képtár nem adott nyilvános HTTPS-hivatkozást.");
+          return result.url;
+        }));
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") uploaded.push(result.value);
+          else failures.push(`${chunk[index].name}: ${result.reason instanceof Error ? result.reason.message : "Feltöltési hiba"}`);
+        });
+        if (uploaded.length) rememberPending([...pendingImages, ...uploaded]);
+      }
+      if (!uploaded.length) {
+        setError(`Egy kép sem került fel. ${failures.slice(0, 3).join(" | ")}`);
+        return;
+      }
+      setProgress("Új képek hozzáadása a közös galériához…");
+      let saved = false;
+      // A kozben tortent modositas miatti 409-nel ujraolvassuk es a kepet
+      // hozzaadjuk, nem irjuk felul a frissen erkezett tobbi kepet.
+      for (let attempt = 0; attempt < 3 && !saved; attempt += 1) {
+        const fresh = await readGallery();
+        const baseline = sellerGalleryImages(fresh.images);
+        const desired = sellerGalleryImages([...baseline, ...pendingImages, ...uploaded]);
+        if (new Set([...baseline, ...pendingImages, ...uploaded]).size > SELLER_GALLERY_MAX) {
+          throw new Error("Időközben betelt a 60 képes galéria. A feltöltött képek megmaradtak az újrapróbáláshoz.");
+        }
+        try {
+          await persist(desired, baseline);
+          rememberPending([]);
+          saved = true;
+        } catch (caught) {
+          const conflict = caught as Error & { code?: string };
+          if (conflict.code !== "gallery_changed_reload_required" || attempt === 2) throw caught;
+        }
+      }
+      if (failures.length) setError(`${uploaded.length}/${files.length} kép sikerült. Ezek hibáztak: ${failures.slice(0, 4).join(" | ")}`);
+    } catch (caught) {
+      // A mar feltoltott file-ok R2 URL-jeit nem veszitjuk el.
+      rememberPending([...pendingImages, ...uploaded]);
+      setError(`${caught instanceof Error ? caught.message : "A közös galéria mentése nem sikerült."} A már feltöltött képek megtarthatók az „Újramentés” gombbal.`);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setProgress("");
+    }
+  }
+
+  async function recoverPending() {
+    if (busyRef.current || !pendingImages.length) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError("");
+    setProgress("Korábban feltöltött képek ellenőrzése…");
+    try {
+      const fresh = await readGallery();
+      const base = sellerGalleryImages(fresh.images);
+      const combined = sellerGalleryImages([...base, ...pendingImages]);
+      if (combined.length < new Set([...base, ...pendingImages]).size) throw new Error("Nincs elég hely a galériában a várakozó képeknek.");
+      await persist(combined, base);
+      rememberPending([]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Az újramentés sikertelen. A várakozó képek megmaradtak.");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setProgress("");
+    }
+  }
+
+  async function addUrl() {
+    const value = urlInput.trim();
+    if (!/^https:\/\//i.test(value) || value.length > 2048) {
+      setError("Nyilvános HTTPS-kép URL-t adj meg (legfeljebb 2048 karakter).");
+      return;
+    }
+    if (images.includes(value) || images.length >= SELLER_GALLERY_MAX) {
+      setError(images.includes(value) ? "Ez a kép már szerepel a galériában." : "A galéria megtelt.");
+      return;
+    }
+    if (await changeImages([...images, value])) setUrlInput("");
+  }
+
+  const main = images[0] || "";
+  const disabled = busy || loading;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[1650] flex items-center justify-center bg-[#06111e]/85 p-2.5 backdrop-blur-[10px] sm:p-5"
+      onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}
+    >
+      <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`${item.title} képgalériája`} className="flex max-h-[96dvh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[30px] border border-[#93e7e2]/50 bg-[#303a4c] text-white shadow-[0_45px_150px_rgba(0,0,0,0.78)]">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#173d4d] via-[#206266] to-[#108D8B] px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/12"><Images size={25}/></span>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-[#d4fffc]/72">AllInFashion • Közös termékképtár</p>
+              <h2 className="mt-1 truncate text-lg sm:text-2xl" title={item.title}>{item.title}</h2>
+              <p className="mt-1 truncate text-[11px] text-white/65">{productCode(item)} • {item.colorName || "Szín nélkül"} • {item.size || "Méret nélkül"}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-black/10 hover:bg-white/15 disabled:opacity-35" aria-label="Képgaléria bezárása"><X size={19}/></button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3.5 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs text-white/68"><ShieldCheck size={17} className="text-[#90eee8]"/> A képek a főnök raktári galériájában is megjelennek, ahonnan Shopify-ra exportálhatók.</div>
+            <span className="rounded-full border border-[#9be9e5]/35 bg-[#108D8B]/25 px-3 py-1.5 text-[11px] text-[#dcfffc]">{images.length} / {SELLER_GALLERY_MAX} kép • {siblingCount} méret</span>
+          </div>
+
+          {error ? <div role="alert" className="mb-3 flex items-start gap-2 rounded-2xl border border-rose-300/50 bg-rose-700/25 px-4 py-3 text-xs leading-5 text-rose-50"><TriangleAlert size={18} className="mt-0.5 shrink-0"/><span>{error}</span></div> : null}
+          {notice && !error ? <div role="status" className="mb-3 flex items-start gap-2 rounded-2xl border border-[#9be9e5]/35 bg-[#108D8B]/20 px-4 py-3 text-xs leading-5 text-[#d7fffd]"><CheckCircle2 size={18} className="mt-0.5 shrink-0"/><span>{notice}</span></div> : null}
+          {progress ? <div role="status" className="mb-3 flex items-center gap-2 rounded-xl border border-sky-200/26 bg-sky-500/10 px-3 py-2.5 text-xs text-sky-50"><Loader2 size={16} className="animate-spin"/> {progress}</div> : null}
+          {pendingImages.length ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200/45 bg-amber-400/10 px-3 py-3">
+              <div className="min-w-0"><p className="text-sm text-amber-50">{pendingImages.length} feltöltött kép mentésellenőrzésre vár</p><p className="mt-1 text-[11px] text-amber-100/70">A képhivatkozások ebben a böngészőfülben megmaradtak. Nem kell újra fájlt választani.</p></div>
+              <button type="button" disabled={disabled} onClick={() => void recoverPending()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-amber-100/40 bg-amber-500/22 px-3 text-xs text-amber-50 hover:bg-amber-500/35 disabled:opacity-40"><RefreshCw size={15}/> Újramentés</button>
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.93fr)_minmax(0,1.07fr)]">
+            <div className="min-w-0 space-y-3">
+              <div className="overflow-hidden rounded-[23px] border border-[#9be9e5]/32 bg-[#263245] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="relative flex min-h-[265px] items-center justify-center overflow-hidden rounded-[18px] bg-white sm:min-h-[370px]">
+                  {main ? <img src={main} alt={`${item.title} főképe`} className="max-h-[370px] w-full object-contain p-4"/> : <div className="flex flex-col items-center justify-center py-16 text-slate-400"><ImagePlus size={48} strokeWidth={1.4}/><p className="mt-3 text-sm">Még nincs termékkép</p></div>}
+                  {main ? <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-lg bg-[#108D8B] px-3 py-1.5 text-xs text-white shadow-lg"><Star size={13} fill="currentColor"/> Főkép</span> : null}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 px-2 pt-2.5 text-[11px] text-white/52"><span>Az első kép a termék főképe.</span><span className="text-[#bafff8]">Automatikus mentés</span></div>
+              </div>
+              <div className="rounded-[19px] border border-[#9be9e5]/23 bg-[#273c4a] px-4 py-3 text-[11px] leading-5 text-white/70">
+                <span className="inline-flex items-center gap-2 text-[#cafffa]"><CheckCircle2 size={15}/> Közös képrendszer</span>
+                <p className="mt-1.5">A főképcsere, sorrend, törlés és feltöltés azonos modell, szín és termékkód szerint egyszerre mentődik. A már Shopify-hoz kapcsolt termékek képei a meglévő szinkronfeladaton keresztül frissülnek.</p>
+              </div>
+            </div>
+
+            <div className="min-w-0 space-y-3">
+              <div
+                className={`rounded-[22px] border-2 border-dashed p-4 text-center transition ${dropActive ? "border-[#d7fffd] bg-[#108D8B]/30" : "border-[#9be9e5]/48 bg-[#108D8B]/12 hover:border-[#c8fffc]"}`}
+                onDragOver={(event) => { event.preventDefault(); if (!disabled) setDropActive(true); }}
+                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropActive(false); }}
+                onDrop={(event) => { event.preventDefault(); setDropActive(false); if (!disabled) void uploadFiles(Array.from(event.dataTransfer.files || [])); }}
+              >
+                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-[#9be9e5]/42 bg-[#108D8B]/28"><UploadCloud size={24}/></div>
+                <h3 className="mt-2 text-base">Képek hozzáadása</h3>
+                <p className="mt-1 text-[11px] leading-5 text-white/52">Húzd ide a képeket, vagy válaszd ki egyszerre mindet. JPG, PNG, WebP, GIF, AVIF • maximum 10 MB/kép.</p>
+                <button type="button" disabled={disabled || images.length >= SELLER_GALLERY_MAX} onClick={() => fileRef.current?.click()} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl border border-[#c3fffa]/55 bg-[#108D8B] px-5 text-sm text-white shadow-[0_8px_20px_rgba(16,141,139,0.25)] transition hover:bg-[#17a29e] disabled:cursor-not-allowed disabled:opacity-40"><ImagePlus size={18}/> Több kép kiválasztása</button>
+                <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/avif" disabled={disabled} className="sr-only" onChange={(event) => { const chosen = Array.from(event.target.files || []) as File[]; event.target.value = ""; void uploadFiles(chosen); }}/>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1"><h3 className="text-sm text-white/90">Galéria és sorrend</h3><span className="text-[11px] text-white/48">Kattints egy képre a főképcseréhez</span></div>
+              <div className="grid max-h-[400px] grid-cols-2 gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-3">
+                {images.map((url, index) => (
+                  <div key={url} className={`min-w-0 overflow-hidden rounded-[16px] border p-1.5 transition ${index === 0 ? "border-[#9be9e5]/68 bg-[#108D8B]/28" : "border-white/14 bg-[#374357]"}`}>
+                    <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} title="Főképnek kijelölés" className="relative w-full overflow-hidden rounded-xl bg-white disabled:opacity-60"><img src={url} alt={`${item.title}, ${index + 1}. kép`} className="aspect-square w-full object-contain p-1.5" loading="lazy"/>{index === 0 ? <span className="absolute left-1 top-1 rounded-md bg-[#108D8B] px-1.5 py-0.5 text-[9px] text-white">Fő</span> : null}</button>
+                    <div className="mt-1.5 flex items-center justify-between gap-0.5"><span className="text-[10px] text-white/65">{index + 1}. kép</span><div className="flex items-center gap-0.5">
+                      <button type="button" disabled={disabled || index === 0} onClick={() => { const next = [...images]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void changeImages(next); }} aria-label="Kép balra" title="Balra" className="rounded-md p-1.5 text-white/74 hover:bg-white/10 disabled:opacity-25"><ArrowLeft size={13}/></button>
+                      <button type="button" disabled={disabled || index === images.length - 1} onClick={() => { const next = [...images]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void changeImages(next); }} aria-label="Kép jobbra" title="Jobbra" className="rounded-md p-1.5 text-white/74 hover:bg-white/10 disabled:opacity-25"><ArrowRight size={13}/></button>
+                      <button type="button" disabled={disabled} onClick={() => void changeImages(images.filter((candidate) => candidate !== url))} aria-label="Kép eltávolítása" title="Eltávolítás" className="rounded-md p-1.5 text-rose-300 hover:bg-rose-600/30 disabled:opacity-30"><Trash2 size={13}/></button>
+                    </div></div>
+                    {index > 0 ? <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-[#8be9e2]/28 bg-[#108D8B]/18 py-1.5 text-[10px] text-[#d7fffd] hover:bg-[#108D8B]/38 disabled:opacity-35"><Star size={11}/> Főképnek</button> : null}
+                  </div>
+                ))}
+                {!loading && !images.length ? <div className="col-span-full rounded-xl border border-dashed border-white/14 px-4 py-8 text-center text-xs text-white/40">A galéria még üres. Tölts fel több képet egyszerre.</div> : null}
+                {loading ? <div className="col-span-full flex min-h-32 items-center justify-center gap-2 text-sm text-white/52"><Loader2 size={18} className="animate-spin"/> Képek betöltése…</div> : null}
+              </div>
+              <div className="flex gap-2"><input disabled={disabled} value={urlInput} onChange={(event) => setUrlInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addUrl(); } }} placeholder="https://... további kép URL" aria-label="Képlink" className="h-10 min-w-0 flex-1 rounded-xl border border-white/18 bg-[#263245] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#a5f4ef]"/><button type="button" disabled={disabled || !urlInput.trim()} onClick={() => void addUrl()} className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#a5f4ef]/38 bg-[#108D8B]/25 px-3 text-xs text-[#d7fffd] hover:bg-[#108D8B]/50 disabled:opacity-35"><Plus size={15}/> Hozzáadás</button></div>
+            </div>
+          </div>
+        </div>
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#263347] px-4 py-3.5 sm:px-6"><span className="flex items-center gap-2 text-[11px] text-white/52"><ShieldCheck size={15} className="text-[#9ef5ee]"/> Csak képeket módosít, készletet és árat nem.</span><div className="flex gap-2"><button type="button" disabled={disabled} onClick={() => void reload()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-white/5 px-3 text-xs hover:bg-white/10 disabled:opacity-35"><RefreshCw size={15}/> Frissítés</button><button type="button" disabled={busy} onClick={onClose} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#a5f4ef]/45 bg-[#108D8B] px-5 text-sm hover:bg-[#18a39f] disabled:opacity-40"><Check size={17}/> Kész</button></div></footer>
+      </section>
+    </div>, document.body,
+  );
+}
+
 function CustomerQuickViewModal({
   detail,
   loading,
@@ -1587,6 +1996,7 @@ export default function AllInShopOperations({
 
   const [stockQuery, setStockQuery] = useState("");
   const [stockData, setStockData] = useState<AifShopStockOverviewResponse | null>(null);
+  const [galleryProduct, setGalleryProduct] = useState<AifShopSaleCatalogItem | null>(null);
   const [stockLoading, setStockLoading] = useState(false);
   const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
   const [productFilters, setProductFilters] = useState<ProductFilters>(() => emptyProductFilters());
@@ -1934,6 +2344,19 @@ export default function AllInShopOperations({
     [productFilters, stockItems],
   );
 
+  // A mentes szerveroldali ellenorzese utan a ket bolti termeklistat egyszerre
+  // frissitjuk, nem csak a megnyitott kartyat. Masik geprol a kovetkezo GET
+  // ugyanazt az adatbazisban mar elmentett galeriat latja a raktarban is.
+  function onSellerGallerySaved(photos: string[], variantIds: string[]) {
+    const affected = new Set(variantIds.map(String));
+    const primary = photos[0] || null;
+    setStockData((current) => current ? {
+      ...current,
+      items: current.items.map((row) => affected.has(row.variantId) ? { ...row, imageUrl: primary } : row),
+    } : current);
+    setSearchItems((current) => current.map((row) => affected.has(row.variantId) ? { ...row, imageUrl: primary } : row));
+  }
+
   function selectCashHistoryPeriod(month: string) {
     if (!validHistoryMonth(month)) return;
     setCashHistoryMonth(month);
@@ -2011,6 +2434,7 @@ export default function AllInShopOperations({
     const code = String(nextCode || "").trim();
     if (!code || code === browseLocationCode) return;
     setBrowseLocationCode(code);
+    setGalleryProduct(null);
     setProductFilters(emptyProductFilters());
     setError("");
 
@@ -2639,6 +3063,7 @@ export default function AllInShopOperations({
     if (!open) return;
     setError("");
     setBrowseLocationCode(locationCode);
+    setGalleryProduct(null);
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
     setOutstandingOnly(false);
@@ -2726,6 +3151,7 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (galleryProduct) return; // A belso, magasabb modal zarodjon, ne a teljes keszletablak.
         if (pdfChoice) {
           setPdfChoice(null);
           return;
@@ -2783,7 +3209,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, handoverOpen, handoverSaving, mode, onClose, open, pdfChoice, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, galleryProduct, handoverOpen, handoverSaving, mode, onClose, open, pdfChoice, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
 
   function openSellerPdfChoice(handoverId?: string) {
     setPdfChoice({date:summaryDate,...(handoverId?{handoverId}:{})});
@@ -2976,6 +3402,7 @@ export default function AllInShopOperations({
                           <span className="text-xl text-[#d7fffd]">{formatMoney(item.sellPrice)}</span>
                           <span className={`rounded-xl border px-3 py-1.5 text-sm ${numberValue(item.availableQty) <= 2 ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{numberValue(item.availableQty)} db</span>
                         </div>
+                        {!browsingOtherLocation ? <button type="button" onClick={() => setGalleryProduct(item)} className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/42 bg-[#108D8B]/32 px-3 text-[11px] text-[#defffc] transition hover:bg-[#108D8B]/65"><ImagePlus size={14}/> Képek feltöltése / kezelése</button> : null}
                       </div>
                     </article>
                   ))}
@@ -3062,7 +3489,7 @@ export default function AllInShopOperations({
                   {filteredStockItems.map((item) => (
                     <article key={item.variantId} className={`grid grid-cols-[80px_1fr_auto] items-center gap-3 rounded-[20px] border p-3 ${item.lowStock ? "border-red-300/48 bg-red-950/18" : "border-white/13 bg-[#374357]"}`}>
                       <ProductImage src={item.imageUrl} title={item.title} />
-                      <div className="min-w-0"><h3 className="truncate text-base">{item.title}</h3><p className="mt-1 truncate text-xs text-white/50">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p><p className="mt-2 text-[11px] text-white/48">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p><p className="mt-2 text-sm text-[#d7fffd]">{formatMoney(item.sellPrice)}</p></div>
+                      <div className="min-w-0"><h3 className="truncate text-base">{item.title}</h3><p className="mt-1 truncate text-xs text-white/50">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p><p className="mt-2 text-[11px] text-white/48">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p><p className="mt-2 text-sm text-[#d7fffd]">{formatMoney(item.sellPrice)}</p>{!browsingOtherLocation ? <button type="button" onClick={() => setGalleryProduct(item)} className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/42 bg-[#108D8B]/30 px-2.5 text-[11px] text-[#ddfffa] transition hover:border-[#b6fff9]/65 hover:bg-[#108D8B]/65"><ImagePlus size={15}/> Kép feltöltése / kezelése</button> : null}</div>
                       <div className="min-w-[88px] text-right">
                          <span className={`inline-flex min-w-[78px] justify-center rounded-xl border px-3 py-2 text-lg ${item.availableQty === 0 && item.reservedQty > 0 ? "border-amber-200/42 bg-amber-500/13 text-amber-50" : item.lowStock ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{item.availableQty} db szabad</span>
                          <p className="mt-1 text-[11px] text-white/65">Fizikai: {item.qty} db</p>
@@ -4131,6 +4558,13 @@ export default function AllInShopOperations({
             </>
           ) : null}
         </div>
+
+        {galleryProduct ? <SellerProductGalleryModal
+          key={galleryProduct.variantId}
+          item={galleryProduct}
+          onClose={() => setGalleryProduct(null)}
+          onSaved={onSellerGallerySaved}
+        /> : null}
 
         <ShopFinancialNotesModal
           open={mode === "summary" && dailyNotesOpen}

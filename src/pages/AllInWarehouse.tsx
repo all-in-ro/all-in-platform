@@ -6921,12 +6921,14 @@ async function apiReadWarehousePhotos(id: string) {
   });
 }
 
-async function apiPersistWarehousePhotos(id: string, urls: string[]) {
+async function apiPersistWarehousePhotos(id: string, urls: string[], expectedPhotos?: string[]) {
   const images = warehousePhotoUrls(urls);
   return fetchJSON<WarehouseSavedGalleryResult>(`/api/aif/variants/${encodeURIComponent(id)}/gallery`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ images }),
+    // Az elado es a fonok kozos galeriat szerkeszt. Ha kozben mas mentett,
+    // regi allapotot SOHA ne irjunk ra a friss kepekre.
+    body: JSON.stringify({ images, ...(expectedPhotos !== undefined ? { expectedImages: warehousePhotoUrls(expectedPhotos) } : {}) }),
     signal: AbortSignal.timeout(25_000),
   });
 }
@@ -15482,11 +15484,9 @@ export default function AllInWarehouse() {
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
-        // A galeria mar a kulon PUT-ben tranzakcionalisan mentodik.
-        // Valtozatlan, esetleg elavult kep-listat nem kuldunk ujra a PATCH-ben.
-        ...(JSON.stringify(warehousePhotoUrls(edit.images, edit.imageUrl)) !== JSON.stringify(warehousePhotoUrls(editBaseline.images, editBaseline.imageUrl))
-          ? { imageUrl: edit.images[0] || null, images: edit.images }
-          : {}),
+        // A galeria kizarolag az izolalt PUT vegponton mentodik. Az altalanos
+        // termek-PATCH meg akkor sem kuld kepeket, ha a React itt egy korabbi
+        // render kepbaseline-jat latna. Ez ved a bolti fotok felulirasa ellen.
         status: edit.variantStatus,
       };
       await apiVariantUpdate(detail.item.id, variantUpdatePayload);
@@ -15806,10 +15806,13 @@ export default function AllInWarehouse() {
   // A képgaléria külön, azonnali mentést kap. Ez megvédi a képeket a
   // munkamenet-frissítés vagy az adatlap véletlen bezárása miatti elvesztéstől.
   // A többi, éppen szerkesztett termékmezőt ez a PATCH nem írja át.
-  async function persistExistingPhotoGallery(urls: string[]): Promise<boolean> {
+  async function persistExistingPhotoGallery(urls: string[], expectedPhotos?: string[]): Promise<boolean> {
     const id = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
     if (!id) return false;
     const next = warehousePhotoUrls(urls);
+    const baseline = expectedPhotos !== undefined
+      ? warehousePhotoUrls(expectedPhotos)
+      : warehousePhotoUrls(editBaseline.images, editBaseline.imageUrl);
     editGalleryRef.current = [...next];
     warehouseRememberPendingGallery(id, next);
     setEdit((current) => ({ ...current, images: next, imageUrl: next[0] || "" }));
@@ -15818,7 +15821,7 @@ export default function AllInWarehouse() {
     detailLoadSequenceRef.current += 1;
     setDetailBusy(false);
     try {
-      const stored = await apiPersistWarehousePhotos(id, next);
+      const stored = await apiPersistWarehousePhotos(id, next, baseline);
       if (JSON.stringify(warehousePhotoUrls(stored.images)) !== JSON.stringify(next) || stored.imageCount !== next.length) {
         throw new Error(`A szerver ${stored.imageCount ?? '?'} képet igazolt a kért ${next.length} helyett.`);
       }
@@ -15942,9 +15945,24 @@ export default function AllInWarehouse() {
             return;
           }
         }
-        const combined = warehousePhotoUrls([...serverPhotos, ...original, ...uploaded]);
+        // A szerverrol frissen olvasott kepek az iranyadok, nem a korabbi
+        // szerkeszto-ablak cache-e. Igy a boltban kozben feltoltott fotokat
+        // a fonoki kepfeltoltes sem irhatja felul, es nem hoz vissza torolteket.
+        const combinedSource = [...(target === "edit" ? serverPhotos : original), ...uploaded];
+        if (new Set(combinedSource).size > WAREHOUSE_GALLERY_MAX) {
+          // A kapacitashibat megelozo friss R2 kepeket is mentsuk a helyi
+          // helyreallitashoz: a MAX miatti levagas NE pont az ujakat dobja el.
+          const pending = warehousePhotoUrls([...uploaded, ...(target === "edit" ? serverPhotos : original)]);
+          if (target === "edit") {
+            warehouseRememberPendingGallery(variantId, pending);
+            setGalleryRecovery(pending);
+            setGalleryNotice(`HIBA: A galéria időközben elérte a ${WAREHOUSE_GALLERY_MAX} képet. Nem írtam felül más képeit. A feltöltött fotók hivatkozásait a helyreállításban megőriztem; mentés előtt ellenőrizd a 60 képbe férő sorrendet.`);
+          } else setMessage(`HIBA: Legfeljebb ${WAREHOUSE_GALLERY_MAX} kép menthető. A feltöltött képek közül csak a korlátig férnek el.`);
+          return;
+        }
+        const combined = warehousePhotoUrls(combinedSource);
         if (target === "edit") {
-          const confirmed = await persistExistingPhotoGallery(combined);
+          const confirmed = await persistExistingPhotoGallery(combined, serverPhotos);
           if (!confirmed) return; // Egy sikertelen adatbázis-mentést nem nevezünk sikeres feltöltésnek.
         } else {
           setNewProduct((current) => {
