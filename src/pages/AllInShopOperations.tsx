@@ -12,7 +12,6 @@ import {
   Star,
   Trash2,
   UploadCloud,
-  ShieldCheck,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -826,6 +825,52 @@ function ProductImage({ src, title, large = false, compact = false }: { src?: st
 
 
 
+/** Ár és szabad készlet: az eladóknak mindig ugyanabban a sorban, jól láthatóan. */
+function SellerProductPriceStock({
+  item,
+  showPhysical = false,
+}: {
+  item: AifShopSaleCatalogItem & { lowStock?: boolean };
+  showPhysical?: boolean;
+}) {
+  const free = numberValue(item.availableQty);
+  const reserved = numberValue(item.reservedQty);
+  const lowStock = item.lowStock ?? free <= 2;
+  return (
+    <div className="flex min-w-0 flex-col items-end justify-center gap-1.5">
+      <div className="flex flex-nowrap items-center justify-end gap-2">
+        <span className="inline-flex min-h-[43px] shrink-0 items-center justify-center whitespace-nowrap rounded-xl border border-[#9be9e5]/32 bg-[#24545b] px-3 text-[17px] tabular-nums tracking-tight text-[#e6fffd]">
+          {formatMoney(item.sellPrice)}
+        </span>
+        <span className={`inline-flex min-h-[43px] shrink-0 items-center justify-center whitespace-nowrap rounded-xl border px-3 text-[17px] tabular-nums tracking-tight ${free === 0 && reserved > 0 ? "border-amber-200/45 bg-amber-500/18 text-amber-50" : lowStock ? "border-red-300/65 bg-[#E21C2A] text-white" : "border-[#9be9e5]/45 bg-[#2a8d8b]/28 text-[#e6fffd]"}`}>
+          {free} db <span className="ml-1.5 text-[11px] opacity-80">szabad</span>
+        </span>
+      </div>
+      {showPhysical ? (
+        <span className="whitespace-nowrap text-[10px] tabular-nums text-white/54">
+          Fizikai: {numberValue(item.qty)} db{reserved > 0 ? `  •  Foglalt: ${reserved} db` : ""}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Másodlagos, halk képgomb, amely nem versenyez az árral és a készlettel. */
+function SellerGalleryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Termékképek feltöltése és kezelése"
+      aria-label="Termékképek feltöltése és kezelése"
+      className="mt-1.5 inline-flex min-h-[27px] items-center gap-1.5 rounded-lg border border-white/12 bg-white/[0.035] px-2 text-[10px] text-white/56 transition hover:border-[#9be9e5]/35 hover:bg-[#108D8B]/15 hover:text-[#defffc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9be9e5]/60"
+    >
+      <ImagePlus size={13} strokeWidth={1.7} /> Képek
+    </button>
+  );
+}
+
+
 // AIF_SELLER_SHARED_GALLERY_20261104
 // A bolti felulet ES a raktar ugyanazt az izolalt /variants/:id/gallery API-t
 // hasznalja. A feltoltes bolti, korlatozott R2 vegponton at tortenik.
@@ -885,7 +930,6 @@ function SellerProductGalleryModal({
   const [error, setError] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [dropActive, setDropActive] = useState(false);
-  const [siblingCount, setSiblingCount] = useState(1);
   const [pendingImages, setPendingImages] = useState<string[]>(() => {
     try { return sellerGalleryImages(JSON.parse(sessionStorage.getItem(sellerGalleryPendingKey(item.variantId)) || "[]")); }
     catch { return []; }
@@ -919,7 +963,6 @@ function SellerProductGalleryModal({
       const urls = sellerGalleryImages(data.images);
       currentServerRef.current = urls;
       setImages(urls);
-      setSiblingCount(Math.max(1, Number(data.siblingCount || 1)));
       if (data.galleryConflict) setError("Egyes méretekhez eltérő régi képek vannak elmentve. A rendszer nem írja felül ezeket automatikusan; a főnöknek kell egyeztetnie.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A képek betöltése sikertelen.");
@@ -983,10 +1026,9 @@ function SellerProductGalleryModal({
     }
     currentServerRef.current = [...next];
     setImages([...next]);
-    setSiblingCount(Math.max(1, Number(saved.siblingCount || checked.siblingCount || 1)));
     const affectedIds = Array.from(new Set([item.variantId, ...(saved.updatedVariantIds || [])]));
     onSaved(next, affectedIds);
-    setNotice(`${next.length} kép mentve és ellenőrizve. ${Math.max(1, Number(saved.siblingCount || 1))} azonos modellű/színű méret galériája összehangolva.${saved.shopifySync === "queued" ? " Shopify-képszinkron sorba állítva." : saved.shopifySync === "processing" ? " Shopify-szinkron feldolgozás alatt." : ""}`);
+    setNotice(saved.shopifySync === "queued" || saved.shopifySync === "processing" ? "Mentve • Shopify szinkron folyamatban" : "Mentve");
     if (saved.syncWarning || saved.shopifySync === "error") {
       setError(saved.syncWarning || "A képek mentve vannak, de a Shopify-képszinkron várólistáját ellenőrizni kell.");
     }
@@ -1145,87 +1187,109 @@ function SellerProductGalleryModal({
       className="fixed inset-0 z-[1650] flex items-center justify-center bg-[#06111e]/85 p-2.5 backdrop-blur-[10px] sm:p-5"
       onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}
     >
-      <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`${item.title} képgalériája`} className="flex max-h-[96dvh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[30px] border border-[#93e7e2]/50 bg-[#303a4c] text-white shadow-[0_45px_150px_rgba(0,0,0,0.78)]">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#173d4d] via-[#206266] to-[#108D8B] px-4 py-4 sm:px-6">
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${item.title} képgalériája`}
+        className="flex max-h-[94dvh] w-full max-w-[1050px] flex-col overflow-hidden rounded-[26px] border border-[#93e7e2]/45 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.75)]"
+      >
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#173d4d] via-[#206266] to-[#108D8B] px-4 py-3.5 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/12"><Images size={25}/></span>
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/10"><Images size={22}/></span>
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.16em] text-[#d4fffc]/72">AllInFashion • Közös termékképtár</p>
-              <h2 className="mt-1 truncate text-lg sm:text-2xl" title={item.title}>{item.title}</h2>
-              <p className="mt-1 truncate text-[11px] text-white/65">{productCode(item)} • {item.colorName || "Szín nélkül"} • {item.size || "Méret nélkül"}</p>
+              <p className="text-[9px] uppercase tracking-[0.14em] text-[#d4fffc]/68">Termékképek</p>
+              <h2 className="mt-0.5 truncate text-lg sm:text-xl" title={item.title}>{item.title}</h2>
+              <p className="mt-0.5 truncate text-[11px] text-white/62">{productCode(item)} • {item.colorName || "–"} • {item.size || "–"}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-black/10 hover:bg-white/15 disabled:opacity-35" aria-label="Képgaléria bezárása"><X size={19}/></button>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-lg border border-white/22 bg-white/10 px-2.5 py-1.5 text-[11px] tabular-nums text-white/85">{images.length} / {SELLER_GALLERY_MAX}</span>
+            <button type="button" onClick={onClose} disabled={busy} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/25 bg-black/10 transition hover:bg-white/15 disabled:opacity-35" aria-label="Képgaléria bezárása"><X size={18}/></button>
+          </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3.5 sm:p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs text-white/68"><ShieldCheck size={17} className="text-[#90eee8]"/> A képek a főnök raktári galériájában is megjelennek, ahonnan Shopify-ra exportálhatók.</div>
-            <span className="rounded-full border border-[#9be9e5]/35 bg-[#108D8B]/25 px-3 py-1.5 text-[11px] text-[#dcfffc]">{images.length} / {SELLER_GALLERY_MAX} kép • {siblingCount} méret</span>
-          </div>
-
-          {error ? <div role="alert" className="mb-3 flex items-start gap-2 rounded-2xl border border-rose-300/50 bg-rose-700/25 px-4 py-3 text-xs leading-5 text-rose-50"><TriangleAlert size={18} className="mt-0.5 shrink-0"/><span>{error}</span></div> : null}
-          {notice && !error ? <div role="status" className="mb-3 flex items-start gap-2 rounded-2xl border border-[#9be9e5]/35 bg-[#108D8B]/20 px-4 py-3 text-xs leading-5 text-[#d7fffd]"><CheckCircle2 size={18} className="mt-0.5 shrink-0"/><span>{notice}</span></div> : null}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4">
+          {error ? <div role="alert" className="mb-3 flex items-start gap-2 rounded-xl border border-rose-300/45 bg-rose-700/20 px-3 py-2.5 text-xs leading-5 text-rose-50"><TriangleAlert size={16} className="mt-0.5 shrink-0"/><span>{error}</span></div> : null}
+          {notice && !error ? <div role="status" className="mb-3 flex items-center gap-2 rounded-xl border border-[#9be9e5]/32 bg-[#108D8B]/16 px-3 py-2 text-xs text-[#d7fffd]"><CheckCircle2 size={16}/>{notice}</div> : null}
           {progress ? <div role="status" className="mb-3 flex items-center gap-2 rounded-xl border border-sky-200/26 bg-sky-500/10 px-3 py-2.5 text-xs text-sky-50"><Loader2 size={16} className="animate-spin"/> {progress}</div> : null}
           {pendingImages.length ? (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200/45 bg-amber-400/10 px-3 py-3">
-              <div className="min-w-0"><p className="text-sm text-amber-50">{pendingImages.length} feltöltött kép mentésellenőrzésre vár</p><p className="mt-1 text-[11px] text-amber-100/70">A képhivatkozások ebben a böngészőfülben megmaradtak. Nem kell újra fájlt választani.</p></div>
-              <button type="button" disabled={disabled} onClick={() => void recoverPending()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-amber-100/40 bg-amber-500/22 px-3 text-xs text-amber-50 hover:bg-amber-500/35 disabled:opacity-40"><RefreshCw size={15}/> Újramentés</button>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200/40 bg-amber-400/10 px-3 py-2.5">
+              <p className="text-xs text-amber-50">{pendingImages.length} kép mentésre vár</p>
+              <button type="button" disabled={disabled} onClick={() => void recoverPending()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-100/40 bg-amber-500/22 px-3 text-xs text-amber-50 hover:bg-amber-500/35 disabled:opacity-40"><RefreshCw size={14}/> Újramentés</button>
             </div>
           ) : null}
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.93fr)_minmax(0,1.07fr)]">
-            <div className="min-w-0 space-y-3">
-              <div className="overflow-hidden rounded-[23px] border border-[#9be9e5]/32 bg-[#263245] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="relative flex min-h-[265px] items-center justify-center overflow-hidden rounded-[18px] bg-white sm:min-h-[370px]">
-                  {main ? <img src={main} alt={`${item.title} főképe`} className="max-h-[370px] w-full object-contain p-4"/> : <div className="flex flex-col items-center justify-center py-16 text-slate-400"><ImagePlus size={48} strokeWidth={1.4}/><p className="mt-3 text-sm">Még nincs termékkép</p></div>}
-                  {main ? <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-lg bg-[#108D8B] px-3 py-1.5 text-xs text-white shadow-lg"><Star size={13} fill="currentColor"/> Főkép</span> : null}
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 px-2 pt-2.5 text-[11px] text-white/52"><span>Az első kép a termék főképe.</span><span className="text-[#bafff8]">Automatikus mentés</span></div>
+          <div className={`grid items-start gap-3.5 ${main || loading ? "md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]" : "mx-auto w-full max-w-[680px] py-4"}`}>
+            {main || loading ? <section className="min-w-0 overflow-hidden rounded-[20px] border border-[#9be9e5]/25 bg-[#263245] p-2.5" aria-label="Főkép előnézete">
+              <div className="relative flex min-h-[255px] items-center justify-center overflow-hidden rounded-[15px] bg-white sm:min-h-[340px]">
+                {loading ? (
+                  <Loader2 size={26} className="animate-spin text-slate-400"/>
+                ) : main ? (
+                  <img src={main} alt={`${item.title} főképe`} className="max-h-[340px] w-full object-contain p-3"/>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-slate-400"><ImagePlus size={42} strokeWidth={1.35}/><span className="text-sm">Nincs kép</span></div>
+                )}
+                {main ? <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-lg bg-[#108D8B] px-2.5 py-1.5 text-[11px] text-white shadow-md"><Star size={12} fill="currentColor"/> Főkép</span> : null}
               </div>
-              <div className="rounded-[19px] border border-[#9be9e5]/23 bg-[#273c4a] px-4 py-3 text-[11px] leading-5 text-white/70">
-                <span className="inline-flex items-center gap-2 text-[#cafffa]"><CheckCircle2 size={15}/> Közös képrendszer</span>
-                <p className="mt-1.5">A főképcsere, sorrend, törlés és feltöltés azonos modell, szín és termékkód szerint egyszerre mentődik. A már Shopify-hoz kapcsolt termékek képei a meglévő szinkronfeladaton keresztül frissülnek.</p>
-              </div>
-            </div>
+            </section> : null}
 
             <div className="min-w-0 space-y-3">
               <div
-                className={`rounded-[22px] border-2 border-dashed p-4 text-center transition ${dropActive ? "border-[#d7fffd] bg-[#108D8B]/30" : "border-[#9be9e5]/48 bg-[#108D8B]/12 hover:border-[#c8fffc]"}`}
+                className={`rounded-[18px] border-2 border-dashed px-4 text-center transition ${main || loading ? "py-4" : "py-9"} ${dropActive ? "border-[#d7fffd] bg-[#108D8B]/28" : "border-[#9be9e5]/40 bg-[#108D8B]/10 hover:border-[#bafff7]/70"}`}
                 onDragOver={(event) => { event.preventDefault(); if (!disabled) setDropActive(true); }}
                 onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropActive(false); }}
                 onDrop={(event) => { event.preventDefault(); setDropActive(false); if (!disabled) void uploadFiles(Array.from(event.dataTransfer.files || [])); }}
               >
-                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-[#9be9e5]/42 bg-[#108D8B]/28"><UploadCloud size={24}/></div>
-                <h3 className="mt-2 text-base">Képek hozzáadása</h3>
-                <p className="mt-1 text-[11px] leading-5 text-white/52">Húzd ide a képeket, vagy válaszd ki egyszerre mindet. JPG, PNG, WebP, GIF, AVIF • maximum 10 MB/kép.</p>
-                <button type="button" disabled={disabled || images.length >= SELLER_GALLERY_MAX} onClick={() => fileRef.current?.click()} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl border border-[#c3fffa]/55 bg-[#108D8B] px-5 text-sm text-white shadow-[0_8px_20px_rgba(16,141,139,0.25)] transition hover:bg-[#17a29e] disabled:cursor-not-allowed disabled:opacity-40"><ImagePlus size={18}/> Több kép kiválasztása</button>
+                <UploadCloud size={25} className="mx-auto text-[#b5f8f3]"/>
+                <h3 className="mt-1.5 text-sm text-white">Képek feltöltése</h3>
+                <p className="mt-1 text-[10px] text-white/48">Húzd ide • JPG, PNG, WebP, GIF, AVIF • 10 MB/kép</p>
+                <button type="button" disabled={disabled || images.length >= SELLER_GALLERY_MAX} onClick={() => fileRef.current?.click()} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#c3fffa]/48 bg-[#108D8B] px-4 text-[13px] text-white transition hover:bg-[#17a29e] disabled:cursor-not-allowed disabled:opacity-40"><ImagePlus size={16}/> Képek kiválasztása</button>
                 <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/avif" disabled={disabled} className="sr-only" onChange={(event) => { const chosen = Array.from(event.target.files || []) as File[]; event.target.value = ""; void uploadFiles(chosen); }}/>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 px-1"><h3 className="text-sm text-white/90">Galéria és sorrend</h3><span className="text-[11px] text-white/48">Kattints egy képre a főképcseréhez</span></div>
-              <div className="grid max-h-[400px] grid-cols-2 gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-3">
+              {main || loading ? <>
+              <div className="flex items-center justify-between gap-2 px-0.5"><h3 className="text-sm text-white/90">Galéria</h3><span className="text-[11px] tabular-nums text-white/45">{images.length} kép</span></div>
+              <div className="grid max-h-[330px] grid-cols-2 gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-3">
                 {images.map((url, index) => (
-                  <div key={url} className={`min-w-0 overflow-hidden rounded-[16px] border p-1.5 transition ${index === 0 ? "border-[#9be9e5]/68 bg-[#108D8B]/28" : "border-white/14 bg-[#374357]"}`}>
-                    <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} title="Főképnek kijelölés" className="relative w-full overflow-hidden rounded-xl bg-white disabled:opacity-60"><img src={url} alt={`${item.title}, ${index + 1}. kép`} className="aspect-square w-full object-contain p-1.5" loading="lazy"/>{index === 0 ? <span className="absolute left-1 top-1 rounded-md bg-[#108D8B] px-1.5 py-0.5 text-[9px] text-white">Fő</span> : null}</button>
-                    <div className="mt-1.5 flex items-center justify-between gap-0.5"><span className="text-[10px] text-white/65">{index + 1}. kép</span><div className="flex items-center gap-0.5">
-                      <button type="button" disabled={disabled || index === 0} onClick={() => { const next = [...images]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void changeImages(next); }} aria-label="Kép balra" title="Balra" className="rounded-md p-1.5 text-white/74 hover:bg-white/10 disabled:opacity-25"><ArrowLeft size={13}/></button>
-                      <button type="button" disabled={disabled || index === images.length - 1} onClick={() => { const next = [...images]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void changeImages(next); }} aria-label="Kép jobbra" title="Jobbra" className="rounded-md p-1.5 text-white/74 hover:bg-white/10 disabled:opacity-25"><ArrowRight size={13}/></button>
-                      <button type="button" disabled={disabled} onClick={() => void changeImages(images.filter((candidate) => candidate !== url))} aria-label="Kép eltávolítása" title="Eltávolítás" className="rounded-md p-1.5 text-rose-300 hover:bg-rose-600/30 disabled:opacity-30"><Trash2 size={13}/></button>
-                    </div></div>
-                    {index > 0 ? <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-[#8be9e2]/28 bg-[#108D8B]/18 py-1.5 text-[10px] text-[#d7fffd] hover:bg-[#108D8B]/38 disabled:opacity-35"><Star size={11}/> Főképnek</button> : null}
+                  <div key={url} className={`min-w-0 overflow-hidden rounded-[14px] border p-1.5 transition ${index === 0 ? "border-[#9be9e5]/60 bg-[#108D8B]/23" : "border-white/14 bg-[#374357]"}`}>
+                    <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} aria-label={`${index + 1}. kép főképpé tétele`} title={index === 0 ? "Főkép" : "Főképpé tesz"} className="relative w-full overflow-hidden rounded-lg bg-white disabled:opacity-60">
+                      <img src={url} alt={`${item.title}, ${index + 1}. kép`} className="aspect-square w-full object-contain p-1" loading="lazy"/>
+                      {index === 0 ? <span className="absolute left-1 top-1 rounded bg-[#108D8B] px-1.5 py-0.5 text-[9px] text-white">Fő</span> : null}
+                    </button>
+                    <div className="mt-1 flex items-center justify-between gap-1">
+                      <span className="pl-0.5 text-[10px] tabular-nums text-white/58">{index + 1}.</span>
+                      <div className="flex items-center gap-0.5">
+                        <button type="button" disabled={disabled || index === 0} onClick={() => { const next = [...images]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void changeImages(next); }} aria-label="Kép balra" title="Balra" className="rounded-md p-1.5 text-white/70 transition hover:bg-white/10 disabled:opacity-25"><ArrowLeft size={14}/></button>
+                        <button type="button" disabled={disabled || index === images.length - 1} onClick={() => { const next = [...images]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void changeImages(next); }} aria-label="Kép jobbra" title="Jobbra" className="rounded-md p-1.5 text-white/70 transition hover:bg-white/10 disabled:opacity-25"><ArrowRight size={14}/></button>
+                        <button type="button" disabled={disabled} onClick={() => void changeImages(images.filter((candidate) => candidate !== url))} aria-label="Kép eltávolítása" title="Törlés" className="rounded-md p-1.5 text-rose-300 transition hover:bg-rose-600/30 disabled:opacity-30"><Trash2 size={14}/></button>
+                      </div>
+                    </div>
                   </div>
                 ))}
-                {!loading && !images.length ? <div className="col-span-full rounded-xl border border-dashed border-white/14 px-4 py-8 text-center text-xs text-white/40">A galéria még üres. Tölts fel több képet egyszerre.</div> : null}
-                {loading ? <div className="col-span-full flex min-h-32 items-center justify-center gap-2 text-sm text-white/52"><Loader2 size={18} className="animate-spin"/> Képek betöltése…</div> : null}
+                {!loading && !images.length ? <div className="col-span-full rounded-xl border border-dashed border-white/12 px-4 py-6 text-center text-xs text-white/40">Nincs kép</div> : null}
+                {loading ? <div className="col-span-full flex min-h-24 items-center justify-center gap-2 text-xs text-white/52"><Loader2 size={16} className="animate-spin"/> Betöltés…</div> : null}
               </div>
-              <div className="flex gap-2"><input disabled={disabled} value={urlInput} onChange={(event) => setUrlInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addUrl(); } }} placeholder="https://... további kép URL" aria-label="Képlink" className="h-10 min-w-0 flex-1 rounded-xl border border-white/18 bg-[#263245] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#a5f4ef]"/><button type="button" disabled={disabled || !urlInput.trim()} onClick={() => void addUrl()} className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#a5f4ef]/38 bg-[#108D8B]/25 px-3 text-xs text-[#d7fffd] hover:bg-[#108D8B]/50 disabled:opacity-35"><Plus size={15}/> Hozzáadás</button></div>
+              </> : null}
+
+              <details className="group rounded-xl border border-white/10 bg-[#263245]/55">
+                <summary className="cursor-pointer list-none px-3 py-2 text-[11px] text-white/48 transition hover:text-[#dcfffc]">+ Kép URL-ből</summary>
+                <div className="flex gap-2 border-t border-white/10 p-2">
+                  <input disabled={disabled} value={urlInput} onChange={(event) => setUrlInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addUrl(); } }} placeholder="https://…" aria-label="Képlink" className="h-10 min-w-0 flex-1 rounded-lg border border-white/18 bg-[#263245] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#a5f4ef]"/>
+                  <button type="button" disabled={disabled || !urlInput.trim()} onClick={() => void addUrl()} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[#a5f4ef]/38 bg-[#108D8B]/25 px-3 text-xs text-[#d7fffd] hover:bg-[#108D8B]/50 disabled:opacity-35"><Plus size={15}/> Hozzáadás</button>
+                </div>
+              </details>
             </div>
           </div>
         </div>
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#263347] px-4 py-3.5 sm:px-6"><span className="flex items-center gap-2 text-[11px] text-white/52"><ShieldCheck size={15} className="text-[#9ef5ee]"/> Csak képeket módosít, készletet és árat nem.</span><div className="flex gap-2"><button type="button" disabled={disabled} onClick={() => void reload()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-white/5 px-3 text-xs hover:bg-white/10 disabled:opacity-35"><RefreshCw size={15}/> Frissítés</button><button type="button" disabled={busy} onClick={onClose} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#a5f4ef]/45 bg-[#108D8B] px-5 text-sm hover:bg-[#18a39f] disabled:opacity-40"><Check size={17}/> Kész</button></div></footer>
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-white/12 bg-[#263347] px-4 py-3 sm:px-5">
+          <button type="button" disabled={disabled} onClick={() => void reload()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-white/5 px-3 text-xs transition hover:bg-white/10 disabled:opacity-35"><RefreshCw size={15}/> Frissítés</button>
+          <button type="button" disabled={busy} onClick={onClose} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#a5f4ef]/45 bg-[#108D8B] px-5 text-sm transition hover:bg-[#18a39f] disabled:opacity-40"><Check size={17}/> Kész</button>
+        </footer>
       </section>
-    </div>, document.body,
+    </div>,
+    document.body,
   );
 }
 
@@ -3387,22 +3451,18 @@ export default function AllInShopOperations({
                 <div className="flex min-h-[420px] items-center justify-center gap-3 text-white/55"><Loader2 className="animate-spin" /> Keresés…</div>
               ) : searchItems.length ? (
                 filteredSearchItems.length ? (
-                <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                <div className="mt-4 grid gap-2.5 lg:grid-cols-2">
                   {filteredSearchItems.map((item) => (
-                    <article key={item.variantId} className="grid min-h-[142px] grid-cols-[80px_1fr] gap-3 rounded-[22px] border border-white/14 bg-[#3b475a] p-3">
+                    <article key={item.variantId} className="grid min-h-[122px] grid-cols-[80px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-[20px] border border-white/14 bg-[#3b475a] p-3 sm:grid-cols-[80px_minmax(0,1fr)_auto]">
                       <ProductImage src={item.imageUrl} title={item.title} />
                       <div className="min-w-0">
-                        <h3 className="truncate text-base text-white">{item.title}</h3>
-                        <p className="mt-1 truncate text-xs text-white/52">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span className="rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/62">{productCode(item)}</span>
-                          {item.barcode ? <span className="rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-[10px] text-white/62">{item.barcode}</span> : null}
-                        </div>
-                        <div className="mt-3 flex items-end justify-between gap-2">
-                          <span className="text-xl text-[#d7fffd]">{formatMoney(item.sellPrice)}</span>
-                          <span className={`rounded-xl border px-3 py-1.5 text-sm ${numberValue(item.availableQty) <= 2 ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{numberValue(item.availableQty)} db</span>
-                        </div>
-                        {!browsingOtherLocation ? <button type="button" onClick={() => setGalleryProduct(item)} className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/42 bg-[#108D8B]/32 px-3 text-[11px] text-[#defffc] transition hover:bg-[#108D8B]/65"><ImagePlus size={14}/> Képek feltöltése / kezelése</button> : null}
+                        <h3 className="truncate text-[15px] text-white" title={item.title}>{item.title}</h3>
+                        <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
+                        <p className="mt-1.5 truncate text-[10px] text-white/47">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p>
+                        {!browsingOtherLocation ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
+                      </div>
+                      <div className="col-span-2 flex justify-end sm:col-span-1">
+                        <SellerProductPriceStock item={item} />
                       </div>
                     </article>
                   ))}
@@ -3487,14 +3547,17 @@ export default function AllInShopOperations({
               {stockLoading && !stockData ? <div className="flex min-h-[380px] items-center justify-center gap-3 text-white/55"><Loader2 className="animate-spin" /> Készlet betöltése…</div> : (
                 <div className="mt-4 grid gap-2 lg:grid-cols-2">
                   {filteredStockItems.map((item) => (
-                    <article key={item.variantId} className={`grid grid-cols-[80px_1fr_auto] items-center gap-3 rounded-[20px] border p-3 ${item.lowStock ? "border-red-300/48 bg-red-950/18" : "border-white/13 bg-[#374357]"}`}>
+                    <article key={item.variantId} className={`grid min-h-[120px] grid-cols-[80px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-[20px] border p-3 sm:grid-cols-[80px_minmax(0,1fr)_auto] ${item.lowStock ? "border-red-300/40 bg-red-950/14" : "border-white/13 bg-[#374357]"}`}>
                       <ProductImage src={item.imageUrl} title={item.title} />
-                      <div className="min-w-0"><h3 className="truncate text-base">{item.title}</h3><p className="mt-1 truncate text-xs text-white/50">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p><p className="mt-2 text-[11px] text-white/48">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p><p className="mt-2 text-sm text-[#d7fffd]">{formatMoney(item.sellPrice)}</p>{!browsingOtherLocation ? <button type="button" onClick={() => setGalleryProduct(item)} className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/42 bg-[#108D8B]/30 px-2.5 text-[11px] text-[#ddfffa] transition hover:border-[#b6fff9]/65 hover:bg-[#108D8B]/65"><ImagePlus size={15}/> Kép feltöltése / kezelése</button> : null}</div>
-                      <div className="min-w-[88px] text-right">
-                         <span className={`inline-flex min-w-[78px] justify-center rounded-xl border px-3 py-2 text-lg ${item.availableQty === 0 && item.reservedQty > 0 ? "border-amber-200/42 bg-amber-500/13 text-amber-50" : item.lowStock ? "border-red-300/60 bg-red-600 text-white" : "border-[#9be9e5]/40 bg-[#2a8d8b]/24 text-[#d7fffd]"}`}>{item.availableQty} db szabad</span>
-                         <p className="mt-1 text-[11px] text-white/65">Fizikai: {item.qty} db</p>
-                         {item.reservedQty > 0 ? <p className="mt-1 text-[11px] text-amber-100">Foglalt: {item.reservedQty} db</p> : null}
-                       </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-[15px] text-white" title={item.title}>{item.title}</h3>
+                        <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
+                        <p className="mt-1.5 truncate text-[10px] text-white/47">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p>
+                        {!browsingOtherLocation ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
+                      </div>
+                      <div className="col-span-2 flex justify-end sm:col-span-1">
+                        <SellerProductPriceStock item={item} showPhysical />
+                      </div>
                     </article>
                   ))}
                   {!stockLoading && !stockItems.length ? <div className="col-span-full flex min-h-[260px] items-center justify-center rounded-[22px] border border-dashed border-white/14 text-white/45">Nincs találat.</div> : null}
