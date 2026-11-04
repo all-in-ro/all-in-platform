@@ -929,6 +929,7 @@ function SellerProductGalleryModal({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [urlInput, setUrlInput] = useState("");
+  const [urlOpen, setUrlOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>(() => {
     try { return sellerGalleryImages(JSON.parse(sessionStorage.getItem(sellerGalleryPendingKey(item.variantId)) || "[]")); }
@@ -1182,9 +1183,85 @@ function SellerProductGalleryModal({
 
   const main = images[0] || "";
   const disabled = busy || loading;
+
+  // Négy kép a főkép mellett, a többi teljes szélességben. Nincs külön
+  // görgethető jobb oldali oszlop: sok képnél csak a teljes ablak görgethető.
+  const galleryTile = (url: string, index: number, compact = false) => (
+    <article
+      key={url}
+      className={`group min-w-0 rounded-[16px] border p-1.5 transition-colors ${
+        index === 0
+          ? "border-[#78d8d2]/85 bg-[#225b64]/50"
+          : "border-white/15 bg-[#354255] hover:border-[#8bdad6]/50"
+      }`}
+    >
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])}
+        aria-label={`${index + 1}. kép főképpé tétele`}
+        title={index === 0 ? "Jelenlegi főkép" : "Főképnek kijelölés"}
+        className={`relative flex w-full items-center justify-center overflow-hidden rounded-[11px] bg-white outline-none transition focus-visible:ring-2 focus-visible:ring-[#9be9e5] disabled:opacity-60 ${
+          compact ? "h-[116px] sm:h-[134px]" : "h-[136px] xl:h-[154px]"
+        }`}
+      >
+        <img
+          src={url}
+          alt={`${item.title}, ${index + 1}. kép`}
+          className="h-full w-full object-contain p-1.5 transition-transform duration-200 group-hover:scale-[1.035]"
+          loading={index < 4 ? "eager" : "lazy"}
+        />
+        {index === 0 ? (
+          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-md bg-[#108D8B] px-2 py-1 text-[10px] text-white shadow-sm">
+            <Star size={11} fill="currentColor" /> Főkép
+          </span>
+        ) : null}
+      </button>
+      <div className="mt-1.5 flex min-h-8 items-center justify-between gap-1 px-0.5">
+        <span className={`rounded-md px-1.5 py-1 text-[11px] tabular-nums ${index === 0 ? "text-[#bff8f5]" : "text-white/60"}`}>
+          {index + 1}.
+        </span>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            disabled={disabled || index === 0}
+            onClick={() => {
+              const next = [...images];
+              [next[index - 1], next[index]] = [next[index], next[index - 1]];
+              void changeImages(next);
+            }}
+            aria-label={`${index + 1}. kép előrébb`}
+            title="Előrébb"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-white/72 transition hover:bg-white/10 hover:text-white disabled:opacity-25"
+          ><ArrowLeft size={15} /></button>
+          <button
+            type="button"
+            disabled={disabled || index === images.length - 1}
+            onClick={() => {
+              const next = [...images];
+              [next[index + 1], next[index]] = [next[index], next[index + 1]];
+              void changeImages(next);
+            }}
+            aria-label={`${index + 1}. kép hátrébb`}
+            title="Hátrébb"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-white/72 transition hover:bg-white/10 hover:text-white disabled:opacity-25"
+          ><ArrowRight size={15} /></button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void changeImages(images.filter((candidate) => candidate !== url))}
+            aria-label={`${index + 1}. kép törlése`}
+            title="Kép törlése"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-rose-300 transition hover:bg-rose-600/25 hover:text-rose-100 disabled:opacity-25"
+          ><Trash2 size={15} /></button>
+        </div>
+      </div>
+    </article>
+  );
+
   return createPortal(
     <div
-      className="fixed inset-0 z-[1650] flex items-center justify-center bg-[#06111e]/85 p-2.5 backdrop-blur-[10px] sm:p-5"
+      className="fixed inset-0 z-[1650] flex items-center justify-center bg-[#07121f]/88 p-2.5 backdrop-blur-[10px] sm:p-5"
       onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}
     >
       <section
@@ -1193,11 +1270,11 @@ function SellerProductGalleryModal({
         role="dialog"
         aria-modal="true"
         aria-label={`${item.title} képgalériája`}
-        className="flex max-h-[94dvh] w-full max-w-[1050px] flex-col overflow-hidden rounded-[26px] border border-[#93e7e2]/45 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.75)]"
+        className="flex max-h-[94dvh] w-full max-w-[1080px] flex-col overflow-hidden rounded-[26px] border border-[#80d8d2]/45 bg-[#303a4c] text-white shadow-[0_42px_130px_rgba(0,0,0,0.73)]"
       >
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#173d4d] via-[#206266] to-[#108D8B] px-4 py-3.5 sm:px-5">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#183c4b] via-[#236368] to-[#108D8B] px-4 py-3.5 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/10"><Images size={22}/></span>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/10"><Images size={21}/></span>
             <div className="min-w-0">
               <p className="text-[9px] uppercase tracking-[0.14em] text-[#d4fffc]/68">Termékképek</p>
               <h2 className="mt-0.5 truncate text-lg sm:text-xl" title={item.title}>{item.title}</h2>
@@ -1205,7 +1282,7 @@ function SellerProductGalleryModal({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="rounded-lg border border-white/22 bg-white/10 px-2.5 py-1.5 text-[11px] tabular-nums text-white/85">{images.length} / {SELLER_GALLERY_MAX}</span>
+            <span className="rounded-lg border border-white/22 bg-white/10 px-2.5 py-1.5 text-[11px] tabular-nums text-white/90">{images.length} / {SELLER_GALLERY_MAX}</span>
             <button type="button" onClick={onClose} disabled={busy} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/25 bg-black/10 transition hover:bg-white/15 disabled:opacity-35" aria-label="Képgaléria bezárása"><X size={18}/></button>
           </div>
         </header>
@@ -1221,65 +1298,69 @@ function SellerProductGalleryModal({
             </div>
           ) : null}
 
-          <div className={`grid items-start gap-3.5 ${main || loading ? "md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]" : "mx-auto w-full max-w-[680px] py-4"}`}>
-            {main || loading ? <section className="min-w-0 overflow-hidden rounded-[20px] border border-[#9be9e5]/25 bg-[#263245] p-2.5" aria-label="Főkép előnézete">
-              <div className="relative flex min-h-[255px] items-center justify-center overflow-hidden rounded-[15px] bg-white sm:min-h-[340px]">
-                {loading ? (
-                  <Loader2 size={26} className="animate-spin text-slate-400"/>
-                ) : main ? (
-                  <img src={main} alt={`${item.title} főképe`} className="max-h-[340px] w-full object-contain p-3"/>
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-slate-400"><ImagePlus size={42} strokeWidth={1.35}/><span className="text-sm">Nincs kép</span></div>
-                )}
-                {main ? <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-lg bg-[#108D8B] px-2.5 py-1.5 text-[11px] text-white shadow-md"><Star size={12} fill="currentColor"/> Főkép</span> : null}
+          <div
+            className={`relative rounded-[20px] border transition-colors ${dropActive ? "border-[#b4f6f1] bg-[#108D8B]/18" : "border-white/10 bg-[#293648]/50"}`}
+            onDragOver={(event) => { event.preventDefault(); if (!disabled) setDropActive(true); }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropActive(false); }}
+            onDrop={(event) => { event.preventDefault(); setDropActive(false); if (!disabled) void uploadFiles(Array.from(event.dataTransfer.files || [])); }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-white/10 px-3 py-2.5 sm:px-4">
+              <div className="flex items-center gap-2.5">
+                <Images size={17} className="text-[#97e9e2]"/>
+                <span className="text-[13px] text-white/85">Galéria</span>
+                <span className="text-[11px] tabular-nums text-white/42">{images.length} kép</span>
               </div>
-            </section> : null}
-
-            <div className="min-w-0 space-y-3">
-              <div
-                className={`rounded-[18px] border-2 border-dashed px-4 text-center transition ${main || loading ? "py-4" : "py-9"} ${dropActive ? "border-[#d7fffd] bg-[#108D8B]/28" : "border-[#9be9e5]/40 bg-[#108D8B]/10 hover:border-[#bafff7]/70"}`}
-                onDragOver={(event) => { event.preventDefault(); if (!disabled) setDropActive(true); }}
-                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropActive(false); }}
-                onDrop={(event) => { event.preventDefault(); setDropActive(false); if (!disabled) void uploadFiles(Array.from(event.dataTransfer.files || [])); }}
-              >
-                <UploadCloud size={25} className="mx-auto text-[#b5f8f3]"/>
-                <h3 className="mt-1.5 text-sm text-white">Képek feltöltése</h3>
-                <p className="mt-1 text-[10px] text-white/48">Húzd ide • JPG, PNG, WebP, GIF, AVIF • 10 MB/kép</p>
-                <button type="button" disabled={disabled || images.length >= SELLER_GALLERY_MAX} onClick={() => fileRef.current?.click()} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#c3fffa]/48 bg-[#108D8B] px-4 text-[13px] text-white transition hover:bg-[#17a29e] disabled:cursor-not-allowed disabled:opacity-40"><ImagePlus size={16}/> Képek kiválasztása</button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => setUrlOpen((value) => !value)} className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[11px] transition ${urlOpen ? "border-[#8dded8]/48 bg-[#108D8B]/20 text-white" : "border-white/12 bg-white/[0.035] text-white/62 hover:border-white/28 hover:text-white"}`} aria-expanded={urlOpen}><Plus size={14}/> Kép URL</button>
+                <button type="button" disabled={disabled || images.length >= SELLER_GALLERY_MAX} onClick={() => fileRef.current?.click()} className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#8ee2dc]/60 bg-[#108D8B] px-4 text-[12px] text-white transition hover:bg-[#159d99] disabled:cursor-not-allowed disabled:opacity-35"><ImagePlus size={16}/> Képek feltöltése</button>
                 <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/avif" disabled={disabled} className="sr-only" onChange={(event) => { const chosen = Array.from(event.target.files || []) as File[]; event.target.value = ""; void uploadFiles(chosen); }}/>
               </div>
+            </div>
 
-              {main || loading ? <>
-              <div className="flex items-center justify-between gap-2 px-0.5"><h3 className="text-sm text-white/90">Galéria</h3><span className="text-[11px] tabular-nums text-white/45">{images.length} kép</span></div>
-              <div className="grid max-h-[330px] grid-cols-2 gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-3">
-                {images.map((url, index) => (
-                  <div key={url} className={`min-w-0 overflow-hidden rounded-[14px] border p-1.5 transition ${index === 0 ? "border-[#9be9e5]/60 bg-[#108D8B]/23" : "border-white/14 bg-[#374357]"}`}>
-                    <button type="button" disabled={disabled} onClick={() => void changeImages([url, ...images.filter((candidate) => candidate !== url)])} aria-label={`${index + 1}. kép főképpé tétele`} title={index === 0 ? "Főkép" : "Főképpé tesz"} className="relative w-full overflow-hidden rounded-lg bg-white disabled:opacity-60">
-                      <img src={url} alt={`${item.title}, ${index + 1}. kép`} className="aspect-square w-full object-contain p-1" loading="lazy"/>
-                      {index === 0 ? <span className="absolute left-1 top-1 rounded bg-[#108D8B] px-1.5 py-0.5 text-[9px] text-white">Fő</span> : null}
-                    </button>
-                    <div className="mt-1 flex items-center justify-between gap-1">
-                      <span className="pl-0.5 text-[10px] tabular-nums text-white/58">{index + 1}.</span>
-                      <div className="flex items-center gap-0.5">
-                        <button type="button" disabled={disabled || index === 0} onClick={() => { const next = [...images]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void changeImages(next); }} aria-label="Kép balra" title="Balra" className="rounded-md p-1.5 text-white/70 transition hover:bg-white/10 disabled:opacity-25"><ArrowLeft size={14}/></button>
-                        <button type="button" disabled={disabled || index === images.length - 1} onClick={() => { const next = [...images]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void changeImages(next); }} aria-label="Kép jobbra" title="Jobbra" className="rounded-md p-1.5 text-white/70 transition hover:bg-white/10 disabled:opacity-25"><ArrowRight size={14}/></button>
-                        <button type="button" disabled={disabled} onClick={() => void changeImages(images.filter((candidate) => candidate !== url))} aria-label="Kép eltávolítása" title="Törlés" className="rounded-md p-1.5 text-rose-300 transition hover:bg-rose-600/30 disabled:opacity-30"><Trash2 size={14}/></button>
-                      </div>
+            {urlOpen ? (
+              <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2.5 sm:px-4">
+                <input disabled={disabled} value={urlInput} onChange={(event) => setUrlInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addUrl(); } }} placeholder="https://…" aria-label="Képlink" className="h-10 min-w-[170px] flex-1 rounded-lg border border-white/18 bg-[#263245] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#a5f4ef]"/>
+                <button type="button" disabled={disabled || !urlInput.trim()} onClick={() => void addUrl()} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[#a5f4ef]/38 bg-[#108D8B]/25 px-3 text-xs text-[#d7fffd] hover:bg-[#108D8B]/50 disabled:opacity-35"><Plus size={15}/> Hozzáadás</button>
+              </div>
+            ) : null}
+
+            {dropActive && !disabled ? (
+              <div className="pointer-events-none absolute inset-1 z-10 flex flex-col items-center justify-center gap-2 rounded-[17px] border-2 border-dashed border-[#b9f5f2] bg-[#163d4b]/94 text-[#e8fffc] shadow-xl">
+                <UploadCloud size={36}/><span className="text-base">Képek ide</span>
+              </div>
+            ) : null}
+
+            <div className="p-2.5 sm:p-3">
+              {loading ? (
+                <div className="flex min-h-[250px] items-center justify-center gap-3 text-sm text-white/60"><Loader2 size={20} className="animate-spin"/> Képek betöltése…</div>
+              ) : !main ? (
+                <button type="button" disabled={disabled} onClick={() => fileRef.current?.click()} className="mx-auto flex min-h-[228px] w-full max-w-[650px] flex-col items-center justify-center gap-2 rounded-[18px] border border-dashed border-[#87dcd6]/40 bg-[#108D8B]/[0.07] text-[#e7fffc] transition hover:border-[#b8f5ef]/70 hover:bg-[#108D8B]/15 disabled:opacity-40">
+                  <UploadCloud size={34} strokeWidth={1.5} className="text-[#9ce9e3]"/>
+                  <span className="text-[15px]">Képek kiválasztása</span>
+                  <span className="text-[11px] text-white/45">JPG · PNG · WebP · GIF · AVIF</span>
+                </button>
+              ) : (
+                <>
+                  <div className="grid items-stretch gap-2.5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                    <section
+                      className={`relative flex min-h-[255px] items-center justify-center overflow-hidden rounded-[17px] border border-white/45 bg-white shadow-[0_12px_30px_rgba(0,0,0,0.16)] sm:min-h-[310px] ${images.length >= 3 ? "lg:min-h-[390px]" : "lg:min-h-[235px]"}`}
+                      aria-label="Főkép előnézete"
+                    >
+                      <img src={main} alt={`${item.title} főképe`} className="absolute inset-0 h-full w-full object-contain p-4 sm:p-5"/>
+                      <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-lg border border-white/25 bg-[#108D8B] px-3 py-1.5 text-[11px] text-white shadow-sm"><Star size={12} fill="currentColor"/> Főkép</span>
+                      <span className="absolute bottom-3 right-3 rounded-md border border-slate-200/75 bg-white/90 px-2 py-1 text-[10px] tabular-nums text-slate-600">1 / {images.length}</span>
+                    </section>
+                    <div className="grid min-w-0 grid-cols-2 content-start gap-2.5">
+                      {images.slice(0, 4).map((url, index) => galleryTile(url, index))}
                     </div>
                   </div>
-                ))}
-                {!loading && !images.length ? <div className="col-span-full rounded-xl border border-dashed border-white/12 px-4 py-6 text-center text-xs text-white/40">Nincs kép</div> : null}
-                {loading ? <div className="col-span-full flex min-h-24 items-center justify-center gap-2 text-xs text-white/52"><Loader2 size={16} className="animate-spin"/> Betöltés…</div> : null}
-              </div>
-              </> : null}
-
-              <details className="group rounded-xl border border-white/10 bg-[#263245]/55">
-                <summary className="cursor-pointer list-none px-3 py-2 text-[11px] text-white/48 transition hover:text-[#dcfffc]">+ Kép URL-ből</summary>
-                <div className="flex gap-2 border-t border-white/10 p-2">
-                  <input disabled={disabled} value={urlInput} onChange={(event) => setUrlInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addUrl(); } }} placeholder="https://…" aria-label="Képlink" className="h-10 min-w-0 flex-1 rounded-lg border border-white/18 bg-[#263245] px-3 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#a5f4ef]"/>
-                  <button type="button" disabled={disabled || !urlInput.trim()} onClick={() => void addUrl()} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[#a5f4ef]/38 bg-[#108D8B]/25 px-3 text-xs text-[#d7fffd] hover:bg-[#108D8B]/50 disabled:opacity-35"><Plus size={15}/> Hozzáadás</button>
-                </div>
-              </details>
+                  {images.length > 4 ? (
+                    <div className="mt-2.5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+                      {images.slice(4).map((url, index) => galleryTile(url, index + 4, true))}
+                    </div>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         </div>
