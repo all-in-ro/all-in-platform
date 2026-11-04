@@ -1,6 +1,7 @@
 import express from 'express';
 import PDFDocument from 'pdfkit';
 import fs from 'node:fs';
+import { ensureAifVoucherFinanceSchema } from '../vouchers.js';
 
 // READ-ONLY daily audit. Uses precisely dated events; never posts a receipt,
 // updates a sale, adjusts cash or changes the inventory.
@@ -363,7 +364,7 @@ export function writeShopDailyAuditPdf(doc, report) {
       y+=blockH+5;
     }
   }
-  const receiptMethod=m=>({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás'})[String(m||'').toLowerCase()]||m||'–';
+  const receiptMethod=m=>({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás',voucher:'Ajándékutalvány · nem új pénz'})[String(m||'').toLowerCase()]||m||'–';
   function employeeSection(s, first=false) {
     const datePrefix=s.workDate ? `${s.workDate}  •  ` : '';
     if(!first)newPage(`${datePrefix}${s.actor}`);
@@ -371,8 +372,12 @@ export function writeShopDailyAuditPdf(doc, report) {
       ? `Műszakátadás: ${hasRealStartTime(report.handover.shift_start_at)?`${bucharest(report.handover.shift_start_at)} → `:''}${bucharest(report.handover.cutoff_at)}  •  Kiállítva: ${bucharest(new Date().toISOString())}`
       : `Eladó: ${s.actor}  •  Kiállítva: ${bucharest(new Date().toISOString())}`);
     const a=s.totals;
-    statCells([['1. Bruttó',amount(a.gross)],[report.period?'2. Időszaki bevétel':'2. Napi bevétel',amount(a.received)],
+    statCells([['1. Bruttó',amount(a.gross)],[report.period?'2. Időszaki pénzbevétel':'2. Napi pénzbevétel',amount(a.received)],
       ['3. Készpénz',amount(a.cash)],['4. Bankkártya',amount(a.card)]]);
+    if (a.voucherIssued || a.voucherRedeemed) {
+      infoLine('Ajándékutalvány eladása (új pénz)', amount(a.voucherIssued));
+      infoLine('Ajándékutalvány beváltása (nem új pénz)', amount(a.voucherRedeemed));
+    }
     heading('5. Kassza és műszak');
     if(s.shifts.length) {
       for(const h of s.shifts)infoLine(h.label,[h.period,h.person,h.cash,h.status].filter(Boolean).join('  •  '));
@@ -402,12 +407,20 @@ export function writeShopDailyAuditPdf(doc, report) {
       chronological(s.settlements,'paid_at').map((r,i)=>[String(i+1),bucharest(r.paid_at,'time'),productText(r),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
       numberedProductWidths,
       {numeric:[0,4,5,6,7],cells:[[2,'ÖSSZESEN'],[4,qty(total(s.settlements,r=>r.quantity))],[5,fmt(total(s.settlements,r=>r.gross))],[6,fmt(total(s.settlements,r=>r.discount))],[7,fmt(total(s.settlements,r=>r.amount))]]});
-    sectionTable('Tételes fizetési események',
+    const realPayments=s.payments.filter(r=>r.method!=='voucher');
+    const voucherPayments=s.payments.filter(r=>r.method==='voucher');
+    sectionTable('Tényleges pénzbevételek · utalványeladással',
       ['Idő','Mit fizettek ki?','Fizetési mód','Összeg'],
-      s.payments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Fizetés',receiptMethod(r.method),fmt(r.amount)]),
+      realPayments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Fizetés',receiptMethod(r.method),fmt(r.amount)]),
       [63,477,132,109],
-      {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${s.payments.length} fizetés`],[3,fmt(total(s.payments,r=>r.amount))]]},
-      '');
+      {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${realPayments.length} pénzmozgás`],[3,fmt(total(realPayments,r=>r.amount))]]},
+      'A papírutalvány eladása külön pénzbevétel; nem termékforgalom.');
+    sectionTable('Utalványbeváltások · nem új pénzbevétel',
+      ['Idő','Mire használták?','Fizetési mód','Beváltott érték'],
+      voucherPayments.map(r=>[bucharest(r.paid_at,'time'),r.description||r.type||'Ruhaeladás',receiptMethod(r.method),fmt(r.amount)]),
+      [63,477,132,109],
+      {numeric:[3],cells:[[1,'ÖSSZESEN'],[2,`${voucherPayments.length} beváltás`],[3,fmt(total(voucherPayments,r=>r.amount))]]},
+      'Ez az összeg az áruértékesítés része, de korábban már befolyt pénzből lett kifizetve.');
     // Ordinary shifts and stock returns stay separate from the money physically
     // handed over to the boss. Never add the same manager handover as a sale,
     // shift transfer or a second cash deduction on the acceptance date.
@@ -480,8 +493,12 @@ export function writeShopDailyAuditPdf(doc, report) {
   if(report.scope==='all'){
     newPage('Teljes üzleti jelentés',`Kiállítva: ${bucharest(new Date().toISOString())}`);
     const a=report.totals;
-    statCells([['1. Bruttó',amount(a.gross)],[report.period?'2. Időszaki bevétel':'2. Napi bevétel',amount(a.received)],
+    statCells([['1. Bruttó',amount(a.gross)],[report.period?'2. Időszaki pénzbevétel':'2. Napi pénzbevétel',amount(a.received)],
       ['3. Készpénz',amount(a.cash)],['4. Bankkártya',amount(a.card)]]);
+    if (a.voucherIssued || a.voucherRedeemed) {
+      infoLine('Utalvány eladása (pénzbevétel)',amount(a.voucherIssued));
+      infoLine('Utalvány beváltás (nem új pénz)',amount(a.voucherRedeemed));
+    }
     heading('5. Kassza és műszak');
     if(report.closure){
       infoLine('Napzárás',`${report.closure.actor} • ${bucharest(report.closure.closed_at)}`);
@@ -565,8 +582,12 @@ export function writeShopDailySummaryPdf(doc, report) {
   put(`${report.date}  •  ${report.location.name}  •  ${actor}`,M+310,17,CW-310,{align:'right',lineBreak:false});
   doc.font(B).fontSize(14).fillColor(palette.ink);
   put(report.period?'Időszaki pénzügyi összefoglaló':'Napi pénzügyi összefoglaló',M,y,CW,{lineBreak:false});y+=27;
-  cards([['1. Bruttó',`${money(a.gross)} RON`],[report.period?'2. Időszaki bevétel':'2. Napi bevétel',`${money(a.received)} RON`],
+  cards([['1. Bruttó',`${money(a.gross)} RON`],[report.period?'2. Időszaki pénzbevétel':'2. Napi pénzbevétel',`${money(a.received)} RON`],
     ['3. Készpénz',`${money(a.cash)} RON`],['4. Bankkártya',`${money(a.card)} RON`]]);
+   if(a.voucherIssued || a.voucherRedeemed){
+     line('Ajándékutalvány eladás · pénz érkezett',`${money(a.voucherIssued)} RON`,true);
+     line('Ajándékutalvány beváltás · nem új pénz',`${money(a.voucherRedeemed)} RON`);
+   }
 
   if(report.scope==='all') {
     section('5. Kassza és műszak');
@@ -694,12 +715,14 @@ function buildTotals(employee) {
   const discounts=moneyNumber(grossNew-netNew + settledGross-settledNet);
   return {
     newSales:netNew,creditReceived:settledNet,
-    received:totalOf(payments,'amount'),
+    received:totalOf(payments.filter(p=>p.method!=='voucher'),'amount'),
     gross:moneyNumber(grossNew+settledGross),discount:discounts,
     creditIssued:totalOf(employee.credits,'net_total'),
     cash:totalOf(payments.filter(p=>p.method==='cash'),'amount'),
     card:totalOf(payments.filter(p=>p.method==='card'),'amount'),
     bank:totalOf(payments.filter(p=>p.method==='bank_transfer'),'amount'),
+    voucherIssued:totalOf(payments.filter(p=>p.type==='Ajándékutalvány eladása'),'amount'),
+    voucherRedeemed:totalOf(payments.filter(p=>p.method==='voucher'),'amount'),
   };
 }
 
@@ -846,6 +869,25 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       WHERE e.location_id=$1 AND e.status='completed'
       AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY e.created_at`,[id,date]),
   ]);
+  // Az utalvany eladasa onallo penznaplo (nincs termeksor), a bevaltas
+  // ellenorzott tender a normal ruhaeladasban. Mindketto AZNAPI esemény.
+  const voucherTransactions=await client.query(`SELECT t.id::text,t.voucher_id::text,t.kind,
+      t.location_code,t.amount,t.method,t.sale_id::text,t.sale_number,t.actor,t.created_at,
+      v.code,v.language,COALESCE(v.buyer_name,'') AS buyer_name
+      FROM aif_gift_voucher_transactions t
+      JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+      WHERE t.location_code=$1 AND (t.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+      ORDER BY t.created_at,t.id`,[id,date]);
+  const voucherIssues=voucherTransactions.rows.filter(t=>t.kind==='issue');
+  const voucherRedeems=voucherTransactions.rows.filter(t=>t.kind==='redeem');
+  const amountsBySale=(rows,idOf)=>{const sum=new Map();for(const r of rows){
+    const key=String(idOf(r)||'');
+    sum.set(key,(sum.get(key)||0)+Math.round(Number(r.amount||0)*100));
+  }return sum;};
+  const paymentsBySale=amountsBySale(normalReceipts.rows.filter(p=>p.method==='voucher'),r=>r.sale_id);
+  const redemptionBySale=amountsBySale(voucherRedeems,r=>r.sale_id);
+  if(paymentsBySale.size!==redemptionBySale.size || [...paymentsBySale].some(([key,n])=>redemptionBySale.get(key)!==n))
+    throw Object.assign(new Error('Az utalvanybevaltas es az eredeti eladas penznaploja elter: PDF audit blokkolva.'),{statusCode:409});
   // Accepted corrections apply to ACCOUNTING OWNERSHIP, not physical payments or stock.
   // Fetch the whole day's original lines once, then split paid receipts in integer bani.
   // This preserves store totals and lets one receipt's lines belong to two sellers.
@@ -952,6 +994,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
     for(const r of cashMoves.rows)if(r.requested_by)actors.add(r.requested_by);
     for(const transfer of accepted.rows){actors.add(transfer.from_actor);actors.add(transfer.to_actor);}
     for(const n of allNotes)if(n.actor&&n.actor!=='–')actors.add(n.actor);
+    for(const issue of voucherIssues)if(issue.actor)actors.add(issue.actor);
   }
   const sections=[];
   for(const actor of Array.from(actors).sort((a,b)=>a.localeCompare(b,'hu'))){
@@ -1033,6 +1076,10 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       ...normalReceipts.rows.filter(r=>matches(r.receipt_actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Eladás',description:describeNormalPayment(r),method:r.method})),
       ...customerReceipts.rows.filter(r=>matches(r.actor)&&withinShift({at:r.paid_at},handover)).map(r=>({paid_at:r.paid_at,at:r.paid_at,amount:moneyNumber(r.amount),type:'Régi tartozás',description:describeCustomerPayment(r),method:r.method})),
       ...exchangePayments.rows.filter(r=>matches(r.actor)&&withinShift({at:r.created_at},handover)).map(r=>({paid_at:r.created_at,at:r.created_at,amount:moneyNumber(r.amount)*(r.direction==='out'?-1:1),type:'Csere különbözet',description:'Csere / visszáru pénzügyi különbözete',method:r.method})),
+      ...voucherIssues.filter(r=>matches(r.actor)&&withinShift({at:r.created_at},handover))
+        .map(r=>({paid_at:r.created_at,at:r.created_at,amount:moneyNumber(r.amount),
+          type:'Ajándékutalvány eladása',description:`Ajándékutalvány kiadása • ${r.code} (${r.language}) • nem áru`,
+          method:r.method})),
     ].sort((a,b)=>eventTime(a)-eventTime(b));
     const shiftEvents=[];
     const moves=[];
@@ -1094,7 +1141,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
   }
   const allCovered = new Set(sections.flatMap(s=>s.notes));
   const miscNotes=scope==='all' ? allNotes.filter(n=>!allCovered.has(n)) : [];
-  const totals=Object.fromEntries(['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank']
+  const totals=Object.fromEntries(['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank','voucherIssued','voucherRedeemed']
     .map(key=>[key,moneyNumber(sections.reduce((sum,s)=>sum+moneyNumber(s.totals[key]),0))]));
   return {location,date,scope,handover,sections,totals,closure:closings.rows[0]||null,miscNotes};
 }
@@ -1109,6 +1156,10 @@ async function aifActiveAuditDates(client,locationId,from,to) {
     UNION ALL
     SELECT (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date
       FROM aif_shop_sale_payments p JOIN aif_shop_sales s ON s.id=p.sale_id WHERE s.location_id=$1
+    UNION ALL
+    SELECT (t.created_at AT TIME ZONE 'Europe/Bucharest')::date
+      FROM aif_gift_voucher_transactions t JOIN aif_locations l ON l.code=t.location_code
+      WHERE l.id=$1
     UNION ALL
     SELECT (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date
       FROM aif_shop_customer_payments cp WHERE cp.location_id=$1
@@ -1135,7 +1186,7 @@ async function aifActiveAuditDates(client,locationId,from,to) {
 }
 
 export function aifBuildAuditPeriodReport(dayReports,{from,to,scope,location}) {
-  const fields=['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank'];
+  const fields=['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank','voucherIssued','voucherRedeemed'];
   const arrays=['normal','credits','settlements','payments','notes','moves','shifts'];
   const reportTotals=Object.fromEntries(fields.map(k=>[k,0]));
   const rollups=new Map();
@@ -1160,7 +1211,7 @@ export function aifBuildAuditPeriodReport(dayReports,{from,to,scope,location}) {
   const rollupEmployees=[...rollups.values()].map(entry=>({
     ...entry,totals:Object.fromEntries(fields.map(k=>[k,moneyNumber(entry.totals[k])]))
   })).sort((a,b)=>a.actor.localeCompare(b.actor,'hu'));
-  for(const k of ['received','gross','cash','card','bank']) {
+  for(const k of ['received','gross','cash','card','bank','voucherIssued','voucherRedeemed']) {
     const employeeSum=moneyNumber(rollupEmployees.reduce((sum,s)=>sum+moneyNumber(s.totals[k]),0));
     if (Math.abs(employeeSum-reportTotals[k])>0.02) {
       throw Object.assign(new Error(`Az időszaki PDF ${k} eladói összege nem egyezik az üzleti összesennel.`),{statusCode:409});
@@ -1181,6 +1232,7 @@ export default function createAifShopDailyAuditPdfRouter({pool,requireAuthed,req
       // All migrations / table creation stay OUTSIDE the read-only transaction.
       await ensureAifShopSalesSchema();
       await ensureAifSellerTransferSchema();
+      await ensureAifVoucherFinanceSchema(pool);
       const location=await aifResolveShopLocation(req,pool,req.query.location);
       const employee=scope==='mine'?String(actorFrom(req)||'').trim():String(req.query.employee||'').trim()||null;
       if(scope==='mine' && (!employee || ['system','shop'].includes(actorKey(employee))))
