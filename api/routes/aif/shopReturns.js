@@ -71,6 +71,9 @@ export default function createAifShopReturnsRouter({
       discountAmount: priceVisible ? aifNumber(row.discount_amount) : null,
       discountPercent: priceVisible ? aifNumber(row.discount_percent) : null,
       lineTotal: priceVisible ? aifNumber(row.line_total) : null,
+      // Az egesz eredeti vasarlas osszege segit a datumhoz tartozo nyugta azonositásaban.
+      // Masik uzlet vegosszege sem jelenhet meg feloldas nelkul.
+      saleTotal: priceVisible ? aifNumber(row.sale_total) : null,
     };
   }
 
@@ -96,7 +99,7 @@ export default function createAifShopReturnsRouter({
          COALESCE(NULLIF(sl.size,''), NULLIF(v.size,'')) AS size,
          COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
          s.sale_number, s.sold_at, s.actor, s.customer_id, s.customer_name, s.customer_phone, s.status AS sale_status,
-         s.sale_type, s.payment_status, s.subtotal, s.discount_total, s.total, s.paid_total, s.balance_due,
+         s.sale_type, s.payment_status, s.subtotal, s.discount_total, s.total, s.total AS sale_total, s.paid_total, s.balance_due,
          s.location_id AS sale_location_id,
          l.code AS sale_location_code,
          l.name AS sale_location_name,
@@ -173,7 +176,18 @@ export default function createAifShopReturnsRouter({
       await ensureAifShopSalesSchema();
       const currentLocation = await aifResolveShopLocation(req, pool, req.query.location);
       const search = normalizeSearch(req.query.q || req.query.search || req.query.code);
-      const limit = Math.min(150, Math.max(1, Number(req.query.limit || 80)));
+      const limit = Math.min(400, Math.max(1, Number(req.query.limit || 80) || 80));
+      // Datum nelkul is mukodik a regi vonalkodos kereses. Ha a vevo csak
+      // hozzaVETŐleges napot mond, az uzlet helyi idozonajaban keressunk.
+      const saleDate = text(req.query.saleDate || req.query.sale_date || "");
+      const windowDays = Number(req.query.windowDays ?? req.query.window_days ?? 0);
+      const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(saleDate)
+        ? new Date(`${saleDate}T12:00:00Z`) : null;
+      if (saleDate && (!parsedDate || !Number.isFinite(parsedDate.getTime()) ||
+                       parsedDate.toISOString().slice(0, 10) !== saleDate ||
+                       !Number.isInteger(windowDays) || ![0,3,7,30].includes(windowDays))) {
+        return res.status(400).json({ error: "Ervenytelen vasarlasi datum vagy idointervallum." });
+      }
       if (!search) return res.json({ ok: true, location: currentLocation, items: [], count: 0 });
       const exact = search;
       const pattern = `%${search}%`;
@@ -197,6 +211,7 @@ export default function createAifShopReturnsRouter({
            COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')) AS image_url,
            s.id AS sale_id,
            s.sale_number, s.sold_at, s.actor, s.customer_name, s.customer_phone, s.payment_status, s.balance_due,
+           s.total AS sale_total,
            s.location_id AS sale_location_id,
            l.code AS sale_location_code,
            l.name AS sale_location_name,
@@ -230,13 +245,19 @@ export default function createAifShopReturnsRouter({
              OR COALESCE(sl.product_title,'') ILIKE $2
              OR COALESCE(sl.product_code,'') ILIKE $2
              OR COALESCE(sl.barcode,'') ILIKE $2
+             OR s.sale_number ILIKE $2
+           )
+           AND (
+             $4::date IS NULL
+             OR (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date
+                BETWEEN $4::date - $5::int AND $4::date + $5::int
            )
          ORDER BY
            CASE WHEN lower(btrim(COALESCE(sl.barcode,'')))=lower(btrim($1)) OR lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1)) THEN 0 ELSE 1 END,
            s.sold_at DESC,
            sl.line_no ASC
          LIMIT $3`,
-        [exact, pattern, limit]
+        [exact, pattern, limit, saleDate || null, saleDate ? windowDays : 0]
       );
       const canSeeCrossStorePrice = normCode(req.session?.role) === "admin";
       const items = result.rows.map((row) => returnSaleRow(row, currentLocation, canSeeCrossStorePrice));
@@ -250,6 +271,42 @@ export default function createAifShopReturnsRouter({
       console.error("AIF shop return sale search failed", error);
       const status = Number(error?.statusCode || 500);
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A korábbi eladások nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+  // A bizonylat osszes eredeti termeksora. A masik uzlet arai itt is vedettek.
+  // A termek vonalkodjanak beolvasasa utan csak a hiteles saleId alapjan kerdezunk.
+  router.get("/sales/:saleId/lines", requireAuthed, async (req, res) => {
+    const saleId = text(req.params.saleId);
+    if (!isUuidText(saleId)) return res.status(400).json({ error: "Ervenytelen bizonylatazonosito." });
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const sale = await pool.query(
+        `SELECT id, sale_number, status FROM aif_shop_sales WHERE id=$1::uuid LIMIT 1`, [saleId]
+      );
+      if (!sale.rowCount || sale.rows[0].status !== "completed") {
+        return res.status(404).json({ error: "A bizonylat nem talalhato, vagy nem ervenyes." });
+      }
+      const lines = await pool.query(
+        `SELECT sl.id::text AS sale_line_id FROM aif_shop_sale_lines sl
+         WHERE sl.sale_id=$1::uuid ORDER BY sl.line_no ASC, sl.id ASC`, [saleId]
+      );
+      const items = [];
+      for (const line of lines.rows) {
+        const loaded = await loadSaleLine(pool, line.sale_line_id);
+        if (loaded) items.push(returnSaleRow(loaded, location, normCode(req.session?.role) === "admin"));
+      }
+      return res.json({
+        ok: true, saleId, saleNumber: sale.rows[0].sale_number,
+        items, count: items.length,
+      });
+    } catch (error) {
+      const status = Number(error?.statusCode || 500);
+      console.error("AIF return receipt lines failed", error);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A bizonylat termeksorai nem tolthetok be.", code: error?.code || null,
+      });
     }
   });
 
@@ -652,6 +709,9 @@ export default function createAifShopReturnsRouter({
           settlementDirection: row.settlement_direction,
           settlementMethod: row.settlement_method || null,
           settlementAmount: aifNumber(row.settlement_amount),
+          returnBatchId: row.original_snapshot?.returnBatchId || null,
+          returnBatchPrimary: row.original_snapshot?.returnBatchPrimary === true,
+          returnBatchCount: aifNumber(row.original_snapshot?.returnBatchCount) || 1,
           note: row.note || null,
           sourceProduct: {
             title: row.source_product_title || "Ismeretlen termék",
@@ -1078,7 +1138,395 @@ export default function createAifShopReturnsRouter({
   });
 
 
+  // Egy bizonylat tobb visszahozott sora egyetlen PostgreSQL tranzakcioban.
+  // Minden forrassor sajat exchange-fejlecet kap (igy a meglevo osszesitok es
+  // visszavetel-szamitasok is helyesek maradnak), a penzugy es a csere csak
+  // egyszer, az elso fejlechez tartozik. returnBatchId csoportositja oket.
+  async function completeReceiptReturnBatch(req, res) {
+    const body = req.body || {};
+    const input = Array.isArray(body.returns) ? body.returns : [];
+    const replacementsInput = Array.isArray(body.replacements) ? body.replacements : [];
+    const key = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+    const settlementMethod = normCode(body.settlementMethod || body.settlement_method || "");
+    const allowedMethods = new Set(["cash", "card", "bank_transfer"]);
+    const errorResponse = (message, code, status = 409) => Object.assign(new Error(message), { code, statusCode: status });
+    if (input.length < 2 || input.length > 40 || replacementsInput.length > 100 || !key) {
+      return res.status(400).json({ error: "A bizonylatos visszaru adatai ervenytelenek (2-40 sor, legfeljebb 100 csere-termek)." });
+    }
+    const wanted = [];
+    const seenLines = new Set();
+    for (const line of input) {
+      const id = text(line.saleLineId || line.sale_line_id);
+      const qty = Number(line.returnedQty ?? line.returned_qty);
+      if (!isUuidText(id) || !Number.isSafeInteger(qty) || qty <= 0 || seenLines.has(id)) {
+        return res.status(400).json({ error: "Duplikalt vagy ervenytelen visszaru sor/darabszam." });
+      }
+      seenLines.add(id);
+      wanted.push({
+        saleLineId: id, returnedQty: qty,
+        authorizationId: text(line.authorizationId || line.authorization_id),
+        unlockToken: text(line.unlockToken || line.unlock_token),
+      });
+    }
+    wanted.sort((a, b) => a.saleLineId.localeCompare(b.saleLineId));
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, client, body.location);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`aif_shop_return_batch_request:${key}`]);
+      const duplicate = await client.query(`SELECT * FROM aif_shop_exchanges WHERE client_request_id=$1 LIMIT 1`, [key]);
+      if (duplicate.rowCount) {
+        const prior = duplicate.rows[0];
+        const snap = prior.original_snapshot || {};
+        const priorLines = Array.isArray(snap.returnBatchLines) ? snap.returnBatchLines : [];
+        const sameLines = JSON.stringify(priorLines.map(x => [String(x.saleLineId), Number(x.returnedQty)]).sort())
+          === JSON.stringify(wanted.map(x => [x.saleLineId, x.returnedQty]).sort());
+        if (!snap.returnBatchPrimary || !sameLines || String(prior.location_id) !== String(location.id)) {
+          throw errorResponse("Ez a visszaru-azonosito mar masik muvelethez tartozik.", "return_batch_idempotency_collision");
+        }
+        const members = await client.query(
+          `SELECT id::text, exchange_number, status FROM aif_shop_exchanges
+           WHERE original_snapshot->>'returnBatchId'=$1 ORDER BY exchange_number`, [String(snap.returnBatchId)]
+        );
+        if (members.rows.length !== Number(snap.returnBatchCount) || members.rows.some(x => x.status !== "completed")) {
+          throw errorResponse("Ez a tobbteteles visszaru mar vissza lett vonva vagy nem teljes. Nem indithato ujra.", "return_batch_incomplete_or_cancelled");
+        }
+        await client.query("COMMIT");
+        return res.json({
+          ok: true, duplicate: true,
+          exchangeId: String(prior.id), exchangeNumber: prior.exchange_number,
+          exchangeIds: members.rows.map(x => x.id), exchangeNumbers: members.rows.map(x => x.exchange_number),
+          returnedLines: priorLines,
+          returnedQty: priorLines.reduce((sum, x) => sum + Number(x.returnedQty || 0), 0),
+          returnCredit: aifNumber(snap.returnBatchCredit),
+          replacementTotal: aifNumber(prior.replacement_total), difference: aifNumber(prior.difference),
+          settlementDirection: prior.settlement_direction,
+          settlementMethod: prior.settlement_method || null,
+          settlementAmount: aifNumber(prior.settlement_amount),
+        });
+      }
+
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`aif_shop_shift:${location.id}`]);
+      await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
+      // A regi, egy-soros visszaru is ugyanazt a forrassor-zarat hasznalja.
+      for (const ret of wanted) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`aif_shop_return_line:${ret.saleLineId}`]);
+      }
+      const isAdmin = normCode(req.session?.role) === "admin";
+      const sourceLines = [];
+      const authRows = [];
+      let saleId = null;
+      let saleLocationId = null;
+      for (const ret of wanted) {
+        const source = await loadSaleLine(client, ret.saleLineId, { lock: true });
+        if (!source || source.sale_status !== "completed" || !source.variant_id) {
+          throw errorResponse("Az egyik eredeti termeksor nem ervenyes vagy nem azonosithato.", "return_batch_source_invalid");
+        }
+        if (saleId && String(source.sale_id) !== saleId) {
+          throw errorResponse("Csak ugyanannak a bizonylatnak a termekei vehetoek vissza egyutt.", "return_batch_mixed_receipts", 400);
+        }
+        if (saleLocationId && String(source.sale_location_id) !== saleLocationId) {
+          throw errorResponse("A visszahozott sorok nem ugyanahhoz az uzlethez tartoznak.", "return_batch_mixed_location", 400);
+        }
+        saleId = String(source.sale_id);
+        saleLocationId = String(source.sale_location_id);
+        if (aifNumber(source.balance_due) > 0.005) {
+          throw errorResponse("Az eredeti bizonylaton meg nyitott tartozas van.", "return_source_open_balance");
+        }
+        const remaining = Math.max(0, aifNumber(source.quantity) - aifNumber(source.returned_qty));
+        if (ret.returnedQty > remaining) {
+          throw errorResponse(`${source.product_title}: legfeljebb ${remaining} db veheto vissza.`, "return_quantity_exceeded");
+        }
+        let auth = null;
+        if (String(source.sale_location_id) !== String(location.id) && !isAdmin) {
+          if (!isUuidText(ret.authorizationId) || !ret.unlockToken) {
+            throw errorResponse(`${source.product_title}: a masik uzlet ar-feloldasa kotelezo.`, "return_price_authorization_required", 403);
+          }
+          const authResult = await client.query(`SELECT * FROM aif_shop_return_authorizations WHERE id=$1::uuid FOR UPDATE`, [ret.authorizationId]);
+          auth = authResult.rows[0] || null;
+          if (!auth || auth.status !== "unlocked" ||
+              String(auth.sale_line_id) !== String(source.sale_line_id) ||
+              String(auth.source_location_id) !== String(source.sale_location_id) ||
+              String(auth.requesting_location_id) !== String(location.id) ||
+              !auth.unlock_expires_at || new Date(auth.unlock_expires_at).getTime() <= Date.now() ||
+              text(auth.unlock_token_hash) !== tokenHash(ret.unlockToken)) {
+            throw errorResponse("A masik uzlet ar-feloldasa ervenytelen vagy lejart.", "return_price_authorization_invalid", 403);
+          }
+          authRows.push(auth);
+        }
+        const unitCredit = aifRoundMoney(source.unit_price);
+        if (unitCredit < 0 || !Number.isFinite(unitCredit)) {
+          throw errorResponse(`${source.product_title}: ervenytelen eredeti fizetett ar.`, "return_source_price_invalid");
+        }
+        sourceLines.push({ ...ret, source, auth, unitCredit, credit: aifRoundMoney(unitCredit * ret.returnedQty) });
+      }
+
+      const replacements = [];
+      const seenVariants = new Set();
+      for (const inputRow of replacementsInput) {
+        const variantId = text(inputRow.variantId || inputRow.variant_id);
+        const quantity = Number(inputRow.quantity ?? inputRow.qty ?? 1);
+        if (!isUuidText(variantId) || !Number.isSafeInteger(quantity) || quantity <= 0 || seenVariants.has(variantId)) {
+          throw errorResponse("Duplikalt vagy ervenytelen csere-termek.", "return_batch_replacement_invalid", 400);
+        }
+        seenVariants.add(variantId);
+        replacements.push({ variantId, quantity });
+      }
+
+      const returnQtyByVariant = new Map();
+      for (const line of sourceLines) {
+        const id = String(line.source.variant_id);
+        returnQtyByVariant.set(id, aifNumber(returnQtyByVariant.get(id)) + line.returnedQty);
+      }
+      const variantsToLock = Array.from(new Set([...returnQtyByVariant.keys(), ...replacements.map(x => x.variantId)])).sort();
+      const variantRows = await client.query(
+        `SELECT v.id AS variant_id, v.internal_sku, v.barcode, v.sell_price, v.buy_price,
+                v.size, v.color_name, v.color_code, v.image_url, v.status AS variant_status,
+                m.status AS model_status, m.model_code,
+                COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+                b.name AS brand_name,
+                sc.supplier_product_code
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN LATERAL (
+           SELECT supplier_product_code FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST LIMIT 1
+         ) sc ON true
+         WHERE v.id=ANY($1::uuid[]) ORDER BY v.id FOR UPDATE OF v`, [variantsToLock]
+      );
+      const stocks = await client.query(
+        `SELECT variant_id, qty, reserved_qty FROM aif_stock
+         WHERE location_id=$1 AND variant_id=ANY($2::uuid[])
+         ORDER BY variant_id FOR UPDATE`, [location.id, variantsToLock]
+      );
+      const stocksById = new Map(stocks.rows.map(x => [String(x.variant_id), x]));
+      const variantMap = new Map(variantRows.rows.map(row => {
+        const stock = stocksById.get(String(row.variant_id));
+        return [String(row.variant_id), {
+          ...row, qty: stock ? aifNumber(stock.qty) : 0,
+          reserved_qty: stock ? aifNumber(stock.reserved_qty) : 0,
+        }];
+      }));
+      for (const source of sourceLines) {
+        if (!variantMap.has(String(source.source.variant_id))) {
+          throw errorResponse("Az egyik visszahozott termek nem talalhato a termektorzsben.", "return_batch_source_variant_missing");
+        }
+      }
+      for (const item of replacements) {
+        const product = variantMap.get(item.variantId);
+        if (!product || String(product.variant_status) !== "active" || String(product.model_status) !== "active") {
+          throw errorResponse("Az egyik csere-termek inaktiv vagy nem talalhato.", "return_batch_replacement_inactive");
+        }
+        const available = aifNumber(product.qty) - aifNumber(product.reserved_qty) + aifNumber(returnQtyByVariant.get(item.variantId));
+        if (available < item.quantity) {
+          throw errorResponse(`${product.title}: csak ${Math.max(0, available)} db all rendelkezesre.`, "insufficient_stock");
+        }
+        const price = Number(product.sell_price);
+        if (!Number.isFinite(price) || price < 0) {
+          throw errorResponse(`${product.title}: ervenytelen eladasi ar.`, "return_batch_replacement_price", 400);
+        }
+        item.unitPrice = aifRoundMoney(price);
+        item.lineTotal = aifRoundMoney(item.unitPrice * item.quantity);
+        item.buyPrice = product.buy_price == null ? null : aifRoundMoney(product.buy_price);
+        item.product = product;
+      }
+      const totalCredit = aifRoundMoney(sourceLines.reduce((sum, x) => sum + x.credit, 0));
+      const replacementTotal = aifRoundMoney(replacements.reduce((sum, x) => sum + x.lineTotal, 0));
+      const difference = aifRoundMoney(replacementTotal - totalCredit);
+      const direction = difference > 0.005 ? "in" : difference < -0.005 ? "out" : "none";
+      const settle = direction === "none" ? 0 : aifRoundMoney(Math.abs(difference));
+      if (direction !== "none" && !allowedMethods.has(settlementMethod)) {
+        throw errorResponse("Valaszd ki a kulonbozet fizetesi modjat.", "return_batch_settlement_required", 400);
+      }
+      const batchId = randomUUID();
+      const actor = actorFrom(req);
+      const summary = sourceLines.map(x => ({
+        saleLineId: String(x.source.sale_line_id), variantId: String(x.source.variant_id),
+        title: x.source.product_title, returnedQty: x.returnedQty,
+        unitPrice: x.unitCredit, returnCredit: x.credit,
+      }));
+      const exchangeRows = [];
+      // Az elso fejlechez tartozik a teljes penzugy es az uj csere-termekek.
+      for (let index = 0; index < sourceLines.length; index++) {
+        const row = sourceLines[index];
+        const primary = index === 0;
+        const exchangeNumber = await allocateExchangeNumber(client, location);
+        const source = row.source;
+        const requestId = primary ? key : `rb:${tokenHash(key).slice(0,40)}:${index}`;
+        const snapshot = {
+          returnBatchId: batchId,
+          returnBatchPrimary: primary,
+          returnBatchCount: sourceLines.length,
+          returnBatchLines: primary ? summary : undefined,
+          returnBatchCredit: primary ? totalCredit : undefined,
+          saleNumber: source.sale_number, soldAt: source.sold_at,
+          sourceLocation: { id: String(source.sale_location_id), code: source.sale_location_code, name: source.sale_location_name },
+          product: {
+            variantId: String(source.variant_id), title: source.product_title,
+            productCode: source.product_code, barcode: source.barcode,
+            brandName: source.brand_name, colorName: source.color_name, size: source.size,
+          },
+          originalQuantity: aifNumber(source.quantity), returnedQty: row.returnedQty,
+          listPrice: aifRoundMoney(source.list_price), unitPrice: row.unitCredit,
+          discountPercent: aifRoundMoney(source.discount_percent),
+          sourceBuyPrice: source.source_buy_price == null ? null : aifRoundMoney(source.source_buy_price),
+          sourceBuyPriceSource: source.buy_price_snapshot == null ? "current_variant_fallback" : "sale_snapshot",
+        };
+        const inserted = await client.query(
+          `INSERT INTO aif_shop_exchanges (
+             exchange_number, location_id, source_location_id, source_sale_id, source_sale_line_id, source_variant_id,
+             returned_qty, return_unit_credit, return_credit, replacement_total, difference,
+             settlement_direction, settlement_method, settlement_amount,
+             customer_name, customer_phone, actor, note, authorization_id,
+             original_snapshot, replacement_snapshot, client_request_id, status, created_at, updated_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,$22,'completed',now(),now()) RETURNING *`,
+          [
+            exchangeNumber, location.id, source.sale_location_id, source.sale_id, source.sale_line_id, source.variant_id,
+            row.returnedQty, row.unitCredit, row.credit, primary ? replacementTotal : 0,
+            primary ? difference : 0, primary ? direction : "none",
+            primary && direction !== "none" ? settlementMethod : null, primary ? settle : 0,
+            source.customer_name || null, source.customer_phone || null, actor,
+            text(body.note) || null, row.auth?.id || null, JSON.stringify(snapshot),
+            JSON.stringify(primary ? replacements.map(x => ({
+              variantId: x.variantId, quantity: x.quantity, unitPrice: x.unitPrice,
+              lineTotal: x.lineTotal, buyPrice: x.buyPrice,
+            })) : []), requestId,
+          ]
+        );
+        exchangeRows.push({ header: inserted.rows[0], line: row });
+      }
+      const main = exchangeRows[0].header;
+      let itemNo = 1;
+      for (const item of replacements) {
+        const p = item.product;
+        await client.query(
+          `INSERT INTO aif_shop_exchange_lines (
+             exchange_id, line_no, variant_id, quantity, unit_price, line_total, buy_price_snapshot,
+             product_title, product_code, barcode, brand_name, color_name, size, image_url, raw
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)`,
+          [main.id, itemNo++, item.variantId, item.quantity, item.unitPrice, item.lineTotal, item.buyPrice,
+           p.title || null, p.supplier_product_code || p.model_code || p.internal_sku || null,
+           p.barcode || null, p.brand_name || null, p.color_name || p.color_code || null,
+           p.size || null, p.image_url || null,
+           JSON.stringify({ source: "shop_exchange_batch", returnBatchId: batchId })]
+        );
+      }
+      const runningQty = new Map(variantMap.entries().map(([variantId, row]) => [variantId, aifNumber(row.qty)]));
+      // A bizonylat valamennyi visszavett tetelet egyenkent es pontosan egyszer
+      // naplozzuk. Az egesz blokk tranzakcios: reszsiker nem fordulhat elo.
+      for (const { header, line } of exchangeRows) {
+        const variantId = String(line.source.variant_id);
+        const before = runningQty.get(variantId);
+        const after = before + line.returnedQty;
+        const stock = variantMap.get(variantId);
+        await client.query(
+          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (location_id,variant_id)
+           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+          [location.id, variantId, after, aifNumber(stock.reserved_qty)]
+        );
+        runningQty.set(variantId, after);
+        const logged = await insertStockMovementSafe(client, {
+          movementType: "manual_adjustment", sourceType: "shop_exchange_return", sourcePrefix: "ex_return",
+          fallbackSourceType: "manual_stock_edit", sourceId: String(header.id),
+          locationId: location.id, variantId, qtyDelta: line.returnedQty,
+          qtyBefore: before, qtyAfter: after, actor,
+          raw: {
+            reason: "shop_exchange_return", exchangeId: String(header.id), exchangeNumber: header.exchange_number,
+            returnBatchId: batchId, sourceSaleId: saleId,
+            sourceSaleLineId: String(line.source.sale_line_id),
+            sourceLocationCode: line.source.sale_location_code,
+            returnCredit: line.credit, returnedQty: line.returnedQty,
+          },
+        });
+        if (!logged) throw errorResponse("Az egyik visszaru keszletnaploja nem mentheto.", "return_batch_stock_log_error", 500);
+      }
+      for (const item of replacements) {
+        const before = runningQty.get(item.variantId);
+        const after = before - item.quantity;
+        const stock = variantMap.get(item.variantId);
+        if (after < aifNumber(stock.reserved_qty)) {
+          throw errorResponse(`${stock.title}: a csere kozben nem eleg a keszlet.`, "insufficient_stock");
+        }
+        await client.query(
+          `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+           VALUES ($1,$2,$3,$4,now()) ON CONFLICT (location_id,variant_id)
+           DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+          [location.id, item.variantId, after, aifNumber(stock.reserved_qty)]
+        );
+        runningQty.set(item.variantId, after);
+        const logged = await insertStockMovementSafe(client, {
+          movementType: "sale", sourceType: "shop_exchange_out", sourcePrefix: "ex_out",
+          fallbackSourceType: "manual_stock_edit", sourceId: String(main.id),
+          locationId: location.id, variantId: item.variantId, qtyDelta: -item.quantity,
+          qtyBefore: before, qtyAfter: after, actor,
+          raw: {
+            reason: "shop_exchange_out", exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+            returnBatchId: batchId, sourceSaleId: saleId,
+            unitPrice: item.unitPrice, lineTotal: item.lineTotal, quantity: item.quantity,
+          },
+        });
+        if (!logged) throw errorResponse("A csere-termek keszletnaploja nem mentheto.", "return_batch_stock_log_error", 500);
+      }
+      if (direction !== "none") {
+        await client.query(
+          `INSERT INTO aif_shop_exchange_settlements (
+             exchange_id,location_id,method,direction,amount,actor,note,raw,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,now())`,
+          [main.id, location.id, settlementMethod, direction, settle, actor,
+           text(body.note) || null,
+           JSON.stringify({ returnBatchId: batchId, difference, returnCredit: totalCredit, replacementTotal })]
+        );
+      }
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
+         VALUES ($1,'exchange_return',$2,$3,$4::jsonb)`,
+        [saleId, actor, text(body.note) || null, JSON.stringify({
+          returnBatchId: batchId, exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+          exchangeIds: exchangeRows.map(x => String(x.header.id)), returns: summary,
+          returnCredit: totalCredit, replacementTotal, difference, direction, settlementMethod: direction === "none" ? null : settlementMethod,
+          processedAtLocation: { id: String(location.id), code: location.code, name: location.name },
+        })]
+      );
+      for (const auth of authRows) {
+        await client.query(
+          `UPDATE aif_shop_return_authorizations
+           SET status='used',used_at=now(),used_by=$2,unlock_token_hash=NULL,updated_at=now()
+           WHERE id=$1`, [auth.id, actor]
+        );
+      }
+      await client.query("COMMIT");
+      return res.json({
+        ok: true, duplicate: false,
+        exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+        exchangeIds: exchangeRows.map(x => String(x.header.id)),
+        exchangeNumbers: exchangeRows.map(x => x.header.exchange_number),
+        returnedLines: summary, returnedQty: summary.reduce((sum, x) => sum + x.returnedQty, 0),
+        returnCredit: totalCredit, replacementTotal, difference,
+        settlementDirection: direction, settlementMethod: direction === "none" ? null : settlementMethod,
+        settlementAmount: settle,
+        createdAt: main.created_at ? new Date(main.created_at).toISOString() : new Date().toISOString(),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop receipt multi-return failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A bizonylat tobb termekes visszaruja nem sikerult.", code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  }
+
   router.post("/exchanges", requireAuthed, async (req, res) => {
+    if (Array.isArray(req.body?.returns) && req.body.returns.length > 1) {
+      return completeReceiptReturnBatch(req, res);
+    }
     const body = req.body || {};
     const saleLineId = text(body.saleLineId || body.sale_line_id);
     const returnedQty = Math.max(0, Number.parseInt(String(body.returnedQty ?? body.returned_qty ?? 1), 10) || 0);
@@ -1554,6 +2002,124 @@ export default function createAifShopReturnsRouter({
   });
 
 
+  async function cancelReceiptReturnBatch(client, req, res, location, requested) {
+    const fail = (message, code, status = 409) => Object.assign(new Error(message), { code, statusCode: status });
+    const batchId = String(requested.original_snapshot?.returnBatchId || "");
+    const group = await client.query(
+      `SELECT * FROM aif_shop_exchanges
+       WHERE original_snapshot->>'returnBatchId'=$1 AND location_id=$2
+       ORDER BY id FOR UPDATE`, [batchId, location.id]
+    );
+    const members = group.rows;
+    if (members.length < 2 || !members.some(x => String(x.id) === String(requested.id))) {
+      throw fail("A kapcsolt visszaru csoportja nem teljes. Adminisztratori ellenorzes szukseges.", "return_batch_group_invalid");
+    }
+    const main = members.find(x => x.original_snapshot?.returnBatchPrimary === true);
+    if (main && members.length !== Number(main.original_snapshot?.returnBatchCount)) {
+      throw fail("A visszaruhoz tartozo termeksorok szama elter. Nem vonjuk vissza.", "return_batch_group_count_mismatch");
+    }
+    if (!main || members.filter(x => x.original_snapshot?.returnBatchPrimary === true).length !== 1 ||
+        members.some(x => String(x.source_sale_id) !== String(main.source_sale_id))) {
+      throw fail("A tobbteteles visszaru adatai nem egyeznek. Nem toroljuk reszlegesen.", "return_batch_group_mismatch");
+    }
+    if (members.every(x => x.status === "cancelled")) {
+      await client.query("COMMIT");
+      return res.json({
+        ok: true, duplicate: true,
+        exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+        exchangeIds: members.map(x => String(x.id)), status: "cancelled",
+        cancelledAt: main.cancelled_at ? new Date(main.cancelled_at).toISOString() : new Date().toISOString(),
+        cancelledBy: main.cancelled_by || actorFrom(req), stockAdjusted: [],
+      });
+    }
+    if (members.some(x => x.status !== "completed")) {
+      throw fail("A tobbteteles visszaru reszben mar vissza van vonva. Nem modositjuk a keszletet.", "return_batch_partial_cancelled");
+    }
+    const replacementRows = await client.query(
+      `SELECT variant_id,quantity FROM aif_shop_exchange_lines
+       WHERE exchange_id=$1 ORDER BY line_no FOR UPDATE`, [main.id]
+    );
+    // Ha masodlagos fejlecen is csere-sort talalunk, a csoport serult.
+    const extraLines = await client.query(
+      `SELECT count(*)::int AS n FROM aif_shop_exchange_lines
+       WHERE exchange_id=ANY($1::uuid[]) AND exchange_id<>$2::uuid`,
+      [members.map(x => x.id), main.id]
+    );
+    if (Number(extraLines.rows[0]?.n || 0) !== 0) {
+      throw fail("A visszaru tovabbi csere-sorokat is tartalmaz. Kezi egyeztetes kell.", "return_batch_extra_replacements");
+    }
+    const deltaByVariant = new Map();
+    for (const row of members) {
+      const variantId = String(row.source_variant_id);
+      deltaByVariant.set(variantId, (deltaByVariant.get(variantId) || 0) - aifNumber(row.returned_qty));
+    }
+    for (const row of replacementRows.rows) {
+      const variantId = String(row.variant_id);
+      deltaByVariant.set(variantId, (deltaByVariant.get(variantId) || 0) + aifNumber(row.quantity));
+    }
+    const variantIds = Array.from(deltaByVariant.keys()).sort();
+    const stocks = await client.query(
+      `SELECT variant_id,qty,reserved_qty FROM aif_stock
+       WHERE location_id=$1 AND variant_id=ANY($2::uuid[])
+       ORDER BY variant_id FOR UPDATE`, [location.id, variantIds]
+    );
+    const stockMap = new Map(stocks.rows.map(x => [String(x.variant_id), x]));
+    const adjustments = [];
+    const actor = actorFrom(req);
+    for (const variantId of variantIds) {
+      const delta = aifNumber(deltaByVariant.get(variantId));
+      if (Math.abs(delta) < 0.0001) continue;
+      const stock = stockMap.get(variantId);
+      const before = aifNumber(stock?.qty);
+      const reserved = aifNumber(stock?.reserved_qty);
+      const after = before + delta;
+      if (after < 0 || after < reserved) {
+        throw fail("A tobbteteles visszaru keszlete azota valtozott, automatikusan nem vonhato vissza.", "return_batch_cancel_stock_conflict");
+      }
+      await client.query(
+        `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+         VALUES ($1,$2,$3,$4,now()) ON CONFLICT (location_id,variant_id)
+         DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+        [location.id, variantId, after, reserved]
+      );
+      const logged = await insertStockMovementSafe(client, {
+        movementType: "manual_adjustment", sourceType: "shop_exchange_cancel",
+        sourcePrefix: "ex_cancel", fallbackSourceType: "manual_stock_edit",
+        sourceId: String(main.id), locationId: location.id, variantId,
+        qtyDelta: delta, qtyBefore: before, qtyAfter: after, actor,
+        raw: {
+          reason: "shop_exchange_cancel", returnBatchId: batchId,
+          exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+          exchangeIds: members.map(x => String(x.id)), sourceSaleId: String(main.source_sale_id), cancelledBy: actor,
+        },
+      });
+      if (!logged) throw fail("A visszavonas keszletnaploja nem sikerult.", "return_batch_cancel_log_failed", 500);
+      adjustments.push({ variantId, qtyBefore: before, qtyAfter: after, qtyDelta: delta });
+    }
+    const note = text(req.body?.note) || null;
+    await client.query(
+      `UPDATE aif_shop_exchanges
+       SET status='cancelled', cancelled_at=now(),cancelled_by=$2,cancellation_note=$3,updated_at=now()
+       WHERE id=ANY($1::uuid[]) AND status='completed'`,
+      [members.map(x => x.id), actor, note]
+    );
+    await client.query(
+      `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
+       VALUES ($1,'exchange_cancelled',$2,$3,$4::jsonb)`,
+      [main.source_sale_id, actor, note || "Tobbteteles visszaru adminisztratori visszavonasa.",
+       JSON.stringify({ returnBatchId: batchId, exchangeId: String(main.id),
+         exchangeIds: members.map(x => String(x.id)), reversedStock: adjustments,
+         returnCredit: members.reduce((n,x) => n + aifNumber(x.return_credit), 0),
+         replacementTotal: aifNumber(main.replacement_total), difference: aifNumber(main.difference) })]
+    );
+    await client.query("COMMIT");
+    return res.json({
+      ok: true, exchangeId: String(main.id), exchangeNumber: main.exchange_number,
+      exchangeIds: members.map(x => String(x.id)), status: "cancelled",
+      cancelledAt: new Date().toISOString(), cancelledBy: actor, stockAdjusted: adjustments,
+    });
+  }
+
   router.delete("/exchanges/:id", requireAdminOrSecret, async (req, res) => {
     const id = text(req.params.id);
     if (!isUuidText(id)) return res.status(400).json({ error: "Érvénytelen csereazonosító." });
@@ -1563,6 +2129,16 @@ export default function createAifShopReturnsRouter({
       await client.query("BEGIN");
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, client, req.body?.location || req.query?.location);
+      // Keresett elem helyett a teljes tobbteteles csoportot zaroljuk eloszor,
+      // hogy masik resztetelre kuldott parhuzamos torles se okozzon holtpontot.
+      const groupLookup = await client.query(
+        `SELECT original_snapshot->>'returnBatchId' AS batch_id
+         FROM aif_shop_exchanges WHERE id::text=$1 AND location_id=$2`, [id, location.id]
+      );
+      const batchId = text(groupLookup.rows[0]?.batch_id);
+      if (batchId) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_return_batch_cancel:${batchId}`]);
+      }
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_exchange_cancel:${id}`]);
 
       const exchangeResult = await client.query(
@@ -1580,6 +2156,9 @@ export default function createAifShopReturnsRouter({
       }
 
       const exchange = exchangeResult.rows[0];
+      if (exchange.original_snapshot?.returnBatchId) {
+        return cancelReceiptReturnBatch(client, req, res, location, exchange);
+      }
       if (exchange.status === "cancelled") {
         await client.query("COMMIT");
         return res.json({
