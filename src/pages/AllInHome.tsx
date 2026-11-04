@@ -27,9 +27,6 @@ import AllInLegacyExport from "./AllInLegacyExport";
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
-// Ez a kesz voucher-GOMBGRAFIKA, nem ikon. A sajat szineit megtartjuk.
-const VOUCHER_BUTTON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
-
 const ShopifyMenuIcon = ({className}:{className?:string}) => <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className={`${className||""} object-contain`} />;
 
 const LOGO_URL =
@@ -328,29 +325,6 @@ function MainMenuButton({
 }
 
 
-// Az eredeti, fekete hatteru gombgrafika balra illesztve. A fennmarado
-// szelesseg fekete, a feher nyil a tobbi fomenu gomb jobb szelevel egyezik.
-function VoucherMenuButton() {
-  return (
-    <button
-      type="button"
-      onClick={() => navigate("#vouchers")}
-      aria-label="Ajándékutalványok"
-      title="Ajándékutalványok"
-      className="group flex h-12 w-full items-center overflow-hidden rounded-xl border border-white/30 bg-black pr-3.5 text-left text-white transition hover:border-white/50 hover:bg-[#101010]"
-    >
-      <img
-        src={VOUCHER_BUTTON_URL}
-        alt=""
-        draggable={false}
-        className="block h-[46px] w-auto max-w-[calc(100%-44px)] min-w-0 shrink-0 object-contain object-left"
-      />
-      <span className="min-w-0 flex-1" />
-      <ChevronRight className="h-4 w-4 shrink-0 text-white transition-transform group-hover:translate-x-0.5" />
-    </button>
-  );
-}
-
 export default function AllInHome(props: { onLogout?: () => void }) {
   const [openGroup, setOpenGroup] = useState<GroupKey | null>(null);
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
@@ -577,8 +551,11 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             onItemSelect={handleIncomingItem}
           />
 
-          {/* A felhasznalo sajat, teljes utalvany-gombgrafikaja; nem ikon + felirat. */}
-          <VoucherMenuButton />
+          <MainMenuButton
+            label="Ajándékutalványok"
+            hash="#vouchers"
+            icon={WalletCards}
+          />
 
           <div className="my-3 border-t border-white/12" />
 
