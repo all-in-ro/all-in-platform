@@ -15568,7 +15568,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function aifSaveSharedGallery(client, variantId, images, { supplierProductCode = null } = {}) {
+  async function aifSaveSharedGallery(client, variantId, images, { supplierProductCode = null, expectedImages = undefined } = {}) {
     const family = await aifGalleryFamily(client, variantId, { lock: true, supplierProductCode });
     if (!family) {
       const error = new Error('A termekvarians nem talalhato vagy archivalt.');
@@ -15577,6 +15577,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       throw error;
     }
     if (family.sources.size > 1) throw aifGalleryConflictError(family);
+    // A bolti es a raktari felhasznalo ugyanazt a galeriasort szerkeszti.
+    // Ha a megnyitas ota valaki mentett, a regi valtozat NEM irhatja felul.
+    if (expectedImages !== undefined) {
+      const lastSeen = aifValidatedGallery(expectedImages);
+      const serverImages = aifGalleryFamilyPresentation(family).images;
+      if (JSON.stringify(lastSeen) !== JSON.stringify(serverImages)) {
+        const error = new Error('Időközben másik munkatárs módosította a termék képeit. Frissítsd a galériát; a friss képeket nem írtuk felül.');
+        error.statusCode = 409;
+        error.code = 'gallery_changed_reload_required';
+        throw error;
+      }
+    }
     const desired = aifValidatedGallery(images);
     const previous = [];
     for (const row of family.siblings) {
@@ -15675,12 +15687,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.put("/variants/:id/gallery", requireAdminOrSecret, async (req, res) => {
+  // A bolti munkatarsaknak CSAK az adott uzletben elerheto, aktiv termekek
+  // galeria-szerkeszteset engedjuk. Nem kapnak termekar-, stock-, SKU- vagy
+  // altalanos admin API-jogosultsagot.
+  async function aifCanEditSharedGallery(req, client, variantId) {
+    if (req.session?.role === 'admin') return true;
+    if (req.session?.role !== 'shop' || !isUuidText(variantId)) return false;
+    const ownLocationCode = text(req.session?.locationCode);
+    if (!ownLocationCode) return false;
+    const allowed = await client.query(`
+      SELECT 1
+      FROM aif_stock s
+      JOIN aif_locations l ON l.id=s.location_id
+      JOIN aif_product_variants v ON v.id=s.variant_id
+      JOIN aif_product_models m ON m.id=v.model_id
+      WHERE v.id=$1::uuid AND l.code=$2
+        AND COALESCE(s.qty,0)>0
+        AND COALESCE(v.status,'active')='active'
+        AND COALESCE(m.status,'active')='active'
+      LIMIT 1
+      FOR SHARE OF s`, [variantId, ownLocationCode]);
+    return allowed.rowCount > 0;
+  }
+
+  router.put("/variants/:id/gallery", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
+    const isSeller = req.session?.role === 'shop';
     let images;
-    try { images = aifValidatedGallery(req.body?.images); }
-    catch (error) {
+    let expectedImages;
+    try {
+      images = aifValidatedGallery(req.body?.images);
+      if (req.body?.expectedImages !== undefined) expectedImages = aifValidatedGallery(req.body.expectedImages);
+    } catch (error) {
       return res.status(400).json({ error: error?.message || 'Hibas kepgaleria.', code: 'invalid_image_gallery' });
+    }
+    if (isSeller && expectedImages === undefined) {
+      return res.status(428).json({
+        error: 'A galéria friss állapota nem ismert. Töltsd újra a képeket mentés előtt.',
+        code: 'gallery_revision_required',
+      });
     }
     let client;
     let saved;
@@ -15691,7 +15736,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query('BEGIN');
       await client.query("SET LOCAL lock_timeout='5s'");
       await client.query("SET LOCAL statement_timeout='20s'");
-      saved = await aifSaveSharedGallery(client, id, images);
+      if (!await aifCanEditSharedGallery(req, client, id)) {
+        const error = new Error('Csak a saját üzletedben készleten lévő, aktív termék képeit szerkesztheted.');
+        error.statusCode = 403;
+        error.code = 'shop_gallery_forbidden';
+        throw error;
+      }
+      saved = await aifSaveSharedGallery(client, id, images, { expectedImages });
       if (saved.previous.length) {
         const schema = await client.query("SELECT to_regclass('public.aif_shopify_image_outbox') AS gallery_queue");
         if (schema.rows[0]?.gallery_queue) {
@@ -15711,7 +15762,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query('COMMIT');
     } catch (error) {
       if (client) await client.query('ROLLBACK').catch(() => {});
-      if (error?.statusCode === 404 || error?.statusCode === 409) {
+      if ([403,404,409].includes(error?.statusCode)) {
         return res.status(error.statusCode).json({ error: error.message, code: error.code,
           conflictingVariants: error.conflictingVariants || [] });
       }
