@@ -543,6 +543,67 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
     finally{client.release();}
   }));
 
+  // A vezetoi / bolti admin kimutatasok kozos, LIMIT nelkuli penzugyi forrasa.
+  // Csak olvasas: az ajandekutalvany kiadasa penzbevetel, a bevaltas nem.
+  // A fennallo osszeg az eredeti kiadas helyehez tartozik akkor is, ha
+  // a papirral egy masik uzletben fizetnek. A dolgozoi szuro erre NEM hat.
+  router.get('/finance-report', requireAuthed, asyncRoute(async (req,res) => {
+    adminOnly(req);
+    const from=String(req.query.from||'').trim();
+    const to=String(req.query.to||'').trim();
+    const location=String(req.query.location||'all').trim();
+    const employee=String(req.query.employee||'').trim().slice(0,120);
+    const dateOk=(value)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
+      const d=new Date(`${value}T12:00:00Z`);return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===value;};
+    if(!dateOk(from)||!dateOk(to)||from>to)
+      throw reject('Adj meg ervenyes Ettol/Eddig datumot.',400,'voucher_report_bad_date');
+    const days=Math.round((Date.parse(to+'T12:00:00Z')-Date.parse(from+'T12:00:00Z'))/86400000)+1;
+    if(days>366)throw reject('Legfeljebb 366 nap kerdezheto le.',400,'voucher_report_period_too_long');
+    if(location!=='all'&&!STORES.has(location))throw reject('Ismeretlen uzlet.',400,'voucher_report_bad_location');
+    const params=[from,to,location,employee||null];
+    const tx=await pool.query(`SELECT t.kind,t.method,COUNT(*)::int AS transactions,
+      COALESCE(SUM(t.amount),0)::numeric AS amount
+      FROM aif_gift_voucher_transactions t
+      WHERE t.created_at >= ($1::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND t.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND ($3::text='all' OR t.location_code=$3)
+        AND ($4::text IS NULL OR
+          lower(regexp_replace(btrim(t.actor),'[[:space:]]+',' ','g'))=
+          lower(regexp_replace(btrim($4),'[[:space:]]+',' ','g')))
+      GROUP BY t.kind,t.method ORDER BY t.kind,t.method`,params);
+    const issued={cash:0,card:0,bank_transfer:0};
+    let issuedTotal=0,redeemedTotal=0,issuedCount=0,redeemedCount=0;
+    for(const row of tx.rows){
+      const value=Math.round(Number(row.amount||0)*100)/100;
+      if(row.kind==='issue'){
+        if(!Object.prototype.hasOwnProperty.call(issued,row.method))
+          throw reject('Ismeretlen utalvany-ertekesitesi fizetesi mod.',409,'voucher_report_unknown_method');
+        issued[row.method]+=value;issuedTotal+=value;issuedCount+=Number(row.transactions||0);
+      }else if(row.kind==='redeem'){
+        redeemedTotal+=value;redeemedCount+=Number(row.transactions||0);
+      }
+    }
+    // Ezt nem a bevaltas uzlete, hanem a voucher eredeti kiadasi uzlete
+    // alapjan csoportositjuk, ezert keresztbolti beváltásnal sem lehet negativ.
+    // Az 'employee' szuro szandekosan nem ervenyes erre az allomanyi ertekre.
+    const outstanding=await pool.query(`SELECT
+      COALESCE(SUM(CASE WHEN t.kind='issue' THEN t.amount ELSE -t.amount END),0)::numeric AS balance
+      FROM aif_gift_voucher_transactions t
+      JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+      WHERE t.created_at < (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND ($2::text='all' OR v.location_code=$2)`,[to,location]);
+    const round2=(n)=>Math.round((Number(n||0)+Number.EPSILON)*100)/100;
+    const outstandingAsOf=round2(outstanding.rows[0]?.balance);
+    if(outstandingAsOf < -0.005)
+      throw reject('Az utalvany egyenlege nem egyezik, manualis audit szukseges.',409,'voucher_report_negative_outstanding');
+    res.setHeader('Cache-Control','private, no-store');
+    res.json({ok:true,from,to,location,employee:employee||null,
+      issuedTotal:round2(issuedTotal),redeemedTotal:round2(redeemedTotal),
+      issuedByMethod:{cash:round2(issued.cash),card:round2(issued.card),
+        bank_transfer:round2(issued.bank_transfer)},
+      issuedCount,redeemedCount,outstandingAsOf});
+  }));
+
   // Teljes archivum: nincsen 300 soros kereso-limit. Csak ADMIN exportalhat.
   router.get('/transactions/export.csv', requireAdminOrSecret, asyncRoute(async (req,res) => {
     adminOnly(req);
