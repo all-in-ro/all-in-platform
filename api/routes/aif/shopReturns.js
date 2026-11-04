@@ -158,6 +158,17 @@ export default function createAifShopReturnsRouter({
     return result.rows[0] || null;
   }
 
+  async function assertNotVoucherFunded(client, rootSaleId) {
+    const paid = await client.query(`SELECT 1 FROM aif_shop_sale_payments
+      WHERE sale_id=$1 AND method='voucher' LIMIT 1`, [rootSaleId]);
+    if (paid.rowCount) {
+      const error = new Error('Ehhez a vasarlashoz ajandekutalvanyt hasznaltak. A visszarut addig nem lehet lezarni, amig az egyenleg visszairasa es a penzugyi elszamolas nincs bevezetve. Fordulj az Adminhoz.');
+      error.statusCode = 409;
+      error.code = 'voucher_funded_return_requires_settlement';
+      throw error;
+    }
+  }
+
   async function assertNoChainedReturns(client, exchangeIds) {
     if (!exchangeIds.length) return;
     const children = await client.query(
@@ -1569,6 +1580,7 @@ export default function createAifShopReturnsRouter({
         sourceLines.push({ ...ret, source, auth, unitCredit, credit: aifRoundMoney(unitCredit * ret.returnedQty) });
       }
 
+      await assertNotVoucherFunded(client, saleId);
       const replacements = [];
       const seenVariants = new Set();
       for (const inputRow of replacementsInput) {
@@ -1900,6 +1912,7 @@ export default function createAifShopReturnsRouter({
           throw fail('Egy lanc-cserehez ugyanannak a cserebizonylatnak a termekei jelolhetok ki.','chain_mixed_receipts',400);
         parentId=String(line.parent_exchange_id);
         rootSaleId=String(line.source_sale_id);
+        await assertNotVoucherFunded(client, rootSaleId);
         parentLocationId=String(line.sale_location_id);
         const remaining=aifNumber(line.quantity)-aifNumber(line.returned_qty);
         if(w.qty>remaining)throw fail(`${line.product_title}: legfeljebb ${Math.max(0,remaining)} db veheto vissza.`,'chain_quantity_exceeded');
@@ -2170,6 +2183,7 @@ export default function createAifShopReturnsRouter({
         error.statusCode = 404;
         throw error;
       }
+      await assertNotVoucherFunded(client, source.sale_id);
       if (aifNumber(source.balance_due) > 0.005) {
         const error = new Error("Ehhez az eredeti eladáshoz még nyitott tartozás tartozik. Visszáru vagy csere előtt a tartozást rendezni kell, különben a pénzügyi egyenleg hibás lenne.");
         error.statusCode = 409;
