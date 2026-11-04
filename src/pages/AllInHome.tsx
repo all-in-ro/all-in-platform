@@ -27,10 +27,8 @@ import AllInLegacyExport from "./AllInLegacyExport";
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
-const VOUCHER_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
-const VoucherMenuIcon = ({ className }: { className?: string }) => (
-  <img src={VOUCHER_ICON_URL} alt="" className={`${className || ""} block object-contain brightness-0 invert`} />
-);
+// Ez a kesz voucher-GOMBGRAFIKA, nem ikon. A sajat szineit megtartjuk.
+const VOUCHER_BUTTON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
 
 const ShopifyMenuIcon = ({className}:{className?:string}) => <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className={`${className||""} object-contain`} />;
 
@@ -316,7 +314,7 @@ function MainMenuButton({
       type="button"
     >
       <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${iconToneClass}`}>
-        <Icon className={hash === "#vouchers" ? "h-6 w-7" : "h-4 w-4"} />
+        <Icon className="h-4 w-4" />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm uppercase tracking-[0.045em]">{label}</span>
       {badge ? (
@@ -325,6 +323,30 @@ function MainMenuButton({
         </span>
       ) : null}
       <ChevronRight className={`h-4 w-4 shrink-0 transition group-hover:translate-x-0.5 ${arrowToneClass}`} />
+    </button>
+  );
+}
+
+
+// Az eredeti, fekete hatteru gombgrafika balra illesztve. A fennmarado
+// szelesseg fekete, a feher nyil a tobbi fomenu gomb jobb szelevel egyezik.
+function VoucherMenuButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => navigate("#vouchers")}
+      aria-label="Ajándékutalványok"
+      title="Ajándékutalványok"
+      className="group flex h-12 w-full items-center overflow-hidden rounded-xl border border-white/30 bg-black pr-3.5 text-left text-white transition hover:border-white/50 hover:bg-[#101010]"
+    >
+      <img
+        src={VOUCHER_BUTTON_URL}
+        alt=""
+        draggable={false}
+        className="block h-[46px] w-auto max-w-[calc(100%-44px)] min-w-0 shrink-0 object-contain object-left"
+      />
+      <span className="min-w-0 flex-1" />
+      <ChevronRight className="h-4 w-4 shrink-0 text-white transition-transform group-hover:translate-x-0.5" />
     </button>
   );
 }
@@ -555,13 +577,8 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             onItemSelect={handleIncomingItem}
           />
 
-          {/* Utalvanyok: onallo admin-oldal, az aru-bevetelezes alatt,
-              ugyanolyan stabil menugombbal, mint a tobbi fosori elem. */}
-          <MainMenuButton
-            label="Ajándékutalványok"
-            hash="#vouchers"
-            icon={VoucherMenuIcon}
-          />
+          {/* A felhasznalo sajat, teljes utalvany-gombgrafikaja; nem ikon + felirat. */}
+          <VoucherMenuButton />
 
           <div className="my-3 border-t border-white/12" />
 
