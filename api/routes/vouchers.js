@@ -71,6 +71,37 @@ export function ensureAifVoucherFinanceSchema(pool) {
           (kind='issue' AND sale_id IS NULL)
         )
       )`);
+      // 5. fazis: egy visszaruhoz pontosan egy, nem torolheto voucher-jovairas.
+      // A korabbi ket CHECK ('issue','redeem') nem fogadja el a 'restore'-t.
+      // A migracio atomikus; minden mas oszlop es a regi naplo valtozatlan.
+      await pool.query(`ALTER TABLE aif_gift_voucher_transactions
+        ADD COLUMN IF NOT EXISTS exchange_id uuid`);
+      await pool.query(`DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='aif_gift_voucher_transactions'::regclass
+                   AND conname='aif_gift_voucher_transactions_kind_check') THEN
+          ALTER TABLE aif_gift_voucher_transactions DROP CONSTRAINT aif_gift_voucher_transactions_kind_check;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='aif_gift_voucher_transactions'::regclass
+                   AND conname='voucher_tx_sale_id_ck') THEN
+          ALTER TABLE aif_gift_voucher_transactions DROP CONSTRAINT voucher_tx_sale_id_ck;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='aif_gift_voucher_transactions'::regclass
+                       AND conname='aif_voucher_kind_v5_ck') THEN
+          ALTER TABLE aif_gift_voucher_transactions ADD CONSTRAINT aif_voucher_kind_v5_ck
+            CHECK(kind IN ('issue','redeem','restore'));
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='aif_gift_voucher_transactions'::regclass
+                       AND conname='aif_voucher_sale_v5_ck') THEN
+          ALTER TABLE aif_gift_voucher_transactions ADD CONSTRAINT aif_voucher_sale_v5_ck
+            CHECK ((kind='issue' AND sale_id IS NULL AND exchange_id IS NULL) OR
+                   (kind='redeem' AND sale_id IS NOT NULL AND exchange_id IS NULL) OR
+                   (kind='restore' AND sale_id IS NOT NULL AND exchange_id IS NOT NULL));
+        END IF;
+      END $$`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_voucher_restore_exchange_uq
+        ON aif_gift_voucher_transactions(exchange_id) WHERE kind='restore'`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS aif_voucher_restore_sale_idx
+        ON aif_gift_voucher_transactions(sale_id) WHERE kind='restore'`);
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_voucher_single_issue_idx
         ON aif_gift_voucher_transactions(voucher_id) WHERE kind='issue'`);
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_voucher_single_sale_redemption_idx
@@ -137,6 +168,137 @@ export async function commitAifVoucherRedemption(client, { voucher, saleId, sale
     VALUES($1,$2,'redeemed',$3,$4,$5::jsonb)`,
     [randomUUID(),voucher.id,actor,locationCode,JSON.stringify({saleId:String(saleId),saleNumber,amount:voucher.amount,balanceBefore:voucher.before,balanceAfter:remaining})]);
   return remaining;
+}
+
+
+// 5. fazis. Pure integer-bani split, cumulative rounding: two half returns
+// MUST give the same voucher/cash totals as one full return.
+export function aifSplitVoucherReturn({ originalCents, voucherCents, previousReturnCents, newReturnCents, previouslyRestoredCents }) {
+  const fields=[originalCents,voucherCents,previousReturnCents,newReturnCents,previouslyRestoredCents];
+  if(!fields.every(n=>Number.isSafeInteger(n)&&n>=0) || originalCents<=0 || voucherCents<=0 || voucherCents>originalCents ||
+      previousReturnCents+newReturnCents>originalCents || newReturnCents<=0) {
+    throw voucherFail('A visszaru eredeti osszege vagy korabbi elszamolasa ervenytelen.','voucher_return_amount_invalid');
+  }
+  const proportional=(returned)=>Math.round(returned*voucherCents/originalCents);
+  const expectedPrior=proportional(previousReturnCents);
+  if (expectedPrior!==previouslyRestoredCents) {
+    throw voucherFail('Az eddigi utalvany-visszairas es a korabbi visszaru nem egyezik.','voucher_return_prior_mismatch');
+  }
+  const targetRestored=proportional(previousReturnCents+newReturnCents);
+  const voucherRefundCents=targetRestored-previouslyRestoredCents;
+  const externalRefundCents=newReturnCents-voucherRefundCents;
+  if(voucherRefundCents<0 || externalRefundCents<0 || targetRestored>voucherCents) {
+    throw voucherFail('A penzugyi visszabontas ellenorzese nem sikerult.','voucher_return_split_invalid');
+  }
+  return {voucherRefundCents,externalRefundCents,targetRestored};
+}
+
+const toBani=(v)=>Math.round(Number(v||0)*100);
+const fromBani=(v)=>Math.round(v)/100;
+
+// Csak teljesen kifizetett, eredeti bolti bizonylathoz, csere-termek NELKUL.
+// A hivo mar zarolta az eredeti eladast es a visszaadando termeksorokat.
+// A voucher-egyenleg zarja garantalt a COMMIT / ROLLBACK vegeig.
+export async function prepareAifVoucherReturn(client,{saleId,locationCode,returnCredit,replacementTotal=0,settlementMethod}) {
+  const pay=await client.query(`SELECT method,COALESCE(SUM(amount),0)::numeric AS amount
+    FROM aif_shop_sale_payments WHERE sale_id=$1 AND customer_payment_id IS NULL
+    GROUP BY method ORDER BY method`,[saleId]);
+  const tx=await client.query(`SELECT t.id,t.voucher_id,t.amount,t.sale_number,
+      v.code,v.issued_value,v.balance,v.status,v.expires_on,v.redeemed_at
+    FROM aif_gift_voucher_transactions t JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+    WHERE t.sale_id=$1 AND t.kind='redeem' FOR UPDATE OF v`,[saleId]);
+  const paidVoucher=pay.rows.filter(p=>p.method==='voucher').reduce((n,p)=>n+toBani(p.amount),0);
+  if(!paidVoucher && !tx.rowCount)return null;
+  if(!voucherFinanceEnabled())throw voucherFail('Az utalvanyos visszaru penzugyi funkcio meg nincs aktivalva.','voucher_finance_disabled',503);
+  if(tx.rowCount!==1||paidVoucher<=0||paidVoucher!==toBani(tx.rows[0].amount))
+    throw voucherFail('Az eredeti utalvanyfizetes es a penzugyi naplo nem egyezik.','voucher_return_payment_mismatch');
+  if(Number(replacementTotal)>0.005)
+    throw voucherFail('Ajandekutalvanyos bizonylatnal ebben a szakaszban csak visszaterites engedelyezett; csere-termek nem.','voucher_return_exchange_not_supported');
+  const saleResult=await client.query(`SELECT id,total,status,sale_type,balance_due,location_id
+      FROM aif_shop_sales WHERE id=$1 FOR UPDATE`,[saleId]);
+  const sale=saleResult.rows[0];
+  const origin=await client.query(`SELECT code FROM aif_locations WHERE id=$1`,[sale?.location_id]);
+  if(!sale||sale.status!=='completed'||sale.sale_type!=='sale'||toBani(sale.balance_due)!==0)
+    throw voucherFail('Csak kifizetett, lezart eredeti eladast lehet visszairni.','voucher_return_sale_invalid');
+  if(origin.rows[0]?.code!==locationCode)
+    throw voucherFail('Utalvanyos visszaru egyelore csak az eredeti eladas boltjaban rendezheto.','voucher_return_cross_store_not_supported',409);
+  const voucher=tx.rows[0];
+  if(!['active','partial','redeemed'].includes(voucher.status))
+    throw voucherFail('Az utalvany blokkolt vagy ervenytelen. Admin ellenorzes szukseges.','voucher_return_status_invalid');
+  if(voucher.expires_on && String(voucher.expires_on).slice(0,10) < new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()))
+    throw voucherFail('Lejart utalvanyra automatikus visszairas helyett admin ellenorzes szukseges.','voucher_return_expired');
+  const originalCents=toBani(sale.total);
+  const physical=pay.rows.filter(p=>p.method!=='voucher');
+  if(physical.some(p=>!['cash','card','bank_transfer'].includes(p.method))||physical.length>1)
+    throw voucherFail('Az eredeti vasarlas kulso fizetesi modjai nem bonthatok automatikusan.','voucher_return_complex_tender');
+  const externalOriginal=physical.reduce((n,p)=>n+toBani(p.amount),0);
+  if(originalCents!==paidVoucher+externalOriginal)
+    throw voucherFail('Az eredeti bizonylat es a fizetesi osszegek elternek.','voucher_return_original_mismatch');
+  const previous=await client.query(`SELECT
+      COALESCE(SUM(return_credit),0)::numeric AS refunded,
+      COUNT(*) FILTER(WHERE replacement_total>0.005)::int AS with_replacements
+    FROM aif_shop_exchanges WHERE source_sale_id=$1 AND status='completed'`,[saleId]);
+  if(Number(previous.rows[0]?.with_replacements||0)>0)
+    throw voucherFail('Korabbi csere-termekkel erintett utalvanyos bizonylatot csak admin ellenorzessel lehet rendezni.','voucher_return_prior_exchange');
+  const priorRestored=await client.query(`SELECT COALESCE(SUM(amount),0)::numeric AS amount
+      FROM aif_gift_voucher_transactions WHERE sale_id=$1 AND kind='restore'`,[saleId]);
+  const split=aifSplitVoucherReturn({
+    originalCents,voucherCents:paidVoucher,
+    previousReturnCents:toBani(previous.rows[0]?.refunded),
+    newReturnCents:toBani(returnCredit),previouslyRestoredCents:toBani(priorRestored.rows[0]?.amount)
+  });
+  const priorExternal=await client.query(`SELECT COALESCE(SUM(es.amount),0)::numeric AS amount
+     FROM aif_shop_exchanges e JOIN aif_shop_exchange_settlements es ON es.exchange_id=e.id
+     WHERE e.source_sale_id=$1 AND e.status='completed' AND es.direction='out'`,[saleId]);
+  if(toBani(priorExternal.rows[0]?.amount)!==toBani(previous.rows[0]?.refunded)-toBani(priorRestored.rows[0]?.amount))
+    throw voucherFail('A korabbi penz-visszafizetes es az utalvany-visszairas elter.','voucher_return_external_mismatch');
+  const expectedMethod=physical[0]?.method||null;
+  if(split.externalRefundCents>0 && (!expectedMethod||settlementMethod!==expectedMethod))
+    throw voucherFail(`Az eredeti fizetes modja: ${({cash:'keszpenz',card:'bankkartya',bank_transfer:'atutalas'})[expectedMethod]||'ismeretlen'}. A visszaterites modjanak ezzel egyeznie kell.`, 'voucher_return_method_mismatch',409);
+  if(split.externalRefundCents+toBani(priorExternal.rows[0]?.amount)>externalOriginal)
+    throw voucherFail('Az eredeti kulso fizetesnel nagyobb visszaterites nem engedelyezett.','voucher_return_external_overflow');
+  const state=await client.query(`SELECT COALESCE(SUM(CASE WHEN kind IN ('issue','restore') THEN amount ELSE -amount END),0)::numeric AS balance
+     FROM aif_gift_voucher_transactions WHERE voucher_id=$1`,[voucher.voucher_id]);
+  if(toBani(state.rows[0]?.balance)!==toBani(voucher.balance))
+    throw voucherFail('Az utalvany egyenlege es a teljes tranzakcionaplo elter.','voucher_return_balance_mismatch');
+  const balanceAfter=toBani(voucher.balance)+split.voucherRefundCents;
+  if(balanceAfter>toBani(voucher.issued_value))throw voucherFail('Az utalvany eredeti erteke nem lepheto tul.','voucher_return_balance_overflow');
+  return {
+    voucherId:voucher.voucher_id,code:voucher.code,saleId,locationCode,
+    returnCredit:fromBani(toBani(returnCredit)),
+    voucherRefund:fromBani(split.voucherRefundCents),externalRefund:fromBani(split.externalRefundCents),
+    externalMethod:split.externalRefundCents>0?expectedMethod:null,
+    balanceBefore:fromBani(toBani(voucher.balance)),balanceAfter:fromBani(balanceAfter),
+    originallyVoucherPaid:fromBani(paidVoucher),originalTotal:fromBani(originalCents)
+  };
+}
+
+export async function commitAifVoucherReturn(client,{plan,exchangeId,exchangeNumber,actor}) {
+  if(!plan)return null;
+  if(plan.voucherRefund>0) {
+    // The issued value, not this particular redemption, determines full balance.
+    const previous=await client.query(`UPDATE aif_gift_vouchers SET
+      balance=$2,status=CASE WHEN $2::numeric=issued_value THEN 'active' ELSE 'partial' END,
+      redeemed_at=NULL,updated_at=now()
+      WHERE id=$1 AND balance=$3 AND status IN ('active','partial','redeemed') RETURNING balance`,
+      [plan.voucherId,plan.balanceAfter,plan.balanceBefore]);
+    if(previous.rowCount!==1)throw voucherFail('Az utalvany egyenlege kozben megvaltozott.','voucher_return_concurrent_change');
+    await client.query(`INSERT INTO aif_gift_voucher_transactions
+      (voucher_id,kind,location_code,amount,method,sale_id,sale_number,exchange_id,reference,idempotency_key,actor)
+      VALUES ($1,'restore',$2,$3,'voucher',$4,$5,$6,$7,$8,$9)`,
+      [plan.voucherId,plan.locationCode,plan.voucherRefund,plan.saleId,exchangeNumber,exchangeId,
+       `Visszaru: ${exchangeNumber}`,`restore:${exchangeId}`,actor]);
+    await client.query(`INSERT INTO aif_gift_voucher_events
+      (id,voucher_id,kind,actor,to_location,details)
+      VALUES($1,$2,'return_restored',$3,$4,$5::jsonb)`,
+      [randomUUID(),plan.voucherId,actor,plan.locationCode,JSON.stringify({exchangeId:String(exchangeId),
+        exchangeNumber,saleId:String(plan.saleId),restoreAmount:plan.voucherRefund,
+        balanceBefore:plan.balanceBefore,balanceAfter:plan.balanceAfter,
+        externalRefund:plan.externalRefund,externalMethod:plan.externalMethod})]);
+  }
+  return {code:plan.code,voucherRestored:plan.voucherRefund,
+    voucherBalanceAfter:plan.balanceAfter,externalRefund:plan.externalRefund,
+    externalMethod:plan.externalMethod};
 }
 
 
@@ -572,7 +734,7 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
           lower(regexp_replace(btrim($4),'[[:space:]]+',' ','g')))
       GROUP BY t.kind,t.method ORDER BY t.kind,t.method`,params);
     const issued={cash:0,card:0,bank_transfer:0};
-    let issuedTotal=0,redeemedTotal=0,issuedCount=0,redeemedCount=0;
+    let issuedTotal=0,redeemedTotal=0,restoredTotal=0,issuedCount=0,redeemedCount=0,restoredCount=0;
     for(const row of tx.rows){
       const value=Math.round(Number(row.amount||0)*100)/100;
       if(row.kind==='issue'){
@@ -581,13 +743,15 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
         issued[row.method]+=value;issuedTotal+=value;issuedCount+=Number(row.transactions||0);
       }else if(row.kind==='redeem'){
         redeemedTotal+=value;redeemedCount+=Number(row.transactions||0);
+      }else if(row.kind==='restore'){
+        restoredTotal+=value;restoredCount+=Number(row.transactions||0);
       }
     }
     // Ezt nem a bevaltas uzlete, hanem a voucher eredeti kiadasi uzlete
     // alapjan csoportositjuk, ezert keresztbolti beváltásnal sem lehet negativ.
     // Az 'employee' szuro szandekosan nem ervenyes erre az allomanyi ertekre.
     const outstanding=await pool.query(`SELECT
-      COALESCE(SUM(CASE WHEN t.kind='issue' THEN t.amount ELSE -t.amount END),0)::numeric AS balance
+      COALESCE(SUM(CASE WHEN t.kind IN ('issue','restore') THEN t.amount ELSE -t.amount END),0)::numeric AS balance
       FROM aif_gift_voucher_transactions t
       JOIN aif_gift_vouchers v ON v.id=t.voucher_id
       WHERE t.created_at < (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
@@ -598,10 +762,10 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
       throw reject('Az utalvany egyenlege nem egyezik, manualis audit szukseges.',409,'voucher_report_negative_outstanding');
     res.setHeader('Cache-Control','private, no-store');
     res.json({ok:true,from,to,location,employee:employee||null,
-      issuedTotal:round2(issuedTotal),redeemedTotal:round2(redeemedTotal),
+      issuedTotal:round2(issuedTotal),redeemedTotal:round2(redeemedTotal),restoredTotal:round2(restoredTotal),
       issuedByMethod:{cash:round2(issued.cash),card:round2(issued.card),
         bank_transfer:round2(issued.bank_transfer)},
-      issuedCount,redeemedCount,outstandingAsOf});
+      issuedCount,redeemedCount,restoredCount,outstandingAsOf});
   }));
 
   // Teljes archivum: nincsen 300 soros kereso-limit. Csak ADMIN exportalhat.
