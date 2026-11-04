@@ -1,5 +1,6 @@
 import express from "express";
 import createAifSmsModule from "./aif/sms/index.js";
+import { ensureAifVoucherFinanceSchema, voucherFinanceEnabled, lockAifVoucherForSale, commitAifVoucherRedemption } from "./vouchers.js";
 import createAifAdminShopsRouter from "./aif/adminShops.js";
 import createAifShopReturnsRouter from "./aif/shopReturns.js";
 import createAifShopReservationsRouter from "./aif/shopReservations.js";
@@ -25791,10 +25792,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       card: { method: "card", label: "Bankkártya", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
       bank_transfer: { method: "bank_transfer", label: "Átutalás", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
       credit: { method: "credit", label: "Utólag fizet", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
+      voucher: { method: "voucher", label: "Ajandekutalvany beváltás", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
     };
   }
 
   async function aifShopShiftSnapshot(client, { locationId, fromAt, toAt, actor = null }) {
+    await ensureAifVoucherFinanceSchema(pool);
     const args = [locationId, fromAt, toAt];
     let actorSaleFilter = "";
     let actorSalePaymentFilter = "";
@@ -25929,6 +25932,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ),
     ]);
 
+    const voucherIssueResult = await client.query(
+      `SELECT method,COALESCE(sum(amount),0)::numeric AS amount,COUNT(*)::int AS transactions
+       FROM aif_gift_voucher_transactions
+       WHERE kind='issue' AND location_code=(SELECT code FROM aif_locations WHERE id=$1)
+         AND created_at >= $2::timestamptz AND created_at < $3::timestamptz
+         ${actor ? "AND lower(regexp_replace(btrim(COALESCE(actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))" : ''}
+       GROUP BY method`,args);
+    const voucherIssuedTotal = aifRoundMoney(voucherIssueResult.rows.reduce((sum,r)=>sum+aifNumber(r.amount),0));
     const row = summaryResult.rows[0] || {};
     const exchangeRow = exchangeSummaryResult.rows[0] || {};
     const revenue = aifRoundMoney(aifNumber(row.revenue) + aifNumber(exchangeRow.revenue));
@@ -25955,8 +25966,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       payments[item.method].exchangeAmount = aifRoundMoney(item.amount);
       payments[item.method].exchangeTransactions = aifNumber(item.transactions);
     }
+    for (const item of voucherIssueResult.rows) {
+      if (!payments[item.method]) continue;
+      payments[item.method].voucherIssueAmount = aifRoundMoney(item.amount);
+      payments[item.method].voucherIssueTransactions = aifNumber(item.transactions);
+    }
     for (const item of Object.values(payments)) {
-      item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount + item.exchangeAmount);
+      item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount + item.exchangeAmount + (item.voucherIssueAmount || 0));
     }
 
     // A napi/muszakos BRUTTO elszamolas a korabban hitelre elvitt, de MOST
@@ -26011,7 +26027,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const revenueWithTransfers=aifRoundMoney(revenue+transferNet);
     const transactionsWithTransfers=transactions+transferTransactions;
     const collectedTotal = aifRoundMoney(Object.values(payments)
-      .filter((payment) => payment.method !== 'credit')
+      .filter((payment) => payment.method !== 'credit' && payment.method !== 'voucher')
       .reduce((sum, payment) => sum + aifNumber(payment.amount), 0));
 
     return {
@@ -26029,6 +26045,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       grossCollectedTotal: aifRoundMoney(grossCollectedTotal+transferGross),
       collectedDiscountTotal: aifRoundMoney(collectedDiscountTotal+transferDiscount),
       collectedTotal,
+      voucherIssuedTotal,
+      voucherRedeemedTotal: aifRoundMoney(payments.voucher?.salesAmount),
       transactions: transactionsWithTransfers,
       itemsSold: itemsSold+transferQty,
       averageBasket: transactionsWithTransfers > 0 ? aifRoundMoney(revenueWithTransfers / transactionsWithTransfers) : 0,
@@ -26258,6 +26276,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function aifShopCashBalanceAt(client, { locationId, at = new Date() }) {
+    await ensureAifVoucherFinanceSchema(pool);
     const atValue = at instanceof Date ? at : new Date(at || Date.now());
     if (Number.isNaN(atValue.getTime())) {
       const error = new Error("Érvénytelen kassza-időpont.");
@@ -26382,12 +26401,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ),
     ]);
 
+    const voucherCashResult = await client.query(
+      `SELECT COALESCE(sum(t.amount),0)::numeric AS amount
+       FROM aif_gift_voucher_transactions t
+       WHERE t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
+         AND t.kind='issue' AND t.method='cash'
+         AND t.created_at >= $2::timestamptz AND t.created_at < $3::timestamptz`,
+      [locationId, baselineAt, atValue]
+    );
+    const voucherCash = aifRoundMoney(voucherCashResult.rows[0]?.amount);
     const saleCash = aifRoundMoney(saleCashResult.rows[0]?.amount);
     const customerCash = aifRoundMoney(customerCashResult.rows[0]?.amount);
     const exchangeCash = aifRoundMoney(exchangeCashResult.rows[0]?.amount);
     const confirmedOut = aifRoundMoney(confirmedOutResult.rows[0]?.amount);
     const pendingOut = aifRoundMoney(pendingOutResult.rows[0]?.amount);
-    const availableCash = aifRoundMoney(baselineCash + saleCash + customerCash + exchangeCash - confirmedOut);
+    const availableCash = aifRoundMoney(baselineCash + saleCash + voucherCash + customerCash + exchangeCash - confirmedOut);
 
     return {
       at: atValue.toISOString(),
@@ -26395,6 +26423,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       baselineAt: baselineAt ? new Date(baselineAt).toISOString() : null,
       baselineCash,
       saleCash,
+      voucherCash,
       customerCash,
       exchangeCash,
       confirmedOut,
@@ -26612,6 +26641,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   // kedvezményét a fizetési arány szerint osztjuk fel. Korábbi tartozás készpénzes
   // rendezésénél az allokált eredeti bizonylatok kedvezményarányát használjuk.
   async function aifShopCashDailyTransferMetrics(client, { locationId, fromDate, toDate }) {
+    await ensureAifVoucherFinanceSchema(pool);
     const from = cleanAifDocumentDate(fromDate);
     const to = cleanAifDocumentDate(toDate);
     if (!from || !to || from > to) return new Map();
@@ -26676,12 +26706,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            AND es.method='cash'
            AND (es.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
          GROUP BY (es.created_at AT TIME ZONE 'Europe/Bucharest')::date
+       ), voucher_cash AS (
+         SELECT (t.created_at AT TIME ZONE 'Europe/Bucharest')::date AS work_date,
+           COALESCE(sum(t.amount),0)::numeric AS cash_net,
+           COALESCE(sum(t.amount),0)::numeric AS cash_gross
+         FROM aif_gift_voucher_transactions t
+         WHERE t.location_code=(SELECT code FROM aif_locations WHERE id=$1)
+           AND t.kind='issue' AND t.method='cash'
+           AND (t.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date
+         GROUP BY (t.created_at AT TIME ZONE 'Europe/Bucharest')::date
        ), combined AS (
          SELECT work_date, cash_net, cash_gross FROM sale_cash
          UNION ALL
          SELECT work_date, cash_net, cash_gross FROM customer_cash
          UNION ALL
          SELECT work_date, cash_net, cash_gross FROM exchange_cash
+         UNION ALL
+         SELECT work_date, cash_net, cash_gross FROM voucher_cash
        )
        SELECT
          work_date::text AS work_date,
@@ -33599,6 +33640,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-operations/daily-summary", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      await ensureAifVoucherFinanceSchema(pool);
       const location = await aifResolveShopLocation(req, pool, req.query.location);
       const date = aifValidIsoDate(req.query.date, aifBucharestIsoDate());
       const sessionRole = normCode(req.session?.role);
@@ -34493,12 +34535,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           amount: historicalUnpaidTotal, transactions: historicalUnpaidSales,
           customerPaymentAmount: 0, customerPaymentTransactions: 0 });
       }
+      const voucherIssueResult = await pool.query(
+        `SELECT t.kind,t.method,COALESCE(sum(t.amount),0)::numeric AS amount,COUNT(*)::int AS count
+         FROM aif_gift_voucher_transactions t
+         WHERE t.location_code=$1
+           AND (t.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+           AND lower(regexp_replace(btrim(COALESCE(t.actor,'')), '[[:space:]]+', ' ', 'g'))
+               = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+         GROUP BY t.kind,t.method`, [location.code,date,employee]);
+      const voucherIssues = voucherIssueResult.rows.filter(r=>r.kind==='issue').map(r=>({
+        method:r.method,amount:aifNumber(r.amount),count:aifNumber(r.count),
+      }));
+      const voucherIssuedTotal = aifRoundMoney(voucherIssues.reduce((sum,r)=>sum+r.amount,0));
+      const voucherRedeemedTotal = aifRoundMoney(payments.filter(p=>p.method==='voucher').reduce((sum,p)=>sum+p.amount,0));
       const customerPaymentTotal = aifRoundMoney(
         payments.reduce((sum, item) => sum + aifNumber(item.customerPaymentAmount), 0)
       );
       const collectedTotal = aifRoundMoney(
         payments
-          .filter((item) => item.method !== 'credit')
+          .filter((item) => item.method !== 'credit' && item.method !== 'voucher')
           .reduce((sum, item) => sum + aifNumber(item.amount), 0)
       );
       // Same credited discount logic as the admin shop monitor.  On the day of
@@ -34533,7 +34588,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           // korábbi tartozások aznapi rendezését is.
           revenue,
           salesRevenue: revenue,
-          collectedTotal,
+          collectedTotal: aifRoundMoney(collectedTotal+voucherIssuedTotal),
+          voucherIssuedTotal,
+          voucherRedeemedTotal,
+          voucherIssues,
           customerPaymentTotal,
           // A Napi Osszesites brutto/kedvezmeny mezoje a tenylegesen AZNAP
           // befolyt regi hiteltartozas eredeti listaraval es kedvezmenyevel
@@ -34668,6 +34726,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const linesInput = Array.isArray(body.lines) ? body.lines : [];
     const paymentMethod = normCode(body.paymentMethod || body.payment_method || "cash");
+    const voucherCode = text(body.voucherCode || body.voucher_code).trim().toUpperCase();
+    const voucherAmount = body.voucherAmount ?? body.voucher_amount;
     const requestedExtraDiscount = toMoney(body.extraDiscountAmount ?? body.extra_discount_amount ?? 0) ?? 0;
     const allowedPayments = new Set(["cash", "card", "bank_transfer", "credit"]);
     const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
@@ -34682,6 +34742,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       if (text(body.couponCode)) await aifSms.ensure();
+      if (voucherCode) {
+        if (!voucherFinanceEnabled()) {
+          return res.status(503).json({ error: "Az utalvanyok penztari bevaltasa meg nincs elesitve.", code: "voucher_finance_disabled" });
+        }
+        if (paymentMethod === "credit") {
+          return res.status(400).json({ error: "Ajandekutalvanyos eladasban az utolagos fizetes nem engedelyezett.", code: "voucher_credit_not_supported" });
+        }
+        // DDL soha ne fusson a mar nyitott eladastranzakcio kellos kozepen.
+        await ensureAifVoucherFinanceSchema(pool);
+      }
       await client.query("BEGIN");
       await ensureAifShopSalesSchema();
       const location = await aifResolveShopLocation(req, client, body.location);
@@ -35002,6 +35072,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const percentDiscountTotal = aifRoundMoney(subtotal - percentDiscountedTotal);
       const discountTotal = aifRoundMoney(subtotal - total);
+      // Ugyanaz a tranzakcio zarolja az utalvanyegyenleget es a ruhakeszletet.
+      // Ketto vagy tobb bolti kassza kozul csak az egyik koltheti el ugyanazt a lejt.
+      const lockedVoucher = voucherCode
+        ? await lockAifVoucherForSale(client, { code: voucherCode, amount: voucherAmount, total })
+        : null;
+      const cashCollected = aifRoundMoney(total - (lockedVoucher?.amount || 0));
 
       const customerInput = body.customer && typeof body.customer === "object" ? body.customer : {};
       let customerRow = null;
@@ -35154,6 +35230,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           JSON.stringify({
             source: "shop_sale_screen",
             paymentMethod,
+            voucherCode: lockedVoucher ? lockedVoucher.code : null,
+            voucherAmount: lockedVoucher ? lockedVoucher.amount : 0,
+            cashCollected,
             role: req.session?.role || null,
             percentDiscountTotal,
             extraDiscountAmount,
@@ -35256,7 +35335,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      if (total > 0 && !isCredit) {
+      // Utalvanynal a teljes termekeladas erteke marad, de a penztarnal csak a
+      // tenyleges rafizetest konyveljuk uj penzkent. Az 500 RON nem folyh at ujra.
+      let voucherBalanceAfter = null;
+      if (lockedVoucher) {
+        voucherBalanceAfter = await commitAifVoucherRedemption(client, {
+          voucher: lockedVoucher, saleId: sale.id, saleNumber,
+          locationCode: location.code, actor: actorFrom(req), idempotencyKey,
+        });
+        await client.query(`INSERT INTO aif_shop_sale_payments
+          (sale_id,method,amount,paid_at,actor,reference,raw)
+          VALUES($1,'voucher',$2,now(),$3,$4,$5::jsonb)`,
+          [sale.id,lockedVoucher.amount,actorFrom(req),lockedVoucher.code,
+           JSON.stringify({ voucherId:String(lockedVoucher.id), voucherCode:lockedVoucher.code })]);
+      }
+      if (cashCollected > 0 && !isCredit) {
         await client.query(
           `INSERT INTO aif_shop_sale_payments (
              sale_id, method, amount, paid_at, actor, note, raw
@@ -35264,10 +35357,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [
             sale.id,
             paymentMethod,
-            total,
+            cashCollected,
             actorFrom(req),
-            isCredit ? "Utólag fizetendő összeg" : null,
-            JSON.stringify({ isCredit, paidNow: !isCredit }),
+            lockedVoucher ? "Ajandekutalvany melletti rafizetes" : null,
+            JSON.stringify({ isCredit, paidNow: !isCredit, voucherCode:lockedVoucher?.code || null }),
           ]
         );
       }
@@ -35281,6 +35374,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           emptyToNull(body.note),
           JSON.stringify({
             paymentMethod,
+            voucherCode: lockedVoucher?.code || null,
+            voucherAmount: lockedVoucher?.amount || 0,
+            voucherBalanceAfter,
+            cashCollected,
             subtotal,
             percentDiscountTotal,
             extraDiscountAmount,
@@ -35296,7 +35393,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await aifSms.coupons.consume(client, smsCoupon, sale, actorFrom(req));
       const completed = await aifLoadShopSaleResult(client, sale.id);
       await client.query("COMMIT");
-      res.json(aifShopSaleResponse(completed, location, false));
+      res.json({ ...aifShopSaleResponse(completed, location, false),
+        ...(lockedVoucher ? { voucher: {code:lockedVoucher.code,used:lockedVoucher.amount,
+          balanceAfter:voucherBalanceAfter,cashCollected} } : {}) });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       if (error?.code === "23505" && idempotencyKey) {
