@@ -1414,7 +1414,7 @@ export default function createAifShopReturnsRouter({
            JSON.stringify({ source: "shop_exchange_batch", returnBatchId: batchId })]
         );
       }
-      const runningQty = new Map(variantMap.entries().map(([variantId, row]) => [variantId, aifNumber(row.qty)]));
+      const runningQty = new Map(Array.from(variantMap, ([variantId, row]) => [variantId, aifNumber(row.qty)]));
       // A bizonylat valamennyi visszavett tetelet egyenkent es pontosan egyszer
       // naplozzuk. Az egesz blokk tranzakcios: reszsiker nem fordulhat elo.
       for (const { header, line } of exchangeRows) {
