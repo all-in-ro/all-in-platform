@@ -1000,6 +1000,81 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
   }
 });
 
+// Bolti kepfeltoltes: kulon R2 vegpont, NEM az altalanos admin feltolto
+// megnyitasa. A shop cookie sajat locationCode-ja es a valos keszlet miatt
+// mas uzlet termekere (vagy tetszoleges R2 mappaba) nem lehet feltolteni.
+const shopGalleryUpload = upload.single("file");
+app.post("/api/uploads/r2/shop-gallery", requireAuthed, (req, res, next) => {
+  shopGalleryUpload(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "A kép legfeljebb 10 MB lehet.", code: "image_too_large" });
+    return res.status(400).json({ error: "A kép feltöltése nem indítható.", code: error.code || "upload_invalid" });
+  });
+}, async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    if (!r2HttpEnabled || !r2PublicBase) {
+      return res.status(503).json({ error: "A képtár (R2) nincs teljesen beállítva.", code: "r2_not_configured" });
+    }
+    const variantId = String(req.body?.variantId || "").trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(variantId)) {
+      return res.status(400).json({ error: "Hiányzó vagy hibás termékazonosító.", code: "invalid_variant" });
+    }
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ error: "Válassz legalább egy képet.", code: "missing_file" });
+    }
+    const mime = String(req.file.mimetype || "").toLowerCase();
+    const buffer = req.file.buffer;
+    const safeImage =
+      (mime === "image/jpeg" && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ||
+      (mime === "image/png" && buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) ||
+      (mime === "image/webp" && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") ||
+      (mime === "image/gif" && ["GIF87a", "GIF89a"].includes(buffer.toString("ascii", 0, 6))) ||
+      (mime === "image/avif" && buffer.toString("ascii", 4, 8) === "ftyp" &&
+        /avif|avis/.test(buffer.toString("ascii", 8, Math.min(64, buffer.length))));
+    if (!safeImage) {
+      return res.status(415).json({ error: "Csak valódi JPG, PNG, WebP, GIF vagy AVIF képfájl tölthető fel.", code: "invalid_image_type" });
+    }
+    if (req.session?.role !== "admin") {
+      if (req.session?.role !== "shop" || !req.session.locationCode) return rejectForbidden(res);
+      const right = await pool.query(`
+        SELECT 1 FROM aif_stock s
+        JOIN aif_locations l ON l.id=s.location_id
+        JOIN aif_product_variants v ON v.id=s.variant_id
+        JOIN aif_product_models m ON m.id=v.model_id
+        WHERE v.id=$1::uuid AND l.code=$2
+          AND COALESCE(s.qty,0)>0
+          AND COALESCE(v.status,'active')='active'
+          AND COALESCE(m.status,'active')='active'
+        LIMIT 1`, [variantId, String(req.session.locationCode)]);
+      if (!right.rowCount) {
+        return res.status(403).json({ error: "Csak a saját üzletedben készletes termékhez tölthetsz fel képet.", code: "shop_gallery_forbidden" });
+      }
+    }
+    // A folder-t nem a kliens hatarozza meg: csak az ellenorzott valtozat
+    // azonositoja szerepelhet a nyilvanos termekkepes R2 kulcsban.
+    const safeName = String(req.file.originalname || "image.jpg")
+      .replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-120) || "image.jpg";
+    const key = `products/${variantId}/${crypto.randomUUID()}_${safeName}`;
+    const encodedKey = encodeURIComponent(key).replace(/%2F/g, "/");
+    const putUrl = `https://api.cloudflare.com/client/v4/accounts/${R2_ACCOUNT_ID}/r2/buckets/${R2_BUCKET}/objects/${encodedKey}`;
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${R2_API_TOKEN}`, "Content-Type": mime },
+      body: buffer,
+      signal: AbortSignal.timeout(85_000),
+    });
+    if (!r.ok) {
+      console.error("AIF shop gallery R2 upload failed", { status: r.status, variantId });
+      return res.status(502).json({ error: "A képtár nem fogadta el a feltöltést. Próbáld újra.", code: "r2_upload_failed" });
+    }
+    return res.json({ ok: true, key, url: `${r2PublicBase}/${key}` });
+  } catch (error) {
+    console.error("AIF shop gallery upload failed", { code: error?.code, message: error?.message });
+    return res.status(500).json({ error: "A kép feltöltése nem sikerült.", code: "shop_gallery_upload_failed" });
+  }
+});
+
 // --- health ---
 app.get("/api/health", async (_req, res) => {
   try {
