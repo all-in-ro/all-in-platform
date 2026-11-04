@@ -19,6 +19,7 @@ import {
   PackageSearch,
   Plus,
   Receipt,
+  Gift,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -86,6 +87,10 @@ type DiscountEditor = {
 };
 
 type CustomerModalMode = "search" | "new";
+type SaleVoucherInfo = {
+  code: string; language: "HU" | "RO"; status: string;
+  balance: string | number; issued_value: string | number; expires_on?: string | null;
+};
 
 type SaleErrorDialog = {
   title: string;
@@ -299,6 +304,12 @@ export default function AllInMagazinSale({
     }
   });
   const [paymentMethod, setPaymentMethod] = useState<AifShopSalePaymentMethod>("cash");
+  const [voucherScan, setVoucherScan] = useState("");
+  const [voucherInfo, setVoucherInfo] = useState<SaleVoucherInfo | null>(null);
+  const [voucherAmountText, setVoucherAmountText] = useState("");
+  const [voucherChecking, setVoucherChecking] = useState(false);
+  const [voucherError, setVoucherError] = useState("");
+  const voucherCheckIdRef = useRef(0);
   const [selectedCustomer, setSelectedCustomer] = useState<AifShopCustomer | null>(null);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [customerModalMode, setCustomerModalMode] = useState<CustomerModalMode>("search");
@@ -360,6 +371,8 @@ export default function AllInMagazinSale({
     setProducts([]);
     setHasSearched(false);
     setExtraDiscountInput("");
+    setVoucherScan("");setVoucherInfo(null);setVoucherAmountText("");setVoucherError("");
+    voucherCheckIdRef.current += 1;
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, [locationCode]);
 
@@ -513,6 +526,13 @@ export default function AllInMagazinSale({
     0,
     roundMoney(percentDiscountTotal + (extraDiscountTooLarge ? 0 : extraDiscountAmount) + smsCoupon.discount),
   );
+  const voucherBalance = voucherInfo ? Math.max(0, numberValue(voucherInfo.balance)) : 0;
+  const voucherDefaultAmount = roundMoney(Math.min(total, voucherBalance));
+  const voucherDesiredAmount = voucherAmountText.trim() ? moneyInputValue(voucherAmountText) : voucherDefaultAmount;
+  const voucherAmountInvalid = Boolean(voucherInfo && (!Number.isFinite(voucherDesiredAmount) || voucherDesiredAmount<=0 ||
+    voucherDesiredAmount>voucherBalance+0.005 || voucherDesiredAmount>total+0.005));
+  const voucherUsed = voucherInfo && !voucherAmountInvalid ? roundMoney(voucherDesiredAmount) : 0;
+  const cashRemaining = roundMoney(Math.max(0,total-voucherUsed));
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const selectedQuickDiscount = useMemo(() => {
     if (!cart.length) return null;
@@ -615,6 +635,58 @@ export default function AllInMagazinSale({
     }
   }
 
+  function clearVoucher() {
+    voucherCheckIdRef.current += 1;
+    setVoucherScan("");setVoucherInfo(null);setVoucherAmountText("");setVoucherError("");
+    invalidateRequestKey();
+  }
+
+  async function lookupVoucher(raw: string, fromCatalog = false): Promise<boolean> {
+    const code=String(raw||"").trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9._-]{7,63}$/.test(code)) {
+      if (!fromCatalog) setVoucherError("A beolvasott utalványkód nem érvényes.");
+      return false;
+    }
+    const id=++voucherCheckIdRef.current;
+    setVoucherChecking(true);
+    if (!fromCatalog) setVoucherError("");
+    try {
+      const response=await fetch(`/api/aif/vouchers/balance/${encodeURIComponent(code)}`, {
+        credentials:"include", cache:"no-store", headers:{Accept:"application/json"},
+      });
+      if (response.status===404) {
+        if (!fromCatalog) setVoucherError("Ez a sorszám nincs nyilvántartva.");
+        return false;
+      }
+      const data=await response.json().catch(()=>null);
+      if (!response.ok || !data?.ok) throw new Error(String(data?.error||`HTTP ${response.status}`));
+      if (voucherCheckIdRef.current!==id) return true;
+      const found=data.item as SaleVoucherInfo;
+      if (found.status==='blank') {
+        // Az ures papir nem fizetoeszkoz. Az aktivacio a kulon utalvanymodulban tortenik.
+        try {
+          sessionStorage.setItem("allin:vouchers:return",window.location.hash);
+          sessionStorage.setItem("allin:vouchers:scan",code);
+        } catch {}
+        window.location.hash="#vouchers";
+        return true;
+      }
+      if (!['active','partial'].includes(found.status)||Number(found.balance)<=0) {
+        setVoucherError("Ez az utalvány nem beváltható: " + found.status);
+        return true;
+      }
+      invalidateRequestKey();
+      setVoucherScan(code);setVoucherInfo(found);setVoucherAmountText("");setVoucherError("");
+      if (paymentMethod==='credit') setPaymentMethod('cash');
+      return true;
+    } catch(e) {
+      if (voucherCheckIdRef.current===id) setVoucherError(e instanceof Error?e.message:'Utalványellenőrzési hiba.');
+      return !fromCatalog;
+    } finally {
+      if (voucherCheckIdRef.current===id) setVoucherChecking(false);
+    }
+  }
+
   async function runSearch(value = query, autoAddExact = false) {
     cancelAutomaticLookup();
     const searchValue = value.trim();
@@ -636,6 +708,14 @@ export default function AllInMagazinSale({
       if (requestId !== searchRequestIdRef.current) return;
 
       const items = response.items || [];
+      // Ha ez nem ruha vonalkod, akkor megnezzuk a kozponti utalvany-regiszterben.
+      if (!items.length && /^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/.test(searchValue)) {
+        if (await lookupVoucher(searchValue,true)) {
+          if (requestId===searchRequestIdRef.current) resetSearchResults();
+          return;
+        }
+      }
+      if (requestId!==searchRequestIdRef.current) return;
       setProducts(items);
       if (autoAddExact) {
         const exact = items.filter((item) => exactCatalogMatch(item, searchValue));
@@ -864,6 +944,7 @@ export default function AllInMagazinSale({
     setSelectedCustomer(null);
     setExtraDiscountInput("");
     setNote("");
+    clearVoucher();
     setError("");
   }
 
@@ -892,6 +973,18 @@ export default function AllInMagazinSale({
       return;
     }
 
+    if (voucherInfo && (voucherAmountInvalid || voucherUsed<=0)) {
+      setSaleErrorDialog({title:"Hibás utalványösszeg",message:"Az utalványból levonni kívánt összeg legyen pozitív, és ne legyen nagyobb a vásárlásnál vagy a rendelkezésre álló egyenlegnél."});
+      return;
+    }
+    if (voucherScan.trim() && !voucherInfo) {
+      setSaleErrorDialog({title:"Utalvány nincs ellenőrizve",message:"Előbb ellenőrizd az utalvány egyenlegét, vagy töröld a sorszámot."});
+      return;
+    }
+    if (voucherInfo && paymentMethod==='credit') {
+      setSaleErrorDialog({title:"Utalvány + hitel nem támogatott",message:"Válassz készpénzt, bankkártyát vagy átutalást a fennmaradó rész rendezéséhez."});
+      return;
+    }
     if (smsCoupon.blocked || smsCoupon.loading) {
       setSaleErrorDialog({title: "A kupon még nincs ellenőrizve", message: "Ellenőrizd a kuponkódot a jelenlegi klienshez és kosárhoz, vagy töröld a kódot az eladásból."});
       return;
@@ -905,6 +998,8 @@ export default function AllInMagazinSale({
       const result = await apiAifCompleteShopSale({
         location: locationCode,
         paymentMethod,
+        voucherCode: voucherInfo?.code || undefined,
+        voucherAmount: voucherInfo ? voucherUsed : undefined,
         idempotencyKey: requestKeyRef.current,
         extraDiscountAmount,
         couponCode: smsCoupon.valid ? smsCoupon.code : undefined,
@@ -936,6 +1031,7 @@ export default function AllInMagazinSale({
       setSelectedCustomer(null);
       setExtraDiscountInput("");
       setNote("");
+      clearVoucher();
       requestKeyRef.current = "";
       resetSearchResults();
     } catch (caught) {
@@ -1355,6 +1451,31 @@ export default function AllInMagazinSale({
 
                 {smsCoupon.box}
 
+                <section className="mt-3 rounded-[18px] border border-[#9be9e5]/25 bg-[#243749] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-sm text-[#d7fffd]"><Gift size={18}/> Ajándékutalvánnyal fizet</p>
+                    {voucherInfo ? <button type="button" onClick={clearVoucher} className="rounded-lg border border-rose-200/30 px-2.5 py-1.5 text-xs text-rose-100 hover:bg-rose-500/10">Törlés</button> : null}
+                  </div>
+                  <form onSubmit={event=>{event.preventDefault();void lookupVoucher(voucherScan);}} className="mt-3 flex gap-2">
+                    <input value={voucherScan} onChange={e=>{voucherCheckIdRef.current+=1;setVoucherScan(e.target.value);setVoucherInfo(null);setVoucherError("");invalidateRequestKey();}}
+                      autoComplete="off" placeholder="Csippantsd be az utalványt…"
+                      className="h-12 min-w-0 flex-1 rounded-xl border border-[#8ee6e2]/30 bg-[#273243] px-3 text-sm text-white outline-none focus:border-[#8ee6e2]"/>
+                    <button type="submit" disabled={!voucherScan.trim()||voucherChecking} className="inline-flex h-12 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-3 text-xs disabled:opacity-40">
+                      {voucherChecking?<Loader2 size={16} className="animate-spin"/>:<Barcode size={16}/>} Ellenőrzés
+                    </button>
+                  </form>
+                  {voucherError?<p role="alert" className="mt-2 text-xs text-rose-200">{voucherError}</p>:null}
+                  {voucherInfo ? <div className="mt-3 space-y-2 rounded-xl border border-[#8ee6e2]/28 bg-[#1c4350] p-3">
+                    <div className="flex items-center justify-between gap-2 text-sm"><span>Rendelkezésre áll</span><span className="text-[#d7fffd]">{formatMoney(voucherBalance)}</span></div>
+                    <div className="flex items-center gap-2"><label className="flex-1 text-xs text-white/70">Felhasznált összeg (RON)<input
+                      value={voucherAmountText} onChange={e=>{setVoucherAmountText(e.target.value.replace(/[^0-9,.]/g,''));invalidateRequestKey();}}
+                      inputMode="decimal" placeholder={voucherDefaultAmount.toFixed(2).replace('.',',')}
+                      className="mt-1 h-11 w-full rounded-lg border border-white/20 bg-[#273243] px-3 text-right text-base outline-none"/></label></div>
+                    {voucherAmountInvalid?<p className="text-xs text-rose-200">Az összeg túl nagy vagy érvénytelen.</p>:null}
+                    <div className="flex justify-between border-t border-white/15 pt-2 text-sm"><span>Ráfizetendő</span><span className="text-lg text-[#d7fffd]">{formatMoney(cashRemaining)}</span></div>
+                  </div> : <p className="mt-2 text-[11px] leading-5 text-white/45">A rendszer a teljes összegből vagy annak egy részéből levonja a kiválasztott utalvány egyenlegét. A fennmaradó összeg készpénzben, kártyával vagy átutalással fizethető.</p>}
+                </section>
+
                 <div className="mt-3">
                   <p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Fizetési mód</p>
                   <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1365,7 +1486,8 @@ export default function AllInMagazinSale({
                         <button
                           key={option.method}
                           type="button"
-                          onClick={() => { invalidateRequestKey(); setPaymentMethod(option.method); setError(""); if (option.method === "credit" && !selectedCustomer) openCustomerModal("search"); }}
+                          onClick={() => { if (voucherInfo && option.method==='credit') return; invalidateRequestKey(); setPaymentMethod(option.method); setError(""); if (option.method === "credit" && !selectedCustomer) openCustomerModal("search"); }}
+                          disabled={Boolean(voucherInfo && option.method==='credit')}
                           className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-[#9be9e5]/60 bg-[#2a8d8b] text-white shadow-[0_10px_22px_rgba(42,141,139,0.20)] ring-1 ring-[#7bd7d4]/25" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
                         >
                           <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-[#d7fffd]" : "text-white/58"} />{option.label}</span>
@@ -1392,11 +1514,11 @@ export default function AllInMagazinSale({
                 <button
                   type="button"
                   onClick={() => void completeSale()}
-                  disabled={submitting || total < 0 || extraDiscountTooLarge || smsCoupon.blocked || smsCoupon.loading}
+                  disabled={submitting || total < 0 || extraDiscountTooLarge || smsCoupon.blocked || smsCoupon.loading || voucherChecking || voucherAmountInvalid || Boolean(voucherScan && !voucherInfo)}
                   className="mt-3 inline-flex min-h-16 w-full touch-manipulation items-center justify-center gap-3 rounded-[20px] border border-[#a4efeb]/55 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-5 text-lg shadow-[0_12px_28px_rgba(22,120,117,0.28)] transition hover:brightness-110 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? <Loader2 className="animate-spin" size={24} /> : <Receipt size={24} />}
-                  {submitting ? "Eladás mentése…" : `Eladás lezárása • ${formatMoney(total)}`}
+                  {submitting ? "Eladás mentése…" : voucherInfo ? `Eladás lezárása • Ráfizetés: ${formatMoney(cashRemaining)}` : `Eladás lezárása • ${formatMoney(total)}`}
                 </button>
               </>
             ) : null}
@@ -1683,6 +1805,11 @@ export default function AllInMagazinSale({
             <p className="mt-4 text-[10px] uppercase tracking-[0.18em] text-white/45">Eladás rögzítve</p>
             <h2 className="mt-2 text-2xl text-white">{success.saleNumber}</h2>
             <p className="mt-2 text-4xl tracking-tight text-[#d7fffd]">{formatMoney(success.total)}</p>
+            {success.voucher ? <div className="mt-3 rounded-xl border border-[#8ee6e2]/35 bg-[#244f55] p-3 text-sm">
+              <p>Utalvány: {success.voucher.code}</p>
+              <p>Beváltva: {formatMoney(success.voucher.used)} • Maradt: {formatMoney(success.voucher.balanceAfter)}</p>
+              <p>Új pénzbevétel: {formatMoney(success.voucher.cashCollected)}</p>
+            </div>:null}
             <div className="mt-4 grid grid-cols-3 gap-2 text-left">
               <div className="rounded-2xl border border-white/12 bg-white/[0.05] p-3"><p className="text-[9px] uppercase text-white/38">Tételek</p><p className="mt-1 text-lg">{success.lineCount}</p></div>
               <div className="rounded-2xl border border-white/12 bg-white/[0.05] p-3"><p className="text-[9px] uppercase text-white/38">Darab</p><p className="mt-1 text-lg">{success.itemCount}</p></div>

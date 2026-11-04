@@ -6,6 +6,7 @@ import {
   ArrowRightLeft,
   Banknote,
   Barcode,
+  Gift,
   Boxes,
   Images,
   ImagePlus,
@@ -3806,6 +3807,21 @@ export default function AllInShopOperations({
                 })}
               </div>
 
+              {(numberValue(daySummary.voucherIssuedTotal)>0.005 || numberValue(daySummary.voucherRedeemedTotal)>0.005) ? (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="flex items-center gap-3 rounded-2xl border border-white/13 bg-[#354153] p-3">
+                    <Gift size={20} className="shrink-0 text-[#8ee6e2]"/>
+                    <div><p className="text-[11px] text-white/55">Eladott ajándékutalványok · beszedett pénz</p><p className="mt-1 text-lg">{formatMoney(daySummary.voucherIssuedTotal)}</p>
+                    <p className="text-[9px] text-white/42">Külön pénzügyi tétel, nem ruhaforgalom</p></div>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-white/13 bg-[#354153] p-3">
+                    <WalletCards size={20} className="shrink-0 text-[#8ee6e2]"/>
+                    <div><p className="text-[11px] text-white/55">Beváltott utalványok</p><p className="mt-1 text-lg">{formatMoney(daySummary.voucherRedeemedTotal)}</p>
+                    <p className="text-[9px] text-white/42">Korábban befizetett összeg, nem új készpénz</p></div>
+                  </div>
+                </div>
+              ) : null}
+
               <section className="mt-4 overflow-hidden rounded-[26px] border border-[#9be9e5]/28 bg-[#2d394b] shadow-[0_16px_38px_rgba(15,23,42,0.20)]">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#304257] to-[#315a5d] px-4 py-4">
                   <div className="flex items-center gap-3">
@@ -4134,6 +4150,9 @@ export default function AllInShopOperations({
                         <div className="text-right">
                           <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Napi bevétel</p>
                           <p className="mt-1 text-3xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(datedShiftData?.totals))}</p>
+                          {(numberValue(datedShiftData?.totals.voucherIssuedTotal)>0.005 || numberValue(datedShiftData?.totals.voucherRedeemedTotal)>0.005) ? (
+                            <p className="mt-1 text-[10px] text-[#bdf8f5]/70">Utalvány eladva: {formatMoney(datedShiftData?.totals.voucherIssuedTotal)} · Beváltva: {formatMoney(datedShiftData?.totals.voucherRedeemedTotal)}</p>
+                          ) : null}
                           <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-white/44">
                             <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
                             <span>Kedvezmény <strong className="font-normal text-amber-100/86">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</strong></span>

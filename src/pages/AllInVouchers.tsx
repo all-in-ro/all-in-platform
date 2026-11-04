@@ -5,7 +5,6 @@ import {
   ShieldCheck, Truck, X, Ban, Search, ChevronRight,
 } from "lucide-react";
 
-const VOUCHER_ICON = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher.svg";
 const VOUCHER_PICS = {
   HU: "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher-HU.png",
   RO: "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/voucher-RO.png",
@@ -17,7 +16,7 @@ const STORE_LABELS: Record<string, string> = {
   magazin_targu_secuiesc: "Kézdivásárhely",
 };
 type Role = "admin" | "shop";
-type Tab = "overview" | "receive-stock" | "transfers" | "list" | "preview";
+type Tab = "overview" | "receive-stock" | "transfers" | "list" | "preview" | "issue" | "ledger";
 type Lang = "HU" | "RO";
 type VoucherStatus = "blank" | "in_transfer" | "active" | "partial" | "redeemed" | "blocked" | "void";
 type Voucher = {
@@ -35,6 +34,10 @@ type Summary = {
 type Transfer = { id: string; from_location: string; to_location: string; status: string; note?: string | null;
   created_by?: string | null; created_at: string; total: number; received: number };
 type TransferLine = { code: string; language: Lang; accepted_at?: string | null; accepted_by?: string | null };
+type VoucherTxn = {id:string;code:string;language:Lang;kind:"issue"|"redeem";
+  location_code:string;method:string|null;amount:number|string;sale_number?:string|null;
+  reference?:string|null;actor:string;created_at:string;};
+type VoucherTxSummary = {kind:string;method:string;count:number;total:string|number};
 const EMPTY_SUMMARY: Summary = {
   totals: { physical: 0, blank: 0, in_transfer: 0, active: 0, partial: 0, redeemed: 0, blocked: 0, void: 0, issued_value: 0, outstanding: 0 },
   rows: [], incoming: {transfers: 0,awaiting:0},
@@ -108,8 +111,42 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   const [detail,setDetail] = useState<Voucher|null>(null);
   const [events,setEvents] = useState<Array<{kind:string;actor:string;from_location:string;to_location:string;created_at:string}>>([]);
   const [previewLang,setPreviewLang] = useState<Lang>("HU");
+  const [financeEnabled,setFinanceEnabled] = useState(false);
+  const [financeLoading,setFinanceLoading] = useState(true);
+  const [issueLocation,setIssueLocation] = useState("main_warehouse");
+  const [issueCode,setIssueCode] = useState("");
+  const [issueAmount,setIssueAmount] = useState("");
+  const [issueBuyer,setIssueBuyer] = useState("");
+  const [issueRecipient,setIssueRecipient] = useState("");
+  const [issueReference,setIssueReference] = useState("");
+  const [issueMethod,setIssueMethod] = useState<"cash"|"card"|"bank_transfer">("cash");
+  const [issuePaymentConfirmed,setIssuePaymentConfirmed] = useState(false);
+  const [issueBusy,setIssueBusy] = useState(false);
+  const [issueItem,setIssueItem] = useState<Voucher|null>(null);
+  const [issueSuccess,setIssueSuccess] = useState<string|null>(null);
+  const issueKeyRef=useRef("");
+  const issueRef=useRef<HTMLInputElement>(null);
+  const [ledgerFrom,setLedgerFrom] = useState("");
+  const [ledgerTo,setLedgerTo] = useState("");
+  const [ledgerRows,setLedgerRows] = useState<VoucherTxn[]>([]);
+  const [ledgerSummary,setLedgerSummary] = useState<VoucherTxSummary[]>([]);
+  const [ledgerBusy,setLedgerBusy] = useState(false);
+  const [ledgerError,setLedgerError] = useState("");
 
   const listLocation = admin ? locationFilter : ownLocation;
+  const issueAt=admin?issueLocation:ownLocation;
+  useEffect(()=>{
+    let alive=true;
+    void request<{enabled:boolean}>("/finance-status").then(r=>{if(alive)setFinanceEnabled(r.enabled===true);})
+      .catch(()=>{if(alive)setFinanceEnabled(false);})
+      .finally(()=>{if(alive)setFinanceLoading(false);});
+    try{
+      const code=(sessionStorage.getItem('allin:vouchers:scan')||'').trim().toUpperCase();
+      if(code){setTab('issue');setIssueCode(code);sessionStorage.removeItem('allin:vouchers:scan');}
+    }catch{}
+    return()=>{alive=false;};
+  },[]);
+  useEffect(()=>{setIssueItem(null);setIssuePaymentConfirmed(false);issueKeyRef.current='';},[issueCode,issueLocation]);
   useEffect(() => {
     const timeout = window.setTimeout(() => setSearchApplied(search.trim()), 260);
     return () => window.clearTimeout(timeout);
@@ -294,11 +331,61 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   const visibleItems=items;
   const getQty=(loc:string,lang:Lang,status="blank")=>summary.rows.filter(x=>x.location_code===loc&&x.language===lang&&x.status===status).reduce((a,x)=>a+Number(x.quantity),0);
 
+  async function checkIssueCode(){
+    const code=cleanCode(issueCode);
+    if(!code)return;
+    setIssueBusy(true);setError("");setIssueSuccess(null);
+    try{
+      const data=await request<{item:Voucher}>(`/balance/${encodeURIComponent(code)}`);
+      if(data.item.status!=='blank')throw new Error('Ez az utalvany mar aktivalva, atadas alatt vagy ervenytelen.');
+      if(data.item.location_code!==issueAt)throw new Error('Az utalvany nincs a kivalasztott uzlet ures keszleteben.');
+      setIssueItem(data.item);
+    }catch(e){setIssueItem(null);setError(e instanceof Error?e.message:'Utalvanyellenorzesi hiba.');}
+    finally{setIssueBusy(false);}
+  }
+  async function activateVoucher(){
+    if(!issueItem||!financeEnabled||issueBusy)return;
+    const raw=String(issueAmount).trim().replace(',','.');
+    if(!/^\d{1,6}(?:\.\d{1,2})?$/.test(raw)||Number(raw)<=0||Number(raw)>100000){setError('0,01 es 100 000 RON kozotti erteket adj meg.');return;}
+    if(!issuePaymentConfirmed){setError('Ellenorizd es igazold vissza a fizetes bevetelét.');return;}
+    setIssueBusy(true);setError('');setIssueSuccess(null);
+    if(!issueKeyRef.current) issueKeyRef.current=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():`voucher-issue-${Date.now()}`;
+    try{
+      const result=await request<{duplicate?:boolean;item:{code:string;amount:number}}>(`/issue`,{
+        method:'POST',headers:{'Idempotency-Key':issueKeyRef.current},
+        body:JSON.stringify({code:issueItem.code,amount:Number(raw),paymentMethod:issueMethod,
+          location:issueAt,paymentConfirmed:true,buyerName:issueBuyer.trim()||null,
+          recipientName:issueRecipient.trim()||null,reference:issueReference.trim()||null,idempotencyKey:issueKeyRef.current}),
+      });
+      setIssueSuccess(`${result.item.code} • ${money(result.item.amount)} • ${result.duplicate?'korabbi aktivacio igazolva':'sikeresen aktivalva'}`);
+      setIssueCode('');setIssueItem(null);setIssueAmount('');setIssueBuyer('');setIssueRecipient('');
+      setIssueReference('');setIssuePaymentConfirmed(false);issueKeyRef.current='';
+      await refresh();
+      window.setTimeout(()=>issueRef.current?.focus(),50);
+    }catch(e){setError(e instanceof Error?e.message:'Az aktivacio nem sikerult. Ellenorizd a naplot mielott ujra probalod.');}
+    finally{setIssueBusy(false);}
+  }
+  async function loadLedger(){
+    setLedgerBusy(true);setLedgerError('');
+    try{
+      const args=new URLSearchParams();
+      if(!admin)args.set('location',ownLocation);
+      if(ledgerFrom)args.set('from',ledgerFrom);
+      if(ledgerTo)args.set('to',ledgerTo);
+      const data=await request<{items:VoucherTxn[];summary:VoucherTxSummary[]}>(`/transactions?${args}`);
+      setLedgerRows(data.items||[]);setLedgerSummary(data.summary||[]);
+    }catch(e){setLedgerError(e instanceof Error?e.message:'Nem sikerult betolteni a penznaplot.');}
+    finally{setLedgerBusy(false);}
+  }
+  useEffect(()=>{if(tab==='ledger')void loadLedger();},[tab,ledgerFrom,ledgerTo,admin,ownLocation]);
+
   const nav:Array<{id:Tab;label:string;icon:typeof Gift}> = [
     {id:"overview",label:"Áttekintés",icon:ClipboardList},
     ...(admin?[{id:"receive-stock" as Tab,label:"Bevételezés",icon:PackagePlus}]:[]),
     {id:"transfers",label:admin?"Átadások":"Átvételek",icon:Truck},
     {id:"list",label:"Utalványok",icon:ListFilter},
+    {id:"issue",label:"Értékesítés / aktiválás",icon:Gift},
+    {id:"ledger",label:"Pénzügyi napló",icon:FileClock},
     {id:"preview",label:"HU / RO előnézet",icon:Gift},
   ];
 
@@ -306,13 +393,13 @@ export default function AllInVouchers({ actor, role, locationCode }: {
     <div className="mx-auto max-w-[1480px] space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3 rounded-[25px] border border-white/20 bg-[#303a4c] px-5 py-4 shadow-2xl">
         <div className="flex items-center gap-3">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-[#3a4558]"><img src={VOUCHER_ICON} alt="" className="h-9 w-9 object-contain" /></span>
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-[#3a4558]"><Gift className="text-[#a9f0eb]" size={27} strokeWidth={1.7}/></span>
           <div><p className="text-[10px] uppercase tracking-[.2em] text-white/50">AllInFashion • önálló nyilvántartás</p>
             <h1 className="mt-1 text-2xl tracking-tight">Ajándékutalvány központ</h1>
             <p className="mt-0.5 text-xs text-white/55">{admin?"Adminisztráció":STORE_LABELS[ownLocation]} • {actor}</p></div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Pill>1. fázis · fizikai készlet</Pill>
+          <Pill>{financeLoading?'Pénztári állapot ellenőrzés…':financeEnabled?'2. fázis · pénzügyi próba':'1. fázis · pénzügy zárolva'}</Pill>
           <button type="button" onClick={()=>void refresh()} disabled={loading} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/18 bg-white/[0.06] px-3 text-sm hover:bg-white/10 disabled:opacity-50"><RefreshCw size={16} className={loading?"animate-spin":""}/> Frissítés</button>
           <button type="button" onClick={goBack} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#8be0da]/42 bg-[#2a8d8b] px-3 text-sm hover:bg-[#319c99]"><ArrowLeft size={16}/> Vissza</button>
         </div>
@@ -328,7 +415,7 @@ export default function AllInVouchers({ actor, role, locationCode }: {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Kpi label="Üres utalványok" value={`${summary.totals.blank} db`} sub="Még nincs pénzbeli értékük"/>
           <Kpi label="Átadás alatt" value={`${summary.totals.in_transfer} db`} sub="A bolt csak átvételi csippantás után látja készleten"/>
-          <Kpi label="Aktív / részben felhasznált" value={`${summary.totals.active+summary.totals.partial} db`} sub="Pénztári integráció a következő fázisban"/>
+          <Kpi label="Aktív / részben felhasznált" value={`${summary.totals.active+summary.totals.partial} db`} sub="Kiadott és még költhető egyenlegek"/>
           <Kpi label="Fennálló utalványegyenleg" value={money(summary.totals.outstanding)} sub="Nem termékforgalom"/>
         </div>
         <section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
@@ -413,6 +500,80 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           {items.length>=200&&<p className="mt-3 text-xs text-amber-100">Az első 200 találat jelenik meg. A pontos sorszámra keresés az egész adatbázist vizsgálja.</p>}
       </section>}
 
+      {tab==="issue"&&<div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_345px]">
+        <section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
+          <h2 className="flex items-center gap-2 text-xl"><Gift size={23}/> Ajándékutalvány értékesítése</h2>
+          <p className="mt-2 text-sm leading-6 text-white/55">Csak a már bevezetett és a boltba átvett, üres utalvány adható el. A kód egyetlen egyszer aktiválható.</p>
+          {!financeEnabled&&<div className="mt-3 rounded-xl border border-amber-200/28 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">A pénzügyi funkció jelenleg szerveroldalon zárolva van. A sorszám ellenőrizhető, de valódi pénzmozgás még nem rögzíthető.</div>}
+          {admin&&<label className="mt-4 grid gap-1 text-xs text-white/65">Melyik üzletben történik az értékesítés?
+            <select value={issueLocation} onChange={e=>setIssueLocation(e.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#253144] px-3 text-sm text-white">
+              <option value="main_warehouse">Csíkszereda</option><option value="magazin_targu_secuiesc">Kézdivásárhely</option>
+            </select></label>}
+          <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
+            <label className="grid gap-1 text-xs text-white/65">Üres utalvány vonalkódja
+              <input ref={issueRef} value={issueCode} onChange={e=>{setIssueCode(e.target.value);setError('');}}
+                onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();void checkIssueCode();}}}
+                className="h-13 min-w-0 rounded-xl border border-[#a5ece5]/32 bg-[#253144] px-4 text-base text-white outline-none focus:border-[#a5ece5]" placeholder="Csippantsd be a sorszámot…"/></label>
+            <button type="button" disabled={issueBusy||!issueCode.trim()} onClick={()=>void checkIssueCode()} className="mt-5 inline-flex h-13 items-center gap-2 rounded-xl border border-[#a5ece5]/42 bg-[#2a8d8b] px-4 text-sm disabled:opacity-40">
+              {issueBusy?<Loader2 size={17} className="animate-spin"/>:<Barcode size={17}/>} Ellenőrzés
+            </button>
+          </div>
+          {issueItem&&<div className="mt-4 space-y-4 rounded-2xl border border-[#9be9e5]/30 bg-[#263a4e] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-xs text-[#d5fffc]">{issueItem.code}</span><Pill green>{issueItem.language} • Üres</Pill></div>
+            <label className="grid gap-1.5 text-sm text-white/80">Az utalvány értéke (RON)
+              <input value={issueAmount} onChange={e=>{setIssueAmount(e.target.value.replace(/[^0-9.,]/g,''));issueKeyRef.current='';}}
+                inputMode="decimal" placeholder="500,00" className="h-14 rounded-xl border border-[#a5ece5]/35 bg-[#192c40] px-4 text-right text-2xl text-white outline-none focus:border-[#a5ece5]"/></label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs text-white/65">Ki vásárolta? (opcionális)
+                <input value={issueBuyer} onChange={e=>{setIssueBuyer(e.target.value);issueKeyRef.current='';}} className="h-11 rounded-lg border border-white/16 bg-[#253144] px-3 text-sm"/></label>
+              <label className="grid gap-1 text-xs text-white/65">Kinek szól? (opcionális)
+                <input value={issueRecipient} onChange={e=>{setIssueRecipient(e.target.value);issueKeyRef.current='';}} className="h-11 rounded-lg border border-white/16 bg-[#253144] px-3 text-sm"/></label>
+            </div>
+            <div className="grid grid-cols-3 gap-2">{([
+              ['cash','Készpénz'],['card','Bankkártya'],['bank_transfer','Átutalás'],
+            ] as const).map(([method,label])=><button type="button" key={method} onClick={()=>{setIssueMethod(method);issueKeyRef.current='';}}
+              className={`h-11 rounded-lg border px-2 text-xs ${issueMethod===method?'border-[#a5ece5]/60 bg-[#2a8d8b]':'border-white/16 bg-[#354153]'}`}>{label}</button>)}</div>
+            <label className="grid gap-1 text-xs text-white/65">Bizonylat / POS referencia (opcionális)
+              <input value={issueReference} onChange={e=>{setIssueReference(e.target.value);issueKeyRef.current='';}} className="h-11 rounded-lg border border-white/16 bg-[#253144] px-3 text-sm"/></label>
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/16 bg-[#354153] p-3 text-xs leading-5 text-white/85">
+              <input type="checkbox" checked={issuePaymentConfirmed} onChange={e=>setIssuePaymentConfirmed(e.target.checked)} className="h-5 w-5 accent-[#108D8B]"/>
+              Az összeget ténylegesen átvettük. Az utalvány aktiválható.
+            </label>
+            <button type="button" disabled={!financeEnabled||issueBusy||!issuePaymentConfirmed||!issueAmount.trim()}
+              onClick={()=>void activateVoucher()} className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-[#a5ece5]/55 bg-[#2a8d8b] text-sm text-white disabled:cursor-not-allowed disabled:opacity-35">
+              <CheckCircle2 size={19}/> Utalvány végleges aktiválása
+            </button>
+          </div>}
+          {issueSuccess&&<div role="status" className="mt-4 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b]/20 p-4 text-sm text-[#d7fffd]">{issueSuccess}</div>}
+        </section>
+        <aside className="rounded-[22px] border border-white/14 bg-[#344256] p-5">
+          <h3 className="text-lg">Elszámolási szabály</h3>
+          <p className="mt-3 text-sm leading-6 text-white/62">Utalványértékesítéskor nem csökken ruhakészlet, és nem keletkezik ruházati eladási sor. A beszedett pénz külön utalványnaplóba kerül, a beváltásig az egyenleg nyitott marad.</p>
+          <div className="mt-4 space-y-2 rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/75">
+            <p>• Új sorszámot csak bevételezéskor rögzítünk.</p>
+            <p>• Az aktiválást nem lehet megismételni.</p>
+            <p>• A napzárást és a műszakátadást az aktuális pénzmozgások alapján ellenőrizzük.</p>
+          </div>
+        </aside>
+      </div>}
+
+      {tab==="ledger"&&<section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg">Utalvány pénzügyi napló</h2>
+          <div className="flex flex-wrap gap-2">
+            {admin&&<a href={`${ROOT}/transactions/export.csv`} className="inline-flex h-10 items-center rounded-lg border border-white/20 bg-[#354153] px-3 text-xs text-white">Teljes napló · CSV</a>}
+            <button type="button" onClick={()=>void loadLedger()} disabled={ledgerBusy} className="h-10 rounded-lg border border-white/20 bg-[#354153] px-3 text-xs disabled:opacity-40">Frissítés</button>
+          </div></div>
+        <div className="mt-3 flex flex-wrap gap-3">
+          <label className="grid gap-1 text-xs text-white/60">Dátumtól<input type="date" value={ledgerFrom} onChange={e=>setLedgerFrom(e.target.value)} className="h-11 rounded-lg border border-white/18 bg-[#293548] px-3"/></label>
+          <label className="grid gap-1 text-xs text-white/60">Dátumig<input type="date" value={ledgerTo} onChange={e=>setLedgerTo(e.target.value)} className="h-11 rounded-lg border border-white/18 bg-[#293548] px-3"/></label>
+        </div>
+        {ledgerError&&<p role="alert" className="mt-3 text-xs text-rose-200">{ledgerError}</p>}
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{ledgerSummary.map(r=><Kpi key={r.kind+r.method} label={`${r.kind==='issue'?'Értékesítés':'Beváltás'} · ${r.method||'–'} · ${r.count} db`} value={money(r.total)}/>)}</div>
+        <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[800px] text-sm"><thead><tr className="border-b border-white/20 text-left text-[10px] uppercase text-white/48">{['Dátum','Kód','Esemény','Üzlet','Mód / bizonylat','Összeg','Rögzítette'].map(x=><th key={x} className="px-3 py-2 font-normal">{x}</th>)}</tr></thead>
+          <tbody>{ledgerRows.map(r=><tr key={r.id} className="border-b border-white/10"><td className="px-3 py-3 text-xs">{date(r.created_at)}</td><td title={r.code} className="px-3 py-3 font-mono text-xs">{shortCode(r.code)}</td><td className="px-3 py-3">{r.kind==='issue'?'Eladás / aktiválás':'Beváltás'}</td><td className="px-3 py-3 text-xs">{STORE_LABELS[r.location_code]}</td><td className="px-3 py-3 text-xs">{r.sale_number||r.reference||r.method||'–'}</td><td className="px-3 py-3 text-right tabular-nums">{money(r.amount)}</td><td className="px-3 py-3 text-xs">{r.actor}</td></tr>)}</tbody></table>
+          {!ledgerRows.length&&<p className="py-10 text-center text-sm text-white/45">{ledgerBusy?'Pénznapló betöltése…':'Nincs rögzített utalványtranzakció.'}</p>}</div>
+      </section>}
+
       {tab==="preview"&&<section className="grid gap-4 lg:grid-cols-[1fr_330px]">
         <div className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg">Eredeti utalványminta</h2><div className="flex gap-2">{(["HU","RO"] as Lang[]).map(x=><button key={x} onClick={()=>setPreviewLang(x)} className={`h-10 rounded-lg border px-4 text-xs ${previewLang===x?"border-[#a4e7e4]/50 bg-[#2a8d8b]":"border-white/15 bg-white/5"}`}>{x}</button>)}</div></div>
           <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány minta`} className="mt-4 w-full rounded-xl border border-white/10 bg-white object-contain"/>
@@ -421,7 +582,7 @@ export default function AllInVouchers({ actor, role, locationCode }: {
         <div className="rounded-[22px] border border-white/14 bg-[#344256] p-5"><h3 className="text-base">Digitális előnézet</h3><p className="mt-3 text-sm leading-6 text-white/60">A név és a tényleges kiadott érték ráillesztése az eladási aktiváláshoz kapcsolódik. Addig az üres papírok értéke 0 RON.</p><div className="mt-5 rounded-xl border border-amber-100/20 bg-amber-100/10 p-3 text-xs text-amber-50">A fehér mezőkbe csak az aktiválás után kerülhet hiteles érték. A kézzel átírt papír soha nem módosítja az adatbázis-egyenleget.</div></div>
       </section>}
 
-      <footer className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/12 bg-[#303a4c] px-4 py-3 text-xs text-white/50"><ShieldCheck size={16} className="text-[#a3eae5]"/> Biztonságos 1. fázis: sorszám-regisztráció és fizikai átadás. <span className="text-white/70">Eladás, aktiválás, beváltás és kassza-integráció még nincs engedélyezve.</span></footer>
+      <footer className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/12 bg-[#303a4c] px-4 py-3 text-xs text-white/50"><ShieldCheck size={16} className="text-[#a3eae5]"/> Az utalvány egyenlege és a ruhakészlet külön, hiteles naplóban él. <span className="text-white/70">{financeEnabled?'Pénzügyi funkció engedélyezve. Fiskális bizonylat külön szükséges.':'A pénzügyi funkciók a szerveren egyelőre zárolva.'}</span></footer>
     </div>
 
     {detail&&<div className="fixed inset-0 z-[400] grid place-items-center bg-[#0a1524]/85 p-3 backdrop-blur-sm" onMouseDown={e=>{if(e.target===e.currentTarget)setDetail(null);}}>
