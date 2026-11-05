@@ -323,6 +323,24 @@ function VoucherDatePicker({
   </div>;
 }
 
+const VOUCHER_EXPORT_ICONS = {
+  pdf: "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp",
+  xlsx: "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/excel_icon_4.jpg",
+};
+function VoucherExportButtons({ section, params }: { section: "items" | "transactions"; params: URLSearchParams }) {
+  const base = section === "items" ? `${ROOT}/export` : `${ROOT}/transactions/export`;
+  const query = params.toString();
+  return <div className="flex items-center gap-2">
+    {(["pdf","xlsx"] as const).map(format => <a key={format}
+      href={`${base}.${format}${query ? `?${query}` : ""}`}
+      title={`${section === "items" ? "Utalványok" : "Pénzügyi napló"} exportálása ${format === "pdf" ? "PDF" : "Excel"} formátumban`}
+      className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-3 text-[12px] text-white transition hover:border-[#7bd7d4]/40 hover:bg-[#405267] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/30">
+      <img src={VOUCHER_EXPORT_ICONS[format]} alt="" className="h-[22px] w-[22px] shrink-0 rounded-[4px] bg-white object-contain p-[2px]" />
+      {format === "pdf" ? "PDF" : "Excel"}
+    </a>)}
+  </div>;
+}
+
 export default function AllInVouchers({ actor, role, locationCode }: {
   actor: string; role: Role; locationCode?: string;
 }) {
@@ -386,7 +404,6 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   const [ledgerError,setLedgerError] = useState("");
   const [ledgerPeriod,setLedgerPeriod] = useState<VoucherLedgerPreset>("all");
   const [ledgerCalendarOpen,setLedgerCalendarOpen] = useState<"from" | "to" | null>(null);
-  const [previewZoom,setPreviewZoom] = useState(false);
   const closeLedgerCalendar = useCallback(() => setLedgerCalendarOpen(null), []);
 
   const listLocation = admin ? locationFilter : ownLocation;
@@ -662,15 +679,6 @@ export default function AllInVouchers({ actor, role, locationCode }: {
     setLedgerCalendarOpen(null);
   }
 
-  useEffect(() => {
-    if (!previewZoom) return;
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setPreviewZoom(false); };
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => { window.removeEventListener("keydown", onKeyDown); document.body.style.overflow = previousOverflow; };
-  }, [previewZoom]);
-
   const nav:Array<{id:Tab;label:string;icon:typeof Gift}> = [
     {id:"overview",label:"Áttekintés",icon:ClipboardList},
     ...(admin?[{id:"receive-stock" as Tab,label:"Bevételezés",icon:PackagePlus}]:[]),
@@ -680,6 +688,16 @@ export default function AllInVouchers({ actor, role, locationCode }: {
     {id:"ledger",label:"Pénzügyi napló",icon:FileClock},
     {id:"preview",label:"HU / RO előnézet",icon:Gift},
   ];
+
+  const voucherListExportParams = new URLSearchParams();
+  if(listLocation) voucherListExportParams.set("location",listLocation);
+  if(langFilter) voucherListExportParams.set("language",langFilter);
+  if(statusFilter) voucherListExportParams.set("status",statusFilter);
+  if(searchApplied) voucherListExportParams.set("search",searchApplied);
+  const voucherLedgerExportParams = new URLSearchParams();
+  if(!admin && ownLocation) voucherLedgerExportParams.set("location",ownLocation);
+  if(ledgerFrom) voucherLedgerExportParams.set("from",ledgerFrom);
+  if(ledgerTo) voucherLedgerExportParams.set("to",ledgerTo);
 
   return <main className="min-h-screen bg-gradient-to-br from-[#626d7d] via-[#555f71] to-[#414d5e] px-3 py-5 text-white sm:px-5">
     <div className="mx-auto max-w-[1480px] space-y-4">
@@ -781,7 +799,7 @@ export default function AllInVouchers({ actor, role, locationCode }: {
 
       {tab==="list"&&<section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg">Sorszámozott utalványok</h2>
-          {admin&&<a href={`${ROOT}/export.csv`} className="inline-flex min-h-10 items-center rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#42546a]">Teljes nyilvántartás · CSV</a>}
+          {admin&&<VoucherExportButtons section="items" params={voucherListExportParams} />}
         </div><p className="mt-1 text-xs text-white/55">Egy sorszám csak egyszer hozható létre. A névérték és egyenleg az értékesítésig 0 RON.</p>
         <div className="mt-4 flex flex-wrap gap-2">
           {admin&&<VoucherSelect label="Készlethely szűrése" value={locationFilter} onChange={setLocationFilter} className="w-full sm:w-[220px]"
@@ -858,7 +876,7 @@ export default function AllInVouchers({ actor, role, locationCode }: {
       {tab==="ledger"&&<section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg">Utalvány pénzügyi napló</h2>
           <div className="flex flex-wrap gap-2">
-            {admin&&<a href={`${ROOT}/transactions/export.csv`} className="inline-flex h-10 items-center rounded-lg border border-white/20 bg-[#354153] px-3 text-xs text-white">Teljes napló · CSV</a>}
+            {admin&&<VoucherExportButtons section="transactions" params={voucherLedgerExportParams} />}
             <button type="button" onClick={()=>void loadLedger()} disabled={ledgerBusy} className="h-10 rounded-lg border border-white/20 bg-[#354153] px-3 text-xs disabled:opacity-40">Frissítés</button>
           </div></div>
         <div className="mt-4 rounded-2xl border border-white/10 bg-[#354153]/55 p-3">
@@ -887,40 +905,18 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           {!ledgerRows.length&&<p className="py-10 text-center text-sm text-white/45">{ledgerBusy?'Pénznapló betöltése…':'Nincs rögzített utalványtranzakció.'}</p>}</div>
       </section>}
 
-      {tab==="preview"&&<section className="grid max-w-[990px] items-start gap-3 lg:grid-cols-[minmax(0,620px)_minmax(0,340px)]">
-        <div className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><h2 className="text-base">Eredeti utalványminta</h2><p className="mt-1 text-xs text-white/45">Az eredeti grafika, változtatás nélkül.</p></div>
-            <div className="flex gap-1.5">{(["HU","RO"] as Lang[]).map(x=><button key={x} type="button" onClick={()=>setPreviewLang(x)}
-              className={`h-9 min-w-12 rounded-lg border px-3 text-xs transition ${previewLang===x?"border-[#a4e7e4]/55 bg-[#2a8d8b]":"border-white/15 bg-[#354153] hover:bg-[#415167]"}`}>{x}</button>)}</div>
-          </div>
-          <div className="mt-3 flex min-h-[360px] items-center justify-center rounded-2xl border border-white/10 bg-[#263346] px-4 py-3">
-            <button type="button" className="group relative max-w-full rounded-xl outline-none focus:ring-2 focus:ring-[#7bd7d4]/50" onClick={()=>setPreviewZoom(true)} title="Utalvány nagyítása">
-              <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány minta`}
-                className="block max-h-[445px] max-w-full rounded-lg border border-white/12 bg-white object-contain shadow-[0_14px_32px_rgba(0,0,0,0.28)]" />
-              <span className="absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/20 bg-[#192739]/92 px-3 py-1.5 text-[10px] text-white opacity-90 transition group-hover:bg-[#2a8d8b]">Kattintás: nagyítás</span>
-            </button>
-          </div>
-          <p className="mt-3 text-[11px] text-white/48">Az eredeti R2 képet jelenítjük meg. Az utalványt és a vonalkódját nem a program generálja.</p>
+      {tab==="preview"&&<section className="mx-auto w-full max-w-[690px] rounded-[22px] border border-white/14 bg-[#303a4c] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base">Ajándékutalvány minta</h2>
+          <div className="flex gap-1.5">{(["HU","RO"] as Lang[]).map(x=><button key={x} type="button" onClick={()=>setPreviewLang(x)}
+            className={`h-9 min-w-12 rounded-lg border px-3 text-xs transition ${previewLang===x?"border-[#a4e7e4]/55 bg-[#2a8d8b]":"border-white/15 bg-[#354153] hover:bg-[#415167]"}`}>{x}</button>)}</div>
         </div>
-        <aside className="rounded-[22px] border border-white/14 bg-[#344256] p-4">
-          <h3 className="text-base">Digitális előnézet</h3>
-          <p className="mt-2 text-xs leading-6 text-white/65">A személyre szóló név és a tényleges kiadott érték az aktiváláskor kapcsolódik az utalványhoz. Az üres papírok értéke 0 RON.</p>
-          <div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 p-3 text-[11px] leading-5 text-white/70">A fehér mezőkre csak az aktiválás után kerülhet hiteles érték. A papír kézi módosítása nem változtatja meg az adatbázis-egyenleget.</div>
-          <button type="button" className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/22 text-xs text-[#d7fffd] hover:bg-[#2a8d8b]/40" onClick={()=>setPreviewZoom(true)}><Search size={15}/> Teljes méretű megtekintés</button>
-        </aside>
+        <div className="mt-3 flex items-center justify-center rounded-2xl border border-white/10 bg-[#263346] p-3">
+          <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány minta`}
+            className="block max-h-[405px] w-full max-w-[620px] rounded-lg border border-white/12 bg-white object-contain" />
+        </div>
       </section>}
 
-      {previewZoom && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 z-[2147483400] flex items-center justify-center bg-[#0c1626]/88 p-3 backdrop-blur-md" onMouseDown={e=>{if(e.currentTarget===e.target)setPreviewZoom(false);}} role="dialog" aria-modal="true" aria-label="Ajándékutalvány nagyított előnézete">
-          <div className="flex max-h-[94vh] max-w-[94vw] flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/35 bg-[#263346] p-3 shadow-[0_30px_100px_rgba(0,0,0,.75)]">
-            <div className="mb-2 flex shrink-0 items-center justify-between gap-3"><span className="text-sm text-white/85">{previewLang} · Eredeti utalványminta</span><button type="button" onClick={()=>setPreviewZoom(false)} className="flex h-9 items-center gap-2 rounded-lg border border-white/16 bg-white/10 px-3 text-xs hover:bg-white/15"><X size={15}/> Bezárás</button></div>
-            <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány nagyítva`} className="min-h-0 max-h-[82vh] max-w-[90vw] rounded-lg bg-white object-contain" />
-          </div>
-        </div>, document.body,
-      )}
-
-      <footer className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/12 bg-[#303a4c] px-4 py-3 text-xs text-white/50"><ShieldCheck size={16} className="text-[#a3eae5]"/> Az utalvány egyenlege és a ruhakészlet külön, hiteles naplóban él. <span className="text-white/70">{financeEnabled?'Pénzügyi funkció engedélyezve. Fiskális bizonylat külön szükséges.':'A pénzügyi funkciók a szerveren egyelőre zárolva.'}</span></footer>
     </div>
 
     {detail&&<div className="fixed inset-0 z-[400] grid place-items-center bg-[#0a1524]/85 p-3 backdrop-blur-sm" onMouseDown={e=>{if(e.target===e.currentTarget)setDetail(null);}}>
