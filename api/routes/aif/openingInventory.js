@@ -435,6 +435,28 @@ export default function createAifOpeningInventoryRouter({
     return Array.from(byVariant.values());
   }
 
+  // A régi, saját AllInFashion-címke archivált terméknél is érvényes azonosító.
+  // Csak a pontos vonalkódot / belső SKU-t vizsgáljuk, az S/N és a modellkód
+  // több változaton is közös lehet. Ez kizárólag leltári ellenőrzés, nem készletmozgás.
+  async function queryArchivedInventoryBarcode(client, code) {
+    const result = await client.query(
+      `SELECT v.id AS variant_id, v.barcode, v.internal_sku, v.sn_cod,
+              v.size, v.color_name, v.color_code,
+              m.title_ro, m.model_code
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       WHERE v.status='archived'
+         AND (
+           lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+           OR lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
+         )
+       ORDER BY v.id
+       LIMIT 5`,
+      [code],
+    );
+    return result.rows;
+  }
+
   async function queryVariantsByOpeningInventoryPrefix(client, values) {
     const prefixes = Array.from(new Set((values || []).filter(isOpeningInventoryRecoveryPrefix)));
     if (!prefixes.length) return [];
@@ -1459,7 +1481,8 @@ export default function createAifOpeningInventoryRouter({
                      last_scanned_at=now(), last_scanned_by=$4, updated_at=now(), resolved_at=NULL, resolved_variant_id=NULL, resolved_by=NULL
        RETURNING *`,
       [session.id, code, qty, actor, JSON.stringify({
-        reason: match?.matches?.length > 1 ? "barcode_conflict" : "unmatched_scan",
+        reason: match?.archivedVariants?.length ? "archived_variant_scan" : match?.matches?.length > 1 ? "barcode_conflict" : "unmatched_scan",
+        archivedVariants: match?.archivedVariants || [],
         originalScanCode: code,
         matchedCode: match?.matchedCode || null,
         normalization: match?.normalization || null,
@@ -1523,12 +1546,36 @@ export default function createAifOpeningInventoryRouter({
         return res.status(400).json({ error: "Olvass be egy érvényes bárkódot vagy termékkódot." });
       }
       if (matched.matches.length === 0) {
-        const unknown = await recordUnknown(client, session, matched.code, qty, actor, matched);
+        // A saját rendszer által korábban nyomtatott címke archiválás után is
+        // beazonosítható legyen. Nem váltunk át automatikusan egy másik, aktív
+        // szín/méret változatra, és a fizikai leltárhoz sem adunk darabszámot.
+        const archivedMatches = await queryArchivedInventoryBarcode(client, matched.code);
+        const archivedVariants = archivedMatches.map((item) => ({
+          variantId: String(item.variant_id),
+          barcode: item.barcode || null,
+          title: item.title_ro || null,
+          color: item.color_name || item.color_code || null,
+          size: item.size || null,
+          snCod: item.sn_cod || null,
+          modelCode: item.model_code || null,
+        }));
+        const unknown = await recordUnknown(client, session, matched.code, qty, actor, { ...matched, archivedVariants });
         await client.query(
           `UPDATE aif_opening_inventory_sessions SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END, updated_at=now() WHERE id=$1`,
           [session.id],
         );
         await client.query("COMMIT");
+        if (archivedVariants.length) {
+          const first = archivedVariants[0];
+          const productText = [first.title, first.color, first.size].filter(Boolean).join(" • ");
+          return res.status(409).json({
+            error: `ARCHIVÁLT TERMÉK! ${productText} • ${matched.code}. Vezetői ellenőrzés szükséges. Készlet nem változott.`,
+            code: "opening_inventory_archived_barcode",
+            unknownRecorded: true,
+            archivedVariants,
+            unknown: { id: String(unknown.id), code: unknown.scan_code, qty: Number(unknown.qty || 0) },
+          });
+        }
         return res.status(404).json({
           error: `Nem találom ezt a kódot a terméktörzsben: ${matched.code}. A beolvasást eltároltam a főnöknek ellenőrzésre.`,
           code: "opening_inventory_unknown_code",
