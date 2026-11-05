@@ -319,12 +319,12 @@ export default function AllInOpeningInventoryShop({
                   <p className="mt-1 text-base text-white">{editable ? "Beolvasás folyamatban • eladás mehet" : "Beolvasás lezárva • eladás mehet tovább"}</p>
                 </div>
                 <div className="flex gap-2 text-center">
-                  <div className="rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-black">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-black">Talált tétel</div>
+                  <div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-white/40">Talált tétel</div>
                     <div className="mt-1 text-xl">{data.progress?.countedLines || 0}</div>
                   </div>
-                  <div className="rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-black">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-black">Talált db</div>
+                  <div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-white/40">Talált db</div>
                     <div className="mt-1 text-xl">{data.progress?.countedQty || 0}</div>
                   </div>
                 </div>
@@ -371,20 +371,20 @@ export default function AllInOpeningInventoryShop({
             </section>
 
             {lastLine ? (
-              <section className="rounded-[22px] border border-[#18ff00] bg-[#18ff00] p-4 text-black shadow-lg">
+              <section className="rounded-[22px] border border-[#8ce7e2]/38 bg-[#2f5056] p-4 shadow-lg">
                 <div className="grid gap-3 sm:grid-cols-[88px_1fr_auto] sm:items-center">
                   <div className="grid h-[88px] w-[88px] place-items-center overflow-hidden rounded-2xl border border-white/16 bg-white">
                     {lastLine.product.imageUrl ? <img src={lastLine.product.imageUrl} alt="" className="h-full w-full object-contain p-1" /> : <PackageSearch className="text-slate-500" size={30} />}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.13em] text-black/65">Utolsó találat</p>
+                    <p className="text-[10px] uppercase tracking-[0.13em] text-[#cffffd]/65">Utolsó találat</p>
                     <h2 className="mt-1 truncate text-lg font-normal">{lastLine.product.title}</h2>
-                    <p className="mt-1 truncate text-xs text-black/70">{productMeta(lastLine) || "–"}</p>
+                    <p className="mt-1 truncate text-xs text-white/58">{productMeta(lastLine) || "–"}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="rounded-2xl border border-[#18ff00] bg-[#18ff00] px-5 py-3 text-center text-black">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-black">Talált</div>
-                      <div className="mt-1 text-3xl text-black">{lastLine.countedQty} <span className="text-sm text-black">db</span></div>
+                    <div className="rounded-2xl border border-white/18 bg-white/[0.08] px-5 py-3 text-center">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Talált</div>
+                      <div className="mt-1 text-3xl">{lastLine.countedQty} <span className="text-sm text-white/55">db</span></div>
                     </div>
                     <div className="min-w-[128px] border-l border-white/10 pl-3">
                       <div className="rounded-2xl border border-white/18 bg-[#283446] px-4 py-3 text-center">
@@ -422,7 +422,7 @@ export default function AllInOpeningInventoryShop({
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
                         ) : null}
-                        <div className="min-w-[82px] rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-center text-lg text-black">{line.countedQty} db</div>
+                        <div className="min-w-[82px] rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/16 px-3 py-2 text-center text-lg text-[#d7fffd]">{line.countedQty} db</div>
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
                         ) : null}
