@@ -319,12 +319,12 @@ export default function AllInOpeningInventoryShop({
                   <p className="mt-1 text-base text-white">{editable ? "Beolvasás folyamatban • eladás mehet" : "Beolvasás lezárva • eladás mehet tovább"}</p>
                 </div>
                 <div className="flex gap-2 text-center">
-                  <div className="rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-white">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-white">Talált tétel</div>
+                  <div className="rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-black">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-black">Talált tétel</div>
                     <div className="mt-1 text-xl">{data.progress?.countedLines || 0}</div>
                   </div>
-                  <div className="rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-white">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-white">Talált db</div>
+                  <div className="rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-black">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-black">Talált db</div>
                     <div className="mt-1 text-xl">{data.progress?.countedQty || 0}</div>
                   </div>
                 </div>
@@ -364,27 +364,27 @@ export default function AllInOpeningInventoryShop({
               ) : null}
 
               {notice ? (
-                <div className={`mt-3 rounded-xl border px-3 py-2.5 text-sm ${notice.tone === "success" ? "border-[#108D8B] bg-[#108D8B] text-white" : notice.tone === "info" ? "border-[#c78b22] bg-[#a26910] text-white" : "border-[#e3132c] bg-[#e3132c] text-white shadow-lg"}`}>
+                <div className={`mt-3 rounded-xl border px-3 py-2.5 text-sm ${notice.tone === "success" ? "border-[#18ff00] bg-[#18ff00] text-black" : notice.tone === "info" ? "border-[#c78b22] bg-[#a26910] text-white" : "border-[#e3132c] bg-[#e3132c] text-white shadow-lg"}`}>
                   {notice.text}
                 </div>
               ) : null}
             </section>
 
             {lastLine ? (
-              <section className="rounded-[22px] border border-[#108D8B] bg-[#108D8B] p-4 text-white shadow-lg">
+              <section className="rounded-[22px] border border-[#18ff00] bg-[#18ff00] p-4 text-black shadow-lg">
                 <div className="grid gap-3 sm:grid-cols-[88px_1fr_auto] sm:items-center">
                   <div className="grid h-[88px] w-[88px] place-items-center overflow-hidden rounded-2xl border border-white/16 bg-white">
                     {lastLine.product.imageUrl ? <img src={lastLine.product.imageUrl} alt="" className="h-full w-full object-contain p-1" /> : <PackageSearch className="text-slate-500" size={30} />}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.13em] text-[#cffffd]/65">Utolsó találat</p>
+                    <p className="text-[10px] uppercase tracking-[0.13em] text-black/65">Utolsó találat</p>
                     <h2 className="mt-1 truncate text-lg font-normal">{lastLine.product.title}</h2>
-                    <p className="mt-1 truncate text-xs text-white/58">{productMeta(lastLine) || "–"}</p>
+                    <p className="mt-1 truncate text-xs text-black/70">{productMeta(lastLine) || "–"}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="rounded-2xl border border-[#108D8B] bg-[#108D8B] px-5 py-3 text-center text-white">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-white">Talált</div>
-                      <div className="mt-1 text-3xl text-white">{lastLine.countedQty} <span className="text-sm text-white">db</span></div>
+                    <div className="rounded-2xl border border-[#18ff00] bg-[#18ff00] px-5 py-3 text-center text-black">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-black">Talált</div>
+                      <div className="mt-1 text-3xl text-black">{lastLine.countedQty} <span className="text-sm text-black">db</span></div>
                     </div>
                     <div className="min-w-[128px] border-l border-white/10 pl-3">
                       <div className="rounded-2xl border border-white/18 bg-[#283446] px-4 py-3 text-center">
@@ -422,7 +422,7 @@ export default function AllInOpeningInventoryShop({
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
                         ) : null}
-                        <div className="min-w-[82px] rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-center text-lg text-white">{line.countedQty} db</div>
+                        <div className="min-w-[82px] rounded-xl border border-[#18ff00] bg-[#18ff00] px-3 py-2 text-center text-lg text-black">{line.countedQty} db</div>
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
                         ) : null}
