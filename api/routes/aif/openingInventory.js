@@ -217,6 +217,31 @@ export default function createAifOpeningInventoryRouter({
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_opening_inventory_unknown_session_idx
           ON aif_opening_inventory_unknown_scans (session_id, resolved_at, last_scanned_at DESC)`);
 
+        // Ismeretlen beolvasasoknal is ugyanaz a kliens-kérés csak egyszer
+        // szamolhato. A feloldott kodok es a meglevő leltarok nem modosulnak.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_opening_inventory_unknown_attempts (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          session_id uuid NOT NULL REFERENCES aif_opening_inventory_sessions(id) ON DELETE CASCADE,
+          unknown_scan_id uuid NOT NULL REFERENCES aif_opening_inventory_unknown_scans(id) ON DELETE CASCADE,
+          client_scan_id text NOT NULL,
+          scan_code text NOT NULL,
+          qty numeric NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (session_id, client_scan_id)
+        )`);
+        // Csak leltarhoz kotott, vezető altal jovahagyott regi / kulso kodok.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_opening_inventory_barcode_aliases (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          scan_code text NOT NULL,
+          target_variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+          unknown_scan_id uuid NULL REFERENCES aif_opening_inventory_unknown_scans(id) ON DELETE SET NULL,
+          approved_by text NOT NULL,
+          reason text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (location_id, scan_code)
+        )`);
+
         // Helyreállító leltárnál többnapos számlálás közben is készletre vezethetjük
         // az addig biztosan megszámolt tételeket anélkül, hogy a leltárt lezárnánk.
         // A checkpointok külön auditot kapnak, így a tegnapi + mai rész együtt,
@@ -457,6 +482,39 @@ export default function createAifOpeningInventoryRouter({
     return result.rows;
   }
 
+  // Csak a konkret uzletben jovahagyott leltari vonalkod-alias. Egy valodi
+  // elsodleges / beszallitoi kod elobbre valo, igy az alias nem arnyekolhatja el.
+  async function queryApprovedOpeningInventoryBarcodeAlias(client, code, locationId) {
+    if (!locationId) return [];
+    const result = await client.query(
+      `SELECT v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
+              v.size, v.color_code, v.color_name, v.color_hex, v.image_url,
+              v.buy_price, v.sell_price,
+              m.model_code, m.title_ro, m.shopify_title,
+              b.name AS brand_name, b.code AS brand_code,
+              cat.name_ro AS category_name,
+              sc.supplier_product_code, sc.supplier_barcode, sc.supplier_sku
+       FROM aif_opening_inventory_barcode_aliases a
+       JOIN aif_product_variants v ON v.id=a.target_variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories cat ON cat.id=m.category_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code, supplier_barcode, supplier_sku
+         FROM aif_variant_supplier_codes sc
+         WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)
+         ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE a.location_id=$2
+         AND a.scan_code=upper(btrim($1))
+         AND COALESCE(v.status,'active') <> 'archived'
+       LIMIT 2`,
+      [code, locationId],
+    );
+    return result.rows;
+  }
+
   async function queryVariantsByOpeningInventoryPrefix(client, values) {
     const prefixes = Array.from(new Set((values || []).filter(isOpeningInventoryRecoveryPrefix)));
     if (!prefixes.length) return [];
@@ -507,7 +565,7 @@ export default function createAifOpeningInventoryRouter({
     return result.rows;
   }
 
-  async function findVariantByCode(client, rawCode) {
+  async function findVariantByCode(client, rawCode, locationId = null) {
     const { original, candidates } = openingInventoryCodeCandidates(rawCode);
     if (!original) return { code: original, matchedCode: null, normalization: null, matches: [], candidatesTried: [], prefixesTried: [] };
 
@@ -523,6 +581,15 @@ export default function createAifOpeningInventoryRouter({
         candidatesTried: [original],
         prefixesTried: [],
       };
+    }
+
+    // Pontos kod nincs az aktiv/inaktiv termektorzzsben: csak itt johet a
+    // vezeto altal, az adott uzletre engedelyezett korabbi kod.
+    const approvedAlias = await queryApprovedOpeningInventoryBarcodeAlias(client, original, locationId);
+    if (approvedAlias.length) {
+      return { code: original, matchedCode: original,
+        normalization: { reason: "approved_store_barcode_alias", originalCode: original, matchedCode: original },
+        matches: approvedAlias, candidatesTried: [original], prefixesTried: [] };
     }
 
     const normalizedMatches = new Map();
@@ -1260,6 +1327,17 @@ export default function createAifOpeningInventoryRouter({
     };
   }
 
+  function inventoryScanCodeHint(raw) {
+    const code = String(raw || "").trim();
+    if (/^(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[\/?#]|$)/i.test(code)) return "qr_or_url";
+    if (/\|/.test(code) || /[?&=]/.test(code)) return "qr_or_url";
+    if (/^\d{8}$|^\d{12}$|^\d{13}$|^\d{14}$/.test(code)) {
+      return isValidOpeningInventoryGtin(code) ? "gtin_not_in_catalog" : "gtin_invalid_check_digit";
+    }
+    if (/\d/.test(code) && /[a-z]/i.test(code) && !/^AIF[0-9A-Z]+$/i.test(code)) return "nonstandard_scanner_content";
+    return "unmatched_or_internal_code";
+  }
+
   async function loadUnknown(client, sessionId) {
     const result = await client.query(
       `SELECT id, scan_code, qty, first_scanned_at, last_scanned_at, last_scanned_by,
@@ -1482,6 +1560,7 @@ export default function createAifOpeningInventoryRouter({
        RETURNING *`,
       [session.id, code, qty, actor, JSON.stringify({
         reason: match?.archivedVariants?.length ? "archived_variant_scan" : match?.matches?.length > 1 ? "barcode_conflict" : "unmatched_scan",
+        scanCodeHint: inventoryScanCodeHint(code),
         archivedVariants: match?.archivedVariants || [],
         originalScanCode: code,
         matchedCode: match?.matchedCode || null,
@@ -1491,6 +1570,16 @@ export default function createAifOpeningInventoryRouter({
       })],
     );
     return result.rows[0];
+  }
+
+  async function recordUnknownAttempt(client, session, unknown, code, qty, clientScanId) {
+    if (!clientScanId) return;
+    await client.query(
+      `INSERT INTO aif_opening_inventory_unknown_attempts (
+         session_id, unknown_scan_id, client_scan_id, scan_code, qty
+       ) VALUES ($1,$2,$3,$4,$5)`,
+      [session.id, unknown.id, clientScanId, code, qty],
+    );
   }
 
   async function ensureDynamicLine(client, session, variant) {
@@ -1539,7 +1628,29 @@ export default function createAifOpeningInventoryRouter({
         return res.status(409).json({ error: "A főnök lezárta a beolvasást. Ez a leltár most csak ellenőrizhető.", code: "opening_inventory_readonly" });
       }
 
-      const matched = await findVariantByCode(client, rawCode);
+      // Elveszett HTTP-valasz eseten a shop ugyanazzal a clientScanId-val
+      // probalkozik ujra. Ismeretlen kodnal sem irhat meg egyszer +1-et.
+      if (clientScanId) {
+        const attempt = await client.query(
+          `SELECT scan_code, qty FROM aif_opening_inventory_unknown_attempts
+           WHERE session_id=$1 AND client_scan_id=$2 LIMIT 1`,
+          [session.id, clientScanId],
+        );
+        if (attempt.rowCount) {
+          const original = text(rawCode).replace(/[\r\n\t]+/g, "").trim();
+          if (attempt.rows[0].scan_code !== original) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({ error: "Ez a beolvasasazonosito mar masik kodhoz tartozik.", code: "opening_inventory_client_scan_conflict" });
+          }
+          await client.query("COMMIT");
+          return res.status(409).json({
+            error: `A ${original} korabbi ismeretlen beolvasasat mar rogzitettuk. Nem szamoltuk ketszer.`,
+            code: "opening_inventory_unknown_scan_duplicate", unknownRecorded: true, duplicate: true,
+          });
+        }
+      }
+
+      const matched = await findVariantByCode(client, rawCode, location.id);
       const actor = actorFrom(req);
       if (!matched.code) {
         await client.query("ROLLBACK");
@@ -1560,6 +1671,7 @@ export default function createAifOpeningInventoryRouter({
           modelCode: item.model_code || null,
         }));
         const unknown = await recordUnknown(client, session, matched.code, qty, actor, { ...matched, archivedVariants });
+        await recordUnknownAttempt(client, session, unknown, matched.code, qty, clientScanId);
         await client.query(
           `UPDATE aif_opening_inventory_sessions SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END, updated_at=now() WHERE id=$1`,
           [session.id],
@@ -1576,15 +1688,22 @@ export default function createAifOpeningInventoryRouter({
             unknown: { id: String(unknown.id), code: unknown.scan_code, qty: Number(unknown.qty || 0) },
           });
         }
+        const hint = inventoryScanCodeHint(matched.code);
+        const cause = hint === "qr_or_url" ? "Ez valoszinuleg QR/webcim, nem termek-vonalkod."
+          : hint === "nonstandard_scanner_content" ? "A beolvasott kod nem szabvanyos, ellenorizd a cimket vagy a szkennert."
+          : hint === "gtin_invalid_check_digit" ? "A kod GTIN ellenorzo szamjegye hibas, ellenorizd a cimket."
+          : "Ez a termekkod nem szerepel a nyilvantartott kodok kozott.";
         return res.status(404).json({
-          error: `Nem találom ezt a kódot a terméktörzsben: ${matched.code}. A beolvasást eltároltam a főnöknek ellenőrzésre.`,
-          code: "opening_inventory_unknown_code",
+          error: `${cause} Kod: ${matched.code}. A beolvasast eltaroltam vezetoi ellenorzesre.`,
+          code: hint === "qr_or_url" ? "opening_inventory_qr_code" : "opening_inventory_unknown_code",
+          scanCodeHint: hint,
           unknownRecorded: true,
           unknown: { id: String(unknown.id), code: unknown.scan_code, qty: Number(unknown.qty || 0) },
         });
       }
       if (matched.matches.length > 1) {
         const unknown = await recordUnknown(client, session, matched.code, qty, actor, matched);
+        await recordUnknownAttempt(client, session, unknown, matched.code, qty, clientScanId);
         await client.query("COMMIT");
         return res.status(409).json({
           error: `A ${matched.code} kód több termékhez tartozik. Nem számoltam bele automatikusan, a főnöknek megjelöltem ellenőrzésre.`,
@@ -2291,6 +2410,285 @@ export default function createAifOpeningInventoryRouter({
     }
   });
 
+  // Vezetoi termekkereso az eltarolt ismeretlen kodo(k) kezi rendezesere.
+  // Csak meglevő, nem archivalt valtozathoz lehet rendelni. Nem ir keszletet.
+  router.get("/admin/sessions/:id/unknown-lookup", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureSchema();
+      const session = await sessionById(client, req.params.id);
+      if (!session) return res.status(404).json({ error: "A leltar nem talalhato." });
+      const q = text(req.query.q).trim().slice(0, 90);
+      if (q.length < 2) return res.json({ ok: true, items: [] });
+      const found = await client.query(
+        `SELECT v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
+                v.size, v.color_code, v.color_name, v.color_hex, v.image_url,
+                v.buy_price, v.sell_price, v.status AS variant_status,
+                m.model_code, m.title_ro, m.shopify_title,
+                b.name AS brand_name, b.code AS brand_code,
+                cat.name_ro AS category_name,
+                (SELECT sc.supplier_product_code
+                   FROM aif_variant_supplier_codes sc
+                  WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)
+                  ORDER BY sc.updated_at DESC NULLS LAST LIMIT 1) AS supplier_product_code,
+                (SELECT sc.supplier_barcode
+                   FROM aif_variant_supplier_codes sc
+                  WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)
+                  ORDER BY sc.updated_at DESC NULLS LAST LIMIT 1) AS supplier_barcode,
+                (SELECT COALESCE(st.qty,0) FROM aif_stock st
+                  WHERE st.variant_id=v.id AND st.location_id=$2 LIMIT 1) AS current_stock_qty,
+                (SELECT ol.counted_qty FROM aif_opening_inventory_lines ol
+                  WHERE ol.session_id=$3 AND ol.variant_id=v.id LIMIT 1) AS already_counted_qty
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories cat ON cat.id=m.category_id
+         WHERE COALESCE(v.status,'active') <> 'archived'
+           AND (
+             v.barcode ILIKE '%' || $1 || '%'
+             OR v.internal_sku ILIKE '%' || $1 || '%'
+             OR v.sn_cod ILIKE '%' || $1 || '%'
+             OR m.title_ro ILIKE '%' || $1 || '%'
+             OR m.model_code ILIKE '%' || $1 || '%'
+             OR b.name ILIKE '%' || $1 || '%'
+             OR EXISTS (
+               SELECT 1 FROM aif_variant_supplier_codes sc
+               WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)
+                 AND (sc.supplier_product_code ILIKE '%' || $1 || '%'
+                   OR sc.supplier_barcode ILIKE '%' || $1 || '%'
+                   OR sc.supplier_sku ILIKE '%' || $1 || '%')
+             )
+           )
+         ORDER BY
+           CASE WHEN lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1)) THEN 0
+                WHEN lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1)) THEN 1
+                ELSE 2 END,
+           m.title_ro, v.color_name, v.size
+         LIMIT 30`,
+        [q, session.location_id, session.id],
+      );
+      return res.json({ ok: true, items: found.rows.map(row => ({
+        product: productPayload(row),
+        variantStatus: row.variant_status,
+        currentStockQty: Number(row.current_stock_qty || 0),
+        alreadyCountedQty: row.already_counted_qty === null || row.already_counted_qty === undefined ? null : Number(row.already_counted_qty),
+      })) });
+    } catch (error) {
+      console.error("AIF unknown lookup failed", error);
+      return res.status(500).json({ error: error?.message || "A termekkereses nem sikerult." });
+    } finally { client.release(); }
+  });
+
+  // Kizárólag explicit vezetoi dontes: meglevő termekhez rendeljuk a tenylegesen
+  // ellenorzott darabszamot, vagy teves scan-t vetunk el. A korabbi beolvasast
+  // sosem toroljuk, a dontes a raw JSON-ban es a scan auditban megmarad.
+  router.post("/admin/sessions/:id/unknown/:unknownId/resolve", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const action = text(body.action);
+    const note = text(body.note).slice(0, 600);
+    const variantId = text(body.variantId);
+    const rawApprovedQty = numberOrNull(body.approvedQty);
+    const approvedQty = Number.isSafeInteger(rawApprovedQty) ? rawApprovedQty : null;
+    const rawExpectedRecordedQty = numberOrNull(body.expectedRecordedQty);
+    const expectedRecordedQty = Number.isSafeInteger(rawExpectedRecordedQty) ? rawExpectedRecordedQty : null;
+    const rawExpectedCountedQty = body.expectedCountedQty === null || body.expectedCountedQty === undefined ? null : numberOrNull(body.expectedCountedQty);
+    const expectedCountedQty = rawExpectedCountedQty === null || Number.isSafeInteger(rawExpectedCountedQty) ? rawExpectedCountedQty : NaN;
+    const rememberBarcode = body.rememberBarcode === true;
+    if (body.confirmed !== true || !["assign", "discard"].includes(action) || note.length < 8) {
+      return res.status(400).json({ error: "A vezeto szemelyes ellenorzese es legalabb 8 karakteres indoklas szukseges." });
+    }
+    if (action === "assign" && (!/^[a-f0-9-]{36}$/i.test(variantId) || approvedQty === null || approvedQty < 1)) {
+      return res.status(400).json({ error: "Valassz ki egy termeket es add meg az ellenorzott darabszamot." });
+    }
+    if (action === "discard" && (rememberBarcode || variantId || approvedQty !== null)) {
+      return res.status(400).json({ error: "Elveteshez csak az indoklast es a jovahagyast add meg." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSchema();
+      const session = await sessionById(client, req.params.id, { lock: true });
+      if (!session) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A leltar nem talalhato." });
+      }
+      if (!["draft", "counting", "review"].includes(session.status)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Mar veglegesitett leltart nem lehet modositani." });
+      }
+      const r = await client.query(
+        `SELECT * FROM aif_opening_inventory_unknown_scans
+          WHERE id::text=$1 AND session_id=$2 FOR UPDATE`,
+        [req.params.unknownId, session.id],
+      );
+      const unknown = r.rows[0];
+      if (!unknown || unknown.resolved_at || Number(unknown.qty || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Ez a beolvasas mar rendezett, vagy nem talalhato. Frissitsd a leltart." });
+      }
+      const recordedQty = Number(unknown.qty || 0);
+      if (expectedRecordedQty === null || expectedRecordedQty !== recordedQty) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "A beolvasasok szama idokozben megvaltozott. Frissitsd a leltart es ellenorizd ujra." });
+      }
+      if (action === "assign" && approvedQty > recordedQty) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: `A korabbi beolvasas ${recordedQty} db. Ennél többet nem adhatsz hozza ezen a feluleten.` });
+      }
+      let variant = null;
+      let lineBefore = null;
+      let lineAfter = null;
+      let aliasCreated = false;
+      const actor = actorFrom(req);
+      if (action === "assign") {
+        const vr = await client.query(
+          `SELECT v.id AS variant_id, v.status AS variant_status, v.internal_sku,
+                  v.barcode, v.sn_cod, v.size, v.color_code, v.color_name,
+                  v.color_hex, v.image_url, v.buy_price, v.sell_price,
+                  m.model_code, m.title_ro, m.shopify_title,
+                  b.name AS brand_name, b.code AS brand_code,
+                  cat.name_ro AS category_name
+             FROM aif_product_variants v
+             JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN aif_categories cat ON cat.id=m.category_id
+            WHERE v.id::text=$1 FOR SHARE OF v`,
+          [variantId],
+        );
+        variant = vr.rows[0];
+        if (!variant || variant.variant_status === "archived") {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "A kivalasztott termek hianyzik vagy archivalt." });
+        }
+        // A regi kod tartos hozzarendelese csak szigoruan ertelmezheto
+        // barcode eseten megengedett, QR URL / serult kod soha nem kaphat alias-t.
+        if (rememberBarcode) {
+          const code = String(unknown.scan_code || "").trim().toUpperCase();
+          const valid = isValidOpeningInventoryGtin(code) || /^AIF[0-9A-Z]{6,30}$/.test(code);
+          if (!valid) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({ error: "QR vagy hibas kod nem rendelheto tartosan termekhez. Kapcsold ki a kod megjegyzeset." });
+          }
+          const found = await findVariantByCode(client, code, session.location_id);
+          if (found.matches.some(item => String(item.variant_id) !== String(variant.variant_id))) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({ error: "A kod mar masik aktiv termekhez tartozik. Nem hoztunk letre uj kapcsolatot." });
+          }
+          const priorAlias = await client.query(
+            `SELECT target_variant_id FROM aif_opening_inventory_barcode_aliases
+              WHERE location_id=$1 AND scan_code=$2 FOR UPDATE`,
+            [session.location_id, code],
+          );
+          if (priorAlias.rowCount && String(priorAlias.rows[0].target_variant_id) !== String(variant.variant_id)) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({ error: "Ebben az uzletben a kodhoz mar masik termek van rendelve." });
+          }
+          if (!priorAlias.rowCount) {
+            await client.query(
+              `INSERT INTO aif_opening_inventory_barcode_aliases
+                (location_id,scan_code,target_variant_id,unknown_scan_id,approved_by,reason)
+               VALUES ($1,$2,$3,$4,$5,$6)`,
+              [session.location_id, code, variant.variant_id, unknown.id, actor, note],
+            );
+            aliasCreated = true;
+          }
+        }
+        const existingLine = await client.query(
+          `SELECT counted_qty FROM aif_opening_inventory_lines
+           WHERE session_id=$1 AND variant_id=$2 FOR UPDATE`,
+          [session.id, variant.variant_id],
+        );
+        const actualCountedQty = existingLine.rowCount && existingLine.rows[0].counted_qty !== null
+          ? Number(existingLine.rows[0].counted_qty) : null;
+        if (actualCountedQty !== expectedCountedQty) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "A kivalasztott termek leltari darabszama megvaltozott. Frissitsd es ellenorizd ujra, hogy ne legyen duplazas." });
+        }
+        const line = await ensureDynamicLine(client, session, variant);
+        lineBefore = Number(line.counted_qty || 0);
+        lineAfter = lineBefore + approvedQty;
+        await client.query(
+          `UPDATE aif_opening_inventory_lines
+           SET counted_qty=$3,
+               first_scanned_at=CASE WHEN first_scanned_at IS NULL THEN $4::timestamptz
+                                    ELSE LEAST(first_scanned_at,$4::timestamptz) END,
+               last_scanned_at=GREATEST(COALESCE(last_scanned_at,$5::timestamptz),$5::timestamptz),
+               last_scanned_by=$6,auto_zeroed=false,updated_at=now()
+           WHERE session_id=$1 AND id=$2`,
+          [session.id, line.id, lineAfter, unknown.first_scanned_at, unknown.last_scanned_at, actor],
+        );
+        await client.query(
+          `INSERT INTO aif_opening_inventory_scans
+            (session_id,line_id,variant_id,scan_code,event_type,qty_delta,counted_before,counted_after,actor,raw)
+            VALUES ($1,$2,$3,$4,'unknown_reconcile',$5,$6,$7,$8,$9::jsonb)`,
+          [session.id, line.id, variant.variant_id, unknown.scan_code, approvedQty, lineBefore, lineAfter, actor, JSON.stringify({
+            unknownScanId: String(unknown.id),
+            resolution: "manager_confirmed_assignment",
+            originalScannedQty: recordedQty,
+            approvedPhysicalQty: approvedQty,
+            excludedRetryOrDuplicateQty: recordedQty - approvedQty,
+            originalScanAt: unknown.first_scanned_at,
+            lastScanAt: unknown.last_scanned_at,
+            rememberBarcode, aliasCreated, note,
+          })],
+        );
+      }
+      const resolution = {
+        action, actor, note, reviewedAt: new Date().toISOString(),
+        recordedQty, approvedPhysicalQty: action === "assign" ? approvedQty : 0,
+        excludedQty: action === "assign" ? recordedQty - approvedQty : recordedQty,
+        variantId: action === "assign" ? String(variant.variant_id) : null,
+        product: variant ? productPayload(variant) : null,
+        priorCountedQty: lineBefore, finalCountedQty: lineAfter,
+        rememberBarcode: action === "assign" && rememberBarcode,
+        aliasCreated,
+      };
+      if (action === "discard") {
+        // A teves olvasas SEM tuntetheto el nyomtalanul: 0 darabos audit.
+        // Nem hoz letre leltarsort es semmilyen keszletmuveletet nem indit.
+        await client.query(
+          `INSERT INTO aif_opening_inventory_scans
+            (session_id,line_id,variant_id,scan_code,event_type,qty_delta,
+             counted_before,counted_after,actor,raw)
+           VALUES ($1,NULL,NULL,$2,'admin_correction',0,NULL,NULL,$3,$4::jsonb)`,
+          [session.id, unknown.scan_code, actor, JSON.stringify({
+            reason: "manager_discarded_unknown_scan",
+            unknownScanId: String(unknown.id),
+            originallyRecordedQty: recordedQty,
+            confirmedBy: actor,
+            note,
+          })],
+        );
+      }
+      await client.query(
+        `UPDATE aif_opening_inventory_unknown_scans
+          SET resolved_variant_id=$3,resolved_at=now(),resolved_by=$4,
+              raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object(
+                'manualResolution',$5::jsonb,
+                'manualResolutionHistory',
+                  COALESCE(raw->'manualResolutionHistory','[]'::jsonb)
+                  || CASE WHEN raw ? 'manualResolution'
+                     THEN jsonb_build_array(raw->'manualResolution')
+                     ELSE '[]'::jsonb END
+              ),
+              updated_at=now()
+          WHERE id=$1 AND session_id=$2 AND resolved_at IS NULL`,
+        [unknown.id, session.id, variant?.variant_id || null, actor, JSON.stringify(resolution)],
+      );
+      await client.query("COMMIT");
+      const fresh = await sessionById(client, session.id);
+      const detail = await adminDetail(client, fresh);
+      return res.json({ ok: true, manualResolution: resolution, ...detail });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF inventory unknown manual resolve failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az ismeretlen beolvasas rendezese nem sikerult.",
+      });
+    } finally { client.release(); }
+  });
+
   router.post("/admin/sessions/:id/reconcile-unknown", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -2321,7 +2719,7 @@ export default function createAifOpeningInventoryRouter({
       // Előbb az egész csomagot azonosítjuk, hogy ugyanazon termék különböző
       // hibás kódjai ne számolódjanak be egymás után észrevétlenül.
       for (const unknown of unknowns.rows) {
-        const match = await findVariantByCode(client, unknown.scan_code);
+        const match = await findVariantByCode(client, unknown.scan_code, session.location_id);
         if (match.matches.length !== 1) {
           remaining += 1;
           continue;
