@@ -1,5 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { buildVoucherXlsx } from './voucherXlsxWriter.js';
+import { buildVoucherPdf } from './voucherPdfWriter.js';
 
 // AllInFashion / Ajandekutalvanyok, 1. fazis: FIZIKAI UTALVANYOK.
 // Kulon nyilvantartas. NINCS penztar-, eladas-, TVA- vagy ruhakeszlet-modositas.
@@ -442,21 +444,81 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
     res.json({ok:true,items:q.rows,count:q.rows.length});
   }));
 
-  // Az adminnak a teljes archivum exportalhato; a keresolista limiten tul is.
-  router.get('/export.csv', requireAdminOrSecret, asyncRoute(async (req,res) => {
-    adminOnly(req);
-    const rows = await pool.query(`SELECT code,language,location_code,status,issued_value,balance,
-       buyer_name,recipient_name,created_by,created_at,issued_at,expires_on
-       FROM aif_gift_vouchers ORDER BY created_at DESC,code`);
-    const csv = value => `"${String(value ?? '').replaceAll('"','""')}"`;
-    const keys = ['code','language','location_code','status','issued_value','balance',
-      'buyer_name','recipient_name','created_by','created_at','issued_at','expires_on'];
-    const text = '\ufeff' + keys.join(';') + '\r\n' +
-      rows.rows.map(row => keys.map(key => csv(row[key])).join(';')).join('\r\n');
-    res.setHeader('Content-Type','text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition','attachment; filename="allinfashion-utalvanyok.csv"');
-    res.send(text);
-  }));
+  // Kizárólag olvasó export: pontosan ugyanazokat a szűrőket használja, mint a lista.
+  // A képernyő 200 soros limitje nem korlátozza a PDF / Excel nyilvántartást.
+  const locationName = code => ({admin_storage:'Központi készlet',main_warehouse:'Csíkszereda',magazin_targu_secuiesc:'Kézdivásárhely'})[code] || String(code || '–');
+  const voucherStatusName = code => ({blank:'Üres',in_transfer:'Átadás alatt',active:'Aktív',partial:'Részben beváltva',redeemed:'Felhasználva',blocked:'Blokkolva',void:'Érvénytelen'})[code] || String(code || '–');
+  const voucherKindName = code => ({issue:'Eladás / aktiválás',redeem:'Beváltás',restore:'Visszáru / jóváírás'})[code] || String(code || '–');
+  const paymentName = code => ({cash:'Készpénz',card:'Bankkártya',bank_transfer:'Átutalás',voucher:'Utalvány'})[code] || String(code || '–');
+  const exportStamp = timestamp => {
+    if (!timestamp) return '–';
+    const d = new Date(timestamp);
+    return Number.isNaN(d.getTime()) ? String(timestamp).slice(0,19) : d.toLocaleString('hu-HU',{
+      timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit',
+      hour:'2-digit',minute:'2-digit',hourCycle:'h23',
+    });
+  };
+  const displayMoney = amount => Number(amount || 0).toLocaleString('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const dateValid = value => /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(`${value}T12:00:00Z`)) && new Date(`${value}T12:00:00Z`).toISOString().slice(0,10) === value;
+  const textLabel = parts => parts.filter(Boolean).join(' · ') || 'Összes rekord';
+  async function sendVoucherDocument(res,format,fileBase,content) {
+    const output = format==='pdf' ? await buildVoucherPdf(content) : buildVoucherXlsx(content);
+    res.setHeader('Cache-Control','private, no-store');
+    res.setHeader('Content-Type',format==='pdf'?'application/pdf':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="${fileBase}.${format}"`);
+    res.send(output);
+  }
+  for (const format of ['pdf','xlsx']) {
+    router.get(`/export.${format}`,requireAdminOrSecret,asyncRoute(async(req,res)=>{
+      adminOnly(req);
+      const location=viewLocation(req,req.query.location);
+      const language=String(req.query.language||'').toUpperCase();
+      const status=String(req.query.status||'').trim();
+      const search=codeValue(req.query.search||'');
+      if(language&&!['HU','RO'].includes(language))throw reject('Érvénytelen nyelv.');
+      if(status&&!['blank','in_transfer','active','partial','redeemed','blocked','void'].includes(status))throw reject('Érvénytelen állapot.');
+      const args=[];const conditions=[];
+      if(location){args.push(location);conditions.push(`location_code=$${args.length}`);}
+      if(language){args.push(language);conditions.push(`language=$${args.length}`);}
+      if(status){args.push(status);conditions.push(`status=$${args.length}`);}
+      if(search){args.push(`%${search}%`);conditions.push(`(code ILIKE $${args.length} OR COALESCE(buyer_name,'') ILIKE $${args.length} OR COALESCE(recipient_name,'') ILIKE $${args.length})`);}
+      const result=await pool.query(`SELECT code,language,location_code,status,issued_value,balance,
+          buyer_name,recipient_name,created_by,created_at,issued_at,expires_on
+        FROM aif_gift_vouchers ${conditions.length?'WHERE '+conditions.join(' AND '):''}
+        ORDER BY created_at DESC,code`,args);
+      const rows=result.rows;
+      const caption=textLabel([location&&locationName(location),language,status&&voucherStatusName(status),search&&`Keresés: ${search}`]);
+      const summary=[
+        {label:'Utalványok',value:rows.length},
+        {label:'Üres utalványok',value:rows.filter(r=>r.status==='blank').length},
+        {label:'Kiadott névérték',value:rows.reduce((s,r)=>s+Number(r.issued_value||0),0),money:true},
+        {label:'Fennálló egyenleg',value:rows.reduce((s,r)=>s+Number(r.balance||0),0),money:true},
+      ];
+      if(format==='pdf'){
+        await sendVoucherDocument(res,format,'AllInFashion_Utalvanyok',{
+          title:'Ajándékutalványok - nyilvántartás',description:caption,summary,
+          columns:[
+            {label:'Kód',weight:18,size:7.6},{label:'Nyelv',weight:5},{label:'Készlethely',weight:12},
+            {label:'Állapot',weight:12},{label:'Névérték',weight:9,align:'right',money:true},
+            {label:'Egyenleg',weight:9,align:'right',money:true},
+            {label:'Vásárló',weight:13},{label:'Címzett',weight:12},{label:'Rögzítve',weight:12},
+          ],
+          rows:rows.map(r=>[r.code,r.language,locationName(r.location_code),voucherStatusName(r.status),
+            displayMoney(r.issued_value),displayMoney(r.balance),r.buyer_name||'–',r.recipient_name||'–',exportStamp(r.created_at)]),
+        });
+      }else{
+        await sendVoucherDocument(res,format,'AllInFashion_Utalvanyok',{
+          title:'Ajándékutalványok - nyilvántartás',description:caption,summary,
+          headers:['Kód','Nyelv','Készlethely','Állapot','Vásárló','Névérték (RON)','Egyenleg (RON)','Címzett','Rögzítve','Aktiválva','Lejárat','Rögzítette'],
+          widths:[29,10,26,22,27,19,19,27,23,23,15,23],moneyColumns:[5,6],
+          rows:rows.map(r=>[r.code,r.language,locationName(r.location_code),voucherStatusName(r.status),
+            r.buyer_name||'',Number(r.issued_value||0),Number(r.balance||0),r.recipient_name||'',
+            exportStamp(r.created_at),exportStamp(r.issued_at),String(r.expires_on||'').slice(0,10),r.created_by||'']),
+        });
+      }
+    }));
+  }
 
   router.post('/register', requireAdminOrSecret, asyncRoute(async (req,res) => {
     adminOnly(req);
@@ -768,22 +830,53 @@ export default function createAifVoucherRouter({ pool, requireAuthed, requireAdm
       issuedCount,redeemedCount,restoredCount,outstandingAsOf});
   }));
 
-  // Teljes archivum: nincsen 300 soros kereso-limit. Csak ADMIN exportalhat.
-  router.get('/transactions/export.csv', requireAdminOrSecret, asyncRoute(async (req,res) => {
-    adminOnly(req);
-    const rows=await pool.query(`SELECT t.created_at,v.code,v.language,t.kind,t.location_code,t.method,
-      t.amount,t.sale_number,t.reference,t.actor
-      FROM aif_gift_voucher_transactions t
-      JOIN aif_gift_vouchers v ON v.id=t.voucher_id
-      ORDER BY t.created_at DESC,t.id DESC`);
-    const columns=['created_at','code','language','kind','location_code','method',
-      'amount','sale_number','reference','actor'];
-    const safe=(v)=>'"'+String(v??'').replaceAll('"','""')+'"';
-    const csv='\ufeff'+columns.join(';')+'\r\n'+rows.rows.map(row=>columns.map(key=>safe(row[key])).join(';')).join('\r\n');
-    res.setHeader('Content-Type','text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition','attachment; filename="allinfashion-utalvany-penznaplo.csv"');
-    res.send(csv);
-  }));
+  // Pénzügyi napló: az összes találat exportálható, nem csak a képernyő 300 sora.
+  for(const format of ['pdf','xlsx']){
+    router.get(`/transactions/export.${format}`,requireAdminOrSecret,asyncRoute(async(req,res)=>{
+      adminOnly(req);
+      const location=viewLocation(req,req.query.location);
+      const from=String(req.query.from||'').trim();
+      const to=String(req.query.to||'').trim();
+      if((from&&!dateValid(from))||(to&&!dateValid(to))||(from&&to&&from>to))throw reject('Érvénytelen dátumtartomány.');
+      const args=[];const filters=[];
+      if(location){args.push(location);filters.push(`t.location_code=$${args.length}`);}
+      if(from){args.push(from);filters.push(`(t.created_at AT TIME ZONE 'Europe/Bucharest')::date >= $${args.length}::date`);}
+      if(to){args.push(to);filters.push(`(t.created_at AT TIME ZONE 'Europe/Bucharest')::date <= $${args.length}::date`);}
+      const result=await pool.query(`SELECT t.created_at,v.code,v.language,t.kind,t.location_code,t.method,
+          t.amount,t.sale_number,t.reference,t.actor
+        FROM aif_gift_voucher_transactions t
+        JOIN aif_gift_vouchers v ON v.id=t.voucher_id
+        ${filters.length?'WHERE '+filters.join(' AND '):''}
+        ORDER BY t.created_at DESC,t.id DESC`,args);
+      const rows=result.rows;
+      const kindSum=kind=>rows.filter(r=>r.kind===kind).reduce((s,r)=>s+Number(r.amount||0),0);
+      const summary=[
+        {label:'Tranzakciók',value:rows.length},
+        {label:'Utalványeladás',value:kindSum('issue'),money:true},
+        {label:'Beváltás',value:kindSum('redeem'),money:true},
+        {label:'Visszaírás',value:kindSum('restore'),money:true},
+      ];
+      const caption=textLabel([location&&locationName(location),from&&`Ettől: ${from}`,to&&`Eddig: ${to}`]);
+      if(format==='pdf'){
+        await sendVoucherDocument(res,format,'AllInFashion_Utalvany_Penzugyi_Naplo',{
+          title:'Ajándékutalvány - pénzügyi napló',description:caption,summary,
+          columns:[{label:'Dátum',weight:13},{label:'Utalványkód',weight:17,size:7.6},
+            {label:'Esemény',weight:14},{label:'Üzlet',weight:11},{label:'Fizetési mód',weight:11},
+            {label:'Összeg',weight:10,align:'right',money:true},{label:'Bizonylat / ref.',weight:14},{label:'Rögzítette',weight:10}],
+          rows:rows.map(r=>[exportStamp(r.created_at),r.code,voucherKindName(r.kind),locationName(r.location_code),
+            paymentName(r.method),displayMoney(r.amount),r.sale_number||r.reference||'–',r.actor||'–']),
+        });
+      }else{
+        await sendVoucherDocument(res,format,'AllInFashion_Utalvany_Penzugyi_Naplo',{
+          title:'Ajándékutalvány - pénzügyi napló',description:caption,summary,
+          headers:['Dátum','Utalványkód','Esemény','Üzlet','Fizetési mód','Összeg (RON)','Bizonylatszám','Referencia','Rögzítette','Nyelv'],
+          widths:[23,29,25,27,22,20,24,27,23,12],moneyColumns:[5],
+          rows:rows.map(r=>[exportStamp(r.created_at),r.code,voucherKindName(r.kind),locationName(r.location_code),
+            paymentName(r.method),Number(r.amount||0),r.sale_number||'',r.reference||'',r.actor||'',r.language||'']),
+        });
+      }
+    }));
+  }
 
   // Pen zmozgasi naplo. A ruhaeladas es utalvanyertekesites nem keveredik.
   router.get('/transactions', requireAuthed, asyncRoute(async (req,res) => {
