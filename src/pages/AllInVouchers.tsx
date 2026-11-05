@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft, Barcode, CheckCircle2, ClipboardList, Clock3, FileClock, Gift,
   ListFilter, Loader2, PackageCheck, PackagePlus, RefreshCw, ShieldAlert,
-  ShieldCheck, Truck, X, Ban, Search, ChevronRight,
+  ShieldCheck, Truck, X, Ban, Search, ChevronRight, ChevronLeft, ChevronDown, CalendarDays,
 } from "lucide-react";
 
 const VOUCHER_PICS = {
@@ -71,6 +72,257 @@ function Kpi({label,value,sub}:{label:string;value:string;sub?:string}) {
   </div>;
 }
 
+// A raktári WarehouseSingleSelect mintáját követő, képernyőhöz igazodó legördülő.
+// A lista portálba kerül, ezért nem vágja le a kártya és lefelé/felfelé is nyílhat.
+type VoucherSelectOption = { value: string; label: string };
+
+function VoucherSelect({
+  label, value, options, onChange, className = "",
+}: {
+  label: string;
+  value: string;
+  options: VoucherSelectOption[];
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<CSSProperties>({});
+  const selected = options.find((option) => option.value === value);
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect || typeof window === "undefined") return;
+    const edge = 10;
+    const gap = 6;
+    const width = Math.min(Math.max(rect.width, 210), window.innerWidth - edge * 2);
+    const desiredHeight = Math.min(340, options.length * 39 + 12);
+    const below = Math.max(0, window.innerHeight - rect.bottom - edge);
+    const above = Math.max(0, rect.top - edge);
+    const upward = below < Math.min(desiredHeight, 190) && above > below;
+    const height = Math.min(desiredHeight, Math.max(90, (upward ? above : below) - gap));
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    setPosition({
+      position: "fixed", left, width, maxHeight: height,
+      top: upward ? Math.max(edge, rect.top - gap) : Math.min(window.innerHeight - edge, rect.bottom + gap),
+      transform: upward ? "translateY(-100%)" : "none",
+      zIndex: 2147483200,
+    });
+  }, [options.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
+
+  return <div className={`min-w-0 ${className}`}>
+    <button
+      ref={triggerRef} type="button" aria-label={label} title={selected?.label || label}
+      aria-haspopup="listbox" aria-expanded={open}
+      className={`flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border bg-[#344257] px-3 text-left text-xs text-white outline-none transition hover:bg-[#405067] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 ${open ? "border-[#7bd7d4]/65 bg-[#3b5266]" : "border-white/18"}`}
+      onClick={() => { if (!open) updatePosition(); setOpen((current) => !current); }}
+    >
+      <span className="min-w-0 truncate">{selected?.label || label}</span>
+      <ChevronDown size={15} className={`shrink-0 text-white/65 transition-transform ${open ? "rotate-180 text-[#d7fffd]" : ""}`} />
+    </button>
+    {open && typeof document !== "undefined" && createPortal(
+      <div
+        ref={popoverRef} style={position} role="listbox" aria-label={label}
+        className="min-h-0 overflow-y-auto overscroll-contain rounded-2xl border border-[#7bd7d4]/32 bg-[#293344] p-1.5 text-white shadow-[0_24px_65px_rgba(0,0,0,0.55)]"
+      >
+        {options.map((option) => {
+          const active = option.value === value;
+          return <button
+            key={option.value} type="button" role="option" aria-selected={active}
+            className={`mb-1 flex min-h-9 w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition last:mb-0 ${active ? "border-[#7bd7d4]/55 bg-[#2a8d8b] text-white" : "border-transparent bg-[#354153] text-white/80 hover:border-white/10 hover:bg-[#425166]"}`}
+            onClick={() => { onChange(option.value); setOpen(false); }}
+          ><span className="min-w-0 truncate">{option.label}</span>{active && <CheckCircle2 size={14} className="shrink-0 text-[#d7fffd]" />}</button>;
+        })}
+      </div>,
+      document.body,
+    )}
+  </div>;
+}
+
+const VOUCHER_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+];
+const VOUCHER_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"];
+type VoucherLedgerPreset = "all" | "today" | "yesterday" | "week" | "month30" | "thisMonth" | "custom";
+
+function voucherTodayIso(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const p = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+function voucherParsedIso(value: string) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { year, month, day, date };
+}
+function voucherUtcIso(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+function voucherShiftDays(iso: string, amount: number) {
+  const parsed = voucherParsedIso(iso);
+  if (!parsed) return iso;
+  const next = new Date(parsed.date);
+  next.setUTCDate(next.getUTCDate() + amount);
+  return voucherUtcIso(next);
+}
+function voucherDateLabel(iso: string) {
+  const parsed = voucherParsedIso(iso);
+  return parsed ? `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.` : "Dátum választása";
+}
+
+// A pénzügyi naplóban magyar, hétfővel kezdődő, böngészőfüggetlen naptár.
+function VoucherDatePicker({
+  label, value, onChange, open, onOpen, onClose,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const today = voucherTodayIso();
+  const initial = voucherParsedIso(value) || voucherParsedIso(today)!;
+  const [viewYear, setViewYear] = useState(initial.year);
+  const [viewMonth, setViewMonth] = useState(initial.month - 1);
+  const [yearMode, setYearMode] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect || typeof window === "undefined") return;
+    const edge = 10, gap = 6;
+    const width = Math.min(326, window.innerWidth - edge * 2);
+    const desiredHeight = 415;
+    const below = window.innerHeight - rect.bottom - edge;
+    const above = rect.top - edge;
+    const upward = below < desiredHeight && above > below;
+    const room = Math.max(130, Math.min(desiredHeight, (upward ? above : below) - gap));
+    setPosition({
+      position: "fixed", left: Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge)),
+      top: upward ? Math.max(edge, rect.top - gap) : rect.bottom + gap,
+      transform: upward ? "translateY(-100%)" : "none",
+      width, maxHeight: room, zIndex: 2147483300,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const selected = voucherParsedIso(value) || voucherParsedIso(voucherTodayIso())!;
+    setViewYear(selected.year);
+    setViewMonth(selected.month - 1);
+    setYearMode(false);
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      onClose();
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, onClose, updatePosition]);
+
+  const first = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const offset = (first.getUTCDay() + 6) % 7;
+  const start = new Date(first);
+  start.setUTCDate(first.getUTCDate() - offset);
+  const dates = Array.from({length: 42}, (_, i) => {
+    const d = new Date(start);
+    d.setUTCDate(start.getUTCDate() + i);
+    return d;
+  });
+  const chosen = voucherParsedIso(value);
+  const shift = (delta: number) => {
+    if (yearMode) setViewYear((year) => year + delta * 12);
+    else {
+      const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+      setViewYear(next.getUTCFullYear());
+      setViewMonth(next.getUTCMonth());
+    }
+  };
+  const choose = (next: string) => { onChange(next); onClose(); };
+
+  return <div className="min-w-0">
+    <span className="mb-1.5 block text-[10px] text-white/58">{label}</span>
+    <button
+      ref={buttonRef} type="button" aria-label={label} aria-haspopup="dialog" aria-expanded={open}
+      className={`flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border bg-[#344257] px-3 text-xs text-white outline-none transition hover:bg-[#405067] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20 ${open ? "border-[#7bd7d4]/65" : "border-white/18"}`}
+      onClick={() => { if (open) onClose(); else { updatePosition(); onOpen(); } }}
+    >
+      <span className="flex min-w-0 items-center gap-2"><CalendarDays size={15} className="shrink-0 text-[#93e4df]"/><span className="truncate">{voucherDateLabel(value)}</span></span>
+      <ChevronDown size={14} className={`shrink-0 text-white/55 transition-transform ${open ? "rotate-180" : ""}`}/>
+    </button>
+    {open && typeof document !== "undefined" && createPortal(
+      <div ref={popupRef} role="dialog" aria-label={`${label} naptár`} style={position}
+        className="overflow-y-auto overscroll-contain rounded-[20px] border border-[#7bd7d4]/40 bg-[#253246] p-3 text-white shadow-[0_28px_80px_rgba(0,0,0,0.64)]">
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#344257] p-1.5">
+          <button type="button" aria-label="Előző hónap vagy év" onClick={() => shift(-1)} className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-white/80 hover:bg-white/10"><ChevronLeft size={16}/></button>
+          <button type="button" onClick={() => setYearMode((current) => !current)} className="min-w-0 flex-1 rounded-lg px-2 py-1 text-center text-sm hover:bg-white/10" title="Év kiválasztása">{viewYear}. {yearMode ? "Évválasztás" : VOUCHER_MONTHS[viewMonth]} <ChevronDown size={12} className="ml-1 inline text-white/55"/></button>
+          <button type="button" aria-label="Következő hónap vagy év" onClick={() => shift(1)} className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-white/80 hover:bg-white/10"><ChevronRight size={16}/></button>
+        </div>
+        {yearMode ? <div className="mt-3 grid grid-cols-4 gap-1.5">{Array.from({length: 12}, (_, i) => viewYear - 5 + i).map((year) => <button
+          type="button" key={year} onClick={() => {setViewYear(year);setYearMode(false);}}
+          className={`h-9 rounded-lg border text-xs ${year===viewYear ? "border-[#7bd7d4]/55 bg-[#2a8d8b]" : "border-white/10 bg-[#344257] hover:bg-[#405067]"}`}>{year}</button>)}</div>
+        : <>
+          <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[10px] text-white/46">{VOUCHER_WEEKDAYS.map((day) => <div key={day} className="py-1">{day}</div>)}</div>
+          <div className="grid grid-cols-7 gap-1">{dates.map((day) => {
+            const iso = voucherUtcIso(day);
+            const inMonth = day.getUTCMonth() === viewMonth;
+            const selected = Boolean(chosen && chosen.year === day.getUTCFullYear() && chosen.month === day.getUTCMonth()+1 && chosen.day === day.getUTCDate());
+            return <button key={iso} type="button" onClick={() => choose(iso)} aria-label={voucherDateLabel(iso)} aria-pressed={selected}
+              className={`relative h-9 rounded-lg border text-xs transition ${selected ? "border-[#b6f5ef]/65 bg-[#2a8d8b] text-white" : inMonth ? "border-transparent bg-[#344257] text-white/85 hover:border-[#7bd7d4]/28 hover:bg-[#42556a]" : "border-transparent text-white/30 hover:bg-white/10"}`}>
+              {day.getUTCDate()}{iso === today && !selected && <span className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#7bd7d4]"/>}
+            </button>;
+          })}</div>
+        </>}
+        <div className="mt-3 flex justify-between gap-2 border-t border-white/10 pt-2.5">
+          <button type="button" onClick={() => choose("")} className="h-8 rounded-lg border border-white/12 px-3 text-[11px] text-white/65 hover:bg-white/10">Törlés</button>
+          <button type="button" onClick={() => choose(today)} className="h-8 rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/25 px-3 text-[11px] text-[#d7fffd] hover:bg-[#2a8d8b]/45">Ma</button>
+        </div>
+      </div>, document.body,
+    )}
+  </div>;
+}
+
 export default function AllInVouchers({ actor, role, locationCode }: {
   actor: string; role: Role; locationCode?: string;
 }) {
@@ -132,6 +384,10 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   const [ledgerSummary,setLedgerSummary] = useState<VoucherTxSummary[]>([]);
   const [ledgerBusy,setLedgerBusy] = useState(false);
   const [ledgerError,setLedgerError] = useState("");
+  const [ledgerPeriod,setLedgerPeriod] = useState<VoucherLedgerPreset>("all");
+  const [ledgerCalendarOpen,setLedgerCalendarOpen] = useState<"from" | "to" | null>(null);
+  const [previewZoom,setPreviewZoom] = useState(false);
+  const closeLedgerCalendar = useCallback(() => setLedgerCalendarOpen(null), []);
 
   const listLocation = admin ? locationFilter : ownLocation;
   const issueAt=admin?issueLocation:ownLocation;
@@ -379,6 +635,42 @@ export default function AllInVouchers({ actor, role, locationCode }: {
   }
   useEffect(()=>{if(tab==='ledger')void loadLedger();},[tab,ledgerFrom,ledgerTo,admin,ownLocation]);
 
+  function changeLedgerFrom(next: string) {
+    setLedgerFrom(next);
+    setLedgerTo((current) => next && current && current < next ? next : current);
+    setLedgerPeriod("custom");
+  }
+  function changeLedgerTo(next: string) {
+    setLedgerTo(next);
+    setLedgerFrom((current) => next && current && current > next ? next : current);
+    setLedgerPeriod("custom");
+  }
+  function applyLedgerPeriod(preset: VoucherLedgerPreset) {
+    if (preset === "custom") {
+      setLedgerPeriod("custom");
+      setLedgerCalendarOpen("from");
+      return;
+    }
+    const today = voucherTodayIso();
+    const from = preset === "all" ? "" : preset === "today" ? today : preset === "yesterday"
+      ? voucherShiftDays(today, -1) : preset === "week" ? voucherShiftDays(today, -6)
+      : preset === "month30" ? voucherShiftDays(today, -29) : `${today.slice(0, 7)}-01`;
+    const to = preset === "all" ? "" : preset === "yesterday" ? from : today;
+    setLedgerFrom(from);
+    setLedgerTo(to);
+    setLedgerPeriod(preset);
+    setLedgerCalendarOpen(null);
+  }
+
+  useEffect(() => {
+    if (!previewZoom) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setPreviewZoom(false); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); document.body.style.overflow = previousOverflow; };
+  }, [previewZoom]);
+
   const nav:Array<{id:Tab;label:string;icon:typeof Gift}> = [
     {id:"overview",label:"Áttekintés",icon:ClipboardList},
     ...(admin?[{id:"receive-stock" as Tab,label:"Bevételezés",icon:PackagePlus}]:[]),
@@ -399,7 +691,7 @@ export default function AllInVouchers({ actor, role, locationCode }: {
             <p className="mt-0.5 text-xs text-white/55">{admin?"Adminisztráció":STORE_LABELS[ownLocation]} • {actor}</p></div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Pill>{financeLoading?'Pénztári állapot ellenőrzés…':financeEnabled?'2. fázis · pénzügyi próba':'1. fázis · pénzügy zárolva'}</Pill>
+          <Pill>{financeLoading?'Pénztári állapot ellenőrzése…':financeEnabled?'Pénzügyi funkció aktív':'Pénzügyi funkció zárolva'}</Pill>
           <button type="button" onClick={()=>void refresh()} disabled={loading} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/18 bg-white/[0.06] px-3 text-sm hover:bg-white/10 disabled:opacity-50"><RefreshCw size={16} className={loading?"animate-spin":""}/> Frissítés</button>
           <button type="button" onClick={goBack} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#8be0da]/42 bg-[#2a8d8b] px-3 text-sm hover:bg-[#319c99]"><ArrowLeft size={16}/> Vissza</button>
         </div>
@@ -456,9 +748,12 @@ export default function AllInVouchers({ actor, role, locationCode }: {
         {admin&&<section className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5">
           <h2 className="flex items-center gap-2 text-lg"><Truck size={21}/> Átadás előkészítése</h2>
           <p className="mt-1 text-sm text-white/55">Csak üres, központi utalványok adhatók át. Az üzlet átvétele külön, egyenkénti beolvasással történik.</p>
-          <div className="mt-4 flex flex-wrap items-center gap-3"><label className="text-xs text-white/65">Célüzlet</label><select value={destination} onChange={e=>setDestination(e.target.value)} className="h-11 rounded-xl border border-white/20 bg-[#293548] px-3 text-sm outline-none">
-            <option value="main_warehouse">Csíkszereda</option><option value="magazin_targu_secuiesc">Kézdivásárhely</option>
-          </select><Pill>{draftCodes.length} darab a csomagban</Pill></div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="text-xs text-white/65">Célüzlet</span>
+            <VoucherSelect label="Célüzlet" value={destination} onChange={setDestination} className="w-full sm:w-[235px]"
+              options={[{value:"main_warehouse",label:"Csíkszereda"},{value:"magazin_targu_secuiesc",label:"Kézdivásárhely"}]}/>
+            <Pill>{draftCodes.length} darab a csomagban</Pill>
+          </div>
           <form onSubmit={e=>{e.preventDefault();addTransferCode();}} className="mt-3 flex gap-2">
             <input ref={transferRef} value={transferCode} onChange={e=>setTransferCode(e.target.value)} className="h-12 min-w-0 flex-1 rounded-xl border border-white/20 bg-[#253144] px-4 text-sm outline-none focus:border-[#8fe9e4]" placeholder="Üres utalvány vonalkódja"/>
             <button type="submit" className="h-12 rounded-xl border border-white/20 bg-[#354d60] px-4 text-sm">Hozzáadás</button>
@@ -489,9 +784,12 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           {admin&&<a href={`${ROOT}/export.csv`} className="inline-flex min-h-10 items-center rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#42546a]">Teljes nyilvántartás · CSV</a>}
         </div><p className="mt-1 text-xs text-white/55">Egy sorszám csak egyszer hozható létre. A névérték és egyenleg az értékesítésig 0 RON.</p>
         <div className="mt-4 flex flex-wrap gap-2">
-          {admin&&<select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)} className="h-11 rounded-xl border border-white/15 bg-[#293548] px-3 text-sm"><option value="">Minden készlethely</option>{Object.entries(STORE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select>}
-          <select value={langFilter} onChange={e=>setLangFilter(e.target.value)} className="h-11 rounded-xl border border-white/15 bg-[#293548] px-3 text-sm"><option value="">HU és RO</option><option value="HU">HU</option><option value="RO">RO</option></select>
-          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="h-11 rounded-xl border border-white/15 bg-[#293548] px-3 text-sm"><option value="">Minden állapot</option><option value="blank">Üres</option><option value="in_transfer">Átadás alatt</option><option value="active">Aktív</option><option value="partial">Részben beváltva</option><option value="redeemed">Felhasználva</option><option value="blocked">Blokkolva</option></select>
+          {admin&&<VoucherSelect label="Készlethely szűrése" value={locationFilter} onChange={setLocationFilter} className="w-full sm:w-[220px]"
+            options={[{value:"",label:"Minden készlethely"},...Object.entries(STORE_LABELS).map(([value,label])=>({value,label}))]}/>}
+          <VoucherSelect label="Nyelv szűrése" value={langFilter} onChange={setLangFilter} className="w-full sm:w-[145px]"
+            options={[{value:"",label:"HU és RO"},{value:"HU",label:"Magyar (HU)"},{value:"RO",label:"Román (RO)"}]}/>
+          <VoucherSelect label="Állapot szűrése" value={statusFilter} onChange={setStatusFilter} className="w-full sm:w-[205px]"
+            options={[{value:"",label:"Minden állapot"},{value:"blank",label:"Üres"},{value:"in_transfer",label:"Átadás alatt"},{value:"active",label:"Aktív"},{value:"partial",label:"Részben beváltva"},{value:"redeemed",label:"Felhasználva"},{value:"blocked",label:"Blokkolva"}]}/>
           <input value={search} onChange={e=>setSearch(e.target.value)} className="h-11 min-w-[190px] flex-1 rounded-xl border border-white/15 bg-[#293548] px-3 text-sm outline-none focus:border-[#8be2dc]" placeholder="Sorszám keresése…"/>
         </div>
         <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="text-[10px] uppercase tracking-wider text-white/45"><tr className="border-b border-white/12">{["Kód","Nyelv","Készlethely","Állapot","Egyenleg","Rögzítve",""].map(x=><th key={x} className="px-3 py-3 font-normal">{x}</th>)}</tr></thead>
@@ -505,10 +803,10 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           <h2 className="flex items-center gap-2 text-xl"><Gift size={23}/> Ajándékutalvány értékesítése</h2>
           <p className="mt-2 text-sm leading-6 text-white/55">Csak a már bevezetett és a boltba átvett, üres utalvány adható el. A kód egyetlen egyszer aktiválható.</p>
           {!financeEnabled&&<div className="mt-3 rounded-xl border border-amber-200/28 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">A pénzügyi funkció jelenleg szerveroldalon zárolva van. A sorszám ellenőrizhető, de valódi pénzmozgás még nem rögzíthető.</div>}
-          {admin&&<label className="mt-4 grid gap-1 text-xs text-white/65">Melyik üzletben történik az értékesítés?
-            <select value={issueLocation} onChange={e=>setIssueLocation(e.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#253144] px-3 text-sm text-white">
-              <option value="main_warehouse">Csíkszereda</option><option value="magazin_targu_secuiesc">Kézdivásárhely</option>
-            </select></label>}
+          {admin&&<div className="mt-4 grid max-w-[380px] gap-1.5"><span className="text-xs text-white/65">Melyik üzletben történik az értékesítés?</span>
+            <VoucherSelect label="Értékesítő üzlet" value={issueLocation} onChange={setIssueLocation}
+              options={[{value:"main_warehouse",label:"Csíkszereda"},{value:"magazin_targu_secuiesc",label:"Kézdivásárhely"}]}/>
+          </div>}
           <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
             <label className="grid gap-1 text-xs text-white/65">Üres utalvány vonalkódja
               <input ref={issueRef} value={issueCode} onChange={e=>{setIssueCode(e.target.value);setError('');}}
@@ -563,9 +861,24 @@ export default function AllInVouchers({ actor, role, locationCode }: {
             {admin&&<a href={`${ROOT}/transactions/export.csv`} className="inline-flex h-10 items-center rounded-lg border border-white/20 bg-[#354153] px-3 text-xs text-white">Teljes napló · CSV</a>}
             <button type="button" onClick={()=>void loadLedger()} disabled={ledgerBusy} className="h-10 rounded-lg border border-white/20 bg-[#354153] px-3 text-xs disabled:opacity-40">Frissítés</button>
           </div></div>
-        <div className="mt-3 flex flex-wrap gap-3">
-          <label className="grid gap-1 text-xs text-white/60">Dátumtól<input type="date" value={ledgerFrom} onChange={e=>setLedgerFrom(e.target.value)} className="h-11 rounded-lg border border-white/18 bg-[#293548] px-3"/></label>
-          <label className="grid gap-1 text-xs text-white/60">Dátumig<input type="date" value={ledgerTo} onChange={e=>setLedgerTo(e.target.value)} className="h-11 rounded-lg border border-white/18 bg-[#293548] px-3"/></label>
+        <div className="mt-4 rounded-2xl border border-white/10 bg-[#354153]/55 p-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {([
+              ["today","Ma"],["yesterday","Tegnap"],["week","7 nap"],
+              ["month30","30 nap"],["thisMonth","E havi"],["custom","Egyedi"],["all","Összes"],
+            ] as Array<[VoucherLedgerPreset,string]>).map(([key,label])=><button key={key} type="button"
+              onClick={()=>applyLedgerPeriod(key)} aria-pressed={ledgerPeriod===key}
+              className={`h-8 rounded-lg border px-3 text-[11px] transition ${ledgerPeriod===key ? "border-[#93e7e1]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#303a4c] text-white/67 hover:border-[#7bd7d4]/30 hover:text-white"}`}>
+              {label}
+            </button>)}
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:max-w-[455px]">
+            <VoucherDatePicker label="Dátumtól" value={ledgerFrom} onChange={changeLedgerFrom}
+              open={ledgerCalendarOpen==="from"} onOpen={()=>setLedgerCalendarOpen("from")} onClose={closeLedgerCalendar}/>
+            <VoucherDatePicker label="Dátumig" value={ledgerTo} onChange={changeLedgerTo}
+              open={ledgerCalendarOpen==="to"} onOpen={()=>setLedgerCalendarOpen("to")} onClose={closeLedgerCalendar}/>
+          </div>
+          <p className="mt-2 text-[10px] text-white/40">A dátumok magyar formátumban jelennek meg, a szűrés a romániai időzónát használja.</p>
         </div>
         {ledgerError&&<p role="alert" className="mt-3 text-xs text-rose-200">{ledgerError}</p>}
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{ledgerSummary.map(r=><Kpi key={r.kind+r.method} label={`${r.kind==='issue'?'Értékesítés':r.kind==='restore'?'Visszaírás':'Beváltás'} · ${r.method||'–'} · ${r.count} db`} value={money(r.total)}/>)}</div>
@@ -574,13 +887,38 @@ export default function AllInVouchers({ actor, role, locationCode }: {
           {!ledgerRows.length&&<p className="py-10 text-center text-sm text-white/45">{ledgerBusy?'Pénznapló betöltése…':'Nincs rögzített utalványtranzakció.'}</p>}</div>
       </section>}
 
-      {tab==="preview"&&<section className="grid gap-4 lg:grid-cols-[1fr_330px]">
-        <div className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg">Eredeti utalványminta</h2><div className="flex gap-2">{(["HU","RO"] as Lang[]).map(x=><button key={x} onClick={()=>setPreviewLang(x)} className={`h-10 rounded-lg border px-4 text-xs ${previewLang===x?"border-[#a4e7e4]/50 bg-[#2a8d8b]":"border-white/15 bg-white/5"}`}>{x}</button>)}</div></div>
-          <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány minta`} className="mt-4 w-full rounded-xl border border-white/10 bg-white object-contain"/>
-          <p className="mt-3 text-xs text-white/48">A képet az eredeti R2 tárolóból nyitjuk meg. Az utalványt és a vonalkódot továbbra sem a rendszer generálja.</p>
+      {tab==="preview"&&<section className="grid max-w-[990px] items-start gap-3 lg:grid-cols-[minmax(0,620px)_minmax(0,340px)]">
+        <div className="rounded-[22px] border border-white/14 bg-[#303a4c] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="text-base">Eredeti utalványminta</h2><p className="mt-1 text-xs text-white/45">Az eredeti grafika, változtatás nélkül.</p></div>
+            <div className="flex gap-1.5">{(["HU","RO"] as Lang[]).map(x=><button key={x} type="button" onClick={()=>setPreviewLang(x)}
+              className={`h-9 min-w-12 rounded-lg border px-3 text-xs transition ${previewLang===x?"border-[#a4e7e4]/55 bg-[#2a8d8b]":"border-white/15 bg-[#354153] hover:bg-[#415167]"}`}>{x}</button>)}</div>
+          </div>
+          <div className="mt-3 flex min-h-[360px] items-center justify-center rounded-2xl border border-white/10 bg-[#263346] px-4 py-3">
+            <button type="button" className="group relative max-w-full rounded-xl outline-none focus:ring-2 focus:ring-[#7bd7d4]/50" onClick={()=>setPreviewZoom(true)} title="Utalvány nagyítása">
+              <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány minta`}
+                className="block max-h-[445px] max-w-full rounded-lg border border-white/12 bg-white object-contain shadow-[0_14px_32px_rgba(0,0,0,0.28)]" />
+              <span className="absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/20 bg-[#192739]/92 px-3 py-1.5 text-[10px] text-white opacity-90 transition group-hover:bg-[#2a8d8b]">Kattintás: nagyítás</span>
+            </button>
+          </div>
+          <p className="mt-3 text-[11px] text-white/48">Az eredeti R2 képet jelenítjük meg. Az utalványt és a vonalkódját nem a program generálja.</p>
         </div>
-        <div className="rounded-[22px] border border-white/14 bg-[#344256] p-5"><h3 className="text-base">Digitális előnézet</h3><p className="mt-3 text-sm leading-6 text-white/60">A név és a tényleges kiadott érték ráillesztése az eladási aktiváláshoz kapcsolódik. Addig az üres papírok értéke 0 RON.</p><div className="mt-5 rounded-xl border border-amber-100/20 bg-amber-100/10 p-3 text-xs text-amber-50">A fehér mezőkbe csak az aktiválás után kerülhet hiteles érték. A kézzel átírt papír soha nem módosítja az adatbázis-egyenleget.</div></div>
+        <aside className="rounded-[22px] border border-white/14 bg-[#344256] p-4">
+          <h3 className="text-base">Digitális előnézet</h3>
+          <p className="mt-2 text-xs leading-6 text-white/65">A személyre szóló név és a tényleges kiadott érték az aktiváláskor kapcsolódik az utalványhoz. Az üres papírok értéke 0 RON.</p>
+          <div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 p-3 text-[11px] leading-5 text-white/70">A fehér mezőkre csak az aktiválás után kerülhet hiteles érték. A papír kézi módosítása nem változtatja meg az adatbázis-egyenleget.</div>
+          <button type="button" className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/22 text-xs text-[#d7fffd] hover:bg-[#2a8d8b]/40" onClick={()=>setPreviewZoom(true)}><Search size={15}/> Teljes méretű megtekintés</button>
+        </aside>
       </section>}
+
+      {previewZoom && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[2147483400] flex items-center justify-center bg-[#0c1626]/88 p-3 backdrop-blur-md" onMouseDown={e=>{if(e.currentTarget===e.target)setPreviewZoom(false);}} role="dialog" aria-modal="true" aria-label="Ajándékutalvány nagyított előnézete">
+          <div className="flex max-h-[94vh] max-w-[94vw] flex-col overflow-hidden rounded-2xl border border-[#7bd7d4]/35 bg-[#263346] p-3 shadow-[0_30px_100px_rgba(0,0,0,.75)]">
+            <div className="mb-2 flex shrink-0 items-center justify-between gap-3"><span className="text-sm text-white/85">{previewLang} · Eredeti utalványminta</span><button type="button" onClick={()=>setPreviewZoom(false)} className="flex h-9 items-center gap-2 rounded-lg border border-white/16 bg-white/10 px-3 text-xs hover:bg-white/15"><X size={15}/> Bezárás</button></div>
+            <img src={VOUCHER_PICS[previewLang]} alt={`${previewLang} ajándékutalvány nagyítva`} className="min-h-0 max-h-[82vh] max-w-[90vw] rounded-lg bg-white object-contain" />
+          </div>
+        </div>, document.body,
+      )}
 
       <footer className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/12 bg-[#303a4c] px-4 py-3 text-xs text-white/50"><ShieldCheck size={16} className="text-[#a3eae5]"/> Az utalvány egyenlege és a ruhakészlet külön, hiteles naplóban él. <span className="text-white/70">{financeEnabled?'Pénzügyi funkció engedélyezve. Fiskális bizonylat külön szükséges.':'A pénzügyi funkciók a szerveren egyelőre zárolva.'}</span></footer>
     </div>
