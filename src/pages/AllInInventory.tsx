@@ -610,6 +610,24 @@ type OpeningInventorySummary = {
   book_diff_retail_value?: number | string | null;
 };
 
+type UnknownProductOption = {
+  product: {
+    variantId: string;
+    title: string;
+    barcode?: string | null;
+    internalSku?: string | null;
+    snCod?: string | null;
+    brandName?: string | null;
+    colorName?: string | null;
+    size?: string | null;
+    imageUrl?: string | null;
+    sellPrice?: number | null;
+  };
+  variantStatus: string;
+  currentStockQty: number;
+  alreadyCountedQty: number | null;
+};
+
 type OpeningUnknownScan = {
   id: string;
   scan_code: string;
@@ -620,6 +638,7 @@ type OpeningUnknownScan = {
   resolved_variant_id?: string | null;
   resolved_at?: string | null;
   resolved_by?: string | null;
+  raw?: { reason?: string; archivedVariants?: unknown[]; identificationReview?: unknown; manualResolution?: unknown } | null;
 };
 
 type OpeningInventoryDetail = {
@@ -738,6 +757,9 @@ type InventoryCountLine = {
   expected_qty: number | string;
   expected_reserved_qty?: number | string | null;
   counted_qty?: number | string | null;
+  physical_counted_qty?: number | string | null;
+  movement_after_count_qty?: number | string | null;
+  effective_counted_qty?: number | string | null;
   diff_qty?: number | string | null;
   missing_qty?: number | string | null;
   extra_qty?: number | string | null;
@@ -786,6 +808,7 @@ type DraftLine = {
 
 type PendingScan = {
   lineId: string;
+  clientScanId: string;
   code: string;
   qty: number;
   at: number;
@@ -844,6 +867,47 @@ async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
 function n(value: unknown) {
   const num = Number(value ?? 0);
   return Number.isFinite(num) ? num : 0;
+}
+
+function newInventoryClientScanId() {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `scan-${Date.now()}-${Math.random().toString(36).slice(2, 13)}`;
+}
+
+function inventoryGtinValid(value: string) {
+  const code = String(value || "").trim();
+  if (!/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)) return false;
+  let sum = 0;
+  let factor = 3;
+  for (let index = code.length - 2; index >= 0; index--) {
+    sum += Number(code[index]) * factor;
+    factor = factor === 3 ? 1 : 3;
+  }
+  return ((10 - sum % 10) % 10) === Number(code[code.length - 1]);
+}
+
+function suggestedModelFromUnknown(codeInput: string) {
+  // Egyes Under Armour QR-ek a termek stilus-/szinkodjat is tartalmazzak.
+  // Ez CSAK kereseshez javaslat, soha nem automatikus hozzarendeles.
+  const match = String(codeInput || "").match(/ua\.com\?([0-9]{7}-[0-9]{3})(?:[|&#]|$)/i);
+  return match?.[1] || "";
+}
+
+function unknownScanExplanation(codeInput: string) {
+  const code = String(codeInput || "").trim();
+  if (/^(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[\/?#]|$)/i.test(code) || /[?&=|]/.test(code)) {
+    return { label: "QR / webes kód", detail: "Valószínűleg QR-t vagy webcímet olvastak. A fizikai címkét ellenőrizni kell.", color: "red" as const };
+  }
+  if (/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)) {
+    return inventoryGtinValid(code)
+      ? { label: "Hiányzik a kód a terméktörzsből", detail: "Szabályos GTIN, de nem található a jelenlegi termékkódok között. A termék lehet már más kóddal felvéve.", color: "amber" as const }
+      : { label: "Hibás ellenőrző szám", detail: "A leolvasott számsor GTIN-ellenőrző számjegye hibás. Nézd meg az eredeti címkét.", color: "red" as const };
+  }
+  if (/\d/.test(code) && /[a-z]/i.test(code) && !/^AIF[0-9A-Z]+$/i.test(code)) {
+    return { label: "Nem szabványos kódtartalom", detail: "Lehetséges szkenner-karakterhiba vagy másik kódtípus. Nem alakítjuk át találomra.", color: "red" as const };
+  }
+  return { label: "Ellenőrzendő termékkód", detail: "Nem található egyértelmű termékhez rendelve.", color: "amber" as const };
 }
 
 function formatQty(value: unknown) {
@@ -1361,6 +1425,19 @@ export default function AllInInventory() {
   const [salesTrustedFrom, setSalesTrustedFrom] = useState(localDateInput());
   const [legacyRetailValue, setLegacyRetailValue] = useState("");
   const [openingDetail, setOpeningDetail] = useState<OpeningInventoryDetail | null>(null);
+  const [unknownDialog, setUnknownDialog] = useState<OpeningUnknownScan | null>(null);
+  const [unknownAction, setUnknownAction] = useState<"assign" | "discard">("assign");
+  const [unknownSearch, setUnknownSearch] = useState("");
+  const [unknownResults, setUnknownResults] = useState<UnknownProductOption[]>([]);
+  const [unknownSelected, setUnknownSelected] = useState<UnknownProductOption | null>(null);
+  const [unknownQty, setUnknownQty] = useState("1");
+  const [unknownNote, setUnknownNote] = useState("");
+  const [unknownConfirmed, setUnknownConfirmed] = useState(false);
+  const [unknownRememberBarcode, setUnknownRememberBarcode] = useState(false);
+  const [unknownSearching, setUnknownSearching] = useState(false);
+  const [unknownBusy, setUnknownBusy] = useState(false);
+  const [unknownError, setUnknownError] = useState("");
+  const unknownLookupGenerationRef = useRef(0);
   const [dirtyLineIds, setDirtyLineIds] = useState<string[]>([]);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [archiveSearch, setArchiveSearch] = useState("");
@@ -1780,6 +1857,17 @@ export default function AllInInventory() {
   const activeFinal = Boolean(active && ["committed", "cancelled"].includes(active.item.status));
   const currentInventoryMode: InventoryMode = openingDetail ? openingMode(openingDetail.session) : inventoryMode;
   const unresolvedUnknown = (openingDetail?.unknown || []).filter((item) => !item.resolved_at && n(item.qty) > 0);
+  const finalizationPreflight = useMemo(() => {
+    if (!openingDetail || openingMode(openingDetail.session) !== "standard") return null;
+    const lines = openingDetail.lines || [];
+    const pending = Math.max(0, n(openingDetail.summary.line_count) - n(openingDetail.summary.counted_lines));
+    const unresolved = (openingDetail.unknown || []).filter((item) => !item.resolved_at && n(item.qty) > 0).length;
+    const during = lines.filter((line) => n(line.movement_during_count_count) > 0).length;
+    const badNegative = lines.filter((line) => line.physical_counted_qty !== null && line.physical_counted_qty !== undefined && n(line.physical_counted_qty) + n(line.movement_after_count_qty) < 0).length;
+    const reservation = lines.filter((line) => line.counted_qty !== null && line.counted_qty !== undefined && n(line.current_reserved_qty) > n(line.counted_qty)).length;
+    const autoZeroed = lines.filter((line) => line.auto_zeroed).length;
+    return { pending, unresolved, during, badNegative, reservation, autoZeroed, ready: [pending, unresolved, during, badNegative, reservation, autoZeroed].every((value) => value === 0) };
+  }, [openingDetail]);
 
   async function createCount() {
     if (!location) {
@@ -2089,13 +2177,106 @@ export default function AllInInventory() {
     setDirtyLineIds((prev) => prev.includes(lineId) ? prev : [...prev, lineId]);
   }
 
+  function openUnknownResolution(item: OpeningUnknownScan) {
+    if (dirtyLineIds.length) {
+      setMessage({ tone: "error", text: "Előbb mentsd a módosított leltársorokat, csak utána rendezd az ismeretlen kódot." });
+      return;
+    }
+    unknownLookupGenerationRef.current += 1;
+    setUnknownSearching(false);
+    setUnknownDialog(item);
+    setUnknownAction("assign");
+    setUnknownSearch(suggestedModelFromUnknown(item.scan_code));
+    setUnknownResults([]);
+    setUnknownSelected(null);
+    setUnknownQty(String(n(item.qty) || 1));
+    setUnknownNote("");
+    setUnknownConfirmed(false);
+    setUnknownRememberBarcode(false);
+    setUnknownError("");
+  }
+
+  async function searchUnknownProduct() {
+    if (!active || unknownSearch.trim().length < 2) {
+      setUnknownError("Írj be legalább 2 karaktert a termék nevéből vagy kódjából.");
+      return;
+    }
+    setUnknownError("");
+    const requestGeneration = ++unknownLookupGenerationRef.current;
+    setUnknownSearching(true);
+    setUnknownResults([]);
+    setUnknownSelected(null);
+    try {
+      const result = await fetchAifJSON<{ ok: true; items: UnknownProductOption[] }>(
+        `/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/unknown-lookup?q=${encodeURIComponent(unknownSearch.trim())}`,
+      );
+      if (requestGeneration !== unknownLookupGenerationRef.current) return;
+      setUnknownResults(result.items || []);
+      if (!result.items?.length) {
+        setUnknownError("Nincs találat. Ha a termék még nem létezik, előbb fel kell venni a terméktörzsbe. A beolvasás addig megmarad.");
+      }
+    } catch (error) {
+      if (requestGeneration === unknownLookupGenerationRef.current)
+        setUnknownError(error instanceof Error ? error.message : "A termékkeresés nem sikerült.");
+    } finally {
+      if (requestGeneration === unknownLookupGenerationRef.current) setUnknownSearching(false);
+    }
+  }
+
+  async function approveUnknownResolution() {
+    if (!active || !unknownDialog || unknownBusy || !unknownConfirmed) return;
+    if (dirtyLineIds.length) {
+      setUnknownError("Előbb mentsd az egyéb leltársorok módosításait.");
+      return;
+    }
+    const qty = Number(unknownQty);
+    if (unknownNote.trim().length < 8) {
+      setUnknownError("Írj legalább 8 karakteres indoklást / ellenőrzési megjegyzést.");
+      return;
+    }
+    if (unknownAction === "assign" && (!unknownSelected || !Number.isInteger(qty) || qty < 1 || qty > n(unknownDialog.qty))) {
+      setUnknownError("Válassz terméket, és 1 és a korábban beolvasott darabszám közötti egész mennyiséget hagyj jóvá.");
+      return;
+    }
+    setUnknownBusy(true);
+    setUnknownError("");
+    try {
+      const body = unknownAction === "assign" ? {
+        action: "assign", variantId: unknownSelected!.product.variantId,
+        approvedQty: qty, rememberBarcode: unknownRememberBarcode,
+        expectedRecordedQty: n(unknownDialog.qty),
+        expectedCountedQty: unknownSelected!.alreadyCountedQty,
+        confirmed: true, note: unknownNote.trim(),
+      } : { action: "discard", expectedRecordedQty: n(unknownDialog.qty), confirmed: true, note: unknownNote.trim() };
+      await fetchAifJSON<OpeningInventoryDetail>(
+        `/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/unknown/${encodeURIComponent(unknownDialog.id)}/resolve`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      const resultText = unknownAction === "discard"
+        ? `A ${unknownDialog.scan_code} téves beolvasást vezetői ellenőrzéssel elvetettük.`
+        : `A ${unknownDialog.scan_code} kód ${qty} darabját a kiválasztott termék leltárához adtuk. Nincs szükség újracsippantásra.`;
+      setUnknownDialog(null);
+      await loadCount(active.item.id, true);
+      setMessage({ tone: "success", text: resultText });
+    } catch (error) {
+      setUnknownError(error instanceof Error ? error.message : "A rendezés nem sikerült.");
+    } finally {
+      setUnknownBusy(false);
+    }
+  }
+
   async function reconcileUnknown() {
     if (!active) return;
+    if (dirtyLineIds.length) {
+      setMessage({ tone: "error", text: "Előbb mentsd a módosított leltársorokat az újraazonosítás előtt." });
+      return;
+    }
     setSaving(true);
     try {
       const raw = await fetchAifJSON<OpeningInventoryDetail>(`/opening-inventory/admin/sessions/${encodeURIComponent(active.item.id)}/reconcile-unknown`, { method: "POST", body: "{}" });
       setOpeningDetail(raw);
       setActive(mapOpeningDetail(raw));
+      await loadCount(active.item.id, true);
       setMessage({ tone: raw.resolution?.remaining ? "info" : "success", text: raw.resolution?.remaining ? `${raw.resolution.resolved} kód rendezve, ${raw.resolution.remaining} még ellenőrzendő.` : "Az ismeretlen kódok egyeztetése kész." });
     } catch (e) {
       setMessage({ tone: "error", text: e instanceof Error ? e.message : "Az ismeretlen kódok egyeztetése nem sikerült." });
@@ -2184,21 +2365,21 @@ export default function AllInInventory() {
     if (!active || !canEditActive) return;
     setSaving(true);
     try {
-      const response = await fetchAifJSON<{ line?: { id?: string; countedQty?: number; product?: OpeningInventoryProduct } }>("/opening-inventory/scan", {
+      const response = await fetchAifJSON<{ duplicate?: boolean; line?: { id?: string; countedQty?: number; product?: OpeningInventoryProduct } }>("/opening-inventory/scan", {
         method: "POST",
-        body: JSON.stringify({ location: currentLocation?.code || location, code, qty: 1 }),
+        body: JSON.stringify({ location: currentLocation?.code || location, code, qty: 1, clientScanId: newInventoryClientScanId() }),
       });
       await loadCount(active.item.id, true);
       if (response.line?.id) setRecentScannedLineIds((currentOrder) => [String(response.line?.id), ...currentOrder.filter((id) => id !== String(response.line?.id))]);
-      setScannerStatus(`${response.line?.product?.title || code}: 1 db hozzáadva.`);
-      setMessage({ tone: "success", text: `${response.line?.product?.title || code}: 1 db hozzáadva a leltárhoz.` });
+      setScannerStatus(response.duplicate ? `${response.line?.product?.title || code}: korábban már rögzítve. Nincs dupla darab.` : `${response.line?.product?.title || code}: 1 db hozzáadva.`);
+      setMessage({ tone: "success", text: response.duplicate ? "A beolvasás már rögzítve volt. Nem dupláztuk." : `${response.line?.product?.title || code}: 1 db hozzáadva a leltárhoz.` });
       if (source === "manual") { setManualBarcode(""); focusBarcodeInput(); }
     } catch (e) {
       const err = e as Error & { payload?: any };
       if (err.payload?.unknownRecorded) {
         await loadCount(active.item.id, true);
         setScannerStatus(err.message);
-        setMessage({ tone: "info", text: err.message });
+        setMessage({ tone: "error", text: err.message });
       } else {
         setScannerStatus(err.message);
         setMessage({ tone: "error", text: err.message || "A beolvasás nem sikerült." });
@@ -2237,7 +2418,7 @@ export default function AllInInventory() {
     }
 
     setLineFilter("all");
-    setPendingScan({ lineId: line.id, code, qty: 1, at: now, source });
+    setPendingScan({ lineId: line.id, clientScanId: newInventoryClientScanId(), code, qty: 1, at: now, source });
     setScannerStatus(`${productTitle(line)} beolvasva. Alapból 1 db, erősítsd meg vagy állítsd + / - gombbal.`);
     if (source === "manual") setManualBarcode("");
   }
@@ -2290,23 +2471,23 @@ export default function AllInInventory() {
     try {
       // Ha ezen a soron van mentetlen kézi módosítás, előbb rögzítjük, hogy a scan arra épüljön.
       if (dirtyLineIdsRef.current.has(line.id)) await saveLines(true);
-      const response = await fetchAifJSON<{ line?: { id?: string; countedQty?: number; product?: OpeningInventoryProduct } }>("/opening-inventory/scan", {
+      const response = await fetchAifJSON<{ duplicate?: boolean; line?: { id?: string; countedQty?: number; product?: OpeningInventoryProduct } }>("/opening-inventory/scan", {
         method: "POST",
-        body: JSON.stringify({ location: currentLocation?.code || location, code: scan.code, qty: scan.qty }),
+        body: JSON.stringify({ location: currentLocation?.code || location, code: scan.code, qty: scan.qty, clientScanId: scan.clientScanId }),
       });
       await loadCount(active.item.id, true);
       setRecentScannedLineIds((currentOrder) => [String(response.line?.id || line.id), ...currentOrder.filter((id) => id !== String(response.line?.id || line.id))]);
       setLinePage(1);
       setPendingScan(null);
       setManualBarcode("");
-      setScannerStatus(`${scan.qty} db hozzáadva: ${response.line?.product?.title || productTitle(line)}. Új talált mennyiség: ${formatQty(response.line?.countedQty)} db.`);
-      setMessage({ tone: "success", text: `${scan.qty} db hozzáadva ehhez: ${response.line?.product?.title || productTitle(line)}.` });
+      setScannerStatus(response.duplicate ? `${response.line?.product?.title || productTitle(line)}: korábban már mentve. Nem dupláztuk.` : `${scan.qty} db hozzáadva: ${response.line?.product?.title || productTitle(line)}. Új talált mennyiség: ${formatQty(response.line?.countedQty)} db.`);
+      setMessage({ tone: "success", text: response.duplicate ? "A beolvasás már rögzítve volt. Nem dupláztuk." : `${scan.qty} db hozzáadva ehhez: ${response.line?.product?.title || productTitle(line)}.` });
     } catch (e) {
       const err = e as Error & { payload?: any };
       if (err.payload?.unknownRecorded) {
         await loadCount(active.item.id, true);
         setPendingScan(null);
-        setMessage({ tone: "info", text: err.message });
+        setMessage({ tone: "error", text: err.message });
         setScannerStatus(err.message);
       } else {
         setMessage({ tone: "error", text: err.message || "A beolvasás nem sikerült." });
@@ -2480,7 +2661,7 @@ export default function AllInInventory() {
                   </div>
 
                   <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás a leltárhoz</button>
+                    <button className={primaryBtn} type="button" onClick={applyPendingScan} disabled={saving}><CheckCircle2 size={15} /> Hozzáadás a leltárhoz</button>
                     <button className={redBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
                   </div>
                 </div>
@@ -2597,7 +2778,7 @@ export default function AllInInventory() {
                 <button className={btnSoft} type="button" onClick={() => changePendingQty(1)}>+</button>
               </div>
               <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-                <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás</button>
+                <button className={primaryBtn} type="button" onClick={applyPendingScan} disabled={saving}><CheckCircle2 size={15} /> Hozzáadás</button>
                 <button className={redBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
               </div>
             </div>
@@ -2605,6 +2786,26 @@ export default function AllInInventory() {
 
           {scannerStatus ? <div className="mt-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-xs text-white/76">{scannerStatus}</div> : null}
         </div>
+
+        {unresolvedUnknown.length > 0 ? (
+          <div className="rounded-2xl border border-amber-200/30 bg-[#3f4050] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs text-white">
+              <span>Ellenőrzendő kódok: {formatQty(unresolvedUnknown.length)}</span>
+              <button type="button" className={`${btnSoft} h-8`} disabled={saving} onClick={() => void reconcileUnknown()}><RefreshCw size={13}/> Újraazonosítás</button>
+            </div>
+            <div className="space-y-2">
+              {unresolvedUnknown.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-2 rounded-xl border border-white/12 bg-[#303a4c] px-3 py-2">
+                  <div className="min-w-0 text-xs">
+                    <div className="break-all font-mono text-white">{item.scan_code} · {formatQty(item.qty)} db</div>
+                    <div className="mt-1 text-[10px] text-amber-200">{unknownScanExplanation(item.scan_code).label}</div>
+                  </div>
+                  <button type="button" className={`${btnSoft} h-8 shrink-0`} disabled={saving} onClick={() => openUnknownResolution(item)}><ShieldCheck size={13}/> Rendezés</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="rounded-2xl border border-white/14 bg-white/[0.06] p-3">
           <div className="relative">
@@ -3009,7 +3210,7 @@ export default function AllInInventory() {
 
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-7">
               <StatCard label={currentInventoryMode === "recovery" ? "Igazolható minimum" : "Rendszer szerint"} value={formatQty(openingDetail?.summary.known_min_qty ?? activeStats.expected)} hint={`${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<ClipboardList size={18} />} tone="blue" />
-              <StatCard label="Leltár most (mozgásokkal)" value={formatQty(openingDetail?.summary.counted_qty ?? activeStats.counted)} hint={`${formatQty(activeStats.physicallyCounted)} db beolvasva • ${formatQty(openingDetail?.summary.counted_lines ?? activeStats.countedLines)} / ${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
+              <StatCard label="Leltár most (mozgásokkal)" value={formatQty(openingDetail?.summary.counted_qty ?? activeStats.counted)} hint={`${formatQty(activeStats.counted)} db beolvasva • ${formatQty(openingDetail?.summary.counted_lines ?? activeStats.countedLines)} / ${formatQty(openingDetail?.summary.line_count ?? activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
               <StatCard
                 label={currentInventoryMode === "recovery" ? "Biztos hiány" : "Hiány"}
                 value={formatQty(openingDetail?.summary.definite_missing_qty ?? activeStats.missing)}
@@ -3043,6 +3244,21 @@ export default function AllInInventory() {
               </div>
             ) : null}
 
+            {finalizationPreflight && !activeFinal ? (
+              <div className={`mx-4 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 ${finalizationPreflight.ready ? "border-[#2a8d8b]/50 bg-[#205651]/30" : "border-amber-300/25 bg-[#454556]"}`}>
+                <div className="flex items-center gap-2 text-xs text-white">
+                  {finalizationPreflight.ready ? <CheckCircle2 size={18} className="text-[#7ce7c1]"/> : <AlertTriangle size={18} className="text-amber-200"/>}
+                  <span>Véglegesítési előellenőrzés: {finalizationPreflight.ready ? "nincs ismert akadály" : "még van rendezendő tétel"}</span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/75">
+                  <span>Nem számolt: {formatQty(finalizationPreflight.pending)}</span>
+                  <span>Ismeretlen: {formatQty(finalizationPreflight.unresolved)}</span>
+                  <span>Mozgás / foglalás: {formatQty(finalizationPreflight.during + finalizationPreflight.reservation + finalizationPreflight.badNegative)}</span>
+                  {finalizationPreflight.autoZeroed ? <span className="text-red-200">Automatikus nulla: {formatQty(finalizationPreflight.autoZeroed)}</span> : null}
+                </div>
+              </div>
+            ) : null}
+
             {canEditActive && currentInventoryMode === "recovery" ? (
               <div className="mx-4 mb-4 rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/12 px-4 py-3 text-sm text-white/82">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -3067,12 +3283,22 @@ export default function AllInInventory() {
                   <button className={btnSoft} type="button" onClick={() => void reconcileUnknown()} disabled={saving}><RefreshCw size={15} /> Újraazonosítás</button>
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  {unresolvedUnknown.slice(0, 12).map((item) => (
-                    <div key={item.id} className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2"><span className="font-mono text-xs text-white">{item.scan_code}</span><span className="text-xs text-amber-50">{formatQty(item.qty)} db</span></div>
-                      <div className="mt-1 text-[10px] text-white/42">{formatDateTime(item.last_scanned_at)} · {item.last_scanned_by || "–"}</div>
-                    </div>
-                  ))}
+                  {unresolvedUnknown.map((item) => {
+                    const hint = unknownScanExplanation(item.scan_code);
+                    return (
+                      <div key={item.id} className="min-w-0 rounded-xl border border-white/12 bg-[#323f51] px-3 py-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="min-w-0 break-all font-mono text-xs text-white">{item.scan_code}</span>
+                          <span className="shrink-0 text-xs text-amber-50">{formatQty(item.qty)} db</span>
+                        </div>
+                        <div className={`mt-2 text-[11px] ${hint.color === "red" ? "text-red-200" : "text-amber-100"}`}>{hint.label}</div>
+                        <div className="mt-1 text-[10px] text-white/50">{formatDateTime(item.last_scanned_at)} · {item.last_scanned_by || "–"}</div>
+                        <button type="button" className={`${btnSoft} mt-2 h-8 w-full`} onClick={() => openUnknownResolution(item)} disabled={saving}>
+                          <ShieldCheck size={14} /> Vezetői rendezés
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -3273,6 +3499,134 @@ export default function AllInInventory() {
             <div className="grid gap-3 p-4 lg:hidden">{filteredStockRows.map((row) => <div key={`${row.location_id}-${row.variant_id}`} className="rounded-2xl border border-white/14 bg-white/[0.05] p-3"><div className="font-semibold">{productTitle(row)}</div><div className="mt-1 text-xs text-white/60">{row.brand_name || "-"} · {row.color_name || "-"} · {row.size || "-"}</div><div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Készlet</div><b>{formatQty(row.qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Foglalt</div><b>{formatQty(row.reserved_qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Elérhető</div><b>{formatQty(row.available_qty)}</b></div></div></div>)}</div>
           </section>
         )}
+
+        {unknownDialog ? createPortal(
+          <div className="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-[#071520]/85 p-3 backdrop-blur-[6px]" role="presentation"
+            onMouseDown={(event) => { if (event.target === event.currentTarget && !unknownBusy) setUnknownDialog(null); }}>
+            <section role="dialog" aria-modal="true" aria-labelledby="inventory-unknown-dialog-title" className="w-full max-w-[760px] overflow-hidden rounded-[22px] border border-white/20 bg-[#303c4e] text-white shadow-[0_28px_90px_rgba(0,0,0,0.55)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/14 bg-[#354153] px-5 py-4">
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.13em] text-white/50">AllInFashion • Vezetői ellenőrzés</div>
+                  <h2 id="inventory-unknown-dialog-title" className="mt-1 text-lg">Ismeretlen vonalkód rendezése</h2>
+                  <p className="mt-2 break-all font-mono text-sm text-white">{unknownDialog.scan_code} <span className="ml-2 text-amber-200">{formatQty(unknownDialog.qty)} beolvasás</span></p>
+                </div>
+                <button type="button" className={btnSoft} onClick={() => setUnknownDialog(null)} disabled={unknownBusy} aria-label="Bezárás"><X size={17} /></button>
+              </header>
+              <div className="max-h-[72vh] space-y-4 overflow-y-auto px-5 py-4">
+                {(() => { const hint = unknownScanExplanation(unknownDialog.scan_code); return (
+                  <div className={`rounded-xl border px-3 py-2 text-xs ${hint.color === "red" ? "border-red-400/35 bg-red-950/25 text-red-100" : "border-amber-300/25 bg-amber-500/10 text-amber-100"}`}>
+                    <span className="block font-medium">{hint.label}</span>
+                    <span className="mt-1 block text-white/75">{hint.detail}</span>
+                  </div>
+                ); })()}
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" disabled={unknownBusy} className={unknownAction === "assign" ? primaryBtn : btnSoft} onClick={() => { setUnknownAction("assign"); setUnknownConfirmed(false); setUnknownError(""); }}>
+                    <CheckCircle2 size={16} /> Termékhez rendelés
+                  </button>
+                  <button type="button" disabled={unknownBusy} className={unknownAction === "discard" ? redBtn : btnSoft} onClick={() => { setUnknownAction("discard"); setUnknownSelected(null); setUnknownRememberBarcode(false); setUnknownConfirmed(false); setUnknownError(""); }}>
+                    <Trash2 size={16} /> Téves beolvasás
+                  </button>
+                </div>
+                {unknownAction === "assign" ? (
+                  <>
+                    <label className={label}>
+                      Termék keresése név, SN CODE, SKU vagy vonalkód alapján
+                      <div className="flex gap-2">
+                        <input className={`${input} min-w-0 flex-1`} value={unknownSearch}
+                          onChange={(event) => {
+                            unknownLookupGenerationRef.current += 1;
+                            setUnknownSearching(false);
+                            setUnknownSearch(event.target.value);
+                            setUnknownResults([]);
+                            setUnknownSelected(null);
+                            setUnknownConfirmed(false);
+                            setUnknownError("");
+                          }}
+                          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void searchUnknownProduct(); } }}
+                          placeholder="Például Under Armour, modellkód…" disabled={unknownBusy}/>
+                        <button type="button" className={btnSoft} onClick={() => void searchUnknownProduct()} disabled={unknownSearching || unknownBusy}>
+                          <Search size={15} /> Keresés
+                        </button>
+                      </div>
+                    </label>
+                    {unknownSearching ? <div className="text-xs text-white/65">Termékek keresése…</div> : null}
+                    {unknownResults.length ? (
+                      <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-white/15 bg-[#293647] p-2">
+                        {unknownResults.map((option) => {
+                          const product = option.product;
+                          const selected = unknownSelected?.product.variantId === product.variantId;
+                          return (
+                            <button key={product.variantId} type="button" disabled={unknownBusy}
+                              onClick={() => { setUnknownSelected(option); setUnknownConfirmed(false); }}
+                              className={`flex w-full items-center gap-3 rounded-xl border p-2.5 text-left transition ${selected ? "border-[#8ce7e2] bg-[#217f7c]/35" : "border-transparent bg-white/[0.04] hover:border-white/20"}`}>
+                              {product.imageUrl ? <img src={product.imageUrl} alt="" className="h-11 w-11 shrink-0 rounded-lg bg-white object-contain p-1" /> : <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[#1e2f40]"><Barcode size={21}/></div>}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm">{product.title}</span>
+                                <span className="block text-[11px] text-white/65">{[product.brandName,product.colorName,product.size].filter(Boolean).join(" • ")}</span>
+                                <span className="block truncate font-mono text-[10px] text-white/45">{product.barcode || product.internalSku || product.snCod || product.variantId}</span>
+                                <span className="block text-[10px] text-white/60">{option.variantStatus} · Készlet {formatQty(option.currentStockQty)} db · Leltárban {option.alreadyCountedQty === null ? "még nincs számolva" : `${formatQty(option.alreadyCountedQty)} db`}</span>
+                              </span>
+                              {selected ? <CheckCircle2 className="shrink-0 text-[#8ce7e2]" size={19}/> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className={label}>
+                        Jóváhagyott fizikai darabszám
+                        <input className={`${input} w-full`} type="number" min={1} max={n(unknownDialog.qty)} step={1}
+                          value={unknownQty} onChange={(event) => { setUnknownQty(event.target.value); setUnknownConfirmed(false); }} disabled={unknownBusy}/>
+                      </label>
+                      <div className="flex items-center text-xs leading-5 text-white/65">
+                        {n(unknownDialog.qty) > 1 ? "Az ismételt csippantás nem bizonyít külön darabokat. A tényleges mennyiséget hagyd jóvá." : "A korábbi beolvasás megmarad. Új csippantás nélkül bekerül a leltárba."}
+                      </div>
+                    </div>
+                    {unknownSelected?.alreadyCountedQty !== null && unknownSelected?.alreadyCountedQty !== undefined ? (
+                      <div className="rounded-xl border border-amber-200/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                        A kiválasztott terméket már számolták: {formatQty(unknownSelected.alreadyCountedQty)} db.
+                        A jóváhagyott mennyiség ehhez HOZZÁADÓDIK. Csak akkor folytasd, ha valóban másik fizikai darab.
+                      </div>
+                    ) : null}
+                    <label className="flex items-start gap-2 text-xs text-white/80">
+                      <input type="checkbox" className="mt-0.5 accent-[#2a8d8b]" checked={unknownRememberBarcode}
+                        onChange={(event) => { setUnknownRememberBarcode(event.target.checked); setUnknownConfirmed(false); }}
+                        disabled={unknownBusy || !(inventoryGtinValid(unknownDialog.scan_code) || /^AIF[0-9A-Z]{6,30}$/i.test(unknownDialog.scan_code.trim()))}/>
+                      <span>Az eredeti vonalkódot az üzlet következő leltáraihoz is megjegyzi a rendszer (csak érvényes GTIN vagy belső AIF-kód esetén).</span>
+                    </label>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-red-400/35 bg-red-950/25 px-3 py-3 text-xs leading-5 text-red-100">
+                    Csak akkor vethető el, ha a főnök meggyőződött róla, hogy QR-kód, téves csippantás vagy már más módon megszámolt darab.
+                    A korábbi beolvasás megmarad az auditban, de nem kerül a készletbe.
+                  </div>
+                )}
+                <label className={label}>
+                  Ellenőrzés indoklása (kötelező)
+                  <textarea rows={2} className="w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none focus:border-white/45"
+                    value={unknownNote} onChange={(event) => { setUnknownNote(event.target.value); setUnknownConfirmed(false); }}
+                    placeholder={unknownAction === "discard" ? "Pl. terméken lévő QR-t olvasták a vonalkód helyett" : "Pl. címke alapján azonosítva, szín és méret ellenőrizve"}
+                    disabled={unknownBusy}/>
+                </label>
+                <label className="flex items-start gap-2 rounded-xl border border-white/14 bg-[#253448] px-3 py-3 text-xs leading-5 text-white/90">
+                  <input type="checkbox" className="mt-0.5 accent-[#2a8d8b]" checked={unknownConfirmed}
+                    onChange={(event) => setUnknownConfirmed(event.target.checked)} disabled={unknownBusy}/>
+                  <span>Vezetőként ellenőriztem a címkét, a terméket és a tényleges darabszámot. Tudom, hogy ez naplózott leltári döntés.</span>
+                </label>
+                {unknownError ? <div role="alert" className="rounded-xl border border-red-400/50 bg-[#ab1730] px-3 py-2 text-xs text-white">{unknownError}</div> : null}
+              </div>
+              <footer className="flex flex-wrap justify-end gap-2 border-t border-white/12 bg-[#293648] px-5 py-4">
+                <button type="button" className={btnSoft} disabled={unknownBusy} onClick={() => setUnknownDialog(null)}>Mégse</button>
+                <button type="button" className={unknownAction === "discard" ? redBtn : primaryBtn}
+                  disabled={unknownBusy || !unknownConfirmed || unknownNote.trim().length < 8 || (unknownAction === "assign" && !unknownSelected)}
+                  onClick={() => void approveUnknownResolution()}>
+                  {unknownBusy ? <RefreshCw size={16} className="animate-spin"/> : unknownAction === "discard" ? <Trash2 size={16}/> : <CheckCircle2 size={16}/>}
+                  {unknownAction === "discard" ? "Beolvasás elvetése" : "Jóváhagyás és leltárba vezetés"}
+                </button>
+              </footer>
+            </section>
+          </div>, document.body
+        ) : null}
 
         {exportDialog ? createPortal(
           <div className="fixed inset-0 z-[2200] flex items-center justify-center overflow-y-auto bg-[#061521]/78 p-4 backdrop-blur-[7px]" role="presentation"
