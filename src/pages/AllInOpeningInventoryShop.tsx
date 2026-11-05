@@ -194,7 +194,7 @@ export default function AllInOpeningInventoryShop({
             // Az ismeretlen vagy ütköző kódot a backend már az auditba mentette.
             scanQueueRef.current.shift();
             persistQueue();
-            setNotice({ tone: "info", text: error.message });
+            setNotice({ tone: "error", text: error.message });
             continue;
           }
           // Nem tudjuk, a hálózati hiba előtt mentette-e a szerver. Megőrizzük
@@ -319,12 +319,12 @@ export default function AllInOpeningInventoryShop({
                   <p className="mt-1 text-base text-white">{editable ? "Beolvasás folyamatban • eladás mehet" : "Beolvasás lezárva • eladás mehet tovább"}</p>
                 </div>
                 <div className="flex gap-2 text-center">
-                  <div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-white/40">Talált tétel</div>
+                  <div className="rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-white">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-white">Talált tétel</div>
                     <div className="mt-1 text-xl">{data.progress?.countedLines || 0}</div>
                   </div>
-                  <div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2">
-                    <div className="text-[9px] uppercase tracking-[0.1em] text-white/40">Talált db</div>
+                  <div className="rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-white">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-white">Talált db</div>
                     <div className="mt-1 text-xl">{data.progress?.countedQty || 0}</div>
                   </div>
                 </div>
@@ -357,21 +357,21 @@ export default function AllInOpeningInventoryShop({
                 </div>
               ) : null}
               {failedScan ? (
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300/40 bg-red-950/20 px-3 py-3">
-                  <span className="text-xs text-red-100">Nem visszaigazolt kód: <strong>{failedScan.code}</strong>. A következő beolvasásokat most szüneteltetjük.</span>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e3132c] bg-[#e3132c] px-3 py-3 text-white shadow-lg">
+                  <span className="text-xs text-white">Nem visszaigazolt kód: <strong>{failedScan.code}</strong>. A következő beolvasásokat most szüneteltetjük.</span>
                   <button type="button" onClick={retryFailedScan} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-200/40 bg-red-600 px-3 text-xs text-white hover:bg-red-500"><RefreshCw size={14} /> Ugyanazon kérés újrapróbálása</button>
                 </div>
               ) : null}
 
               {notice ? (
-                <div className={`mt-3 rounded-xl border px-3 py-2.5 text-sm ${notice.tone === "success" ? "border-[#8ce7e2]/36 bg-[#108D8B]/18 text-[#d7fffd]" : notice.tone === "info" ? "border-amber-200/30 bg-amber-500/10 text-amber-50" : "border-red-300/35 bg-red-600/20 text-red-50"}`}>
+                <div className={`mt-3 rounded-xl border px-3 py-2.5 text-sm ${notice.tone === "success" ? "border-[#108D8B] bg-[#108D8B] text-white" : notice.tone === "info" ? "border-[#c78b22] bg-[#a26910] text-white" : "border-[#e3132c] bg-[#e3132c] text-white shadow-lg"}`}>
                   {notice.text}
                 </div>
               ) : null}
             </section>
 
             {lastLine ? (
-              <section className="rounded-[22px] border border-[#8ce7e2]/38 bg-[#2f5056] p-4 shadow-lg">
+              <section className="rounded-[22px] border border-[#108D8B] bg-[#108D8B] p-4 text-white shadow-lg">
                 <div className="grid gap-3 sm:grid-cols-[88px_1fr_auto] sm:items-center">
                   <div className="grid h-[88px] w-[88px] place-items-center overflow-hidden rounded-2xl border border-white/16 bg-white">
                     {lastLine.product.imageUrl ? <img src={lastLine.product.imageUrl} alt="" className="h-full w-full object-contain p-1" /> : <PackageSearch className="text-slate-500" size={30} />}
@@ -382,9 +382,9 @@ export default function AllInOpeningInventoryShop({
                     <p className="mt-1 truncate text-xs text-white/58">{productMeta(lastLine) || "–"}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="rounded-2xl border border-white/18 bg-white/[0.08] px-5 py-3 text-center">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Talált</div>
-                      <div className="mt-1 text-3xl">{lastLine.countedQty} <span className="text-sm text-white/55">db</span></div>
+                    <div className="rounded-2xl border border-[#108D8B] bg-[#108D8B] px-5 py-3 text-center text-white">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-white">Talált</div>
+                      <div className="mt-1 text-3xl text-white">{lastLine.countedQty} <span className="text-sm text-white">db</span></div>
                     </div>
                     <div className="min-w-[128px] border-l border-white/10 pl-3">
                       <div className="rounded-2xl border border-white/18 bg-[#283446] px-4 py-3 text-center">
@@ -422,7 +422,7 @@ export default function AllInOpeningInventoryShop({
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id || line.countedQty <= 0} onClick={() => void setLineQty(line, line.countedQty - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Minus size={16} /></button>
                         ) : null}
-                        <div className="min-w-[82px] rounded-xl border border-[#8ce7e2]/28 bg-[#108D8B]/16 px-3 py-2 text-center text-lg text-[#d7fffd]">{line.countedQty} db</div>
+                        <div className="min-w-[82px] rounded-xl border border-[#108D8B] bg-[#108D8B] px-3 py-2 text-center text-lg text-white">{line.countedQty} db</div>
                         {editable ? (
                           <button type="button" disabled={scanning || Boolean(failedScan) || editingLineId === line.id} onClick={() => void setLineQty(line, line.countedQty + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#283446] text-white hover:bg-white/[0.08] disabled:opacity-40"><Plus size={16} /></button>
                         ) : null}
