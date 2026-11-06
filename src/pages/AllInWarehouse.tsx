@@ -12903,7 +12903,9 @@ export default function AllInWarehouse() {
         0,
         invoiceLabelCopiesForItem(item) || Math.floor(n(item.total_qty || item.available_qty)),
       );
-      const fallbackRequested = baseRequested + relabelCopies;
+      const fallbackRequested = labelPreprint
+        ? Math.max(1, baseRequested + relabelCopies)
+        : baseRequested + relabelCopies;
       const requested = preserveExistingCopies && labelCopies[id] !== undefined
         ? labelInt(labelCopies[id], fallbackRequested, 0, 999)
         : fallbackRequested;
@@ -17705,19 +17707,6 @@ export default function AllInWarehouse() {
                       </p>
                     )}
                   </div>
-                  <label className="mb-3 flex items-start gap-3 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/15 p-3 text-sm text-white">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={labelPreprint}
-                      disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
-                      onChange={(e) => setLabelPreprint(e.target.checked)}
-                    />
-                    <span>
-                      Előzetes címkenyomtatás
-                      <span className="mt-1 block text-xs text-white/65">Készlettől független darabszám, termékenként 0–999 címke. Nulla készletnél is megadható. A nyomtatás nem módosítja a készletet.</span>
-                    </span>
-                  </label>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
                       <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
@@ -17952,6 +17941,15 @@ export default function AllInWarehouse() {
                     >
                       <Trash2 size={14} /> Minden kijelölés törlése
                     </button>
+                    <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/20 px-3 text-xs text-white" title="Készlettől független címkenyomtatás. A darabszám az előkészítés után állítható.">
+                      <input
+                        type="checkbox"
+                        checked={labelPreprint}
+                        disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
+                        onChange={(e) => setLabelPreprint(e.target.checked)}
+                      />
+                      Előzetes címkenyomtatás
+                    </label>
                     <button className={primaryBtn} onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy || labelCleanupBusy}>
                       <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Címkék előkészítése"}
                     </button>
