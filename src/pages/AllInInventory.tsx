@@ -1431,6 +1431,7 @@ export default function AllInInventory() {
   const [unknownResults, setUnknownResults] = useState<UnknownProductOption[]>([]);
   const [unknownSelected, setUnknownSelected] = useState<UnknownProductOption | null>(null);
   const [unknownQty, setUnknownQty] = useState("1");
+  const [unknownQuantityMode, setUnknownQuantityMode] = useState<"" | "additional" | "already_counted">("");
   const [unknownNote, setUnknownNote] = useState("");
   const [unknownConfirmed, setUnknownConfirmed] = useState(false);
   const [unknownRememberBarcode, setUnknownRememberBarcode] = useState(false);
@@ -2190,6 +2191,7 @@ export default function AllInInventory() {
     setUnknownResults([]);
     setUnknownSelected(null);
     setUnknownQty(String(n(item.qty) || 1));
+    setUnknownQuantityMode("");
     setUnknownNote("");
     setUnknownConfirmed(false);
     setUnknownRememberBarcode(false);
@@ -2229,13 +2231,15 @@ export default function AllInInventory() {
       setUnknownError("Előbb mentsd az egyéb leltársorok módosításait.");
       return;
     }
-    const qty = Number(unknownQty);
+    const qty = unknownQuantityMode === "already_counted" ? 0 : Number(unknownQty);
     if (unknownNote.trim().length < 8) {
       setUnknownError("Írj legalább 8 karakteres indoklást / ellenőrzési megjegyzést.");
       return;
     }
-    if (unknownAction === "assign" && (!unknownSelected || !Number.isInteger(qty) || qty < 1 || qty > n(unknownDialog.qty))) {
-      setUnknownError("Válassz terméket, és 1 és a korábban beolvasott darabszám közötti egész mennyiséget hagyj jóvá.");
+    if (unknownAction === "assign" && (!unknownSelected || !unknownQuantityMode || !Number.isInteger(qty) || qty < 0 || qty > n(unknownDialog.qty)
+      || (unknownQuantityMode === "additional" && qty < 1)
+      || (unknownQuantityMode === "already_counted" && !(n(unknownSelected.alreadyCountedQty) > 0)))) {
+      setUnknownError("Válassz terméket és műveletet. Csak valóban további darabot adj hozzá; a már beszámított darab kódját mennyiségnövelés nélkül rendezd.");
       return;
     }
     setUnknownBusy(true);
@@ -2243,7 +2247,7 @@ export default function AllInInventory() {
     try {
       const body = unknownAction === "assign" ? {
         action: "assign", variantId: unknownSelected!.product.variantId,
-        approvedQty: qty, rememberBarcode: unknownRememberBarcode,
+        approvedQty: qty, quantityMode: unknownQuantityMode, rememberBarcode: unknownRememberBarcode,
         expectedRecordedQty: n(unknownDialog.qty),
         expectedCountedQty: unknownSelected!.alreadyCountedQty,
         confirmed: true, note: unknownNote.trim(),
@@ -2254,7 +2258,9 @@ export default function AllInInventory() {
       );
       const resultText = unknownAction === "discard"
         ? `A ${unknownDialog.scan_code} téves beolvasást vezetői ellenőrzéssel elvetettük.`
-        : `A ${unknownDialog.scan_code} kód ${qty} darabját a kiválasztott termék leltárához adtuk. Nincs szükség újracsippantásra.`;
+        : unknownQuantityMode === "already_counted"
+          ? `A ${unknownDialog.scan_code} kódot rendeztük. A darabszám és a számolás időpontja nem változott.`
+          : `A ${unknownDialog.scan_code} kód ${qty} darabját a kiválasztott termék leltárához adtuk. Nincs szükség újracsippantásra.`;
       setUnknownDialog(null);
       await loadCount(active.item.id, true);
       setMessage({ tone: "success", text: resultText });
@@ -3557,7 +3563,7 @@ export default function AllInInventory() {
                           const selected = unknownSelected?.product.variantId === product.variantId;
                           return (
                             <button key={product.variantId} type="button" disabled={unknownBusy}
-                              onClick={() => { setUnknownSelected(option); setUnknownConfirmed(false); }}
+                              onClick={() => { setUnknownSelected(option); setUnknownQuantityMode(""); setUnknownConfirmed(false); }}
                               className={`flex w-full items-center gap-3 rounded-xl border p-2.5 text-left transition ${selected ? "border-[#8ce7e2] bg-[#217f7c]/35" : "border-transparent bg-white/[0.04] hover:border-white/20"}`}>
                               {product.imageUrl ? <img src={product.imageUrl} alt="" className="h-11 w-11 shrink-0 rounded-lg bg-white object-contain p-1" /> : <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[#1e2f40]"><Barcode size={21}/></div>}
                               <span className="min-w-0 flex-1">
@@ -3572,20 +3578,29 @@ export default function AllInInventory() {
                         })}
                       </div>
                     ) : null}
+                    <label className={label}>
+                      Mit rendezünk ezzel a beolvasással?
+                      <select className={`${input} w-full`} value={unknownQuantityMode} disabled={unknownBusy}
+                        onChange={(event) => { setUnknownQuantityMode(event.target.value as "" | "additional" | "already_counted"); setUnknownConfirmed(false); }}>
+                        <option value="">Válassz műveletet</option>
+                        <option value="already_counted" disabled={!(n(unknownSelected?.alreadyCountedQty) > 0)}>A darab már szerepel a leltárban – csak a kód rendezése</option>
+                        <option value="additional">További, még nem számolt darab hozzáadása</option>
+                      </select>
+                    </label>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className={label}>
-                        Jóváhagyott fizikai darabszám
-                        <input className={`${input} w-full`} type="number" min={1} max={n(unknownDialog.qty)} step={1}
-                          value={unknownQty} onChange={(event) => { setUnknownQty(event.target.value); setUnknownConfirmed(false); }} disabled={unknownBusy}/>
+                        További, még nem számolt darabok
+                        <input className={`${input} w-full`} type="number" min={unknownQuantityMode === "already_counted" ? 0 : 1} max={n(unknownDialog.qty)} step={1}
+                          value={unknownQuantityMode === "already_counted" ? "0" : unknownQty} onChange={(event) => { setUnknownQty(event.target.value); setUnknownConfirmed(false); }} disabled={unknownBusy || unknownQuantityMode !== "additional"}/>
                       </label>
                       <div className="flex items-center text-xs leading-5 text-white/65">
-                        {n(unknownDialog.qty) > 1 ? "Az ismételt csippantás nem bizonyít külön darabokat. A tényleges mennyiséget hagyd jóvá." : "A korábbi beolvasás megmarad. Új csippantás nélkül bekerül a leltárba."}
+                        {unknownQuantityMode === "already_counted" ? "A leltári darabszám változatlan marad. A korábbi beolvasás rendezése naplózva lesz." : "Ez hozzáadandó mennyiség, nem a termék teljes darabszáma. Újraszámoláskor a leltársor teljes mennyiségét javítsd."}
                       </div>
                     </div>
                     {unknownSelected?.alreadyCountedQty !== null && unknownSelected?.alreadyCountedQty !== undefined ? (
                       <div className="rounded-xl border border-amber-200/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
                         A kiválasztott terméket már számolták: {formatQty(unknownSelected.alreadyCountedQty)} db.
-                        A jóváhagyott mennyiség ehhez HOZZÁADÓDIK. Csak akkor folytasd, ha valóban másik fizikai darab.
+                        {unknownQuantityMode === "additional" ? ` Hozzáadás után: ${formatQty(n(unknownSelected.alreadyCountedQty) + n(unknownQty))} db. Csak újabb fizikai darabot adj hozzá.` : " A kód rendezése önmagában nem jelent további darabot."}
                       </div>
                     ) : null}
                     <label className="flex items-start gap-2 text-xs text-white/80">
@@ -3618,10 +3633,10 @@ export default function AllInInventory() {
               <footer className="flex flex-wrap justify-end gap-2 border-t border-white/12 bg-[#293648] px-5 py-4">
                 <button type="button" className={btnSoft} disabled={unknownBusy} onClick={() => setUnknownDialog(null)}>Mégse</button>
                 <button type="button" className={unknownAction === "discard" ? redBtn : primaryBtn}
-                  disabled={unknownBusy || !unknownConfirmed || unknownNote.trim().length < 8 || (unknownAction === "assign" && !unknownSelected)}
+                  disabled={unknownBusy || !unknownConfirmed || unknownNote.trim().length < 8 || (unknownAction === "assign" && (!unknownSelected || !unknownQuantityMode))}
                   onClick={() => void approveUnknownResolution()}>
                   {unknownBusy ? <RefreshCw size={16} className="animate-spin"/> : unknownAction === "discard" ? <Trash2 size={16}/> : <CheckCircle2 size={16}/>}
-                  {unknownAction === "discard" ? "Beolvasás elvetése" : "Jóváhagyás és leltárba vezetés"}
+                  {unknownAction === "discard" ? "Beolvasás elvetése" : unknownQuantityMode === "already_counted" ? "Kód rendezése – darabszám változatlan" : "További darab hozzáadása"}
                 </button>
               </footer>
             </section>
