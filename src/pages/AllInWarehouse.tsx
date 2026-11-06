@@ -7845,6 +7845,7 @@ export default function AllInWarehouse() {
   const [warehouseTransferToast, setWarehouseTransferToast] = useState<WarehouseTransferToastState | null>(null);
   const warehouseTransferToastTimerRef = useRef<number | null>(null);
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
+  const [labelPreprint, setLabelPreprint] = useState(false);
   const [labelPrintMode, setLabelPrintMode] = useState<WarehouseLabelPrintMode>(() => readWarehouseLabelPrintMode());
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
   const labelCopiesUploadRef = useRef<HTMLInputElement | null>(null);
@@ -12906,10 +12907,11 @@ export default function AllInWarehouse() {
       const requested = preserveExistingCopies && labelCopies[id] !== undefined
         ? labelInt(labelCopies[id], fallbackRequested, 0, 999)
         : fallbackRequested;
-      const finalCopies = Math.max(0, Math.min(requested, maxCopies));
+      // Előzetes nyomtatáskor a kézzel megadott példányszám készlettől független.
+      const finalCopies = Math.max(0, Math.min(requested, labelPreprint ? 999 : maxCopies));
       copiesById[id] = finalCopies;
 
-      if (maxCopies <= 0) zeroStockVariantIds.push(id);
+      if (!labelPreprint && maxCopies <= 0) zeroStockVariantIds.push(id);
       if (finalCopies < requested) {
         reducedProducts += 1;
         removedLabels += requested - finalCopies;
@@ -13016,7 +13018,7 @@ export default function AllInWarehouse() {
       }
       for (const entry of requested) {
         const item = barcodeToItem.get(entry.barcode)!;
-        const maxCopies = Object.prototype.hasOwnProperty.call(labelStockLimitById, item.id)
+        const maxCopies = !labelPreprint && Object.prototype.hasOwnProperty.call(labelStockLimitById, item.id)
           ? Math.max(0, Math.floor(n(labelStockLimitById[item.id])))
           : 999;
         if (entry.copies > maxCopies) {
@@ -13418,7 +13420,7 @@ export default function AllInWarehouse() {
   }, [labelComposerOpen]);
 
   function updateLabelCopies(id: string, value: string) {
-    const limit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+    const limit = !labelPreprint && Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
       ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
       : 999;
     const qty = labelInt(value, 1, 0, limit);
@@ -13427,7 +13429,7 @@ export default function AllInWarehouse() {
 
   function adjustLabelCopies(id: string, delta: number) {
     setLabelCopies((current) => {
-      const limit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+      const limit = !labelPreprint && Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
         ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
         : 999;
       const currentQty = labelInt(current[id], 1, 0, limit);
@@ -13462,7 +13464,7 @@ export default function AllInWarehouse() {
       const id = String(item.variant_id || "");
       const detailItem = labelDetailMap[id]?.item || {};
       const barcode = barcodeForLabelItem(item, detailItem);
-      const stockLimit = Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
+      const stockLimit = !labelPreprint && Object.prototype.hasOwnProperty.call(labelStockLimitById, id)
         ? Math.max(0, Math.floor(n(labelStockLimitById[id])))
         : 999;
       const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 0, 0, stockLimit), 0, stockLimit);
@@ -13500,7 +13502,7 @@ export default function AllInWarehouse() {
         render: labelBarcodeSvg(barcode, 52),
       };
     });
-  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, labelPreprint, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
 
   // A címkenyomtatóba kerülő végső példányszámok tételes ellenőrzése.
   // Számlánként szétválasztjuk a felületi mennyiséget, a szerverhez elküldött
@@ -17703,6 +17705,19 @@ export default function AllInWarehouse() {
                       </p>
                     )}
                   </div>
+                  <label className="mb-3 flex items-start gap-3 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/15 p-3 text-sm text-white">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={labelPreprint}
+                      disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
+                      onChange={(e) => setLabelPreprint(e.target.checked)}
+                    />
+                    <span>
+                      Előzetes címkenyomtatás
+                      <span className="mt-1 block text-xs text-white/65">Készlettől független darabszám, termékenként 0–999 címke. Nulla készletnél is megadható. A nyomtatás nem módosítja a készletet.</span>
+                    </span>
+                  </label>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
                       <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
@@ -17762,7 +17777,7 @@ export default function AllInWarehouse() {
                             <button
                               className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
                               onClick={() => adjustLabelCopies(row.id, 1)}
-                              disabled={Object.prototype.hasOwnProperty.call(labelStockLimitById, row.id) && labelInt(labelCopies[row.id], row.copies, 0, 999) >= Math.max(0, Math.floor(n(labelStockLimitById[row.id])))}
+                              disabled={labelInt(labelCopies[row.id], row.copies, 0, 999) >= (labelPreprint ? 999 : (labelStockLimitById[row.id] ?? 999))}
                               type="button"
                             >+</button>
                           </div>
