@@ -2487,6 +2487,7 @@ export default function createAifOpeningInventoryRouter({
     const action = text(body.action);
     const note = text(body.note).slice(0, 600);
     const variantId = text(body.variantId);
+    const quantityMode = text(body.quantityMode);
     const rawApprovedQty = numberOrNull(body.approvedQty);
     const approvedQty = Number.isSafeInteger(rawApprovedQty) ? rawApprovedQty : null;
     const rawExpectedRecordedQty = numberOrNull(body.expectedRecordedQty);
@@ -2497,8 +2498,10 @@ export default function createAifOpeningInventoryRouter({
     if (body.confirmed !== true || !["assign", "discard"].includes(action) || note.length < 8) {
       return res.status(400).json({ error: "A vezeto szemelyes ellenorzese es legalabb 8 karakteres indoklas szukseges." });
     }
-    if (action === "assign" && (!/^[a-f0-9-]{36}$/i.test(variantId) || approvedQty === null || approvedQty < 1)) {
-      return res.status(400).json({ error: "Valassz ki egy termeket es add meg az ellenorzott darabszamot." });
+    if (action === "assign" && (!/^[a-f0-9-]{36}$/i.test(variantId) || approvedQty === null || approvedQty < 0 || !["additional", "already_counted"].includes(quantityMode)
+      || (quantityMode === "additional" && approvedQty < 1)
+      || (quantityMode === "already_counted" && approvedQty !== 0))) {
+      return res.status(400).json({ error: "Valassz termeket es mennyisegi muveletet: tovabbi darab hozzaadasa, vagy mar beszamitott darab kodjanak rendezese. Frissitsd az oldalt, ha nem latszik a valaszto." });
     }
     if (action === "discard" && (rememberBarcode || variantId || approvedQty !== null)) {
       return res.status(400).json({ error: "Elveteshez csak az indoklast es a jovahagyast add meg." });
@@ -2604,10 +2607,15 @@ export default function createAifOpeningInventoryRouter({
           await client.query("ROLLBACK");
           return res.status(409).json({ error: "A kivalasztott termek leltari darabszama megvaltozott. Frissitsd es ellenorizd ujra, hogy ne legyen duplazas." });
         }
+        if (quantityMode === "already_counted" && !(actualCountedQty > 0)) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "A kod csak pozitiv, mar megszamolt mennyiseghez rendezheto hozzaadas nelkul. Ellenorizd a termeket es a darabszamot." });
+        }
         const line = await ensureDynamicLine(client, session, variant);
         lineBefore = Number(line.counted_qty || 0);
         lineAfter = lineBefore + approvedQty;
-        await client.query(
+        // A kodkapcsolat javitasa nem uj fizikai szamolas: az idopontokat is megorizzuk.
+        if (quantityMode === "additional") await client.query(
           `UPDATE aif_opening_inventory_lines
            SET counted_qty=$3,
                first_scanned_at=CASE WHEN first_scanned_at IS NULL THEN $4::timestamptz
@@ -2623,7 +2631,8 @@ export default function createAifOpeningInventoryRouter({
             VALUES ($1,$2,$3,$4,'unknown_reconcile',$5,$6,$7,$8,$9::jsonb)`,
           [session.id, line.id, variant.variant_id, unknown.scan_code, approvedQty, lineBefore, lineAfter, actor, JSON.stringify({
             unknownScanId: String(unknown.id),
-            resolution: "manager_confirmed_assignment",
+            resolution: quantityMode === "already_counted" ? "manager_confirmed_already_counted" : "manager_confirmed_assignment",
+            quantityMode,
             originalScannedQty: recordedQty,
             approvedPhysicalQty: approvedQty,
             excludedRetryOrDuplicateQty: recordedQty - approvedQty,
@@ -2634,7 +2643,7 @@ export default function createAifOpeningInventoryRouter({
         );
       }
       const resolution = {
-        action, actor, note, reviewedAt: new Date().toISOString(),
+        action, quantityMode: action === "assign" ? quantityMode : null, actor, note, reviewedAt: new Date().toISOString(),
         recordedQty, approvedPhysicalQty: action === "assign" ? approvedQty : 0,
         excludedQty: action === "assign" ? recordedQty - approvedQty : recordedQty,
         variantId: action === "assign" ? String(variant.variant_id) : null,
