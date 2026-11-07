@@ -1,4 +1,5 @@
 import express from "express";
+import { buildAccountingReport, buildAccountingXlsx, buildAccountingHtml, accountingFilename } from "./openingInventoryAccounting.js";
 import { buildOpeningInventoryXlsx, openingInventoryXlsxFilename } from "./openingInventoryXlsx.js";
 import { buildOpeningInventorySummaryHtml } from "./openingInventorySummary.js";
 
@@ -2340,6 +2341,36 @@ export default function createAifOpeningInventoryRouter({
 
   // 7 lehetséges exportkombináció: 3 önálló állomány, illetve ezek együtt.
   // Mindegyik az aktuális sessionhez és annak üzletéhez tartozik.
+  // Accountant report: archived rows only, one consistent read-only transaction.
+  router.get("/admin/sessions/:id/accounting-export", requireAdminOrSecret, async (req, res) => {
+    const format = String(req.query.format || "xlsx");
+    if (!["xlsx", "html"].includes(format)) return res.status(400).json({error:"Érvénytelen exportformátum."});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const session = await sessionById(client, req.params.id);
+      if (!session) throw Object.assign(new Error("A leltár nem található."), {statusCode:404});
+      const result = await client.query(
+        "SELECT id, variant_id, raw FROM aif_opening_inventory_lines WHERE session_id=$1 ORDER BY id",
+        [session.id],
+      );
+      const report = buildAccountingReport({session, lines:result.rows});
+      const output = format === "xlsx" ? buildAccountingXlsx(report) : buildAccountingHtml(report);
+      await client.query("COMMIT");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      if (format === "xlsx") {
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="${accountingFilename(session)}"`);
+      } else res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(output);
+    } catch(error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF accountant export error", error);
+      return res.status(error?.statusCode || 500).json({error:error?.message || "A könyvelői export nem sikerült."});
+    } finally { client.release(); }
+  });
+
   router.get("/admin/sessions/:id/export-data", requireAdminOrSecret, async (req,res) => {
     const sections=requestedExportSections(req.query.sections);
     if(!sections) return res.status(400).json({error:"Érvénytelen export-összeállítás.",code:"inventory_export_sections_invalid"});
