@@ -478,6 +478,11 @@ async function recordLifecycleEvent(db,order,kind,document,actor,lines,key=rando
   return payload;
 }
 async function updateLifecycleState(db,order,warehouse,{markProcessed=false}={}) {
+  // A rounded JS Date would leave the order perpetually newer than its marker,
+  // repeatedly replaying lifecycle checks and blocking the whole stock outbox.
+  if(markProcessed && (typeof order.updated_at_exact!=='string' || !order.updated_at_exact.trim())) {
+    throw new Error('Hiányzik a zárolt Shopify rendelés pontos adatbázis-időbélyege.');
+  }
   const r=await db.query(`SELECT COALESCE(sum(allocated_qty-shipped_qty-released_qty),0)::int AS held,
     COALESCE(sum(shipped_qty),0)::int AS shipped,COALESCE(sum(released_qty),0)::int AS released,
     COALESCE(sum(returned_qty),0)::int AS returned FROM aif_shopify_warehouse_lines WHERE shopify_order_id=$1`,[order.shopify_order_id]);
@@ -486,7 +491,7 @@ async function updateLifecycleState(db,order,warehouse,{markProcessed=false}={})
   const detail=q.held>0?(q.shipped>0?'partial':'allocated'):q.shipped>0?(q.returned>=q.shipped?'returned':q.returned>0?'partially_returned':q.released>0?'fulfilled_partial_cancel':'fulfilled'):'cancelled';
   await db.query(`UPDATE aif_shopify_warehouse_orders SET state=$2,fulfilled_at=CASE WHEN $2='fulfilled' THEN COALESCE(fulfilled_at,now()) ELSE fulfilled_at END,
     cancelled_at=CASE WHEN $2='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END,
-    raw=raw||$3::jsonb,updated_at=now() WHERE shopify_order_id=$1`,[order.shopify_order_id,state,JSON.stringify({lifecycleVersion:2,lifecycleState:detail,pendingQty:q.held,shippedQty:q.shipped,releasedQty:q.released,returnedQty:q.returned,...(markProcessed?{lastSeenOrderUpdatedAt:order.updated_at}:{})})]);
+    raw=raw||$3::jsonb,updated_at=now() WHERE shopify_order_id=$1`,[order.shopify_order_id,state,JSON.stringify({lifecycleVersion:2,lifecycleState:detail,pendingQty:q.held,shippedQty:q.shipped,releasedQty:q.released,returnedQty:q.returned,...(markProcessed?{lastSeenOrderUpdatedAt:order.updated_at_exact}:{})})]);
   await db.query(`UPDATE aif_stock_transfer_documents SET raw=raw||$2::jsonb,updated_at=now() WHERE id=$1`,[warehouse.document_id,JSON.stringify({shopifyWarehouseState:state,shopifyLifecycleState:detail,pendingQty:q.held,shippedQty:q.shipped,returnedQty:q.returned})]);
   return {state,lifecycleState:detail,...q};
 }
@@ -570,7 +575,9 @@ async function withOrderTransaction(pool,orderId,{allowLegacy=false,dryRun=false
     await db.query("SET LOCAL lock_timeout='6s'");
     await db.query("SET LOCAL statement_timeout='30000ms'");
     await db.query("SELECT pg_advisory_xact_lock(hashtext('shopify_warehouse'),hashtext($1))",[orderId]);
-    const q=await db.query('SELECT * FROM aif_shopify_orders WHERE shopify_order_id=$1 FOR UPDATE',[orderId]);
+    // Keep PostgreSQL microseconds: pg's JS Date parser truncates them to milliseconds.
+    // Capture the exact version together with the locked order, never a later version.
+    const q=await db.query('SELECT *, updated_at::text AS updated_at_exact FROM aif_shopify_orders WHERE shopify_order_id=$1 FOR UPDATE',[orderId]);
     if(!q.rowCount) throw lifeError('Shopify rendelés nem található.','order_not_found',404);
     const order=q.rows[0];
     const existing=await db.query('SELECT * FROM aif_shopify_warehouse_orders WHERE shopify_order_id=$1 FOR UPDATE',[orderId]);
