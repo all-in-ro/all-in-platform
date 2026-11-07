@@ -1442,6 +1442,7 @@ export default function AllInInventory() {
   const [dirtyLineIds, setDirtyLineIds] = useState<string[]>([]);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [archiveSearch, setArchiveSearch] = useState("");
+  const [showCancelledCounts, setShowCancelledCounts] = useState(false);
 
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
@@ -1775,8 +1776,9 @@ export default function AllInInventory() {
 
   const filteredCounts = useMemo(() => {
     const q = archiveSearch.trim().toLowerCase();
-    if (!q) return counts;
-    return counts.filter((count) => {
+    const listed = showCancelledCounts ? counts : counts.filter((count) => count.status !== "cancelled");
+    if (!q) return listed;
+    return listed.filter((count) => {
       const session = count.opening;
       return [
         count.title,
@@ -1788,7 +1790,7 @@ export default function AllInInventory() {
         String(count.created_at || "").slice(0, 10),
       ].filter(Boolean).join(" ").toLowerCase().includes(q);
     });
-  }, [archiveSearch, counts]);
+  }, [archiveSearch, counts, showCancelledCounts]);
 
   const countsPageSize = 10;
   const countsTotalPages = Math.max(1, Math.ceil(filteredCounts.length / countsPageSize));
@@ -1799,7 +1801,7 @@ export default function AllInInventory() {
 
   useEffect(() => {
     setCountsPage(1);
-  }, [location, archiveSearch]);
+  }, [location, archiveSearch, showCancelledCounts]);
 
   useEffect(() => {
     if (countsPage > countsTotalPages) setCountsPage(countsTotalPages);
@@ -3113,7 +3115,14 @@ export default function AllInInventory() {
                     placeholder="Archívum keresés: kód, dátum, állapot, megjegyzés..."
                   />
                 </div>
-                <span className="text-xs text-white/50">{filteredCounts.length} leltár</span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-white/70">
+                    <input type="checkbox" className="accent-[#2a8d8b]" checked={showCancelledCounts}
+                      onChange={(event) => setShowCancelledCounts(event.target.checked)} />
+                    Törölt leltárak mutatása
+                  </label>
+                  <span className="text-xs text-white/50">{filteredCounts.length} leltár</span>
+                </div>
               </div>
               <div className="grid gap-2">
                 {visibleCounts.length ? visibleCounts.map((count) => {
