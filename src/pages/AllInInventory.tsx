@@ -2299,6 +2299,45 @@ export default function AllInInventory() {
     window.location.hash = "openinginventoryshop";
   }
 
+  async function exportAccounting(id: string, format: "xlsx" | "pdf") {
+    if (saving || exportBusy) return;
+    const reportWindow = format === "pdf" ? window.open("", "_blank", "width=1250,height=870") : null;
+    if (format === "pdf" && !reportWindow) {
+      setMessage({tone:"error",text:"Engedélyezd az új ablakokat a könyvelői PDF megnyitásához."});
+      return;
+    }
+    if (reportWindow) {
+      reportWindow.opener = null;
+      reportWindow.document.write('<!doctype html><html><meta charset="utf-8"><body style="font:14px Arial;padding:30px">Könyvelői kimutatás előkészítése…</body></html>');
+      reportWindow.document.close();
+    }
+    setExportBusy(true);
+    try {
+      const response = await fetch(`${AIF_BASE}/opening-inventory/admin/sessions/${encodeURIComponent(id)}/accounting-export?format=${format === "pdf" ? "html" : "xlsx"}`, {credentials:"include",cache:"no-store"});
+      if (!response.ok) {
+        const body = await response.json().catch(()=>null);
+        throw new Error(body?.error || `Az export sikertelen (HTTP ${response.status}).`);
+      }
+      if (format === "pdf") {
+        const html = await response.text();
+        if (!reportWindow || reportWindow.closed) throw new Error("A PDF előnézetét közben bezárták.");
+        reportWindow.document.open();reportWindow.document.write(html);reportWindow.document.close();
+      } else {
+        const bytes = await response.arrayBuffer();
+        const signature = new Uint8Array(bytes,0,Math.min(bytes.byteLength,4));
+        if (signature[0] !== 0x50 || signature[1] !== 0x4b) throw new Error("Hibás Excel-fájl érkezett.");
+        const name = response.headers.get("content-disposition")?.match(/filename="([^"\/]+\.xlsx)"/i)?.[1] || `Lista_inventariere_${safeFilePart(id)}.xlsx`;
+        const url=URL.createObjectURL(new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+        const link=document.createElement("a");link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
+        window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }
+      setMessage({tone:"success",text:format === "pdf" ? "A könyvelői kimutatás megnyílt. A Nyomtatás / Mentés PDF-ként gombbal menthető." : "A könyvelői Excel letöltve a lezáráskor rögzített adatokból."});
+    } catch(error) {
+      if(reportWindow && !reportWindow.closed) reportWindow.close();
+      setMessage({tone:"error",text:error instanceof Error ? error.message : "A könyvelői export nem sikerült."});
+    } finally {setExportBusy(false);}
+  }
+
   function openExportDialog(id: string, format: "excel" | "pdf", pdfMode: PrintMode = "result") {
     if (saving || exportBusy) return;
     setExportChoice("inventory");
@@ -2742,6 +2781,10 @@ export default function AllInInventory() {
             {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés</button> : activeReview ? <button className={btnSoft} type="button" onClick={requestReopen}><RotateCcw size={15} /> Újranyitás</button> : <button className={btnSoft} type="button" disabled>Lezárt</button>}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
+            {openingDetail?.session.status === "applied" ? <>
+              <button className={btnSoft} type="button" onClick={() => void exportAccounting(openingDetail.session.id, "xlsx")} disabled={saving || exportBusy}><ExportFileIcon kind="excel" /> Könyvelői XLS</button>
+              <button className={btnSoft} type="button" onClick={() => void exportAccounting(openingDetail.session.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" /> Könyvelői PDF</button>
+            </> : null}
             <button className={primaryBtn} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "summary")}><ExportFileIcon kind="pdf" /> Összesítő PDF</button>
             <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
             {canEditActive && currentInventoryMode === "recovery"
@@ -3173,6 +3216,10 @@ export default function AllInInventory() {
                       <div className={`flex flex-wrap justify-end gap-1.5 border-t px-3 py-2 ${selected ? "border-white/18 bg-black/8" : "border-white/8 bg-[#303a4c]/35"}`}>
                         <button className={headerBtnSoft} type="button" onClick={() => loadCount(count.id)}><Eye size={13} /> Átnézés</button>
                         <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" compact /> Teljes XLS</button>
+                        {count.opening?.status === "applied" ? <>
+                          <button className={headerBtnSoft} type="button" onClick={() => void exportAccounting(count.id, "xlsx")} disabled={saving || exportBusy}><ExportFileIcon kind="excel" compact /> Könyvelői XLS</button>
+                          <button className={headerBtnSoft} type="button" onClick={() => void exportAccounting(count.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> Könyvelői PDF</button>
+                        </> : null}
                         <button className={headerPrimaryBtn} type="button" onClick={() => openExportDialog(count.id, "pdf", "summary")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> Összesítő PDF</button>
                         <button className={headerBtnSoft} type="button" onClick={() => openExportDialog(count.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" compact /> PDF</button>
                       </div>
@@ -3212,6 +3259,10 @@ export default function AllInInventory() {
                 <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "sheet")}><ExportFileIcon kind="pdf" /> Leltárív PDF</button>
                 <button className={btnSoft} type="button" onClick={() => openExportDialog(active.item.id, "pdf", "result")}><ExportFileIcon kind="pdf" /> Eredmény PDF</button>
                 {openingDetail ? <button className={btnSoft} type="button" onClick={() => openExportDialog(openingDetail.session.id, "excel")} disabled={saving || exportBusy} title="Választható leltár, hitel és félretett Excel-export"><ExportFileIcon kind="excel" /> Teljes XLS</button> : null}
+                {openingDetail?.session.status === "applied" ? <>
+                  <button className={btnSoft} type="button" onClick={() => void exportAccounting(openingDetail.session.id, "xlsx")} disabled={saving || exportBusy}><ExportFileIcon kind="excel" /> Könyvelői XLS</button>
+                  <button className={btnSoft} type="button" onClick={() => void exportAccounting(openingDetail.session.id, "pdf")} disabled={saving || exportBusy}><ExportFileIcon kind="pdf" /> Könyvelői PDF</button>
+                </> : null}
                 {!activeFinal ? <button className={btnSoft} type="button" onClick={openShopView}><Eye size={15} /> Bolti nézet</button> : null}
                 {canEditActive ? <button className={btnSoft} type="button" onClick={() => void saveLines()} disabled={saving || dirtyLineIds.length === 0}><Save size={15} /> Mentés{dirtyLineIds.length ? ` (${dirtyLineIds.length})` : ""}</button> : null}
                 {canEditActive && currentInventoryMode === "recovery" ? <button className={primaryBtn} type="button" onClick={requestRecoveryCheckpoint} disabled={saving || activeStats.countedLines === 0}><PackageCheck size={15} /> Eddigi készletre vezetés</button> : null}
