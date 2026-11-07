@@ -11,6 +11,12 @@ const numeric = (v, label) => {
 const cents = v => Math.round((v + Number.EPSILON) * 100);
 const money = v => (v / 100).toLocaleString('ro-RO', {minimumFractionDigits:2,maximumFractionDigits:2});
 const qty = v => v.toLocaleString('ro-RO', {maximumFractionDigits:3});
+// Romanian place names on accountant documents only; leave the admin UI unchanged.
+function accountingLocation(value) {
+  return text(value)
+    .replace(/cs[ií]kszereda/giu, 'Miercurea Ciuc')
+    .replace(/k[eé]zdiv[aá]s[aá]rhely/giu, 'Targu Secuiesc');
+}
 const date = v => {
   const d = new Date(v);
   if (!v || !Number.isFinite(d.getTime())) fail('Hiányzó leltári dátum.');
@@ -40,7 +46,7 @@ export function buildAccountingReport(detail) {
   rows.sort((a,b)=>collator.compare(a.name,b.name)||collator.compare(a.barcode,b.barcode)||a.id.localeCompare(b.id));
   rows.forEach((r,i)=>{r.number=i+1;});
   const totals=rows.reduce((t,r)=>({system:t.system+r.system,actual:t.actual+r.actual,book:t.book+r.book,value:t.value+r.value}),{system:0,actual:0,book:0,value:0});
-  return {company:'TITAN EURO-COM SRL',location:text(s.location_name || s.location?.name),code:text(s.code),documentDate:date(s.started_at || s.created_at),appliedDate:date(s.applied_at),rows,totals,note:NOTE};
+  return {company:'TITAN EURO-COM SRL',location:accountingLocation(s.location_name || s.location?.name),code:text(s.code),documentDate:date(s.started_at || s.created_at),appliedDate:date(s.applied_at),rows,totals,note:NOTE};
 }
 export function accountingFilename(session,extension='xlsx') {
   const safe=text(session.code).replace(/[^a-zA-Z0-9_-]/g,'_');
