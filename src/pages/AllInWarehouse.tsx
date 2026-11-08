@@ -7687,6 +7687,98 @@ function overviewOpenByDefault() {
   return false;
 }
 
+type WarehouseShopifyHealth = {
+  ok: boolean; enabled: boolean; checkedAt: string;
+  queue: { pending: number; processing: number; errors: number; blocked: number; overdue: number; stale_processing: number; last_success_at: string | null };
+  workers: Array<{ alive: boolean; heartbeat_at: string }>;
+  safety: { global: boolean; reason: string | null; variantIds: string[]; orderIds: string[] };
+  warnings: string[];
+};
+
+function warehouseShopifyHealthState(health: WarehouseShopifyHealth | null, error: string, now: number) {
+  if (error || !health || !Number.isFinite(Date.parse(health.checkedAt)) || now - Date.parse(health.checkedAt) > 120000) return "unknown";
+  if (!health.enabled || health.safety.global || !health.workers.some((worker) => worker.alive)) return "stopped";
+  if (!health.ok || health.warnings.length || health.queue.errors || health.queue.blocked || health.queue.overdue || health.queue.stale_processing || health.safety.variantIds.length) return "warning";
+  return "healthy";
+}
+
+function WarehouseShopifyHealthBanner({ onOpenCenter }: { onOpenCenter: () => void }) {
+  const [health, setHealth] = useState<WarehouseShopifyHealth | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const active = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
+  const denied = useRef(false);
+  const refresh = useCallback(async (manual = false) => {
+    if (active.current || (!manual && denied.current) || document.visibilityState === "hidden") return;
+    const controller = new AbortController();
+    active.current = controller;
+    setBusy(true);
+    const timeout = window.setTimeout(() => controller.abort(), 45000);
+    try {
+      const result = await fetchJSON<{ health?: WarehouseShopifyHealth; remoteError?: string | null; ok?: boolean }>("/api/aif/shopify/status", { signal: controller.signal });
+      if (!mounted.current || active.current !== controller) return;
+      const next = result.health;
+      if (!next?.queue || !next?.safety || !Array.isArray(next.workers) || !Array.isArray(next.warnings) || !Array.isArray(next.safety.variantIds)) throw new Error("A szerver nem adott szinkronállapotot. Ellenőrizd a backend frissítését.");
+      setHealth(next);
+      setError(result.remoteError ? `Shopify kapcsolat: ${result.remoteError}` : result.ok === false ? "A Shopify kapcsolat ellenőrzése sikertelen." : "");
+      denied.current = false;
+    } catch (err) {
+      if (!mounted.current || active.current !== controller) return;
+      const status = Number((err as { status?: number })?.status);
+      denied.current = status === 401 || status === 403;
+      setError(status === 401 ? "A munkamenet lejárt. Jelentkezz be újra." : status === 403 ? "A szinkron ellenőrzéséhez nincs jogosultságod." : controller.signal.aborted ? "Az állapotlekérés túllépte a várakozási időt." : err instanceof Error ? err.message : "Az állapot nem kérhető le.");
+    } finally {
+      window.clearTimeout(timeout);
+      if (active.current === controller) {
+        active.current = null;
+        if (mounted.current) { setBusy(false); setNow(Date.now()); }
+      }
+    }
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    void refresh();
+    const timer = window.setInterval(() => { setNow(Date.now()); void refresh(); }, 60000);
+    const visible = () => { if (document.visibilityState === "visible") { setNow(Date.now()); void refresh(); } };
+    document.addEventListener("visibilitychange", visible);
+    return () => { mounted.current = false; active.current?.abort(); active.current = null; window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [refresh]);
+  const state = warehouseShopifyHealthState(health, error, now);
+  const title = state === "healthy" ? "Shopify • készletküldés működik" : state === "warning" ? "Shopify • figyelmet igényel" : state === "stopped" ? "Shopify • készletküldés nem üzemkész" : busy && !health && !error ? "Shopify • állapot ellenőrzése…" : "Shopify • állapot nem igazolt";
+  const tone = state === "healthy" ? "border-[#7bd7d4]/35 bg-[#31565d]" : state === "stopped" ? "border-rose-300/40 bg-rose-950/30" : "border-amber-200/35 bg-amber-950/20";
+  const date = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString("hu-HU") : "Nincs adat";
+  const queue = health?.queue;
+  return (
+    <section className={`rounded-xl border px-3 py-2 text-xs ${tone}`} aria-label="Shopify szinkronállapot">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2" role="status">
+          {state === "healthy" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+          <span>{title}</span>
+          {queue && <span className="text-white/70">Várakozó: {queue.pending} · Küldés: {queue.processing} · Hibás / blokkolt: {queue.errors + queue.blocked}</span>}
+        </div>
+        <button type="button" className={headerBtnSoft} disabled={busy} onClick={() => void refresh(true)} aria-label="Shopify állapot frissítése"><RefreshCw size={14} className={busy ? "animate-spin" : ""} />Frissítés</button>
+        <button type="button" className={headerBtnSoft} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}Részletek</button>
+      </div>
+      {error && <p className="mt-2 text-amber-100">{error}</p>}
+      {expanded && <div className="mt-3 space-y-2 border-t border-white/15 pt-3 text-white/80">
+        <p>Utolsó ellenőrzés: {date(health?.checkedAt)} · Utolsó sikeres készletküldés: {date(queue?.last_success_at)}</p>
+        {health && <>
+          <p>Aktív feldolgozó: {health.workers.some((worker) => worker.alive) ? "van" : "nincs"} · Közös blokkolás: {health.safety.global ? "igen" : "nincs"} · Rendelés miatt várakozó variáns: {health.safety.variantIds.length}</p>
+          <p>10 percnél régebbi várakozás: {queue?.overdue} · Elakadt feldolgozás: {queue?.stale_processing}</p>
+          {health.warnings.length > 0 && <ul className="list-disc space-y-1 pl-4">{health.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+          {!health.safety.global && (health.queue.errors + health.queue.blocked > 0) && <p>A hibás tételeket külön kell rendezni; ezek önmagukban nem állítják le a többi termék küldését.</p>}
+          {health.safety.orderIds?.length > 0 && <p className="break-words">Érintett rendelések: {health.safety.orderIds.join(", ")}</p>}
+        </>}
+        <p>A jelzés a készletküldés állapotát mutatja; nem az összes webshoptermék élő készletének összehasonlítása.</p>
+        <button type="button" className={headerBtnSoft} onClick={onOpenCenter}><ShoppingBag size={14} />Shopify központ megnyitása</button>
+      </div>}
+    </section>
+  );
+}
+
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
@@ -16218,6 +16310,8 @@ export default function AllInWarehouse() {
             </div>
           </div>
         </header>
+
+        <WarehouseShopifyHealthBanner onOpenCenter={() => setShopifySyncCenterOpen(true)} />
 
         {message && <div className="rounded-xl border border-white/20 bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
         {barcodeReturnNotice && (
