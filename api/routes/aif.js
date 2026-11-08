@@ -1,3 +1,4 @@
+import { requireAifImagePermission } from "../lib/aifImagePermissions.js";
 import express from "express";
 import createAifSmsModule from "./aif/sms/index.js";
 import { ensureAifVoucherFinanceSchema, voucherFinanceEnabled, lockAifVoucherForSale, commitAifVoucherRedemption } from "./vouchers.js";
@@ -15711,7 +15712,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return allowed.rowCount > 0;
   }
 
-  router.put("/variants/:id/gallery", requireAuthed, async (req, res) => {
+  router.put("/variants/:id/gallery", requireAuthed, requireAifImagePermission(pool), async (req, res) => {
     const id = text(req.params.id);
     const isSeller = req.session?.role === 'shop';
     let images;
