@@ -1848,11 +1848,12 @@ export default function AllInInventory() {
   const stockStats = useMemo(() => {
     return filteredStockRows.reduce((acc, row) => {
       acc.lines += 1;
+      if (n(row.qty) === 0) acc.zeroStockVariants += 1;
       acc.qty += n(row.qty);
       acc.available += n(row.available_qty);
       acc.sellValue += n(row.qty) * n(row.sell_price);
       return acc;
-    }, { lines: 0, qty: 0, available: 0, sellValue: 0 });
+    }, { lines: 0, zeroStockVariants: 0, qty: 0, available: 0, sellValue: 0 });
   }, [filteredStockRows]);
 
   const canEditActive = Boolean(active && ["draft", "counting"].includes(active.item.status));
@@ -3115,7 +3116,7 @@ export default function AllInInventory() {
         {(!active || !isMobileLayout) ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard label={sourceLabel(currentLocation)} value={currentLocation?.name || "-"} hint="Kiválasztott helyszín" icon={<MapPin size={18} />} tone="blue" />
-          <StatCard label="Készletsor" value={formatQty(stockStats.lines)} hint={`${formatQty(stockStats.qty)} db rendszer szerint`} icon={<PackageCheck size={18} />} />
+          <StatCard label="Készleten" value={`${formatQty(stockStats.qty)} db`} hint={`Nulla készletű termékváltozat: ${formatQty(stockStats.zeroStockVariants)}`} icon={<PackageCheck size={18} />} />
           <StatCard label="Elérhető" value={formatQty(stockStats.available)} hint="Készlet mínusz foglalt" icon={<ShieldCheck size={18} />} tone="green" />
           <StatCard
             label={search.trim() || categoryFilter !== "all" || sizeFilter !== "all"
