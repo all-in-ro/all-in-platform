@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   processAifShopifyOutboxBatch,
+  recordAifShopifyWorkerHealth,
+  getAifShopifySyncHealth,
   syncAifShopifyNewness,
   syncAifShopifyNewnessVisibility,
 } from "./aifShopify.js";
@@ -32,9 +34,33 @@ function schedule(state, delayMs) {
   state.timer.unref?.();
 }
 
+async function persistHealth(state, patch) {
+  try { await recordAifShopifyWorkerHealth(state.pool,state.instanceId,patch); }
+  catch(error) { console.error('AIF Shopify health persistence failed',error?.message||String(error)); }
+}
+
+async function logHealth(state) {
+  if(Date.now()-Number(state.lastHealthCheck||0)<60000)return;
+  state.lastHealthCheck=Date.now();
+  try {
+    const health=await getAifShopifySyncHealth(state.pool);
+    const fingerprint=JSON.stringify(health.warnings);
+    if(fingerprint!==state.lastHealthFingerprint || Date.now()-Number(state.lastHealthLog||0)>300000) {
+      const payload={instanceId:state.instanceId,queue:health.queue,warnings:health.warnings,
+        globalBlock:health.safety.global,reason:health.safety.reason,
+        orderIds:health.safety.orderIds.slice(0,20),heldVariants:health.safety.variantIds.length};
+      if(health.ok)console.log('AIF Shopify sync health OK',JSON.stringify(payload));
+      else console.warn('AIF SHOPIFY SYNC ATTENTION',JSON.stringify(payload));
+      state.lastHealthFingerprint=fingerprint;state.lastHealthLog=Date.now();
+    }
+  } catch(error) { console.error('AIF Shopify health check failed',error?.message||String(error)); }
+}
+
 async function tick(state) {
   if (state.stopped || state.running) return;
   state.running = true;
+  state.tickOutcome={phase:'running',lastError:null,blocked:null};
+  await persistHealth(state,state.tickOutcome);
 
   try {
     // AIF_SHOPIFY_IMAGE_V8: a regi 274+ Shopify termeknel meg nem volt
@@ -101,17 +127,26 @@ async function tick(state) {
     if (warehouse.processed || warehouse.errors) {
       console.log("AIF Shopify warehouse Aviz batch",JSON.stringify({instanceId:state.instanceId,...warehouse}));
     }
-    // If any warehouse transfer failed, do not overwrite the just-reduced
-    // Shopify available stock with a stale outbox value in this tick.
-    if (warehouse.errors || warehouse.blocked || warehouse.lockSkipped || orders.errors) {
+    // Failed allocations are handled by the scoped inventory safety check below.
+    // Persisted failures are scoped by the outbox guard. Never bypass a global
+    // initialization/audit block or a processor owned by another instance.
+    if (warehouse.blocked || warehouse.lockSkipped) {
+      state.tickOutcome={phase:'waiting',lastError:null,blocked:warehouse.blocked||'shopify_processor_busy'};
+      if(warehouse.blocked)console.warn('AIF SHOPIFY SYNC BLOCKED',JSON.stringify(state.tickOutcome));
       schedule(state,state.errorDelayMs);
       return;
     }
 
     const outbound = await processAifShopifyOutboxBatch(state.pool, {
       limit: state.limit,
+      upstreamErrors:{orders:orders.errors||0,warehouse:warehouse.errors||0,
+        orderIds:(warehouse.errorItems||[]).map(item=>item.orderId).filter(Boolean)},
     });
-    if (outbound.processed || outbound.errors || outbound.superseded) {
+    state.tickOutcome={phase:outbound.blocked?'waiting':'idle',lastError:null,
+      blocked:outbound.blocked||null,heldVariants:outbound.safety?.variantIds?.length||0,
+      lastBatch:{processed:outbound.processed||0,success:outbound.success||0,errors:outbound.errors||0,held:outbound.held||0},
+      ...(outbound.success?{lastProgressAt:new Date().toISOString()}:{} )};
+    if (outbound.processed || outbound.errors || outbound.superseded || outbound.blocked) {
       console.log("AIF Shopify embedded sync batch", JSON.stringify({
         instanceId: state.instanceId,
         ...outbound,
@@ -211,9 +246,11 @@ async function tick(state) {
         newness?.removed ||
         newness?.visibility?.changed
       );
-      schedule(state, hadWork ? state.busyDelayMs : state.idleDelayMs);
+      const onlyHeld = !outbound.success && (outbound.blocked || outbound.held || warehouse.errors || orders.errors);
+      schedule(state, onlyHeld ? state.errorDelayMs : hadWork ? state.busyDelayMs : state.idleDelayMs);
     }
   } catch (error) {
+    state.tickOutcome={phase:'error',lastError:error?.message||String(error),blocked:null};
     console.error("AIF Shopify embedded sync error", {
       instanceId: state.instanceId,
       message: error?.message || String(error),
@@ -221,6 +258,8 @@ async function tick(state) {
     });
     schedule(state, state.errorDelayMs);
   } finally {
+    await persistHealth(state,state.tickOutcome);
+    await logHealth(state);
     state.running = false;
   }
 }

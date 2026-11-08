@@ -154,6 +154,7 @@ async function getAccessToken() {
 
   const response = await fetch(`https://${config.shopDomain}/admin/oauth/access_token`, {
     method: "POST",
+    signal: AbortSignal.timeout(30000),
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "client_credentials",
@@ -184,6 +185,7 @@ export async function shopifyGraphql(query, variables = {}) {
   const token = await getAccessToken();
   const response = await fetch(`https://${config.shopDomain}/admin/api/${config.apiVersion}/graphql.json`, {
     method: "POST",
+    signal: AbortSignal.timeout(30000),
     headers: {
       "content-type": "application/json",
       "x-shopify-access-token": token.accessToken,
@@ -736,7 +738,7 @@ async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQt
   return { payload, quantities };
 }
 
-async function claimOutboxRows(pool, limit) {
+async function claimOutboxRows(pool, limit, excludedVariantIds = []) {
   const client = await pool.connect();
   try {
     // A DDL/schema ellenőrzés szándékosan a tranzakción KÍVÜL fut.
@@ -750,8 +752,9 @@ async function claimOutboxRows(pool, limit) {
          WHERE (
            (status IN ('pending','error') AND next_attempt_at <= now())
            OR
-           (status='processing' AND locked_at < now() - interval '10 minutes')
+           (status='processing' AND (locked_at IS NULL OR locked_at < now() - interval '10 minutes'))
          )
+         AND NOT (variant_id = ANY($2::uuid[]))
          ORDER BY updated_at ASC
          LIMIT $1
          FOR UPDATE SKIP LOCKED
@@ -768,7 +771,7 @@ async function claimOutboxRows(pool, limit) {
        FROM picked
        WHERE o.variant_id=picked.variant_id
        RETURNING o.*`,
-      [Math.min(100, Math.max(1, Number(limit || 20)))]
+      [Math.min(100, Math.max(1, Number(limit || 20))), excludedVariantIds]
     );
     await client.query("COMMIT");
     return result.rows;
@@ -1790,6 +1793,123 @@ export async function syncAifShopifyNewnessVisibility(
 }
 
 
+// Queue safety: known warehouse-order failures hold only proven affected variants.
+// Raw order/refund/fulfillment webhooks may contain new or changed lines not yet
+// imported. They deliberately retain the global barrier until processed.
+export async function getAifShopifySyncBlockers(db) {
+  const empty={global:false,reason:null,variantIds:[],orderIds:[],events:[]};
+  if(!bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false))return empty;
+  const ready=await db.query("SELECT to_regclass('public.aif_shopify_warehouse_orders') AS w");
+  if(!ready.rows[0]?.w)return {...empty,global:true,reason:'warehouse_schema_pending'};
+  const events=await db.query(`SELECT topic,status,count(*)::int AS count,min(received_at) AS oldest_at
+    FROM aif_shopify_webhook_events WHERE
+      (topic LIKE 'orders/%' OR topic LIKE 'fulfillments/%' OR topic LIKE 'returns/%' OR topic='refunds/create')
+      AND status IN ('received','processing','error') GROUP BY topic,status ORDER BY topic,status`);
+  if(events.rows.length)return {...empty,global:true,reason:'order_events_pending',events:events.rows};
+  const pending=await db.query(`SELECT DISTINCT shopify_order_id FROM (
+    SELECT o.shopify_order_id FROM aif_shopify_orders o
+          LEFT JOIN aif_shopify_warehouse_orders w ON w.shopify_order_id=o.shopify_order_id
+          WHERE (
+            (w.shopify_order_id IS NULL
+              AND o.shopify_order_legacy_id IS DISTINCT FROM $2
+              AND (o.cancelled_at IS NULL AND o.status<>'cancelled' OR EXISTS(
+                SELECT 1 FROM aif_shopify_fulfillments f
+                WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success'))
+              AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l
+                WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active
+                AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false)
+                AND (l.current_quantity>0 OR EXISTS(
+                  SELECT 1 FROM aif_shopify_fulfillments f
+                  WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success')))
+              AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a
+                WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
+            OR (w.shopify_order_id IS NOT NULL AND (
+              ($1::boolean AND o.updated_at > COALESCE(
+                (w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,
+                w.created_at
+              ))
+              OR (NOT $1::boolean AND w.state='allocated' AND
+                (o.cancelled_at IS NOT NULL OR o.status='cancelled' OR o.fulfillment_status='fulfilled'))
+            ))
+          )
+    UNION SELECT shopify_order_id FROM aif_shopify_warehouse_failures
+  ) pending_orders`,[bool(process.env.SHOPIFY_WAREHOUSE_LIFECYCLE_ENABLED,false),'8294369788231']);
+  const orderIds=pending.rows.map(r=>String(r.shopify_order_id));
+  if(!orderIds.length)return empty;
+  // Include inactive/deleted order lines too: cancellations/returns still affect them.
+  const lines=await db.query(`SELECT shopify_order_id,aif_variant_id AS variant_id,
+      requires_shipping FROM aif_shopify_order_lines WHERE shopify_order_id=ANY($1::text[])`,[orderIds]);
+  const saved=await db.query(`SELECT shopify_order_id,variant_id
+    FROM aif_shopify_warehouse_lines WHERE shopify_order_id=ANY($1::text[])`,[orderIds]);
+  const scope=scopeAifShopifyOrderBlockers(orderIds,lines.rows,saved.rows);
+  return {...empty,...scope,orderIds,reason:scope.global?'order_scope_unresolved':'order_variants_pending'};
+}
+
+export function scopeAifShopifyOrderBlockers(orderIds,lines,saved) {
+  const covered=new Set(),ids=new Set();let unresolved=false;
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  for(const line of lines) {
+    if(line.variant_id && uuid.test(String(line.variant_id))) {
+      ids.add(String(line.variant_id));covered.add(String(line.shopify_order_id));
+    } else if(line.requires_shipping!==false) unresolved=true;
+  }
+  for(const line of saved) {
+    if(line.variant_id && uuid.test(String(line.variant_id))) {
+      ids.add(String(line.variant_id));covered.add(String(line.shopify_order_id));
+    } else unresolved=true;
+  }
+  // An order without positively identified stock lines cannot be isolated safely.
+  if(orderIds.some(id=>!covered.has(String(id))))unresolved=true;
+  return {global:unresolved,variantIds:[...ids].sort()};
+}
+
+const healthSchemaPools = new WeakSet();
+export async function recordAifShopifyWorkerHealth(db,instanceId,patch={}) {
+  if(!healthSchemaPools.has(db)) {
+  await db.query(`CREATE TABLE IF NOT EXISTS aif_shopify_worker_health (
+    instance_id text PRIMARY KEY, heartbeat_at timestamptz NOT NULL DEFAULT now(),
+    data jsonb NOT NULL DEFAULT '{}'::jsonb)`);
+    await db.query("DELETE FROM aif_shopify_worker_health WHERE heartbeat_at<now()-interval '7 days'");
+    healthSchemaPools.add(db);
+  }
+  await db.query(`INSERT INTO aif_shopify_worker_health(instance_id,data) VALUES($1,$2::jsonb)
+    ON CONFLICT(instance_id) DO UPDATE SET heartbeat_at=now(),
+      data=aif_shopify_worker_health.data||EXCLUDED.data`,[instanceId,JSON.stringify(patch)]);
+}
+
+export async function getAifShopifySyncHealth(db) {
+  const queue=await db.query(`SELECT
+    count(*) FILTER(WHERE status='pending')::int AS pending,
+    count(*) FILTER(WHERE status='processing')::int AS processing,
+    count(*) FILTER(WHERE status='error')::int AS errors,
+    count(*) FILTER(WHERE status='blocked')::int AS blocked,
+    count(*) FILTER(WHERE status='pending' AND next_attempt_at<now()-interval '10 minutes')::int AS overdue,
+    count(*) FILTER(WHERE status='processing' AND (locked_at IS NULL OR locked_at<now()-interval '10 minutes'))::int AS stale_processing,
+    min(next_attempt_at) FILTER(WHERE status='pending') AS oldest_due_at,
+    (SELECT max(last_synced_at) FROM aif_shopify_variant_map) AS last_success_at
+    FROM aif_shopify_sync_outbox`);
+  const ready=await db.query("SELECT to_regclass('public.aif_shopify_worker_health') AS health_table");
+  const workers=ready.rows[0]?.health_table ? (await db.query(`SELECT instance_id,heartbeat_at,data,
+    heartbeat_at>now()-interval '2 minutes' AS alive
+    FROM aif_shopify_worker_health ORDER BY heartbeat_at DESC LIMIT 5`)).rows : [];
+  const safety=await getAifShopifySyncBlockers(db);
+  const q=queue.rows[0]||{};
+  const enabled=envConfig().enabled;
+  const warnings=[];
+  if(!enabled)warnings.push('A Shopify készletszinkron ki van kapcsolva.');
+  if(enabled&&!workers.some(w=>w.alive))warnings.push('Legalább 2 perce nincs friss háttérfolyamat-jelzés.');
+  const newest=workers[0];
+  if(newest?.data?.lastError)warnings.push('Háttérfolyamat-hiba: '+newest.data.lastError);
+  if(newest?.data?.blocked && newest.data.blocked!=='shopify_processor_busy')warnings.push('Háttérfolyamat várakozik: '+newest.data.blocked);
+  if(safety.global)warnings.push('Közös készletvédelem aktív: '+safety.reason);
+  else if(safety.variantIds.length)warnings.push(safety.variantIds.length+' variáns rendelési egyeztetésre vár; a többi szinkronizálható.');
+  if(q.overdue)warnings.push(q.overdue+' készletküldés több mint 10 perce esedékes.');
+  if(q.stale_processing)warnings.push(q.stale_processing+' elakadt feldolgozás újrapróbálásra vár.');
+  if(q.errors||q.blocked)warnings.push((Number(q.errors||0)+Number(q.blocked||0))+' készletküldési hiba vagy tiltott összerendelés.');
+  return {ok:warnings.length===0,enabled,checkedAt:new Date().toISOString(),queue:q,workers,
+    safety,warnings};
+}
+
 export async function processAifShopifyOutboxBatch(pool, options = {}) {
   const config = envConfig();
   if (!config.enabled) {
@@ -1831,53 +1951,16 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
   }
 
   try {
-    // Fail closed while known order/return changes have not been accounted for.
-    // Never push a stale pre-checkout quantity over Shopify's current reservation.
-    if (bool(process.env.SHOPIFY_WAREHOUSE_AUTOMATION_ENABLED,false)) {
-      const ready=await pool.query("SELECT to_regclass('public.aif_shopify_warehouse_orders') AS w");
-      if(!ready.rows[0]?.w)return {enabled:true,processed:0,errors:0,blocked:'warehouse_schema_pending'};
-      // The outbox must wait for exactly the orders that the warehouse worker
-      // would process. An existing pre-v2 AVIZ can lack lifecycleVersion and
-      // lastSeenOrderUpdatedAt: use its creation time as the baseline, never
-      // the Unix epoch. Missing legacy metadata alone is not pending work.
-      // Real updates after that baseline still block premature inventory sync.
-      const pending=await pool.query(`SELECT EXISTS(
-        SELECT 1 FROM aif_shopify_webhook_events WHERE
-          (topic LIKE 'orders/%' OR topic LIKE 'fulfillments/%' OR topic LIKE 'returns/%' OR topic='refunds/create')
-          AND status IN ('received','processing','error')
-        UNION ALL SELECT 1 FROM aif_shopify_warehouse_failures
-        UNION ALL SELECT 1 FROM aif_shopify_orders o
-          LEFT JOIN aif_shopify_warehouse_orders w ON w.shopify_order_id=o.shopify_order_id
-          WHERE (
-            (w.shopify_order_id IS NULL
-              AND o.shopify_order_legacy_id IS DISTINCT FROM $2
-              AND (o.cancelled_at IS NULL AND o.status<>'cancelled' OR EXISTS(
-                SELECT 1 FROM aif_shopify_fulfillments f
-                WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success'))
-              AND EXISTS(SELECT 1 FROM aif_shopify_order_lines l
-                WHERE l.shopify_order_id=o.shopify_order_id AND l.is_active
-                AND (l.aif_variant_id IS NOT NULL OR l.requires_shipping IS DISTINCT FROM false)
-                AND (l.current_quantity>0 OR EXISTS(
-                  SELECT 1 FROM aif_shopify_fulfillments f
-                  WHERE f.shopify_order_id=o.shopify_order_id AND f.status='success')))
-              AND EXISTS(SELECT 1 FROM aif_shopify_warehouse_activation a
-                WHERE a.id=1 AND COALESCE(o.shopify_created_at,o.created_at)>=a.activated_at))
-            OR (w.shopify_order_id IS NOT NULL AND (
-              ($1::boolean AND o.updated_at > COALESCE(
-                (w.raw->>'lastSeenOrderUpdatedAt')::timestamptz,
-                w.created_at
-              ))
-              OR (NOT $1::boolean AND w.state='allocated' AND
-                (o.cancelled_at IS NOT NULL OR o.status='cancelled' OR o.fulfillment_status='fulfilled'))
-            ))
-          )
-        ) AS pending`,[
-          bool(process.env.SHOPIFY_WAREHOUSE_LIFECYCLE_ENABLED,false),
-          '8294369788231', // AIF-1003: already audited historical AVIZ.
-        ]);
-      if(pending.rows[0]?.pending)return {enabled:true,processed:0,errors:0,blocked:'order_lifecycle_pending'};
-    }
-    const rows = await claimOutboxRows(pool, options.limit || 20);
+    const safety = await getAifShopifySyncBlockers(pool);
+    // Unknown upstream errors cannot be treated as an empty, safe order queue.
+    const upstream=options.upstreamErrors||{};
+    if(Number(upstream.orders||0)>0)return {enabled:true,processed:0,errors:0,blocked:'order_processor_errors',safety};
+    const failedOrderIds=Array.isArray(upstream.orderIds)?upstream.orderIds.map(String):[];
+    if(Number(upstream.warehouse||0)>0 && (!failedOrderIds.length || failedOrderIds.some(id=>!safety.orderIds.includes(id))))
+      return {enabled:true,processed:0,errors:0,blocked:'warehouse_error_scope_unresolved',safety};
+    if(safety.global)return {enabled:true,processed:0,errors:0,blocked:safety.reason,safety};
+    const rows = await claimOutboxRows(pool, options.limit || 20, safety.variantIds);
+    let held = 0;
     let success = 0;
     let superseded = 0;
     const errors = [];
@@ -1897,6 +1980,16 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
         }
 
         const map = mapping.rows[0];
+        // A new order webhook can arrive while a previous row is sent. Recheck
+        // before every write; release held rows without consuming retry attempts.
+        const freshSafety = await getAifShopifySyncBlockers(client);
+        if(freshSafety.global || freshSafety.variantIds.includes(String(row.variant_id))) {
+          await client.query(`UPDATE aif_shopify_sync_outbox SET status='pending',locked_at=NULL,
+            attempts=GREATEST(attempts-1,0)
+            WHERE variant_id=$1 AND idempotency_key=$2 AND status='processing'`,[row.variant_id,row.idempotency_key]);
+          held += 1;
+          continue;
+        }
 
         /*
          * A Shopify oldali készletírás idempotens kulccsal történik.
@@ -2020,6 +2113,8 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
     return {
       enabled: true,
       processed: rows.length,
+      held,
+      safety,
       success,
       errors: errors.length,
       superseded,
@@ -2061,9 +2156,10 @@ export async function getAifShopifyStatus(client) {
       : shopifyGraphql(`query AifShopifyStatus {
           shop { id name myshopifyDomain }
           locations(first: 50) { nodes { id name isActive address { city address1 } } }
-        }`),
+        }`).catch(error=>({data:{},error:error?.message||String(error)})),
   ]);
 
+  const health=await getAifShopifySyncHealth(client);
   const locationById = new Map((remote?.data?.locations?.nodes || []).map((row) => [text(row.id), row]));
   return {
     ok: publicConfig.missing.length === 0 && Boolean(remote?.data?.shop),
@@ -2076,6 +2172,8 @@ export async function getAifShopifyStatus(client) {
       all: remote?.data?.locations?.nodes || [],
     },
     database: db.rows[0] || {},
+    health,
+    remoteError: remote?.error || null,
   };
 }
 
