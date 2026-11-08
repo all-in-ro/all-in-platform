@@ -43,9 +43,9 @@ const panelHead = "flex flex-col gap-3 border-b border-white/[0.10] bg-[#404a5b]
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const historyBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/65 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_8px_18px_rgba(42,141,139,0.18)] transition hover:bg-[#319c99] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/[0.14] bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/[0.12] bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnBase = "inline-flex box-border h-8 min-h-[32px] max-h-[32px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 !py-0 text-[11px] font-normal leading-none text-white disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:shrink-0";
+const headerBtnSoft = `${headerBtnBase} border-white/[0.12] bg-white/[0.08] hover:bg-white/[0.12]`;
+const headerPrimaryBtn = `${headerBtnBase} border-[#2a8d8b]/[0.55] bg-[#2a8d8b] hover:bg-[#319c99]`;
 const rowPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const rowSoftBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.12] bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const rowDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.18] bg-[#E21C2A] px-2.5 text-[11px] text-white transition hover:bg-[#C91522] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -2268,7 +2268,7 @@ export default function AllInStockMoves() {
               <button type="button" onClick={() => setActiveTab("moves")} className={activeTab === "moves" ? headerPrimaryBtn : headerBtnSoft}><Activity size={15} /> Mozgásnapló</button>
               <button type="button" onClick={() => setActiveTab("stock")} className={activeTab === "stock" ? headerPrimaryBtn : headerBtnSoft}><Boxes size={15} /> Jelenlegi készlet</button>
               <button type="button" onClick={() => refresh()} disabled={loading} className={headerBtnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
-              <button className={`${headerBtn} ml-2 border-white/[0.18] bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
+              <button className={headerBtnSoft} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
             </div>
           </div>
         </header>
