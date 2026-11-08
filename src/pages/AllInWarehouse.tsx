@@ -15357,10 +15357,6 @@ export default function AllInWarehouse() {
       return;
     }
     const totalQty = newProductTotalQty();
-    if (totalQty <= 0) {
-      setMessage("Legalább egy célhelyre adj meg készletet.");
-      return;
-    }
     if (effectiveNewProductBarcodeConflict) {
       setNewProductBarcodeConflict(effectiveNewProductBarcodeConflict);
       setMessage("");
@@ -19227,7 +19223,7 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Edit3 size={16} /> Alapadatok</div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={label}>Terméknév románul<span className="ml-1 text-rose-300" title="Kötelező" aria-label="kötelező">*</span><input id="new-product-required-title" required aria-required="true" className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
+                      <label className={label}><span className="inline-flex items-center gap-1.5">Terméknév románul<span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#ed001c] text-[10px] font-bold leading-none text-white" title="Kötelező" aria-label="kötelező">!</span></span><input id="new-product-required-title" required aria-required="true" className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
                       <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <WarehouseSingleSelect
@@ -19299,14 +19295,14 @@ export default function AllInWarehouse() {
                       <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
                       <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => { setNewProductBarcodeConflict(null); setNewProduct((x) => ({ ...x, barcode: e.target.value })); }} /></label>
                       <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
-                      <label className={label}>Szín<span className="ml-1 text-rose-300" title="Kötelező" aria-label="kötelező">*</span><input id="new-product-required-color" required aria-required="true" className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
+                      <label className={label}><span className="inline-flex items-center gap-1.5">Szín<span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#ed001c] text-[10px] font-bold leading-none text-white" title="Kötelező" aria-label="kötelező">!</span></span><input id="new-product-required-color" required aria-required="true" className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
                       <label className={label}>Gyártói méret<input className={input} value={newProduct.supplierSize} onChange={(e) => {
                         const supplierSizeValue = e.target.value;
                         const mapped = standardSizeForBrandSize(newProduct.brandCode, supplierSizeValue);
                         setNewProduct((x) => ({ ...x, supplierSize: supplierSizeValue, size: mapped || x.size || supplierSizeValue }));
                       }} placeholder="pl. US 8.5 vagy OSFM" /></label>
-                      <label className={label}>Standard méret<span className="ml-1 text-rose-300" title="Kötelező" aria-label="kötelező">*</span><input id="new-product-required-size" required aria-required="true" className={input} list="warehouse-new-product-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
+                      <label className={label}><span className="inline-flex items-center gap-1.5">Standard méret<span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#ed001c] text-[10px] font-bold leading-none text-white" title="Kötelező" aria-label="kötelező">!</span></span><input id="new-product-required-size" required aria-required="true" className={input} list="warehouse-new-product-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
                       <label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
                       <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
@@ -19331,7 +19327,7 @@ export default function AllInWarehouse() {
               <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-sm text-white/88">Kezdő készlet célhelyenként<span className="ml-1 text-rose-300" title="Kötelező" aria-label="kötelező">*</span></p>
+                    <p className="text-sm text-white/88">Kezdő készlet célhelyenként</p>
                     <p className="text-xs text-white/55">Összesen: <span className="text-white">{newProductTotalQty()}</span> db</p>
                   </div>
                   <button className={btnSoft} type="button" onClick={() => setNewProductStockRows(emptyStockRowsByLocation("0"))}>Nullázás</button>
@@ -19346,7 +19342,7 @@ export default function AllInWarehouse() {
                       </label>
                     );
                   })}
-                  {!stockLocationRows.length && <p className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-2 py-2 text-sm text-amber-100">Nincs aktív célhely. Előbb vegyél fel legalább egy aktív lokációt a törzsadatoknál.</p>}
+                  {!stockLocationRows.length && <p className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-2 py-2 text-sm text-amber-100">Nincs aktív célhely.</p>}
                 </div>
               </section>
 
@@ -19354,7 +19350,7 @@ export default function AllInWarehouse() {
                 
                 <div className="flex gap-2">
                   <button className={btnSoft} type="button" onClick={closeNewProductModal} disabled={newProductSaving}>Mégse</button>
-                  <button className={primaryBtn} type="button" onClick={saveNewProduct} disabled={newProductSaving || newProductTotalQty() <= 0 || Boolean(effectiveNewProductBarcodeConflict)} title={effectiveNewProductBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined}><Save size={15} /> Termék mentése</button>
+                  <button className={primaryBtn} type="button" onClick={saveNewProduct} disabled={newProductSaving || Boolean(effectiveNewProductBarcodeConflict)} title={effectiveNewProductBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined}><Save size={15} /> Termék mentése</button>
                 </div>
               </div>
             </div>
