@@ -1,3 +1,4 @@
+import { requireAifImagePermission } from "./api/lib/aifImagePermissions.js";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -594,6 +595,7 @@ app.post("/api/auth/login", async (req, res) => {
     const actor = row.name ? row.name : "SHOP USER";
     const session = {
       role: "shop",
+      codeId: String(row.id),
       shopId: row.shop_id,
       shopName: row.shop_name || row.shop_id,
       locationCode: row.aif_location_code || row.shop_id,
@@ -1007,7 +1009,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
 // megnyitasa. A shop cookie sajat locationCode-ja es a valos keszlet miatt
 // mas uzlet termekere (vagy tetszoleges R2 mappaba) nem lehet feltolteni.
 const shopGalleryUpload = upload.single("file");
-app.post("/api/uploads/r2/shop-gallery", requireAuthed, (req, res, next) => {
+app.post("/api/uploads/r2/shop-gallery", requireAuthed, requireAifImagePermission(pool), (req, res, next) => {
   shopGalleryUpload(req, res, (error) => {
     if (!error) return next();
     if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "A kép legfeljebb 10 MB lehet.", code: "image_too_large" });
