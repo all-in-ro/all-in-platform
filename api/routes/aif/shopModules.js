@@ -1,3 +1,4 @@
+import { ensureAifImagePermissions, getAifImagePermission } from '../../lib/aifImagePermissions.js';
 import express from 'express';
 
 // Felületi kártyák: a listán kívüli, új modulok alapból nem engedélyezettek.
@@ -40,6 +41,7 @@ async function ensure(pool) {
   return schemaPromise;
 }
 async function ensureOnce(pool) {
+  await ensureAifImagePermissions(pool);
   await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_module_defaults (
     shop_id text PRIMARY KEY,
     enabled_modules text[] NOT NULL,
@@ -106,11 +108,12 @@ export default function createAifShopModulesRouter({pool,requireAuthed}) {
       const found=await pool.query('SELECT id::text AS id,shop_id,name FROM login_codes WHERE id::text=$1',[codeId]);
       if (!found.rowCount) return res.status(404).json({error:'A belépőkód nem található.'});
       const item=found.rows[0];
-      const saved=await pool.query('SELECT enabled_modules FROM aif_shop_user_modules WHERE code_id=$1',[codeId]);
+      const saved=await pool.query('SELECT enabled_modules, can_manage_images FROM aif_shop_user_modules WHERE code_id=$1',[codeId]);
       res.setHeader('Cache-Control','no-store');
       res.json({ok:true,codeId,shopId:item.shop_id,actor:item.name,
         modules:saved.rowCount?cleanModules(saved.rows[0].enabled_modules):await defaultModules(pool,item.shop_id),
-        source:saved.rowCount?'user':'shop-default'});
+        source:saved.rowCount?'user':'shop-default',
+        canManageImages:saved.rows[0]?.can_manage_images === true});
     } catch(e) { sendError(res,e); }
   });
 
@@ -118,16 +121,28 @@ export default function createAifShopModulesRouter({pool,requireAuthed}) {
     try {
       const codeId=txt(req.params.codeId);
       const modules=cleanModules(req.body?.modules);
+      const imageGrant = req.body?.canManageImages;
+      if (imageGrant !== undefined && typeof imageGrant !== 'boolean') {
+        return res.status(400).json({error:'A képszerkesztési engedély csak igaz vagy hamis lehet.'});
+      }
       await ensure(pool);
       const found=await pool.query('SELECT id::text AS id,shop_id FROM login_codes WHERE id::text=$1',[codeId]);
       if (!found.rowCount) return res.status(404).json({error:'A belépőkód nem található.'});
       const shopId=found.rows[0].shop_id;
-      await pool.query(`INSERT INTO aif_shop_user_modules(code_id,shop_id,enabled_modules,updated_by)
-        VALUES($1,$2,$3::text[],$4) ON CONFLICT(code_id) DO UPDATE
+      await pool.query(`INSERT INTO aif_shop_user_modules(code_id,shop_id,enabled_modules,updated_by,can_manage_images)
+        VALUES($1,$2,$3::text[],$4,COALESCE($5::boolean,false)) ON CONFLICT(code_id) DO UPDATE
         SET shop_id=EXCLUDED.shop_id,enabled_modules=EXCLUDED.enabled_modules,
-            updated_at=now(),updated_by=EXCLUDED.updated_by`,
-        [codeId,shopId,modules,txt(req.session?.actor) || 'ADMIN']);
+            updated_at=now(),updated_by=EXCLUDED.updated_by,
+            can_manage_images=COALESCE($5::boolean,aif_shop_user_modules.can_manage_images)`,
+        [codeId,shopId,modules,txt(req.session?.actor) || 'ADMIN',imageGrant ?? null]);
       res.json({ok:true,codeId,shopId,modules});
+    } catch(e) { sendError(res,e); }
+  });
+
+  router.get('/image-permission', requireAuthed, async(req,res)=>{
+    try {
+      res.setHeader('Cache-Control','no-store');
+      res.json({ok:true,...await getAifImagePermission(pool,req.session)});
     } catch(e) { sendError(res,e); }
   });
 
