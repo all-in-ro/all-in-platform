@@ -21807,7 +21807,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const documentTypeFilter = cleanAifStockDocumentType(req.query.documentType || req.query.document_type || req.query.operationType || req.query.operation_type, null);
     const from = emptyToNull(req.query.from || req.query.dateFrom || req.query.date_from);
     const to = emptyToNull(req.query.to || req.query.dateTo || req.query.date_to);
-    const limit = Math.min(3000, Math.max(1, Number(req.query.limit || 250)));
+    const limit = Math.min(3000, Math.max(1, Number.parseInt(String(req.query.limit || "50"), 10) || 50));
+    const offset = Math.min(10000000, Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0));
 
     // AIF_STOCK_MOVES_BUSINESS_VIEW_V1
     // A normál raktármozgás riport üzleti eseményeket mutat.
@@ -21896,7 +21897,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         args
       );
 
-      const rowArgs = [...args, limit];
+      const rowArgs = [...args, limit, offset];
       const rows = await pool.query(
         `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
                 sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
@@ -21914,11 +21915,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 c.name_ro AS category_name_ro, c.code AS category_code
          ${fromSql}
          ORDER BY sm.created_at DESC, sm.id DESC
-         LIMIT $${rowArgs.length}`,
+         LIMIT $${rowArgs.length - 1} OFFSET $${rowArgs.length}`,
         rowArgs
       );
 
-      res.json({ items: rows.rows, totals: totals.rows[0] || {} });
+      const total = Number(totals.rows[0]?.movement_count || 0);
+      res.json({ items: rows.rows, totals: totals.rows[0] || {}, total, limit, offset, hasMore: offset + rows.rows.length < total });
     } catch (e) {
       console.error("AIF stock movements failed", e);
       res.status(500).json({ error: e?.message || "A készletmozgások betöltése nem sikerült.", code: e?.code || null });
