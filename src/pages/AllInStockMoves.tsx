@@ -1714,6 +1714,11 @@ export default function AllInStockMoves() {
   const [locationId, setLocationId] = useState("");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [moveRows, setMoveRows] = useState<AifStockMoveItem[]>([]);
+  const [movePageSize, setMovePageSize] = useState(50);
+  const [movePagination, setMovePagination] = useState({ key: "", page: 0 });
+  const moveListRef = useRef<HTMLDivElement | null>(null);
+  const scrollToMovesRef = useRef(false);
+  const stockCacheRef = useRef<{ key: string; at: number; items: AifStockItem[] } | null>(null);
   const [totals, setTotals] = useState<AifStockMoveTotals>({});
   const [activeTab, setActiveTab] = useState<TabKey>("moves");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -1746,7 +1751,7 @@ export default function AllInStockMoves() {
   const [reorderError, setReorderError] = useState<string | null>(null);
   const [reorderIdempotencyKey, setReorderIdempotencyKey] = useState("");
   const [openPurchaseOrdersByVariant, setOpenPurchaseOrdersByVariant] = useState<Record<string, OpenPurchaseOrderBadgeInfo>>({});
-  const refreshInFlightRef = useRef(false);
+  const refreshRequestRef = useRef<{ key: string; controller: AbortController } | null>(null);
 
   const loadOpenPurchaseOrderState = useCallback(async () => {
     try {
@@ -1986,7 +1991,17 @@ export default function AllInStockMoves() {
     return q;
   }, [locationId, search]);
 
-  const buildMoveQuery = useCallback((override?: { direction?: DirectionFilter | "in" | "out"; limit?: number }) => {
+  const moveFilterKey = JSON.stringify([locationId, search.trim(), direction, documentType, from, to]);
+  const movePage = movePagination.key === moveFilterKey ? movePagination.page : 0;
+  const movePageCount = Math.max(1, Math.ceil(n(totals.movement_count) / movePageSize));
+
+  const changeMovePage = (page: number) => {
+    scrollToMovesRef.current = true;
+    setSelectedMoveIds(new Set());
+    setMovePagination({ key: moveFilterKey, page });
+  };
+
+  const buildMoveQuery = useCallback((override?: { direction?: DirectionFilter | "in" | "out"; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();
     if (locationId) q.set("location", locationId);
     if (search.trim()) q.set("search", search.trim());
@@ -1995,40 +2010,64 @@ export default function AllInStockMoves() {
     if (documentType !== "all") q.set("documentType", documentType);
     if (from) q.set("from", from);
     if (to) q.set("to", to);
-    q.set("limit", String(override?.limit || 350));
+    q.set("limit", String(override?.limit ?? movePageSize));
+    q.set("offset", String(override?.offset ?? movePage * movePageSize));
     return q;
-  }, [direction, documentType, from, locationId, search, to]);
+  }, [direction, documentType, from, locationId, search, to, movePageSize, movePage]);
 
-  const refresh = useCallback(async (options?: { silent?: boolean }) => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
+  const refresh = useCallback(async (options?: { silent?: boolean; forceStock?: boolean }) => {
+    const stockQ = buildStockQuery();
+    const movesQ = buildMoveQuery();
+    const requestKey = `${stockQ}|${movesQ}`;
+    if (refreshRequestRef.current?.key === requestKey && !refreshRequestRef.current.controller.signal.aborted) return;
+    refreshRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    const request = { key: requestKey, controller };
+    refreshRequestRef.current = request;
     if (!options?.silent) setLoading(true);
     setMessage(null);
     setMessageTone("info");
     try {
-      const stockQ = buildStockQuery();
-      const movesQ = buildMoveQuery({ limit: 350 });
+      const stockKey = stockQ.toString();
+      const cache = stockCacheRef.current;
+      const reuseStock = !options?.forceStock && cache?.key === stockKey;
       const [stockData, moveData] = await Promise.all([
-        fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${stockQ.toString()}`),
-        fetchAifJSON<{ items: AifStockMoveItem[]; totals: AifStockMoveTotals }>(`/stock-movements?${movesQ.toString()}`),
+        reuseStock ? Promise.resolve({ items: cache!.items }) : fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${stockKey}`, { signal: controller.signal }),
+        fetchAifJSON<{ items: AifStockMoveItem[]; totals: AifStockMoveTotals; offset?: number }>(`/stock-movements?${movesQ}`, { signal: controller.signal }),
       ]);
-      const nextMoveRows = moveData.items || [];
+      if (controller.signal.aborted || refreshRequestRef.current !== request) return;
+      if (movePage > 0 && moveData.offset !== movePage * movePageSize) throw new Error("A lapozáshoz a frissített szerverfájlt is telepíteni kell.");
+      if (!reuseStock) stockCacheRef.current = { key: stockKey, at: Date.now(), items: stockData.items || [] };
       setStockRows(stockData.items || []);
+      setTotals(moveData.totals || {});
+      const lastPage = Math.max(0, Math.ceil(n(moveData.totals?.movement_count) / movePageSize) - 1);
+      if (movePage > lastPage) {
+        setMovePagination({ key: moveFilterKey, page: lastPage });
+        return;
+      }
+      const nextMoveRows = moveData.items || [];
       setMoveRows(nextMoveRows);
       setSelectedMoveIds((current) => {
         const visibleIds = new Set(nextMoveRows.map((row) => String(row.id)));
         const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
         return next.size === current.size ? current : next;
       });
-      setTotals(moveData.totals || {});
+      if (scrollToMovesRef.current) {
+        scrollToMovesRef.current = false;
+        window.requestAnimationFrame(() => moveListRef.current?.scrollIntoView({ behavior: "auto", block: "start" }));
+      }
     } catch (e: any) {
+      if (controller.signal.aborted || refreshRequestRef.current !== request) return;
+      setMoveRows([]);
       setMessageTone("error");
       setMessage(e.message || "A készletmozgások betöltése nem sikerült.");
     } finally {
-      refreshInFlightRef.current = false;
-      if (!options?.silent) setLoading(false);
+      if (refreshRequestRef.current === request) {
+        refreshRequestRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [buildMoveQuery, buildStockQuery]);
+  }, [buildMoveQuery, buildStockQuery, movePage, movePageSize, moveFilterKey]);
 
   const notifyStockMovesChanged = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -2041,20 +2080,22 @@ export default function AllInStockMoves() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    return () => refreshRequestRef.current?.controller.abort();
   }, [refresh]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const refreshSilently = () => refresh({ silent: true });
+    const refreshSilently = () => refresh({ silent: true, forceStock: !stockCacheRef.current || Date.now() - stockCacheRef.current.at >= 30000 });
+    const refreshAfterChange = () => { stockCacheRef.current = null; void refresh({ silent: true, forceStock: true }); };
     const onStorage = (event: StorageEvent) => {
-      if (event.key === stockMovesChangedStorageKey) refreshSilently();
+      if (event.key === stockMovesChangedStorageKey) refreshAfterChange();
     };
     const onVisibility = () => {
       if (!document.hidden) refreshSilently();
     };
     window.addEventListener("storage", onStorage);
-    window.addEventListener(stockMovesChangedEventName, refreshSilently as EventListener);
+    window.addEventListener(stockMovesChangedEventName, refreshAfterChange as EventListener);
     window.addEventListener("focus", refreshSilently);
     document.addEventListener("visibilitychange", onVisibility);
     const intervalId = window.setInterval(() => {
@@ -2062,7 +2103,7 @@ export default function AllInStockMoves() {
     }, 12000);
     return () => {
       window.removeEventListener("storage", onStorage);
-      window.removeEventListener(stockMovesChangedEventName, refreshSilently as EventListener);
+      window.removeEventListener(stockMovesChangedEventName, refreshAfterChange as EventListener);
       window.removeEventListener("focus", refreshSilently);
       document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(intervalId);
@@ -2195,7 +2236,7 @@ export default function AllInStockMoves() {
     setMessage(null);
     setMessageTone("info");
     try {
-      const q = buildMoveQuery({ direction: kind, limit: 2000 });
+      const q = buildMoveQuery({ direction: kind, limit: 2000, offset: 0 });
       const data = await fetchAifJSON<{ items: AifStockMoveItem[] }>(`/stock-movements?${q.toString()}`);
       const rows = data.items || [];
       writeStockMovementPdfWindow(popup, { kind, rows, locationName: selectedLocationName, rangeLabel, search });
@@ -2229,7 +2270,7 @@ export default function AllInStockMoves() {
                 <p className="mt-0.5 truncate text-[10px] text-white/44">{selectedLocationName} • {activeTab === "moves" ? rangeLabel : `${formatQty(stockRows.length)} terméksor`}</p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                <button type="button" onClick={() => refresh()} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés">
+                <button type="button" onClick={() => refresh({ forceStock: true })} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés">
                   <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
                 </button>
                 <button type="button" onClick={goHome} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Kezdőlap">
@@ -2267,7 +2308,7 @@ export default function AllInStockMoves() {
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
               <button type="button" onClick={() => setActiveTab("moves")} className={activeTab === "moves" ? headerPrimaryBtn : headerBtnSoft}><Activity size={15} /> Mozgásnapló</button>
               <button type="button" onClick={() => setActiveTab("stock")} className={activeTab === "stock" ? headerPrimaryBtn : headerBtnSoft}><Boxes size={15} /> Jelenlegi készlet</button>
-              <button type="button" onClick={() => refresh()} disabled={loading} className={headerBtnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button type="button" onClick={() => refresh({ forceStock: true })} disabled={loading} className={headerBtnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
               <button className={headerBtnSoft} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
             </div>
           </div>
@@ -2363,7 +2404,7 @@ export default function AllInStockMoves() {
                 />
               </label>
 
-              <button type="button" onClick={() => refresh()} disabled={loading} className={primaryBtn}>
+              <button type="button" onClick={() => refresh({ forceStock: true })} disabled={loading} className={primaryBtn}>
                 <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés
               </button>
             </div>
@@ -2482,7 +2523,7 @@ export default function AllInStockMoves() {
         </div>
 
         {activeTab === "moves" ? (
-          <div className={panel}>
+          <div ref={moveListRef} className={`${panel} scroll-mt-44 lg:scroll-mt-28`}>
             <div className="border-b border-white/[0.08] bg-[#303b4d] px-3 py-3 lg:hidden">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -2741,6 +2782,27 @@ export default function AllInStockMoves() {
                 );
               })}
               {!moveRows.length ? <div className="rounded-[20px] border border-dashed border-white/[0.10] bg-[#293548] px-4 py-10 text-center text-[11px] text-white/46">Nincs mozgás ebben az időszakban.</div> : null}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.10] bg-[#303b4d] px-4 py-3">
+              <label className="flex items-center gap-2 text-xs text-white/70">
+                Oldalanként
+                <select className={`${input} h-9 w-20`} value={movePageSize} disabled={loading} onChange={(e) => {
+                  scrollToMovesRef.current = true;
+                  setSelectedMoveIds(new Set());
+                  setMovePageSize(Number(e.target.value));
+                  setMovePagination({ key: moveFilterKey, page: 0 });
+                }}>
+                  {[50, 100, 150, 200].map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
+              <span className="text-xs text-white/60">{loading ? "Betöltés..." : `${formatQty(moveRows.length ? movePage * movePageSize + 1 : 0)}–${formatQty(moveRows.length ? movePage * movePageSize + moveRows.length : 0)} / ${formatQty(totals.movement_count || 0)} tétel`}</span>
+              <div className="flex items-center gap-2">
+                <button type="button" className={headerBtnSoft} disabled={loading || movePage === 0} onClick={() => changeMovePage(0)}>Első</button>
+                <button type="button" className={headerBtnSoft} disabled={loading || movePage === 0} onClick={() => changeMovePage(movePage - 1)}>Előző</button>
+                <span className="px-1 text-xs tabular-nums text-white/70">{movePage + 1} / {movePageCount}</span>
+                <button type="button" className={headerBtnSoft} disabled={loading || movePage + 1 >= movePageCount} onClick={() => changeMovePage(movePage + 1)}>Következő</button>
+                <button type="button" className={headerBtnSoft} disabled={loading || movePage + 1 >= movePageCount} onClick={() => changeMovePage(movePageCount - 1)}>Utolsó</button>
+              </div>
             </div>
           </div>
         ) : (
