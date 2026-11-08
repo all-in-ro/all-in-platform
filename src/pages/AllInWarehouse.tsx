@@ -52,45 +52,45 @@ import {
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
-const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
+const panel = "overflow-hidden rounded-2xl border border-white/[0.12] bg-white/[0.07] shadow-sm";
 const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
-const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.14] bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/[0.14] bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/[0.12] bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const warehouseListIconButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
+const warehouseListIconButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
 const warehouseListDangerButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
-const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
+const input = "h-10 rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/[0.45]";
 const moveLabel = "grid min-w-0 gap-1 text-[10px] uppercase tracking-[0.05em] text-white/58";
-const moveInput = "h-8 min-w-0 w-full rounded-lg border border-white/18 bg-[#303a4c] px-2 text-xs text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55";
-const moveQtyBox = "grid h-8 w-full min-w-[132px] grid-cols-[32px,minmax(56px,1fr),32px] overflow-hidden rounded-lg border border-white/18 bg-[#303a4c]";
+const moveInput = "h-8 min-w-0 w-full rounded-lg border border-white/[0.14] bg-[#303a4c] px-2 text-xs text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55";
+const moveQtyBox = "grid h-8 w-full min-w-[132px] grid-cols-[32px,minmax(56px,1fr),32px] overflow-hidden rounded-lg border border-white/[0.14] bg-[#303a4c]";
 const moveQtyButton = "inline-flex h-8 w-8 items-center justify-center text-white/86 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-45";
-const moveTinyBtn = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-[#344257] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#405067] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/30 disabled:cursor-not-allowed disabled:opacity-50";
+const moveTinyBtn = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/[0.12] bg-[#344257] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#405067] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/30 disabled:cursor-not-allowed disabled:opacity-50";
 const moveCompactBtn = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/78 px-2.5 text-[11px] text-white transition hover:bg-[#319c99] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/30 disabled:cursor-not-allowed disabled:opacity-45";
 const moveRowActions = "ml-auto flex shrink-0 items-center gap-1";
 const label = "grid gap-1.5 text-xs text-white/70";
-const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
-const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
+const chip = "rounded-full border border-white/[0.10] bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
+const selectBox = "h-4 w-4 rounded border-white/[0.18] bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
 const WAREHOUSE_PRODUCTS_PER_PAGE = 50;
 const WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS = [50, 100, 150, 200];
 const WAREHOUSE_SALES_TVA_RATE_PERCENT = 21;
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
-const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
-const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
-const taxonomyCard = "rounded-2xl border border-white/18 bg-[#566171] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(15,23,42,0.10)]";
+const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/[0.12] bg-[#4b5362] shadow-2xl";
+const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/[0.14] bg-[#4b5362] shadow-2xl";
+const taxonomyCard = "rounded-2xl border border-white/[0.14] bg-[#566171] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(15,23,42,0.10)]";
 const taxonomyTabBase = "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs transition-colors font-normal";
 const taxonomyTabActive = `${taxonomyTabBase} border-[#7bd7d4]/55 bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.22),0_8px_18px_rgba(15,23,42,0.12)]`;
-const taxonomyTabIdle = `${taxonomyTabBase} border-white/16 bg-[#3f4959] text-white/78 hover:bg-[#475365]`;
-const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/18 bg-[#3f4959] px-2.5 text-[11px] text-white/88 hover:bg-[#475365] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyTabIdle = `${taxonomyTabBase} border-white/[0.12] bg-[#3f4959] text-white/78 hover:bg-[#475365]`;
+const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.14] bg-[#3f4959] px-2.5 text-[11px] text-white/88 hover:bg-[#475365] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.12)] hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45 font-normal";
 const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/30 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_0_0_1px_rgba(248,113,113,0.06)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyField = "grid gap-1.5 text-[11px] text-white/72";
-const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
-const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
-const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
+const taxonomyInput = "h-9 rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
+const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
+const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/[0.12] bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
 function ShopifyBrandMark({
   size = "sm",
@@ -609,7 +609,7 @@ function WarehouseShopifyStatusIcon({
       <button
         ref={buttonRef}
         type="button"
-        className={`${buttonSize} relative inline-flex shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] transition hover:border-[#95bf47]/70 hover:bg-white/[0.13] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45`}
+        className={`${buttonSize} relative inline-flex shrink-0 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.08] transition hover:border-[#95bf47]/70 hover:bg-white/[0.13] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45`}
         onMouseEnter={() => { cancelClose(); setHovered(true); }}
         onMouseLeave={scheduleClose}
         onFocus={() => { cancelClose(); setHovered(true); }}
@@ -1126,7 +1126,7 @@ function WarehouseMultiSelect({
       <span>{labelText}</span>
       <button
         type="button"
-        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -1140,8 +1140,8 @@ function WarehouseMultiSelect({
         </span>
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl">
-          <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1.5">
+        <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/[0.14] bg-[#293344] shadow-2xl">
+          <div className="flex items-center justify-between gap-2 border-b border-white/[0.08] px-2 py-1.5">
             <button
               type="button"
               className="h-7 rounded-lg px-2 text-[11px] text-white/72 hover:bg-white/[0.08] hover:text-white"
@@ -1180,7 +1180,7 @@ function WarehouseMultiSelect({
             })}
             {!options.length ? <div className="px-3 py-3 text-xs text-white/45">Nincs választható érték.</div> : null}
           </div>
-          <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
+          <div className="flex justify-end border-t border-white/[0.08] px-2 py-1.5">
             <button type="button" className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]" onClick={() => setOpen(false)}>Kész</button>
           </div>
         </div>
@@ -1330,11 +1330,11 @@ function WarehouseSingleSelect({
           aria-label={labelText}
         >
           {showSearch ? (
-            <div className="shrink-0 border-b border-white/10 bg-[#303a4c] p-2">
+            <div className="shrink-0 border-b border-white/[0.08] bg-[#303a4c] p-2">
               <div className="relative">
                 <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-white/42" />
                 <input
-                  className="h-9 w-full rounded-xl border border-white/16 bg-[#202b3b] pl-8 pr-8 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
+                  className="h-9 w-full rounded-xl border border-white/[0.12] bg-[#202b3b] pl-8 pr-8 text-xs text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20"
                   value={pickerSearch}
                   onChange={(event) => setPickerSearch(event.target.value)}
                   placeholder={`Keresés: ${labelText.toLowerCase()}`}
@@ -1361,7 +1361,7 @@ function WarehouseSingleSelect({
                 className={`mb-1 flex min-h-9 w-full items-center justify-between gap-2 rounded-xl border px-2.5 text-left text-xs transition ${
                   isEmpty
                     ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
-                    : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                    : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/[0.08] hover:bg-[#3b485d] hover:text-white"
                 }`}
                 onClick={() => {
                   onChange(emptyValue);
@@ -1386,7 +1386,7 @@ function WarehouseSingleSelect({
                     className={`flex min-h-9 w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
                       active
                         ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)]"
-                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/10 hover:bg-[#3b485d] hover:text-white"
+                        : "border-transparent bg-[#303a4c] text-white/78 hover:border-white/[0.08] hover:bg-[#3b485d] hover:text-white"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     onClick={() => {
                       if (option.disabled) return;
@@ -1425,8 +1425,8 @@ function WarehouseSingleSelect({
         type="button"
         className={`flex min-w-0 items-center justify-between gap-2 border text-left text-white outline-none transition focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${
           compact
-            ? "h-8 min-w-[70px] rounded-lg border-white/18 bg-[#303a4c] px-2 text-xs hover:bg-[#3b485d]"
-            : "h-10 w-full rounded-xl border-white/18 bg-[#3f4959] px-3 text-sm hover:bg-[#475365]"
+            ? "h-8 min-w-[70px] rounded-lg border-white/[0.14] bg-[#303a4c] px-2 text-xs hover:bg-[#3b485d]"
+            : "h-10 w-full rounded-xl border-white/[0.14] bg-[#3f4959] px-3 text-sm hover:bg-[#475365]"
         } ${open ? "!border-[#7bd7d4]/55 shadow-[0_0_0_1px_rgba(123,215,212,0.08),0_8px_20px_rgba(15,23,42,0.18)]" : ""} ${buttonClassName}`}
         onClick={() => {
           if (open) closePicker();
@@ -1550,7 +1550,7 @@ function WarehouseTaxonomySelect({
     ? createPortal(
         <div
           ref={menuRef}
-          className="overflow-hidden rounded-xl border border-white/18 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          className="overflow-hidden rounded-xl border border-white/[0.14] bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
           style={menuStyle}
           role="listbox"
           aria-label={labelText || placeholder}
@@ -1569,7 +1569,7 @@ function WarehouseTaxonomySelect({
               <span className="min-w-0 flex-1 truncate">{placeholder}</span>
               {!value ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
             </button>
-            <div className="mx-2 border-t border-white/10" />
+            <div className="mx-2 border-t border-white/[0.08]" />
             {options.map((option) => {
               const active = String(option.value) === String(value);
               return (
@@ -1589,7 +1589,7 @@ function WarehouseTaxonomySelect({
                 >
                   {option.swatch ? (
                     <span
-                      className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
+                      className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
                       style={{ backgroundColor: option.swatch }}
                       aria-hidden="true"
                     />
@@ -1614,7 +1614,7 @@ function WarehouseTaxonomySelect({
         ref={buttonRef}
         type="button"
         disabled={disabled}
-        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/18 bg-[#3f4959] text-left text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${compact ? "h-7 rounded-lg px-2 text-[11px]" : "h-9 rounded-xl px-3 text-[13px]"}`}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/[0.14] bg-[#3f4959] text-left text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${compact ? "h-7 rounded-lg px-2 text-[11px]" : "h-9 rounded-xl px-3 text-[13px]"}`}
         onClick={() => {
           updateMenuPosition();
           setOpen((current) => !current);
@@ -1626,7 +1626,7 @@ function WarehouseTaxonomySelect({
         <span className="flex min-w-0 flex-1 items-center gap-2">
           {selected?.swatch ? (
             <span
-              className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
+              className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
               style={{ backgroundColor: selected.swatch }}
               aria-hidden="true"
             />
@@ -1674,7 +1674,7 @@ function WarehouseMoveDropdown({
     ? "border-rose-400/45 focus:border-rose-300 focus:ring-rose-400/20"
     : tone === "target"
       ? "border-[#7bd7d4]/45 focus:border-[#7bd7d4] focus:ring-[#7bd7d4]/20"
-      : "border-white/20 focus:border-[#7bd7d4] focus:ring-[#7bd7d4]/20";
+      : "border-white/[0.14] focus:border-[#7bd7d4] focus:ring-[#7bd7d4]/20";
 
   function updateMenuPosition() {
     if (typeof window === "undefined") return;
@@ -1772,7 +1772,7 @@ function WarehouseMoveDropdown({
                 key={option.value}
                 type="button"
                 disabled={option.disabled}
-                className="mt-1 flex min-h-9 w-full items-center justify-between gap-3 rounded-xl border border-transparent px-3 text-left text-[12px] transition hover:border-white/10 hover:bg-[#415064] disabled:cursor-not-allowed"
+                className="mt-1 flex min-h-9 w-full items-center justify-between gap-3 rounded-xl border border-transparent px-3 text-left text-[12px] transition hover:border-white/[0.08] hover:bg-[#415064] disabled:cursor-not-allowed"
                 style={{
                   backgroundColor: active ? "#2a8d8b" : "#303d51",
                   color: option.disabled ? "rgba(255,255,255,0.36)" : "#ffffff",
@@ -2021,7 +2021,7 @@ function WarehouseBarcodeConflictNotice({
           </button>
         ) : null}
       </div>
-      <div className="mt-2.5 rounded-xl border border-white/12 bg-black/15 px-3 py-2">
+      <div className="mt-2.5 rounded-xl border border-white/[0.10] bg-black/15 px-3 py-2">
         <p className="truncate text-sm text-white" title={info.title || info.modelCode || info.conflictVariantId}>
           {info.title || info.modelCode || "Már létező termék"}
         </p>
@@ -2539,7 +2539,7 @@ function OpenPurchaseOrderBadge({
           style={tooltipStyle}
           role="tooltip"
         >
-          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+          <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] pb-2">
             <span className="inline-flex items-center gap-2 text-orange-100"><ShoppingCart size={15} /> {title}</span>
             <span className="rounded-full border border-orange-200/55 bg-[#ff6a00] px-2 py-0.5 text-[10px] text-white">{formatQty(info.totalQty)} db</span>
           </div>
@@ -2554,7 +2554,7 @@ function OpenPurchaseOrderBadge({
               </div>
             ))}
           </div>
-          <div className="mt-2 border-t border-white/10 pt-2 text-[10px] text-white/42">Kattintás: művelet folytatása</div>
+          <div className="mt-2 border-t border-white/[0.08] pt-2 text-[10px] text-white/42">Kattintás: művelet folytatása</div>
         </div>,
         document.body,
       ) : null}
@@ -2949,7 +2949,7 @@ function WarehouseInvoicePicker({
       <span>Számla</span>
       <button
         type="button"
-        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
         onClick={() => { setOpen((current) => !current); setHovered(null); }}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -2959,13 +2959,13 @@ function WarehouseInvoicePicker({
       </button>
 
       {open ? (
-        <div className="absolute left-0 top-full z-[85] mt-1 w-[min(590px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-white/18 bg-[#293344] shadow-2xl">
+        <div className="absolute left-0 top-full z-[85] mt-1 w-[min(590px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-white/[0.14] bg-[#293344] shadow-2xl">
           <button
             type="button"
-            className={`flex min-h-11 w-full items-center gap-3 border-b border-white/10 px-3 text-left text-xs transition ${value === "all" ? "bg-[#2a8d8b]/24 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
+            className={`flex min-h-11 w-full items-center gap-3 border-b border-white/[0.08] px-3 text-left text-xs transition ${value === "all" ? "bg-[#2a8d8b]/24 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
             onClick={() => { onSelect("all"); setOpen(false); setHovered(null); }}
           >
-            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/12 bg-white/[0.06]"><Receipt size={16} /></span>
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/[0.10] bg-white/[0.06]"><Receipt size={16} /></span>
             <span><span className="block text-white">Összes számla</span><span className="text-[10px] text-white/42">A számlaszűrés kikapcsolása</span></span>
           </button>
           <div className="max-h-80 overflow-auto py-1" role="listbox">
@@ -3003,13 +3003,13 @@ function WarehouseInvoicePicker({
             })}
             {!options.length ? <div className="px-4 py-5 text-center text-xs text-white/45">Nincs számlaadat az aktuális szűréshez.</div> : null}
           </div>
-          <div className="border-t border-white/10 px-3 py-2 text-[10px] text-white/38">Rámutatás: dátumok • Kattintás: szűrés és számlarészletek</div>
+          <div className="border-t border-white/[0.08] px-3 py-2 text-[10px] text-white/38">Rámutatás: dátumok • Kattintás: szűrés és számlarészletek</div>
         </div>
       ) : null}
 
       {hovered && typeof document !== "undefined" ? createPortal(
         <div className="pointer-events-none z-[9999] rounded-2xl border border-[#7bd7d4]/30 bg-[#202838] p-3 text-left text-[11px] text-white shadow-2xl shadow-black/45" style={hovered.style} role="tooltip">
-          <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+          <div className="flex items-center gap-2 border-b border-white/[0.08] pb-2">
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#2a8d8b]/22 text-[#d7fffd]"><Receipt size={17} /></span>
             <div className="min-w-0"><div className="text-[10px] uppercase tracking-[0.12em] text-[#cffffd]/65">Számla</div><div className="truncate text-[14px] text-white">{hovered.option.invoiceNumber}</div></div>
           </div>
@@ -3192,8 +3192,8 @@ function WarehouseInvoiceDetailModal({
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 px-3 py-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <div className="flex max-h-[94vh] w-full max-w-[1220px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] text-white shadow-2xl shadow-black/45">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
+      <div className="flex max-h-[94vh] w-full max-w-[1220px] flex-col overflow-hidden rounded-[24px] border border-white/[0.14] bg-[#4b5362] text-white shadow-2xl shadow-black/45">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.10] bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
           <div className="flex min-w-0 items-start gap-3">
             <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-lg"><Receipt size={21} /></span>
             <div className="min-w-0">
@@ -3210,22 +3210,22 @@ function WarehouseInvoiceDetailModal({
 
         <div className="min-h-0 flex-1 overflow-auto p-3.5">
           {error ? <div className="mb-3 rounded-xl border border-rose-300/30 bg-rose-500/12 px-3 py-2 text-sm text-rose-50">{error}</div> : null}
-          {loading && !details.length ? <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-5 text-center text-sm text-white/60"><RefreshCw size={16} className="mr-2 inline animate-spin" /> Számlarészletek betöltése...</div> : null}
+          {loading && !details.length ? <div className="mb-3 rounded-xl border border-white/[0.10] bg-white/[0.05] px-3 py-5 text-center text-sm text-white/60"><RefreshCw size={16} className="mr-2 inline animate-spin" /> Számlarészletek betöltése...</div> : null}
 
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-6">
-            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Beszállító</p><p className="mt-1 truncate text-sm" title={supplierName}>{supplierName}</p></div>
-            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Számla dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(invoiceDate) || "-"}</p></div>
-            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Receptió dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(receptionDate) || "-"}</p></div>
-            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Állapot</p><p className="mt-1 text-sm">{receptionStatusHu(status)}</p></div>
+            <div className="rounded-2xl border border-white/[0.10] bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Beszállító</p><p className="mt-1 truncate text-sm" title={supplierName}>{supplierName}</p></div>
+            <div className="rounded-2xl border border-white/[0.10] bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Számla dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(invoiceDate) || "-"}</p></div>
+            <div className="rounded-2xl border border-white/[0.10] bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Receptió dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(receptionDate) || "-"}</p></div>
+            <div className="rounded-2xl border border-white/[0.10] bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Állapot</p><p className="mt-1 text-sm">{receptionStatusHu(status)}</p></div>
             <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Terméksor / darab</p><p className="mt-1 text-sm text-[#d7fffd]">{productRows.length} sor • {totalQty} db</p></div>
             <div className="rounded-2xl border border-amber-200/20 bg-amber-500/10 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-amber-100/55">Számlaérték</p><p className="mt-1 text-sm text-amber-50">{invoiceTotal ? `${money(invoiceTotal)} ${currencies.join("/")}` : "-"}</p></div>
           </div>
 
-          <div className="mt-3 overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
+          <div className="mt-3 overflow-hidden rounded-2xl border border-white/[0.10] bg-[#404a5b]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-2.5">
               <div className="flex items-center gap-2 text-sm"><PackageOpen size={16} /> A számla termékei</div>
               <div className="flex flex-wrap gap-1.5 text-[10px] text-white/48">
-                {option.sourceFileNames.map((file) => <span key={file} className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5" title={file}>{file}</span>)}
+                {option.sourceFileNames.map((file) => <span key={file} className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5" title={file}>{file}</span>)}
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -3237,7 +3237,7 @@ function WarehouseInvoiceDetailModal({
                   {productRows.map((row, index) => (
                     <tr key={row.key} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]">
                       <td className="px-2 py-2 text-center font-medium tabular-nums text-[#d7fffd]">{invoiceRowNumberDescending ? productRows.length - index : index + 1}</td>
-                      <td className="px-2 py-2">{row.imageUrl ? <img src={row.imageUrl} alt="" className="h-11 w-11 rounded-lg border border-white/12 bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/30"><ImagePlus size={16} /></span>}</td>
+                      <td className="px-2 py-2">{row.imageUrl ? <img src={row.imageUrl} alt="" className="h-11 w-11 rounded-lg border border-white/[0.10] bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/[0.10] bg-white/[0.05] text-white/30"><ImagePlus size={16} /></span>}</td>
                       <td className="px-2 py-2"><p className="max-w-[250px] truncate text-white">{row.title}</p><p className="mt-0.5 max-w-[250px] truncate text-[10px] text-[#cffffd]/70">{row.productCode}</p></td>
                       <td className="px-2 py-2"><p className="max-w-[180px] truncate">{row.brand}</p><p className="mt-0.5 max-w-[180px] truncate text-[10px] text-white/42">{row.category}</p></td>
                       <td className="px-2 py-2">{row.color}</td>
@@ -3245,7 +3245,7 @@ function WarehouseInvoiceDetailModal({
                       <td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{row.qty}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{buyPricesVisible ? money(row.buyPrice) : "••••"}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{money(row.sellPrice)}</td>
-                      <td className="px-2 py-2"><span className="rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/65">{invoiceProductRowStatusHu(row.status)}</span></td>
+                      <td className="px-2 py-2"><span className="rounded-full border border-white/[0.10] bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/65">{invoiceProductRowStatusHu(row.status)}</span></td>
                     </tr>
                   ))}
                   {!productRows.length && !loading ? <tr><td colSpan={10} className="px-4 py-8 text-center text-white/45">Ehhez a számlához nem találtam terméksort.</td></tr> : null}
@@ -3255,7 +3255,7 @@ function WarehouseInvoiceDetailModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45">
+        <div className="flex items-center justify-between gap-3 border-t border-white/[0.10] bg-[#303a4c] px-4 py-3 text-[11px] text-white/45">
           <span>ESC: bezárás • a számlaszűrés a bezárás után is megmarad</span>
           <button className={btnSoft} type="button" onClick={onClose}><X size={14} /> Bezárás</button>
         </div>
@@ -4708,7 +4708,7 @@ function WarehouseProductImage({
   const thumb = (
     <span
       ref={thumbRef}
-      className={`inline-flex shrink-0 items-center justify-center overflow-hidden border border-white/18 bg-white text-slate-400 shadow-sm ${thumbClassName}`}
+      className={`inline-flex shrink-0 items-center justify-center overflow-hidden border border-white/[0.14] bg-white text-slate-400 shadow-sm ${thumbClassName}`}
       onMouseEnter={openPreview}
       onMouseLeave={() => setPreviewOpen(false)}
       onFocus={openPreview}
@@ -4727,7 +4727,7 @@ function WarehouseProductImage({
   const preview = cleanSrc && previewOpen && typeof document !== "undefined"
     ? createPortal(
         <div
-          className="pointer-events-none z-[9999] rounded-2xl border border-white/80 bg-white p-2 shadow-2xl shadow-black/45"
+          className="pointer-events-none z-[9999] rounded-2xl border border-white/[0.80] bg-white p-2 shadow-2xl shadow-black/45"
           style={previewStyle}
           role="tooltip"
         >
@@ -5182,7 +5182,7 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
               <button
                 type="button"
                 disabled={!value}
-                className="h-6 rounded-lg border border-white/12 bg-white/[0.08] px-2 text-[10px] text-white/78 transition hover:border-[#5bd0cc]/35 hover:bg-[#2a8d8b]/22 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                className="h-6 rounded-lg border border-white/[0.10] bg-white/[0.08] px-2 text-[10px] text-white/78 transition hover:border-[#5bd0cc]/35 hover:bg-[#2a8d8b]/22 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                 onClick={(event) => {
                   event.stopPropagation();
                   void copyCode(row.key, value);
@@ -5205,7 +5205,7 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
         <button
           ref={buttonRef}
           type="button"
-          className={buttonClassName || `inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${pinned ? "border-amber-200/50 bg-amber-300/15 text-amber-50" : hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+          className={buttonClassName || `inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${pinned ? "border-amber-200/50 bg-amber-300/15 text-amber-50" : hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/[0.10] bg-white/[0.06] text-white/45"}`}
           aria-label={pinned ? "Termékazonosítók elengedése" : "Termékazonosítók megjelenítése"}
           title={pinned ? "Fix tooltip kikapcsolása" : "Kattintásra fix, újabb kattintásra elenged"}
           onMouseEnter={() => !pinned && showTooltip()}
@@ -7384,13 +7384,13 @@ function WarehouseGalleryEditor({
         <span className="rounded-full border border-[#7bd7d4]/30 bg-[#2a8d8b]/15 px-2 py-1 text-[10px] text-[#c9fffb] tabular-nums">{photos.length} kép</span>
       </div>
       {statusText ? <p className={`rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${statusText.startsWith("HIBA") ? "border-rose-300/35 bg-rose-500/10 text-rose-100" : "border-[#7bd7d4]/35 bg-[#2a8d8b]/15 text-[#e0fffa]"}`} role="status">{statusText}</p> : null}
-      <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-white p-2">
+      <div className="relative overflow-hidden rounded-2xl border border-white/[0.12] bg-white p-2">
         {main ? <img src={main} alt={title || "Termék főképe"} className="aspect-square w-full object-contain"/> :
           <div className="flex aspect-square items-center justify-center gap-2 text-slate-400"><ImagePlus size={25}/><span className="text-xs">Még nincs termékkép</span></div>}
         {main && <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-lg bg-[#167a75] px-2 py-1 text-[10px] text-white shadow"><Star size={11} fill="currentColor"/> Fő kép</span>}
       </div>
       {photos.length > 0 && <div className="grid grid-cols-2 gap-2">
-        {photos.map((url,index)=><div key={url} className={`overflow-hidden rounded-xl border p-1 ${index === 0 ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/20" : "border-white/14 bg-[#354153]"}`}>
+        {photos.map((url,index)=><div key={url} className={`overflow-hidden rounded-xl border p-1 ${index === 0 ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/20" : "border-white/[0.12] bg-[#354153]"}`}>
           <button type="button" disabled={uploading} className="relative w-full overflow-hidden rounded-lg bg-white disabled:opacity-70" onClick={()=>chooseMain(url)} title="Fő képnek kijelölés">
             <img src={url} alt={`${title || "Kép"} ${index+1}`} className="aspect-square w-full object-contain p-1" loading="lazy"/>
             {index===0 && <span className="absolute left-1 top-1 rounded-md bg-[#167a75] px-1.5 py-0.5 text-[9px] text-white">Fő</span>}
@@ -7762,7 +7762,7 @@ function WarehouseShopifyHealthBanner({ onOpenCenter }: { onOpenCenter: () => vo
         <button type="button" className={headerBtnSoft} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}Részletek</button>
       </div>
       {error && <p className="mt-2 text-amber-100">{error}</p>}
-      {expanded && <div className="mt-3 space-y-2 border-t border-white/15 pt-3 text-white/80">
+      {expanded && <div className="mt-3 space-y-2 border-t border-white/[0.12] pt-3 text-white/80">
         <p>Utolsó ellenőrzés: {date(health?.checkedAt)} · Utolsó sikeres készletküldés: {date(queue?.last_success_at)}</p>
         {health && <>
           <p>Aktív feldolgozó: {health.workers.some((worker) => worker.alive) ? "van" : "nincs"} · Közös blokkolás: {health.safety.global ? "igen" : "nincs"} · Rendelés miatt várakozó variáns: {health.safety.variantIds.length}</p>
@@ -9108,7 +9108,7 @@ export default function AllInWarehouse() {
                 <div className="rounded-lg bg-white/[0.06] px-2 py-1.5 text-white/68">Nincs készletadat üzletenként.</div>
               )}
             </div>
-            <div className="mt-2 border-t border-white/10 pt-1 text-[10px] text-white/45">Kattintás: készlet szerkesztése</div>
+            <div className="mt-2 border-t border-white/[0.08] pt-1 text-[10px] text-white/45">Kattintás: készlet szerkesztése</div>
           </div>,
           document.body,
         )
@@ -10224,9 +10224,9 @@ export default function AllInWarehouse() {
             style={tooltipStyle}
             role="tooltip"
           >
-            <div className="mb-2 flex items-center gap-2 border-b border-white/10 pb-2">
+            <div className="mb-2 flex items-center gap-2 border-b border-white/[0.08] pb-2">
               <span
-                className="h-4 w-4 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.04)]"
+                className="h-4 w-4 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.04)]"
                 style={hex ? { backgroundColor: hex } : undefined}
               />
               <div className="min-w-0">
@@ -10246,7 +10246,7 @@ export default function AllInWarehouse() {
               <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
                 <div className="px-2 py-1.5 text-white/58">Standard szín</div>
                 <div className="px-2 py-1.5">
-                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${standardColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/12 bg-white/[0.05] text-white/55"}`}>
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${standardColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/[0.10] bg-white/[0.05] text-white/55"}`}>
                     {standardColor ? "Igen" : "Nem"}
                   </span>
                   {standardColor ? <span className="ml-2 text-white/78">{standardName}{standardColor.code ? ` • ${standardColor.code}` : ""}</span> : null}
@@ -10255,7 +10255,7 @@ export default function AllInWarehouse() {
               <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
                 <div className="px-2 py-1.5 text-white/58">Márka szín</div>
                 <div className="px-2 py-1.5">
-                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${brandColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/12 bg-white/[0.05] text-white/55"}`}>
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${brandColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/[0.10] bg-white/[0.05] text-white/55"}`}>
                     {brandColor ? "Igen" : "Nem"}
                   </span>
                   <span className="ml-2 text-white/78">{brandColorText}</span>
@@ -10283,7 +10283,7 @@ export default function AllInWarehouse() {
         onBlur={() => setTooltipOpen(false)}
       >
         <span
-          className="h-3 w-3 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
+          className="h-3 w-3 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
           style={hex ? { backgroundColor: hex } : undefined}
         />
         <span className="min-w-0 max-w-[86px] truncate">{label}</span>
@@ -11400,7 +11400,7 @@ export default function AllInWarehouse() {
   }, [pendingProductJumpId, filtered, safeProductPage, productPageItems.length, listOpen, productPageSize]);
 
   const productPager = filtered.length > 0 ? (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/[0.12] bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
       <div>
         {productPageStartIndex}-{productPageEndIndex} / {filtered.length} terméksor
         {activeInvoiceFilterStats ? <span className="ml-2 text-[#d7fffd]">• számla összesen: {formatQty(activeInvoiceFilterStats.totalQty)} db</span> : null}
@@ -11421,7 +11421,7 @@ export default function AllInWarehouse() {
         />
         <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(1)}>Első</button>
         <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(safeProductPage - 1)}><ArrowLeft size={14} /> Előző {productPageSize}</button>
-        <span className="rounded-full border border-white/12 bg-white/[0.08] px-3 py-2 text-white">{safeProductPage} / {totalProductPages}</span>
+        <span className="rounded-full border border-white/[0.10] bg-white/[0.08] px-3 py-2 text-white">{safeProductPage} / {totalProductPages}</span>
         <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(safeProductPage + 1)}>Következő {productPageSize} <ArrowRight size={14} /></button>
         <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(totalProductPages)}>Utolsó</button>
       </div>
@@ -16216,7 +16216,7 @@ export default function AllInWarehouse() {
     return (
       <div className="relative shrink-0">
         <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/18 bg-[#3f4959] text-white/80 hover:bg-[#475365] hover:text-white"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.14] bg-[#3f4959] text-white/80 hover:bg-[#475365] hover:text-white"
           onClick={() => setOpenTaxonomyMenu(isOpen ? null : args.menuId)}
           type="button"
           aria-label="Műveletek"
@@ -16224,7 +16224,7 @@ export default function AllInWarehouse() {
           <MoreVertical size={15} />
         </button>
         {isOpen && (
-          <div className={`absolute right-0 z-50 w-40 rounded-xl border border-white/18 bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
+          <div className={`absolute right-0 z-50 w-40 rounded-xl border border-white/[0.14] bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
             <button
               className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-white/90 hover:bg-white/10"
               onClick={() => {
@@ -16273,7 +16273,7 @@ export default function AllInWarehouse() {
     <main className={page}>
       <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
       <div className={`${shell} aifWarehouseScreenContent`}>
-        <header className="relative z-20 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
+        <header className="relative z-20 rounded-2xl border border-white/[0.14] bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
               <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
@@ -16292,7 +16292,7 @@ export default function AllInWarehouse() {
               <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
               <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
               <button
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/90 bg-white p-[2px] text-[#008060] shadow-[0_5px_14px_rgba(15,23,42,0.18)] transition hover:border-[#cfe1a8] hover:bg-[#fbfdf7] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/[0.90] bg-white p-[2px] text-[#008060] shadow-[0_5px_14px_rgba(15,23,42,0.18)] transition hover:border-[#cfe1a8] hover:bg-[#fbfdf7] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45"
                 onClick={() => setShopifySyncCenterOpen(true)}
                 type="button"
                 title="Shopify központ: kapcsolatok, újraszinkron és exportelőzmények"
@@ -16308,14 +16308,14 @@ export default function AllInWarehouse() {
                 <Receipt size={15} /> Árváltozások
               </button>
               <button className={headerBtnSoft} onClick={() => void load()} disabled={busy}><RefreshCw size={15} className={busy ? "animate-spin" : ""} /> Frissítés</button>
-              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
+              <button className={`${headerBtn} ml-2 border-white/[0.18] bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
             </div>
           </div>
         </header>
 
         <WarehouseShopifyHealthBanner onOpenCenter={() => setShopifySyncCenterOpen(true)} />
 
-        {message && <div className="rounded-xl border border-white/20 bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
+        {message && <div className="rounded-xl border border-white/[0.14] bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
         {barcodeReturnNotice && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#7bd7d4]/40 bg-[#203f49] px-4 py-3 text-sm text-white shadow-lg">
             <div className="min-w-0">
@@ -16349,7 +16349,7 @@ export default function AllInWarehouse() {
         {labelRelabelPromptOpen && (
           <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#071019]/84 px-3 py-5 backdrop-blur-md sm:px-4" role="dialog" aria-modal={!labelRelabelPriceTargetId} aria-hidden={Boolean(labelRelabelPriceTargetId)} aria-label="Árváltozás: régi készlet">
             <div className="flex max-h-[88vh] w-full max-w-[900px] flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/35 bg-[#354153] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
-              <div className="flex items-start justify-between gap-4 border-b border-white/12 bg-[linear-gradient(135deg,rgba(42,141,139,.34),rgba(31,48,67,.96))] px-4 py-4 sm:px-5 sm:py-5">
+              <div className="flex items-start justify-between gap-4 border-b border-white/[0.10] bg-[linear-gradient(135deg,rgba(42,141,139,.34),rgba(31,48,67,.96))] px-4 py-4 sm:px-5 sm:py-5">
                 <div className="flex min-w-0 items-start gap-3 sm:gap-4">
                   <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#b9fffb]/30 bg-[#2a8d8b] text-white shadow-[0_12px_30px_rgba(42,141,139,.28)] sm:h-12 sm:w-12"><RefreshCw size={21} /></span>
                   <div className="min-w-0">
@@ -16358,7 +16358,7 @@ export default function AllInWarehouse() {
                     <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/70">Kattints a termék sorára, és egy külön ablakban válaszd ki a régi vagy az új eladási árat. A jóváhagyott ár a rendszerbe is mentődik. Új árat választva a korábbi készlethez is készül új címke.</p>
                   </div>
                 </div>
-                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.07] text-white hover:bg-white/[0.12] disabled:opacity-40" type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Csak az új bevételezés címkéi"><X size={17} /></button>
+                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-white/[0.07] text-white hover:bg-white/[0.12] disabled:opacity-40" type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Csak az új bevételezés címkéi"><X size={17} /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
                 <div className="space-y-2.5">
@@ -16374,15 +16374,15 @@ export default function AllInWarehouse() {
                         disabled={labelDetailsBusy}
                         onClick={() => openRelabelPriceChoice(row)}
                         aria-label={`${change.productTitle || change.productCode || "Termék"}: ár kiválasztása`}
-                        className={`grid w-full grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border px-3 py-3 text-left transition sm:grid-cols-[48px_minmax(0,1fr)_auto] sm:px-3.5 ${isNew ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : isOld ? "border-amber-200/30 bg-[#424956]" : "border-white/16 bg-[#3e495b] hover:border-[#7bd7d4]/50 hover:bg-[#465266]"} disabled:cursor-wait disabled:opacity-65`}
+                        className={`grid w-full grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border px-3 py-3 text-left transition sm:grid-cols-[48px_minmax(0,1fr)_auto] sm:px-3.5 ${isNew ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : isOld ? "border-amber-200/30 bg-[#424956]" : "border-white/[0.12] bg-[#3e495b] hover:border-[#7bd7d4]/50 hover:bg-[#465266]"} disabled:cursor-wait disabled:opacity-65`}
                       >
-                        <div className="h-11 w-11 overflow-hidden rounded-xl border border-white/12 bg-[#2b3547] sm:h-12 sm:w-12">
+                        <div className="h-11 w-11 overflow-hidden rounded-xl border border-white/[0.10] bg-[#2b3547] sm:h-12 sm:w-12">
                           {change.imageUrl ? <img src={String(change.imageUrl)} alt="" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center text-[9px] text-white/38">Nincs kép</div>}
                         </div>
                         <div className="min-w-0">
                           <div className="flex min-w-0 flex-wrap items-center gap-2">
                             <span className="truncate text-[13px] text-white">{change.productTitle || change.productCode || row.variantId}</span>
-                            <span className="rounded-full border border-white/15 bg-black/10 px-2 py-0.5 text-[9px] text-white/62">{change.documentNumber || "Árváltozás"}</span>
+                            <span className="rounded-full border border-white/[0.12] bg-black/10 px-2 py-0.5 text-[9px] text-white/62">{change.documentNumber || "Árváltozás"}</span>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/57">
                             <span>{[change.brandName, change.colorName, change.size].filter(Boolean).join(" • ")}</span>
@@ -16394,19 +16394,19 @@ export default function AllInWarehouse() {
                             {isNew ? `Új ár jóváhagyva • +${row.relabelMaxCopies} új címke` : isOld ? "Régi ár jóváhagyva • nincs extra címke" : "Ár kiválasztása és jóváhagyása"}
                           </div>
                         </div>
-                        <div className="col-span-2 flex items-center justify-between gap-3 border-t border-white/10 pt-2.5 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
+                        <div className="col-span-2 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-2.5 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
                           <div className="text-left sm:text-right">
                             <div className="flex flex-wrap items-center gap-2 text-[11px] tabular-nums sm:justify-end"><span className="text-white/65">{money(change.oldSellPrice)} RON</span><ArrowRight size={13} className="text-white/35"/><span className="text-[#bff8f5]">{money(change.newSellPrice)} RON</span></div>
                             <div className="mt-1 text-[11px] text-white/60">{row.relabelMaxCopies} db korábbi készlet</div>
                           </div>
-                          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${isNew ? "border-[#9ff4ef]/55 bg-[#2a8d8b] text-white" : isOld ? "border-amber-200/40 bg-amber-300/15 text-amber-100" : "border-white/20 bg-[#2d3749] text-white/65"}`}>{row.approvedPrice ? <CheckCircle2 size={17} /> : <ChevronDown size={16} className="-rotate-90" />}</span>
+                          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${isNew ? "border-[#9ff4ef]/55 bg-[#2a8d8b] text-white" : isOld ? "border-amber-200/40 bg-amber-300/15 text-amber-100" : "border-white/[0.14] bg-[#2d3749] text-white/65"}`}>{row.approvedPrice ? <CheckCircle2 size={17} /> : <ChevronDown size={16} className="-rotate-90" />}</span>
                         </div>
                       </button>
                     );
                   })}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#2b3547] px-4 py-3.5 sm:px-5 sm:py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.10] bg-[#2b3547] px-4 py-3.5 sm:px-5 sm:py-4">
                 <div className="text-[11px] leading-relaxed text-white/64">
                   Jóváhagyva: <span className="text-white">{labelRelabelApprovedCount} / {labelRelabelPromptRows.length} termék</span>
                   <span className="mx-1.5 text-white/25">•</span><span className="text-[#bff8f5]">{labelRelabelExtraCopies} extra címke</span>
@@ -16424,16 +16424,16 @@ export default function AllInWarehouse() {
         {labelRelabelPromptOpen && labelRelabelPriceTarget && (
           <div className="fixed inset-0 z-[165] flex items-center justify-center bg-[#06101d]/82 px-3 py-5 backdrop-blur-lg sm:px-4" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRelabelPriceChoice(); }}>
             <div ref={labelRelabelPriceDialogRef} className="flex max-h-[92vh] w-full max-w-[690px] flex-col overflow-hidden rounded-[28px] border border-[#7bd7d4]/50 bg-[#263246] text-white shadow-[0_40px_130px_rgba(0,0,0,.72)]" role="dialog" aria-modal="true" aria-labelledby="aif-warehouse-relabel-price-title" aria-describedby="aif-warehouse-relabel-price-description">
-              <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-[linear-gradient(120deg,#22434e,#28384d_65%,#2a8d8b)] px-4 py-4 sm:px-5">
+              <div className="flex items-start justify-between gap-3 border-b border-white/[0.10] bg-[linear-gradient(120deg,#22434e,#28384d_65%,#2a8d8b)] px-4 py-4 sm:px-5">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#aff4f0]/40 bg-[#2a8d8b]/65"><Receipt size={21} /></span>
                   <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.15em] text-[#cffffd]/72">Árváltozás jóváhagyása</p><h3 id="aif-warehouse-relabel-price-title" className="mt-0.5 text-[20px] leading-tight">Régi vagy új ár?</h3></div>
                 </div>
-                <button type="button" aria-label="Árválasztó bezárása" disabled={labelRelabelPriceBusy} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/[0.08] text-white hover:bg-white/[0.14] disabled:opacity-40" onClick={closeRelabelPriceChoice}><X size={16}/></button>
+                <button type="button" aria-label="Árválasztó bezárása" disabled={labelRelabelPriceBusy} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-white/[0.08] text-white hover:bg-white/[0.14] disabled:opacity-40" onClick={closeRelabelPriceChoice}><X size={16}/></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-                <div className="flex items-center gap-3 rounded-2xl border border-white/12 bg-[#354153] p-3">
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-[#202c3e]">
+                <div className="flex items-center gap-3 rounded-2xl border border-white/[0.10] bg-[#354153] p-3">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/[0.12] bg-[#202c3e]">
                     {labelRelabelPriceTarget.priceChange.imageUrl ? <img src={String(labelRelabelPriceTarget.priceChange.imageUrl)} alt="" className="h-full w-full object-contain"/> : <ImagePlus size={20} className="text-white/25"/>}
                   </div>
                   <div className="min-w-0"><p className="text-[15px] leading-snug text-white">{labelRelabelPriceTarget.priceChange.productTitle || labelRelabelPriceTarget.priceChange.productCode || labelRelabelPriceTarget.variantId}</p><p className="mt-1 text-[11px] text-white/58">{[labelRelabelPriceTarget.priceChange.brandName, labelRelabelPriceTarget.priceChange.productCode, labelRelabelPriceTarget.priceChange.colorName, labelRelabelPriceTarget.priceChange.size].filter(Boolean).join(" • ")}</p><p className="mt-1.5 text-[11px] text-[#c5f5f2]">{labelRelabelPriceTarget.relabelMaxCopies} db korábbi készlet • {Math.floor(n(labelRelabelPriceTarget.priceChange.incomingQty))} db most bevételezve</p></div>
@@ -16447,9 +16447,9 @@ export default function AllInWarehouse() {
                     const available = (priceNumber(priceValue) ?? 0) > 0;
                     return (
                       <button key={choice} type="button" data-aif-relabel-choice="true" aria-pressed={chosen} disabled={labelRelabelPriceBusy || !available} onClick={() => { setLabelRelabelPriceDraft(choice); setLabelRelabelPriceError(""); }}
-                        className={`relative flex min-h-[174px] flex-col items-start rounded-2xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-white/30 disabled:cursor-not-allowed disabled:opacity-40 ${chosen ? (old ? "border-amber-200 bg-[#5a5147] shadow-[0_0_0_2px_rgba(251,191,36,.16),0_10px_30px_rgba(0,0,0,.16)]" : "border-[#9ff4ef] bg-[#1a5559] shadow-[0_0_0_2px_rgba(123,215,212,.18),0_10px_30px_rgba(0,0,0,.16)]") : "border-white/16 bg-[#354153] hover:border-[#7bd7d4]/55 hover:bg-[#3f4d60]"}`}
+                        className={`relative flex min-h-[174px] flex-col items-start rounded-2xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-white/30 disabled:cursor-not-allowed disabled:opacity-40 ${chosen ? (old ? "border-amber-200 bg-[#5a5147] shadow-[0_0_0_2px_rgba(251,191,36,.16),0_10px_30px_rgba(0,0,0,.16)]" : "border-[#9ff4ef] bg-[#1a5559] shadow-[0_0_0_2px_rgba(123,215,212,.18),0_10px_30px_rgba(0,0,0,.16)]") : "border-white/[0.12] bg-[#354153] hover:border-[#7bd7d4]/55 hover:bg-[#3f4d60]"}`}
                       >
-                        <span className="flex w-full items-center justify-between gap-3"><span className={`text-[11px] uppercase tracking-[0.12em] ${old ? "text-amber-100" : "text-[#bff8f5]"}`}>{old ? "Régi eladási ár" : "Új eladási ár"}</span><span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${chosen ? "border-white bg-[#2a8d8b] text-white" : "border-white/25 bg-[#263246] text-transparent"}`}><CheckCircle2 size={15}/></span></span>
+                        <span className="flex w-full items-center justify-between gap-3"><span className={`text-[11px] uppercase tracking-[0.12em] ${old ? "text-amber-100" : "text-[#bff8f5]"}`}>{old ? "Régi eladási ár" : "Új eladási ár"}</span><span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${chosen ? "border-white bg-[#2a8d8b] text-white" : "border-white/[0.18] bg-[#263246] text-transparent"}`}><CheckCircle2 size={15}/></span></span>
                         <span className="mt-3 text-[31px] leading-none tabular-nums tracking-tight text-white">{money(priceValue)} <span className="text-[13px] text-white/65">RON</span></span>
                         <span className="mt-3 text-[11px] leading-relaxed text-white/65">{old ? "A régi darabok címkéje maradhat. Az újonnan bevételezett darabok is ezen az áron kapnak címkét." : `A teljes készlet az új áron lesz. A korábbi ${labelRelabelPriceTarget.relabelMaxCopies} db-hoz új címkéket adunk a nyomtatáshoz.`}</span>
                         {chosen ? <span className="mt-auto pt-2 text-[11px] text-white"><CheckCircle2 size={13} className="mr-1 inline"/> Kiválasztva</span> : null}
@@ -16460,7 +16460,7 @@ export default function AllInWarehouse() {
                 {labelRelabelPriceError ? <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-rose-300/40 bg-rose-500/15 px-3 py-2.5 text-xs leading-relaxed text-rose-100"><AlertTriangle size={15} className="shrink-0"/>{labelRelabelPriceError}</div> : null}
                 <p className="mt-3 text-[11px] leading-relaxed text-white/52">A jóváhagyás a termék eladási árát is menti. A vételárhoz, mennyiséghez és a többi termékadathoz nem nyúl.</p>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#202c3e] px-4 py-3.5 sm:px-5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.10] bg-[#202c3e] px-4 py-3.5 sm:px-5">
                 <span className="text-[11px] text-white/55">{labelRelabelPriceDraft ? `Választott ár: ${money(labelRelabelPriceDraft === "old" ? labelRelabelPriceTarget.priceChange.oldSellPrice : labelRelabelPriceTarget.priceChange.newSellPrice)} RON` : "Még nem választottál árat"}</span>
                 <div className="flex gap-2"><button type="button" className={btnSoft} disabled={labelRelabelPriceBusy} onClick={closeRelabelPriceChoice}>Vissza</button><button type="button" className={primaryBtn} disabled={!labelRelabelPriceDraft || labelRelabelPriceBusy} onClick={() => void approveRelabelPriceChoice()}>{labelRelabelPriceBusy ? <RefreshCw size={15} className="animate-spin"/> : <CheckCircle2 size={15}/>} {labelRelabelPriceBusy ? "Ár mentése..." : "Ár jóváhagyása"}</button></div>
               </div>
@@ -16470,10 +16470,10 @@ export default function AllInWarehouse() {
 
         {priceChangeArchiveOpen && (
           <div className="fixed inset-0 z-[135] flex items-center justify-center bg-[#071019]/84 p-4 backdrop-blur-md">
-            <div className="flex h-[min(820px,calc(100vh-28px))] w-[min(1460px,calc(100vw-28px))] flex-col overflow-hidden rounded-[28px] border border-white/18 bg-[#263246] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[linear-gradient(135deg,#26364b,#2a8d8b)] px-5 py-4">
+            <div className="flex h-[min(820px,calc(100vh-28px))] w-[min(1460px,calc(100vw-28px))] flex-col overflow-hidden rounded-[28px] border border-white/[0.14] bg-[#263246] shadow-[0_36px_120px_rgba(0,0,0,.62)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.10] bg-[linear-gradient(135deg,#26364b,#2a8d8b)] px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/22 bg-white/[0.08] text-[#d7fffd]"><Receipt size={20} /></span>
+                  <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/[0.18] bg-white/[0.08] text-[#d7fffd]"><Receipt size={20} /></span>
                   <div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/70">Hivatalos árváltozási nyilvántartás</p><h2 className="mt-0.5 text-xl text-white">Árváltozások</h2><p className="mt-0.5 text-[11px] text-white/58">{priceChangeDocumentTotal} bizonylat • visszamenőleges importtörténettel</p></div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -16482,8 +16482,8 @@ export default function AllInWarehouse() {
                 </div>
               </div>
               <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[430px_minmax(0,1fr)]">
-                <section className="flex min-h-0 flex-col border-r border-white/10 bg-[#2d394c]">
-                  <div className="border-b border-white/10 p-3">
+                <section className="flex min-h-0 flex-col border-r border-white/[0.08] bg-[#2d394c]">
+                  <div className="border-b border-white/[0.08] p-3">
                     <div className="flex gap-2">
                       <div className="relative min-w-0 flex-1"><Search size={15} className="absolute left-3 top-2.5 text-white/38" /><input className={`${input} h-9 w-full pl-9`} value={priceChangeArchiveSearch} onChange={(e) => setPriceChangeArchiveSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void loadPriceChangeArchive(); }} placeholder="Bizonylat, számla, termék..." /></div>
                       <button className={primaryBtn} type="button" disabled={priceChangeArchiveBusy} onClick={() => void loadPriceChangeArchive()}>{priceChangeArchiveBusy ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />} Keresés</button>
@@ -16493,12 +16493,12 @@ export default function AllInWarehouse() {
                     <div className="space-y-2">
                       {priceChangeDocuments.map((doc) => {
                         const active = String(priceChangeDetail?.item?.id || "") === String(doc.id);
-                        return <button key={doc.id} type="button" onClick={() => void openPriceChangeDocumentDetail(String(doc.id))} className={`w-full rounded-2xl border px-3 py-3 text-left transition ${active ? "border-[#7bd7d4]/55 bg-[#244e56]" : "border-white/10 bg-[#354153] hover:bg-[#3d495b]"}`}>
+                        return <button key={doc.id} type="button" onClick={() => void openPriceChangeDocumentDetail(String(doc.id))} className={`w-full rounded-2xl border px-3 py-3 text-left transition ${active ? "border-[#7bd7d4]/55 bg-[#244e56]" : "border-white/[0.08] bg-[#354153] hover:bg-[#3d495b]"}`}>
                           <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-[13px] text-white">{doc.document_number}</div><div className="mt-1 truncate text-[10px] text-white/48">{doc.invoice_number ? `Számla: ${doc.invoice_number}` : "Kézi árváltozás"} • {doc.supplier_name || doc.location_name || "AllInFashion"}</div></div><div className="text-right"><div className="text-[10px] text-white/52">{warehousePriceChangeDate(doc.document_date)}</div><div className="mt-1 text-[12px] tabular-nums text-[#bff8f5]">{money(doc.difference_total)} RON</div></div></div>
                           <div className="mt-2 flex items-center gap-2 text-[9px] text-white/46"><span>{Math.floor(n(doc.line_count))} sor</span><span>•</span><span>{Math.floor(n(doc.total_qty))} db</span><span>•</span><span>{warehouseActorDisplay(doc.actor)}</span></div>
                         </button>;
                       })}
-                      {!priceChangeArchiveBusy && !priceChangeDocuments.length ? <div className="rounded-2xl border border-white/10 bg-[#354153] p-5 text-center text-sm text-white/48">Nincs árváltozási bizonylat a szűrésre.</div> : null}
+                      {!priceChangeArchiveBusy && !priceChangeDocuments.length ? <div className="rounded-2xl border border-white/[0.08] bg-[#354153] p-5 text-center text-sm text-white/48">Nincs árváltozási bizonylat a szűrésre.</div> : null}
                     </div>
                   </div>
                 </section>
@@ -16507,15 +16507,15 @@ export default function AllInWarehouse() {
                     <div className="space-y-3">
                       <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
                         <div><p className="text-[10px] uppercase tracking-[0.16em] text-[#bff8f5]/70">PROCES-VERBAL DE MODIFICARE PREȚURI</p><h3 className="mt-1 text-[22px] text-white">{priceChangeDetail.item.document_number}</h3><p className="mt-1 text-[11px] text-white/50">{warehousePriceChangeDate(priceChangeDetail.item.document_date)} • {priceChangeDetail.item.invoice_number ? `Számla ${priceChangeDetail.item.invoice_number}` : "Kézi módosítás"} • {priceChangeDetail.item.location_name || "AllInFashion"}</p></div>
-                        <div className="grid grid-cols-3 gap-2 text-right"><div className="rounded-xl border border-white/10 bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase text-white/42">Régi érték</p><p className="mt-1 text-[15px] tabular-nums text-white">{money(priceChangeDetail.item.old_total)} RON</p></div><div className="rounded-xl border border-[#7bd7d4]/20 bg-[#21464e] px-3 py-2"><p className="text-[9px] uppercase text-[#bff8f5]/58">Új érték</p><p className="mt-1 text-[15px] tabular-nums text-[#d7fffd]">{money(priceChangeDetail.item.new_total)} RON</p></div><div className="rounded-xl border border-orange-300/18 bg-orange-500/[0.10] px-3 py-2"><p className="text-[9px] uppercase text-orange-100/58">Különbözet</p><p className="mt-1 text-[15px] tabular-nums text-orange-100">{money(priceChangeDetail.item.difference_total)} RON</p></div></div>
+                        <div className="grid grid-cols-3 gap-2 text-right"><div className="rounded-xl border border-white/[0.08] bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase text-white/42">Régi érték</p><p className="mt-1 text-[15px] tabular-nums text-white">{money(priceChangeDetail.item.old_total)} RON</p></div><div className="rounded-xl border border-[#7bd7d4]/20 bg-[#21464e] px-3 py-2"><p className="text-[9px] uppercase text-[#bff8f5]/58">Új érték</p><p className="mt-1 text-[15px] tabular-nums text-[#d7fffd]">{money(priceChangeDetail.item.new_total)} RON</p></div><div className="rounded-xl border border-orange-300/18 bg-orange-500/[0.10] px-3 py-2"><p className="text-[9px] uppercase text-orange-100/58">Különbözet</p><p className="mt-1 text-[15px] tabular-nums text-orange-100">{money(priceChangeDetail.item.difference_total)} RON</p></div></div>
                       </div>
-                      <div className="overflow-hidden rounded-2xl border border-white/12 bg-[#303c50]">
-                        <div className="hidden grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] gap-2 border-b border-white/10 bg-[#202c3e] px-3 py-2 text-[9px] uppercase tracking-[0.08em] text-white/52 md:grid"><span></span><span>Termék</span><span className="text-center">Db</span><span className="text-right">Régi ár</span><span className="text-right">Új ár</span><span className="text-right">Különbözet</span></div>
+                      <div className="overflow-hidden rounded-2xl border border-white/[0.10] bg-[#303c50]">
+                        <div className="hidden grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] gap-2 border-b border-white/[0.08] bg-[#202c3e] px-3 py-2 text-[9px] uppercase tracking-[0.08em] text-white/52 md:grid"><span></span><span>Termék</span><span className="text-center">Db</span><span className="text-right">Régi ár</span><span className="text-right">Új ár</span><span className="text-right">Különbözet</span></div>
                         <div className="divide-y divide-white/[0.08]">
-                          {priceChangeDetail.lines.map((line) => <div key={line.id} className="grid gap-2 px-3 py-2.5 md:grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] md:items-center"><div className="h-10 w-10 overflow-hidden rounded-lg border border-white/10 bg-[#263246]">{line.image_url ? <img src={line.image_url} alt="" className="h-full w-full object-cover" /> : null}</div><div className="min-w-0"><div className="truncate text-[12px] text-white">{line.product_title || line.product_code || "Termék"}</div><div className="mt-0.5 truncate text-[9px] text-white/42">{[line.brand_name,line.product_code,line.color_name,line.size].filter(Boolean).join(" • ")}</div></div><div className="text-center text-[12px] tabular-nums text-white">{Math.floor(n(line.affected_qty))} db</div><div className="text-right text-[12px] tabular-nums text-white/64">{money(line.old_sell_price)} RON</div><div className="text-right text-[13px] tabular-nums text-[#bff8f5]">{money(line.new_sell_price)} RON</div><div className="text-right text-[12px] tabular-nums text-orange-100">{money(line.difference_value)} RON</div></div>)}
+                          {priceChangeDetail.lines.map((line) => <div key={line.id} className="grid gap-2 px-3 py-2.5 md:grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] md:items-center"><div className="h-10 w-10 overflow-hidden rounded-lg border border-white/[0.08] bg-[#263246]">{line.image_url ? <img src={line.image_url} alt="" className="h-full w-full object-cover" /> : null}</div><div className="min-w-0"><div className="truncate text-[12px] text-white">{line.product_title || line.product_code || "Termék"}</div><div className="mt-0.5 truncate text-[9px] text-white/42">{[line.brand_name,line.product_code,line.color_name,line.size].filter(Boolean).join(" • ")}</div></div><div className="text-center text-[12px] tabular-nums text-white">{Math.floor(n(line.affected_qty))} db</div><div className="text-right text-[12px] tabular-nums text-white/64">{money(line.old_sell_price)} RON</div><div className="text-right text-[13px] tabular-nums text-[#bff8f5]">{money(line.new_sell_price)} RON</div><div className="text-right text-[12px] tabular-nums text-orange-100">{money(line.difference_value)} RON</div></div>)}
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#303c50] px-4 py-3 text-[11px] text-white/52"><span>Rögzítette: <strong className="font-normal text-white">{warehouseActorDisplay(priceChangeDetail.item.actor)}</strong></span><span>TVA különbözet: <strong className="font-normal text-white">{money(priceChangeDetail.item.difference_tva)} RON</strong></span><button className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail)}><Printer size={14} /> Hivatalos PDF</button></div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.08] bg-[#303c50] px-4 py-3 text-[11px] text-white/52"><span>Rögzítette: <strong className="font-normal text-white">{warehouseActorDisplay(priceChangeDetail.item.actor)}</strong></span><span>TVA különbözet: <strong className="font-normal text-white">{money(priceChangeDetail.item.difference_tva)} RON</strong></span><button className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail)}><Printer size={14} /> Hivatalos PDF</button></div>
                     </div>
                   ) : <div className="flex h-full items-center justify-center text-sm text-white/45">Válassz egy árváltozási bizonylatot.</div>}
                 </section>
@@ -16534,8 +16534,8 @@ export default function AllInWarehouse() {
           {colorTypes.map((c) => <option key={c.id} value={c.name_ro}>{c.name_hu || c.code}</option>)}
         </datalist>
 
-        <section className={`${panel} overflow-visible`}>
-          <div className={`${panelHead} ${filtersOpen ? "border-b border-white/12" : ""}`}>
+        <section className={panel.replace("overflow-hidden", "overflow-visible")}>
+          <div className={`${panelHead} ${filtersOpen ? "rounded-t-[15px] border-b border-white/[0.10]" : "rounded-[15px]"}`}>
             <div className="flex items-center gap-2"><Filter size={17} /><span>Szűrés és keresés</span></div>
             <button className={btnSoft} onClick={() => setFiltersOpen((x) => !x)}>{filtersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {filtersOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
@@ -16638,14 +16638,14 @@ export default function AllInWarehouse() {
                 Szín
                 <button
                   type="button"
-                  className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/25"
+                  className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/25"
                   onClick={() => setColorFilterOpen((x) => !x)}
                   aria-haspopup="listbox"
                   aria-expanded={colorFilterOpen}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span
-                      className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10"
+                      className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/[0.18] bg-white/10"
                       style={selectedColorFilterHex ? { backgroundColor: selectedColorFilterHex } : undefined}
                     />
                     <span className="truncate">{selectedColorFilterLabel}</span>
@@ -16653,8 +16653,8 @@ export default function AllInWarehouse() {
                   <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${colorFilterOpen ? "rotate-180" : ""}`} />
                 </button>
                 {colorFilterOpen && (
-                  <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl" role="listbox">
-                    <div className="border-b border-white/10 px-2 py-1.5">
+                  <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/[0.14] bg-[#293344] shadow-2xl" role="listbox">
+                    <div className="border-b border-white/[0.08] px-2 py-1.5">
                       <button
                         type="button"
                         className={`flex h-7 w-full items-center justify-between rounded-lg px-2 text-left text-[11px] transition ${color === "all" ? "bg-[#2a8d8b]/22 text-white" : "text-white/72 hover:bg-white/[0.08] hover:text-white"}`}
@@ -16663,7 +16663,7 @@ export default function AllInWarehouse() {
                         aria-selected={color === "all"}
                       >
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" />
+                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/[0.18] bg-white/10" />
                           <span className="truncate">Összes</span>
                         </span>
                         {color === "all" ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
@@ -16683,9 +16683,9 @@ export default function AllInWarehouse() {
                               role="option"
                               aria-selected={groupActive}
                             >
-                              <span className="h-4 w-4 shrink-0 rounded-full border border-white/35 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
+                              <span className="h-4 w-4 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
                               <span className="min-w-0 flex-1 truncate font-medium">{colorGroupLabel(group)}</span>
-                              <span className="shrink-0 rounded-full border border-white/10 bg-black/10 px-1.5 py-0.5 text-[10px] text-white/50">{groupColors.length}</span>
+                              <span className="shrink-0 rounded-full border border-white/[0.08] bg-black/10 px-1.5 py-0.5 text-[10px] text-white/50">{groupColors.length}</span>
                               {groupActive ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
                             </button>
                             {groupColors.map((c) => {
@@ -16701,7 +16701,7 @@ export default function AllInWarehouse() {
                                   role="option"
                                   aria-selected={active}
                                 >
-                                  <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                                  <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/[0.18] bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
                                   <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
                                   {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
                                 </button>
@@ -16711,7 +16711,7 @@ export default function AllInWarehouse() {
                         );
                       })}
                       {ungroupedColorTypes.length ? (
-                        <div className="border-t border-white/10 pt-1">
+                        <div className="border-t border-white/[0.08] pt-1">
                           <div className="px-3 py-1 text-[10px] uppercase tracking-[0.12em] text-white/35">Csoport nélkül</div>
                           {ungroupedColorTypes.map((c) => {
                             const value = colorFilterTypeValue(c);
@@ -16726,7 +16726,7 @@ export default function AllInWarehouse() {
                                 role="option"
                                 aria-selected={active}
                               >
-                                <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                                <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/[0.18] bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
                                 <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
                                 {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
                               </button>
@@ -16736,7 +16736,7 @@ export default function AllInWarehouse() {
                       ) : null}
                       {!colorTypes.length && <span className="block px-3 py-3 text-xs text-white/45">Nincs szín törzsadat.</span>}
                     </div>
-                    <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
+                    <div className="flex justify-end border-t border-white/[0.08] px-2 py-1.5">
                       <button type="button" className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]" onClick={() => setColorFilterOpen(false)}>Kész</button>
                     </div>
                   </div>
@@ -16855,7 +16855,7 @@ export default function AllInWarehouse() {
         </section>
 
         <section className={panel}>
-          <div className={`${panelHead} ${summaryOpen ? "border-b border-white/12" : ""}`}>
+          <div className={`${panelHead} ${summaryOpen ? "border-b border-white/[0.10]" : ""}`}>
             <div className="flex items-center gap-2"><Boxes size={17} /><span>Áttekintés</span></div>
             <button className={btnSoft} onClick={() => setSummaryOpen((x) => !x)}>{summaryOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {summaryOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
@@ -16870,7 +16870,7 @@ export default function AllInWarehouse() {
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Aktiválandó</p><p className="mt-1 text-xl">{activationTodoCount}</p></div>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-white/40 bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
+                <div className="rounded-xl border border-white/[0.40] bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
                   <p className="mb-3 text-sm text-slate-700">Márkák készletérték szerint</p>
                   <div className="space-y-2">
                     {brandChart.map((x) => (
@@ -16882,7 +16882,7 @@ export default function AllInWarehouse() {
                     {!brandChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/40 bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
+                <div className="rounded-xl border border-white/[0.40] bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
                   <p className="mb-3 text-sm text-slate-700">Készlet célhelyenként</p>
                   <div className="space-y-2">
                     {locationChart.map((x) => (
@@ -16899,8 +16899,8 @@ export default function AllInWarehouse() {
           )}
         </section>
 
-        <section ref={productListRef} className="overflow-hidden rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
-          <div className={`bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/16" : ""}`}>
+        <section ref={productListRef} className="overflow-hidden rounded-2xl border border-white/[0.14] bg-[#515d6e] shadow-xl">
+          <div className={`bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/[0.12]" : ""}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-white/95">
                 <Eye size={17} />
@@ -16956,7 +16956,7 @@ export default function AllInWarehouse() {
               </div>
             </div>
 
-            <div className="mt-3 grid min-h-[48px] gap-2 rounded-xl border border-white/12 bg-white/[0.045] p-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+            <div className="mt-3 grid min-h-[48px] gap-2 rounded-xl border border-white/[0.10] bg-white/[0.045] p-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-white/72">
                 <PackageCheck size={15} className="shrink-0 text-[#9cf4f0]" />
                 <span className="shrink-0 text-white">{incomingFocus ? "Import-kijelölés" : "Közös munkalista"}</span>
@@ -16965,7 +16965,7 @@ export default function AllInWarehouse() {
                     ? incomingFocus
                       ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/22 text-[#d7fffd]"
                       : "border-[#7bd7d4]/45 bg-[#2a8d8b]/18 text-white"
-                    : "border-white/12 bg-white/[0.04] text-white/42"
+                    : "border-white/[0.10] bg-white/[0.04] text-white/42"
                 }`}>
                   {activeListSelectedCount > 0
                     ? incomingFocus
@@ -17105,14 +17105,14 @@ export default function AllInWarehouse() {
                 </div>
               )}
               {filtered.length > 0 && (
-                <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
+                <div className="mb-3 rounded-xl border border-white/[0.10] bg-white/[0.045] px-3 py-2 text-xs text-white/55">
                   A raktárlista termékvariánsonként összesít: külön méret külön sor. Importnál a már létező modell + szín + méret nem új terméksor, hanem a meglévő sor készlete nő.
                   {incomingFocus ? (
                     <span className="mt-1 block text-[#d7fffd]">Most az utolsó bevezetés aktiválandó listája aktív, ezért csak azok a sorok látszanak, amelyeknél a modell vagy a variáns még nem aktív.</span>
                   ) : null}
                 </div>
               )}
-              <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
+              <div className="hidden overflow-auto rounded-xl border border-white/[0.14] bg-[#465163] lg:block">
                 <table className="min-w-[1120px] w-full table-fixed text-left text-[12px]">
                   <colgroup>
                     <col style={{ width: "42px" }} />
@@ -17291,7 +17291,7 @@ export default function AllInWarehouse() {
                   <article
                     key={it.variant_id}
                     data-aif-variant-id={variantId}
-                    className={`scroll-mt-32 rounded-xl border p-3 ${isHighlighted ? "border-amber-200/75 bg-amber-400/14 ring-2 ring-amber-200/60" : isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}
+                    className={`scroll-mt-32 rounded-xl border p-3 ${isHighlighted ? "border-amber-200/75 bg-amber-400/14 ring-2 ring-amber-200/60" : isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/[0.10] bg-white/[0.05]"}`}
                   >
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2">
@@ -17351,7 +17351,7 @@ export default function AllInWarehouse() {
                   </article>
                   );
                 })}
-                {!productPageItems.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
+                {!productPageItems.length && <div className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
                 {productPager}
               </div>
             </div>
@@ -17361,8 +17361,8 @@ export default function AllInWarehouse() {
 
       {selectedPanelOpen && (
         <div className={modalWrap}>
-          <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+          <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Kijelölt termékek</p>
                 <h2 className="mt-1 text-lg text-white">{selectedCount} termék kijelölve</h2>
@@ -17389,7 +17389,7 @@ export default function AllInWarehouse() {
                 Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. Egy terméknél használd a sor eleji pipát, az összes szabadon várakozó terméknél pedig az alábbi tömeges gombot.
               </div>
 
-              <div className="flex flex-col gap-3 rounded-xl border border-white/14 bg-[#3f4959] p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 rounded-xl border border-white/[0.12] bg-[#3f4959] p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <p className="text-sm text-white">Tömeges feladatválasztás</p>
                   <p className="mt-1 text-xs leading-relaxed text-white/55">
@@ -17412,7 +17412,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-2">
                 {selectedUnassignedItems.map((it) => (
-                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/[0.10] bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
                     <div className="flex justify-center">
                       <input
                         className={selectBox}
@@ -17447,13 +17447,13 @@ export default function AllInWarehouse() {
                   </div>
                 ))}
                 {!selectedUnassignedItems.length && (
-                  <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">
+                  <p className="rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">
                     Nincs szabadon várakozó kijelölt termék. A felső gombokkal megnyithatók a feladatlisták.
                   </p>
                 )}
               </div>
 
-              <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
+              <div className="flex flex-wrap justify-between gap-2 border-t border-white/[0.10] pt-3">
                 <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli"><X size={15} /> Teljes kijelölés törlése</button>
                 <button className={primaryBtn} onClick={closeSelectedWorkflowAndReturn} type="button">Kész</button>
               </div>
@@ -17465,7 +17465,7 @@ export default function AllInWarehouse() {
       {labelClearConfirmOpen && (
         <div className="fixed inset-0 z-[125] flex items-center justify-center bg-[#071019]/78 px-4 py-6 backdrop-blur-md">
           <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-rose-200/24 bg-[#354153] shadow-[0_28px_80px_rgba(0,0,0,.46)]">
-            <div className="border-b border-white/10 bg-[#303a4c] px-5 py-4">
+            <div className="border-b border-white/[0.08] bg-[#303a4c] px-5 py-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/24 bg-rose-500/14 text-rose-100"><Trash2 size={19} /></span>
                 <div>
@@ -17475,7 +17475,7 @@ export default function AllInWarehouse() {
               </div>
             </div>
             <div className="space-y-4 p-5">
-              <div className="rounded-2xl border border-white/12 bg-[#3f4959] p-4 text-sm leading-relaxed text-white/76">
+              <div className="rounded-2xl border border-white/[0.10] bg-[#3f4959] p-4 text-sm leading-relaxed text-white/76">
                 <span className="text-white">{selectedLabelItems.length} termék</span> kerül ki a <span className="text-[#d7fffd]">Vonalkód / címke</span> munkalistából.
                 A termékek, a készlet és a korábbi számlák nem törlődnek, csak ez a kijelölés.
               </div>
@@ -17509,7 +17509,7 @@ export default function AllInWarehouse() {
                   <p className="mt-1 text-sm text-white/66">{labelPrintFlow.totalProducts} termék • {labelPrintFlow.totalLabels} címke</p>
                 </div>
               </div>
-              <div className="mt-4 h-2.5 overflow-hidden rounded-full border border-white/14 bg-black/18">
+              <div className="mt-4 h-2.5 overflow-hidden rounded-full border border-white/[0.12] bg-black/18">
                 <div className="h-full w-full rounded-full bg-[#5dd6cf] shadow-[0_0_18px_rgba(93,214,207,.55)]" />
               </div>
             </div>
@@ -17527,7 +17527,7 @@ export default function AllInWarehouse() {
                   <CheckCircle2 size={17} /> {labelCleanupBusy ? "Lista törlése..." : "Igen, kész • töröld a nyomtatottakat"}
                 </button>
                 <button
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/16 bg-[#3f4959] px-4 text-sm text-white/88 transition hover:bg-[#485467] disabled:cursor-not-allowed disabled:opacity-45"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/[0.12] bg-[#3f4959] px-4 text-sm text-white/88 transition hover:bg-[#485467] disabled:cursor-not-allowed disabled:opacity-45"
                   type="button"
                   disabled={labelCleanupBusy}
                   onClick={() => { setLabelPrintFlow(null); setMessage("A címkelistát megtartottam. Így tudsz újranyomtatni vagy ellenőrizni, ha valami nem jött ki rendesen."); }}
@@ -17545,8 +17545,8 @@ export default function AllInWarehouse() {
 
       {labelComposerOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-3 py-4 backdrop-blur-sm">
-          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Vonalkód / címke nyomtatás</p>
                 <h2 className="mt-1 text-lg text-white">{labelRowsForPrint.length} termék • {labelPrintItems.length} címke</h2>
@@ -17585,7 +17585,7 @@ export default function AllInWarehouse() {
                     <summary className="cursor-pointer font-medium text-amber-50">Miért maradt ki címke? {labelInvoiceAuditTotals.affected} érintett termék részletei</summary>
                     <div className="mt-2 max-h-56 space-y-1.5 overflow-auto pr-1">
                       {labelQuantityAudit.filter((row) => row.deficit > 0).map((row) => (
-                        <div key={row.id} className="rounded-lg border border-white/10 bg-[#334155] px-2.5 py-2 text-white/82">
+                        <div key={row.id} className="rounded-lg border border-white/[0.08] bg-[#334155] px-2.5 py-2 text-white/82">
                           <p className="text-[11px] text-white">{row.title} • {row.productCode} • {row.color} • {row.size}</p>
                           <p className="mt-1 font-mono text-[10px] text-white/58">{row.barcode}</p>
                           <p className="mt-1 tabular-nums text-[11px]">Számla: {row.displayedInvoiceQty} • API: {row.submittedQty} • Limit: {row.allowedQty} • Címke: {row.copies} • <b className="text-amber-100">Hiányzik: {row.deficit}</b></p>
@@ -17625,21 +17625,21 @@ export default function AllInWarehouse() {
             )}
 
             <div className="space-y-4 p-4">
-              <div className="grid gap-2 rounded-2xl border border-white/12 bg-[#354153] p-2 sm:grid-cols-2">
+              <div className="grid gap-2 rounded-2xl border border-white/[0.10] bg-[#354153] p-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => setLabelPrintMode("a4")}
-                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "a4" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/12 bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
+                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "a4" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/[0.10] bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
                 >
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10"><FileText size={17} /></span>
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-black/10"><FileText size={17} /></span>
                   <span><strong className="block text-sm font-normal">A4 ív</strong><span className="mt-0.5 block text-[10px] text-white/52">Több címke egy 210 × 297 mm-es lapon</span></span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLabelPrintMode("zebra")}
-                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "zebra" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/12 bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
+                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "zebra" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/[0.10] bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
                 >
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10"><Printer size={17} /></span>
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-black/10"><Printer size={17} /></span>
                   <span><strong className="block text-sm font-normal">Zebra GC420t</strong><span className="mt-0.5 block text-[10px] text-white/52">1 címke = 1 nyomtatási oldal, Windows driverrel</span></span>
                 </button>
               </div>
@@ -17655,7 +17655,7 @@ export default function AllInWarehouse() {
               )}
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
-                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                <div className="rounded-xl border border-white/[0.10] bg-[#3f4959] p-3">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <p className="text-sm text-white">Címke tartalma</p>
                     <span className="text-xs text-white/55">Kapcsold ki, ami nem kell a címkére</span>
@@ -17668,12 +17668,12 @@ export default function AllInWarehouse() {
                         className={`flex min-h-[48px] items-start gap-2 rounded-xl border px-3 py-2 text-left transition ${
                           labelContent[opt.key]
                             ? "border-[#7bd7d4]/60 bg-[#2a8d8b]/20 text-white"
-                            : "border-white/16 bg-[#303a4c] text-white/76"
+                            : "border-white/[0.12] bg-[#303a4c] text-white/76"
                         }`}
                         onClick={() => toggleLabelContent(opt.key)}
                       >
                         <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${
-                          labelContent[opt.key] ? "border-[#9af4d8]/80 bg-[#6ee7c8] text-[#123328]" : "border-white/35 bg-white/[0.04] text-white/30"
+                          labelContent[opt.key] ? "border-[#9af4d8]/80 bg-[#6ee7c8] text-[#123328]" : "border-white/[0.18] bg-white/[0.04] text-white/30"
                         }`}>
                           {labelContent[opt.key] ? "✓" : ""}
                         </span>
@@ -17686,10 +17686,10 @@ export default function AllInWarehouse() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                <div className="rounded-xl border border-white/[0.10] bg-[#3f4959] p-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-white">{labelPrintMode === "zebra" ? "Zebra címkeméret és sablon" : "Méret, kiosztás és sablon"}</p>
-                    <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
+                    <span className="rounded-full border border-white/[0.10] bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
                       {labelPrintMode === "zebra"
                         ? `${labelW} × ${labelH} mm • 1 címke / oldal • ${labelPrintItems.length} oldal`
                         : `${labelColCount} oszlop × ${labelRowCount} sor • ${labelsPerPage} címke / oldal • ${Math.max(1, labelPrintPages.length)} oldal`}
@@ -17765,7 +17765,7 @@ export default function AllInWarehouse() {
               </section>
 
               <section className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
-                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                <div className="rounded-xl border border-white/[0.10] bg-[#3f4959] p-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-white">Termékek és példányszám</p>
                     <span className="text-xs text-white/55">A kép csak végső ellenőrzéshez látszik, a címkére nem kerül</span>
@@ -17805,7 +17805,7 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
-                      <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
+                      <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/[0.10] bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
                         <div className="self-start md:self-center" title={row.imageUrl ? "Rámutatásra nagyítás" : "Ehhez a termékhez nincs mentett kép"}>
                           <WarehouseProductImage
                             src={row.imageUrl}
@@ -17824,7 +17824,7 @@ export default function AllInWarehouse() {
                               <span className="text-xs text-rose-100">{row.render.error}</span>
                               {row.barcode ? (
                                 <button
-                                  className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-white/25 bg-[#354153] px-2 text-[11px] text-white hover:bg-[#3e4d63]"
+                                  className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-white/[0.18] bg-[#354153] px-2 text-[11px] text-white hover:bg-[#3e4d63]"
                                   type="button"
                                   onClick={() => {
                                     setLabelComposerOpen(false);
@@ -17856,11 +17856,11 @@ export default function AllInWarehouse() {
                         </div>
                         <div className="col-span-2 md:col-span-1">
                           <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
-                          <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
-                            <button className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
+                          <div className="flex h-9 overflow-hidden rounded-xl border border-white/[0.14] bg-[#303a4c]">
+                            <button className="flex h-full w-10 items-center justify-center border-r border-white/[0.12] bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
                             <input className="h-full min-w-0 flex-1 bg-transparent px-2 text-center text-sm tabular-nums text-white outline-none" value={String(labelInt(labelCopies[row.id], row.copies, 0, 999))} inputMode="numeric" onChange={(e) => updateLabelCopies(row.id, e.target.value)} />
                             <button
-                              className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
+                              className="flex h-full w-10 items-center justify-center border-l border-white/[0.12] bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
                               onClick={() => adjustLabelCopies(row.id, 1)}
                               disabled={labelInt(labelCopies[row.id], row.copies, 0, 999) >= (labelPreprint ? 999 : (labelStockLimitById[row.id] ?? 999))}
                               type="button"
@@ -17869,18 +17869,18 @@ export default function AllInWarehouse() {
                         </div>
                       </div>
                     ))}
-                    {!labelRowsForPrint.length && <p className="rounded-xl border border-white/12 bg-[#465163] px-3 py-5 text-center text-sm text-white/60">Nincs termék a Vonalkód / címke listában.</p>}
+                    {!labelRowsForPrint.length && <p className="rounded-xl border border-white/[0.10] bg-[#465163] px-3 py-5 text-center text-sm text-white/60">Nincs termék a Vonalkód / címke listában.</p>}
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                <div className="rounded-xl border border-white/[0.10] bg-[#3f4959] p-3">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <p className="text-sm text-white">{labelPrintMode === "zebra" ? "Zebra címke előnézet" : "Első oldal előnézet"}</p>
                     <span className="text-xs text-white/55">{labelPrintMode === "zebra" ? `${labelW} × ${labelH} mm` : `${Math.min(labelPrintItems.length, labelsPerPage)} / ${labelPrintItems.length} címke`}</span>
                   </div>
                   {labelPrintItems.length ? (
                     labelPrintMode === "zebra" ? (
-                      <div className="flex min-h-[360px] items-start justify-center overflow-auto rounded-[14px] border border-white/14 bg-[#2f394a] p-5">
+                      <div className="flex min-h-[360px] items-start justify-center overflow-auto rounded-[14px] border border-white/[0.12] bg-[#2f394a] p-5">
                         <div
                           className="relative shrink-0 bg-[#f1f3f6] shadow-[0_14px_34px_rgba(0,0,0,.32)]"
                           style={{ width: `${labelW * zebraLabelPreviewScale}mm`, height: `${labelH * zebraLabelPreviewScale}mm` }}
@@ -17915,7 +17915,7 @@ export default function AllInWarehouse() {
                       </div>
                     )
                   ) : (
-                    <div className="rounded-xl border border-white/12 bg-[#465163] px-3 py-8 text-center text-sm text-white/60">Nincs előnézet.</div>
+                    <div className="rounded-xl border border-white/[0.10] bg-[#465163] px-3 py-8 text-center text-sm text-white/60">Nincs előnézet.</div>
                   )}
                 </div>
               </section>
@@ -17926,8 +17926,8 @@ export default function AllInWarehouse() {
 
       {selectedActionTargets.length > 0 && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-3 py-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b]/98 px-4 py-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Feladat kiválasztása</p>
                 <h2 className="mt-1 text-lg text-white">{selectedActionTargets.length === 1 ? (selectedActionTargets[0]?.title_ro || "Termék") : `${selectedActionTargets.length} termék`}</h2>
@@ -17948,15 +17948,15 @@ export default function AllInWarehouse() {
                   <span className="inline-flex items-center gap-2"><Barcode size={16} /> Vonalkód / címke</span>
                   <span className="text-xs text-white/55">címkelista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "order")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.12] bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "order")} type="button">
                   <span className="inline-flex items-center gap-2"><ClipboardList size={16} /> Rendelés / PDF</span>
                   <span className="text-xs text-white/55">rendelési lista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "move")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.12] bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "move")} type="button">
                   <span className="inline-flex items-center gap-2"><PackageCheck size={16} /> Készletmozgatás</span>
                   <span className="text-xs text-white/55">átadási lista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "shopify")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.12] bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "shopify")} type="button">
                   <span className="inline-flex items-center gap-2"><ShopifyBrandMark size="sm" /> Shopify export</span>
                   <span className="text-xs text-white/55">egyetlen termék-CSV</span>
                 </button>
@@ -17973,7 +17973,7 @@ export default function AllInWarehouse() {
               ? "flex max-w-none flex-col overflow-hidden rounded-[28px] bg-[#253143]"
               : selectedWorkPanel === "order"
                 ? "flex max-w-none flex-col overflow-hidden rounded-[26px] bg-[#253143]"
-                : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl bg-[#4b5362]"} w-full border border-white/20 shadow-[0_34px_110px_rgba(2,6,23,0.72),0_0_0_1px_rgba(123,215,212,0.05)]`}
+                : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl bg-[#4b5362]"} w-full border border-white/[0.14] shadow-[0_34px_110px_rgba(2,6,23,0.72),0_0_0_1px_rgba(123,215,212,0.05)]`}
             style={selectedWorkPanel === "move" ? {
               width: "min(1480px, calc(100vw - 32px))",
               height: "min(780px, calc(100vh - 32px))",
@@ -17984,7 +17984,7 @@ export default function AllInWarehouse() {
           >
             <div className={`${selectedWorkPanel === "move" || selectedWorkPanel === "order"
               ? "bg-gradient-to-r from-[#172235] via-[#293b52] to-[#2a8d8b]/70 px-5 py-3.5"
-              : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/14`}>
+              : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.12]`}>
               {selectedWorkPanel === "move" ? (
                 <div className="flex min-w-0 items-center gap-3.5">
                   <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/38 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-[0_12px_28px_rgba(2,6,23,0.28)]" title="A készlet csak a végső megerősítés után változik.">
@@ -18072,8 +18072,8 @@ export default function AllInWarehouse() {
               {selectedWorkPanel === "move" ? (
                 <div className="flex h-full min-h-0 flex-col gap-3">
                   <div className="grid shrink-0 gap-3 xl:grid-cols-[minmax(420px,.92fr)_minmax(700px,1.38fr)]">
-                    <section className="overflow-hidden rounded-2xl border border-white/14 bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
-                      <div className="flex h-10 items-center justify-between gap-2 border-b border-white/10 bg-[#29364a] px-3.5">
+                    <section className="overflow-hidden rounded-2xl border border-white/[0.12] bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
+                      <div className="flex h-10 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#29364a] px-3.5">
                         <span className="inline-flex items-center gap-2 text-[13px] text-white/92">
                           <FileText size={13} className="text-[#7bd7d4]" />
                           Bizonylat
@@ -18087,7 +18087,7 @@ export default function AllInWarehouse() {
                         <label className="grid min-w-0 gap-1.5 text-[10px] uppercase tracking-[0.08em] text-white/58" title="Ez a cím kerül a PDF-re és a mozgásnaplóba.">
                           Bizonylat címe
                           <input
-                            className="h-10 w-full rounded-xl border border-white/18 bg-[#253247] px-3 text-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                            className="h-10 w-full rounded-xl border border-white/[0.14] bg-[#253247] px-3 text-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/18"
                             value={stockMoveDocumentTitle}
                             onChange={(e) => setStockMoveDocumentTitle(e.target.value)}
                             placeholder="Aviz intern de transfer stoc"
@@ -18096,7 +18096,7 @@ export default function AllInWarehouse() {
                         <label className="grid min-w-0 gap-1.5 text-[10px] uppercase tracking-[0.08em] text-white/58" title="Opcionális megjegyzés a PDF-re és a mozgásnaplóba.">
                           Megjegyzés
                           <input
-                            className="h-10 w-full rounded-xl border border-white/18 bg-[#253247] px-3 text-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                            className="h-10 w-full rounded-xl border border-white/[0.14] bg-[#253247] px-3 text-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/18"
                             value={stockMoveNote}
                             onChange={(e) => setStockMoveNote(e.target.value)}
                             placeholder="Opcionális"
@@ -18105,13 +18105,13 @@ export default function AllInWarehouse() {
                       </div>
                     </section>
 
-                    <section className="overflow-hidden rounded-2xl border border-white/14 bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
-                      <div className="flex h-10 items-center justify-between gap-2 border-b border-white/10 bg-[#29364a] px-3.5">
+                    <section className="overflow-hidden rounded-2xl border border-white/[0.12] bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
+                      <div className="flex h-10 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#29364a] px-3.5">
                         <span className="inline-flex items-center gap-2 text-[13px] text-white/92" title="Az itt kiválasztott útvonal egy kattintással minden terméksorra rákerül.">
                           <ArrowRightLeft size={13} className="text-[#7bd7d4]" />
                           Egységes útvonal
                         </span>
-                        <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/66">1 PV = 1 útvonal</span>
+                        <span className="rounded-full border border-white/[0.10] bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/66">1 PV = 1 útvonal</span>
                       </div>
                       <div className="grid gap-2.5 p-3 sm:grid-cols-[minmax(220px,1fr)_40px_minmax(220px,1fr)_auto] sm:items-center">
                         <label className="grid min-w-0 gap-1.5 rounded-xl border border-rose-400/24 bg-rose-950/16 p-2 text-[10px] uppercase tracking-[0.08em] text-rose-200">
@@ -18133,7 +18133,7 @@ export default function AllInWarehouse() {
                           />
                         </label>
                         <button
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-[#253247] text-white/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.12] bg-[#253247] text-white/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                           type="button"
                           disabled={!stockMoveBulkFrom || !stockMoveBulkTo}
                           onClick={() => {
@@ -18191,14 +18191,14 @@ export default function AllInWarehouse() {
                     </div>
                   ) : null}
 
-                  <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/14 bg-[#29364a] shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_16px_34px_rgba(2,6,23,0.14)]">
-                    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-[#263246] px-3.5">
+                  <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.12] bg-[#29364a] shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_16px_34px_rgba(2,6,23,0.14)]">
+                    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#263246] px-3.5">
                       <div className="flex items-center gap-2 text-[13px] text-white/94" title="A teljes termékadatok rámutatással érhetők el.">
                         <Boxes size={14} className="text-[#7bd7d4]" />
                         Mozgatandó termékek
                       </div>
                       <div className="flex items-center gap-2 text-[11px]">
-                        <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedMoveItems.length} sor</span>
+                        <span className="rounded-full border border-white/[0.10] bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedMoveItems.length} sor</span>
                         <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2 py-0.5 text-[#d7fffd]">{moveTotalQty} db</span>
                       </div>
                     </div>
@@ -18284,7 +18284,7 @@ export default function AllInWarehouse() {
                               />
 
                               <button
-                                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-[#253247] text-white/68 transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.12] bg-[#253247] text-white/68 transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                                 type="button"
                                 onClick={() => setStockMoveRowField(variantId, {
                                   fromLocationId: draft.toLocationId,
@@ -18314,11 +18314,11 @@ export default function AllInWarehouse() {
                               />
 
                               <div
-                                className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/18 bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]"
+                                className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/[0.14] bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]"
                                 title={`Legfeljebb ${availableFrom} db mozgatható erről a forráshelyről.`}
                               >
                                 <button
-                                  className="inline-flex h-10 items-center justify-center border-r border-white/10 text-white/84 hover:bg-white/10 disabled:opacity-35"
+                                  className="inline-flex h-10 items-center justify-center border-r border-white/[0.08] text-white/84 hover:bg-white/10 disabled:opacity-35"
                                   type="button"
                                   onClick={() => adjustStockMoveQty(variantId, -1)}
                                   disabled={n(draft.qty) <= 0}
@@ -18338,7 +18338,7 @@ export default function AllInWarehouse() {
                                   aria-label="Mozgatott darabszám"
                                 />
                                 <button
-                                  className="inline-flex h-10 items-center justify-center border-l border-white/10 text-white/84 hover:bg-white/10 disabled:opacity-35"
+                                  className="inline-flex h-10 items-center justify-center border-l border-white/[0.08] text-white/84 hover:bg-white/10 disabled:opacity-35"
                                   type="button"
                                   onClick={() => adjustStockMoveQty(variantId, 1)}
                                   disabled={availableFrom <= 0 || n(draft.qty) >= availableFrom}
@@ -18395,13 +18395,13 @@ export default function AllInWarehouse() {
                 </div>
               ) : selectedWorkPanel === "order" ? (
                 <div className="flex h-full min-h-0 flex-col gap-3">
-                  <section className="shrink-0 overflow-hidden rounded-2xl border border-white/14 bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
-                    <div className="flex h-10 items-center justify-between gap-2 border-b border-white/10 bg-[#29364a] px-3.5">
+                  <section className="shrink-0 overflow-hidden rounded-2xl border border-white/[0.12] bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
+                    <div className="flex h-10 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#29364a] px-3.5">
                       <span className="inline-flex items-center gap-2 text-[13px] text-white/92">
                         <ClipboardList size={13} className="text-[#7bd7d4]" />
                         Nyitott rendelések beállítása
                       </span>
-                      <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/66" title="Beszállítónként mindig a meglévő nyitott rendelés bővül; ha nincs, új rendelés nyílik.">
+                      <span className="rounded-full border border-white/[0.10] bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/66" title="Beszállítónként mindig a meglévő nyitott rendelés bővül; ha nincs, új rendelés nyílik.">
                         1 beszállító = 1 nyitott rendelés
                       </span>
                     </div>
@@ -18425,7 +18425,7 @@ export default function AllInWarehouse() {
                       </label>
                       <div className="min-w-0">
                         <p className="mb-1.5 text-[10px] uppercase tracking-[0.08em] text-white/48">Rendelések</p>
-                        <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-xl border border-white/12 bg-[#253247] px-2.5 py-1.5">
+                        <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-xl border border-white/[0.10] bg-[#253247] px-2.5 py-1.5">
                           {purchaseOrderWorkGroups.map((group) => (
                             <span key={group.supplierId} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-2 text-[11px] text-[#d7fffd]" title={`${group.rows} terméksor, ${group.qty} db, ismert vételár alapján ${money(group.value)} RON`}>
                               {group.supplierName}
@@ -18447,14 +18447,14 @@ export default function AllInWarehouse() {
                     </div>
                   ) : null}
 
-                  <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/14 bg-[#29364a] shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_16px_34px_rgba(2,6,23,0.14)]">
-                    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-[#263246] px-3.5">
+                  <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.12] bg-[#29364a] shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_16px_34px_rgba(2,6,23,0.14)]">
+                    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#263246] px-3.5">
                       <div className="flex items-center gap-2 text-[13px] text-white/94">
                         <Boxes size={14} className="text-[#7bd7d4]" />
                         Rendelendő termékek
                       </div>
                       <div className="flex items-center gap-2 text-[11px]">
-                        <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedOrderItems.length} sor</span>
+                        <span className="rounded-full border border-white/[0.10] bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedOrderItems.length} sor</span>
                         <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2 py-0.5 text-[#d7fffd]">{purchaseOrderWorkTotalQty} db</span>
                         <span className="rounded-full border border-amber-200/20 bg-amber-300/[0.08] px-2 py-0.5 text-amber-50" title="Csak a rögzített vételárak összege. Eladási ár nem kerül a beszerzési rendelésbe.">{money(purchaseOrderWorkTotalValue)} RON</span>
                       </div>
@@ -18525,9 +18525,9 @@ export default function AllInWarehouse() {
                                   : <span className="text-amber-50">{money(prepared.unitPrice)} RON</span>}
                               </div>
 
-                              <div className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/18 bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+                              <div className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/[0.14] bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                                 <button
-                                  className="inline-flex h-10 items-center justify-center border-r border-white/10 text-white/84 hover:bg-white/10 disabled:opacity-35"
+                                  className="inline-flex h-10 items-center justify-center border-r border-white/[0.08] text-white/84 hover:bg-white/10 disabled:opacity-35"
                                   type="button"
                                   onClick={() => adjustPurchaseOrderWorkQty(variantId, -1)}
                                   disabled={n(draft.qty) <= 1}
@@ -18547,7 +18547,7 @@ export default function AllInWarehouse() {
                                   aria-label="Rendelendő darabszám"
                                 />
                                 <button
-                                  className="inline-flex h-10 items-center justify-center border-l border-white/10 text-white/84 hover:bg-white/10"
+                                  className="inline-flex h-10 items-center justify-center border-l border-white/[0.08] text-white/84 hover:bg-white/10"
                                   type="button"
                                   onClick={() => adjustPurchaseOrderWorkQty(variantId, 1)}
                                   aria-label="Rendelendő mennyiség növelése"
@@ -18601,7 +18601,7 @@ export default function AllInWarehouse() {
                 <>
                   <div className="grid gap-2">
                     {selectedItemsForAction(selectedWorkPanel).map((it) => (
-                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
+                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/[0.10] bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
                         <div className="flex justify-center">
                           <input
                             className={selectBox}
@@ -18628,14 +18628,14 @@ export default function AllInWarehouse() {
                         </div>
                       </div>
                     ))}
-                    {!selectedItemsForAction(selectedWorkPanel).length && <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs termék ebben a listában.</p>}
+                    {!selectedItemsForAction(selectedWorkPanel).length && <p className="rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs termék ebben a listában.</p>}
                   </div>
                 </>
               )}
             </div>
 
             {selectedWorkPanel === "move" && selectedMoveItems.length > 0 && (
-              <div className="flex min-h-[62px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/14 bg-[#172235]/98 px-4 py-3 shadow-[0_-18px_38px_rgba(2,6,23,0.34)] backdrop-blur">
+              <div className="flex min-h-[62px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/[0.12] bg-[#172235]/98 px-4 py-3 shadow-[0_-18px_38px_rgba(2,6,23,0.34)] backdrop-blur">
                 <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-[12px]" title={`${moveRouteSummary.from} → ${moveRouteSummary.to}. Mentéskor a készlet ténylegesen átkerül, és a sorok a nyitott PV-előkészítéshez adódnak.`}>
                   <span className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 ${moveAllRowsValid ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/20 text-[#d7fffd]" : "border-amber-200/28 bg-amber-300/12 text-amber-50"}`}>
                     {moveAllRowsValid ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {moveAllRowsValid ? "Rendben" : "Javítandó"}
@@ -18655,7 +18655,7 @@ export default function AllInWarehouse() {
             )}
 
             {selectedWorkPanel === "order" && selectedOrderItems.length > 0 && (
-              <div className="flex min-h-[62px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/14 bg-[#172235]/98 px-4 py-3 shadow-[0_-18px_38px_rgba(2,6,23,0.34)] backdrop-blur">
+              <div className="flex min-h-[62px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/[0.12] bg-[#172235]/98 px-4 py-3 shadow-[0_-18px_38px_rgba(2,6,23,0.34)] backdrop-blur">
                 <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-[12px]" title="Mentéskor beszállítónként a meglévő nyitott rendelés bővül, vagy új nyitott rendelés jön létre.">
                   <span className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 ${purchaseOrderWorkCanSave ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/20 text-[#d7fffd]" : "border-rose-200/35 bg-[#d31126]/65 text-white"}`}>
                     {purchaseOrderWorkCanSave ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
@@ -18692,7 +18692,7 @@ export default function AllInWarehouse() {
           aria-live="polite"
         >
           <div className={`flex items-start gap-3 px-3.5 py-3 text-white ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-[#b4233d]" : "bg-[#176f6c]"}`}>
-            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/35 bg-white/15 text-white shadow-sm">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/[0.18] bg-white/15 text-white shadow-sm">
               {warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? <AlertTriangle size={19} /> : warehouseMoveValuePreview.uitRecorded ? <CheckCircle2 size={19} /> : <Receipt size={19} />}
             </span>
             <div className="min-w-0 flex-1">
@@ -18779,7 +18779,7 @@ export default function AllInWarehouse() {
           aria-live="polite"
         >
           <div className={`flex items-start gap-3 px-3.5 py-3 text-white ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-[#b4233d]" : "bg-[#176f6c]"}`}>
-            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/35 bg-white/15 text-white shadow-sm">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/[0.18] bg-white/15 text-white shadow-sm">
               {warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? <AlertTriangle size={19} /> : <CheckCircle2 size={19} />}
             </span>
             <div className="min-w-0 flex-1">
@@ -18788,7 +18788,7 @@ export default function AllInWarehouse() {
             </div>
             <button
               type="button"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/30 bg-white/12 text-white hover:bg-white/22"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/[0.18] bg-white/12 text-white hover:bg-white/22"
               onClick={() => setWarehouseTransferToast(null)}
               aria-label="Értesítés bezárása"
             >
@@ -18834,14 +18834,14 @@ export default function AllInWarehouse() {
         <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/58 p-3 backdrop-blur-md" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWarehouseUitWarning(); }}>
           <div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-red-300 bg-[#f8fafc] text-slate-900 shadow-[0_32px_90px_rgba(2,6,23,0.52)]">
             <div className="flex items-start gap-3 border-b border-red-300 bg-gradient-to-r from-[#8f1f32] via-[#b4233d] to-[#d31126] px-4 py-4 text-white">
-              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/15 text-white shadow-lg"><AlertTriangle size={23} /></span>
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/[0.18] bg-white/15 text-white shadow-lg"><AlertTriangle size={23} /></span>
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-white/78">UIT figyelmeztetés</p>
                 <h2 className="mt-1 text-[22px] leading-tight text-white">Az előkészítés elérte a 10.000 RON-t</h2>
                 <p className="mt-1 truncate text-xs text-white/82" title={warehouseUitWarning.documentNumber}>{warehouseUitWarning.documentNumber}</p>
                 {warehouseUitWarning.routeLabel ? <p className="mt-0.5 truncate text-[10px] text-white/72" title={warehouseUitWarning.routeLabel}>{warehouseUitWarning.routeLabel}</p> : null}
               </div>
-              <button type="button" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-black/10 text-white hover:bg-black/20" onClick={closeWarehouseUitWarning} aria-label="Bezárás"><X size={15} /></button>
+              <button type="button" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/[0.18] bg-black/10 text-white hover:bg-black/20" onClick={closeWarehouseUitWarning} aria-label="Bezárás"><X size={15} /></button>
             </div>
 
             <div className="space-y-3 p-4">
@@ -18883,8 +18883,8 @@ export default function AllInWarehouse() {
 
       {stockMoveConfirmOpen && selectedWorkPanel === "move" && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md">
-          <div className="w-full max-w-xl overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-[0_28px_80px_rgba(2,6,23,0.62)]">
-            <div className="flex items-center gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
+          <div className="w-full max-w-xl overflow-hidden rounded-[24px] border border-white/[0.14] bg-[#4b5362] shadow-[0_28px_80px_rgba(2,6,23,0.62)]">
+            <div className="flex items-center gap-3 border-b border-white/[0.10] bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
               <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><PackageCheck size={21} /></span>
               <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Végső ellenőrzés</p>
@@ -18898,7 +18898,7 @@ export default function AllInWarehouse() {
                   <p className="text-[9px] uppercase tracking-[0.12em] text-rose-300">Kimenő / forrás</p>
                   <p className="mt-1 truncate text-sm text-rose-50" title={moveRouteSummary.from}>{moveRouteSummary.from}</p>
                 </div>
-                <span className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-[#303a4c] text-[#7bd7d4]"><ArrowRight size={18} /></span>
+                <span className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.10] bg-[#303a4c] text-[#7bd7d4]"><ArrowRight size={18} /></span>
                 <div className="rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/30 px-3 py-2.5">
                   <p className="text-[9px] uppercase tracking-[0.12em] text-[#7bd7d4]">Bejövő / cél</p>
                   <p className="mt-1 truncate text-sm text-[#d7fffd]" title={moveRouteSummary.to}>{moveRouteSummary.to}</p>
@@ -18906,9 +18906,9 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Sor</span><strong className="mt-1 block text-xl font-normal text-white">{moveValidRows.length}</strong></div>
-                <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Darab</span><strong className="mt-1 block text-xl font-normal text-white">{moveTotalQty}</strong></div>
-                <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Érték</span><strong className="mt-1 block text-sm font-normal text-white">{money(moveTotalValue)} RON</strong></div>
+                <div className="rounded-xl border border-white/[0.10] bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Sor</span><strong className="mt-1 block text-xl font-normal text-white">{moveValidRows.length}</strong></div>
+                <div className="rounded-xl border border-white/[0.10] bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Darab</span><strong className="mt-1 block text-xl font-normal text-white">{moveTotalQty}</strong></div>
+                <div className="rounded-xl border border-white/[0.10] bg-[#354153] px-3 py-2 text-center"><span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Érték</span><strong className="mt-1 block text-sm font-normal text-white">{money(moveTotalValue)} RON</strong></div>
               </div>
 
               <div className="flex items-start gap-2 rounded-xl border border-amber-200/24 bg-amber-300/[0.08] px-3 py-2.5 text-xs leading-relaxed text-amber-50">
@@ -18929,8 +18929,8 @@ export default function AllInWarehouse() {
 
       {stockEditorTarget && (
         <div className={modalWrap}>
-          <div className="max-h-[88vh] w-full max-w-xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+          <div className="max-h-[88vh] w-full max-w-xl overflow-auto rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Készlet célhelyenként</p>
                 <h2 className="mt-1 text-lg text-white">{stockEditorTarget.title_ro || "Termék"}</h2>
@@ -18944,7 +18944,7 @@ export default function AllInWarehouse() {
                 Mozgatás módban a teljes készlet nem változik: ha az egyik célhelyre pluszolsz, automatikusan leveszi másik célhelyről. Minden Honnan → Hová irány külön PV-előkészítést kap. Új áru vagy leltárkorrekció esetén kapcsold be a készletkorrekció módot.
               </div>
 
-              <div className="grid gap-2 rounded-xl border border-white/12 bg-[#3f4959]/70 p-3 text-xs text-white/72 sm:grid-cols-[1fr_auto] sm:items-center">
+              <div className="grid gap-2 rounded-xl border border-white/[0.10] bg-[#3f4959]/70 p-3 text-xs text-white/72 sm:grid-cols-[1fr_auto] sm:items-center">
                 <div>
                   <p className="text-white/88">{stockEditorAllowTotalChange ? "Készletkorrekció mód" : "Mozgatás célhelyek között"}</p>
                   <p className="mt-0.5 text-white/52">
@@ -19053,16 +19053,16 @@ export default function AllInWarehouse() {
                   const qtyValue = Math.max(reservedQty, Math.floor(n(stockEditorRows[key])));
                   const availableDraft = Math.max(0, qtyValue - reservedQty);
                   return (
-                    <div key={key} className="grid grid-cols-[1fr_136px] items-center gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2">
+                    <div key={key} className="grid grid-cols-[1fr_136px] items-center gap-3 rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{loc.name || loc.code || "-"}</p>
                         <p className="mt-0.5 text-[11px] text-white/50">
                           Előző: {n(current?.qty)} • Foglalt: {reservedQty} • Új elérhető: {availableDraft}
                         </p>
                       </div>
-                      <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
+                      <div className="flex h-9 overflow-hidden rounded-xl border border-white/[0.14] bg-[#303a4c]">
                         <button
-                          className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35"
+                          className="flex h-full w-10 items-center justify-center border-r border-white/[0.12] bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35"
                           onClick={() => adjustStockEditorQty(loc, -1)}
                           disabled={stockEditorSaving || qtyValue <= reservedQty}
                           title={reservedQty > 0 ? `Minimum a foglalt mennyiség miatt: ${reservedQty}` : "Készlet csökkentése"}
@@ -19078,7 +19078,7 @@ export default function AllInWarehouse() {
                           aria-label={`${loc.name || loc.code || "Célhely"} készlet`}
                         />
                         <button
-                          className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50"
+                          className="flex h-full w-10 items-center justify-center border-l border-white/[0.12] bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50"
                           onClick={() => adjustStockEditorQty(loc, 1)}
                           disabled={stockEditorSaving}
                           title="Készlet növelése"
@@ -19090,10 +19090,10 @@ export default function AllInWarehouse() {
                     </div>
                   );
                 })}
-                {!stockLocationRows.length && <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-4 text-sm text-white/60">Nincs aktív célhely.</p>}
+                {!stockLocationRows.length && <p className="rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-4 text-sm text-white/60">Nincs aktív célhely.</p>}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.10] pt-3">
                 <div className="text-xs text-white/60">
                   Régi összesen: <span className="text-white">{stockEditorOriginalTotal()}</span> • Új összesen: <span className="text-white">{stockEditorDraftTotal()}</span>
                   {stockEditorTotalDelta() !== 0 && <span className="ml-2 text-amber-200">({stockEditorTotalDelta() > 0 ? "+" : ""}{stockEditorTotalDelta()} db)</span>}
@@ -19121,7 +19121,7 @@ export default function AllInWarehouse() {
       {newProductOpen && (
         <div className={modalWrap}>
           <div className={modal}>
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b] px-4 py-3">
               <div>
                 <p className="text-sm text-white/65">Új termék kézi felvétele</p>
                 <h2 className="text-xl">Új termék hozzáadása raktárba</h2>
@@ -19158,7 +19158,7 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="grid gap-2">
                     {newProductBarcodeMatches.map((it) => (
-                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/14 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/[0.12] bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
                         <div>
                           <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-14 w-14 rounded-lg" iconSize={18} />
                         </div>
@@ -19208,9 +19208,9 @@ export default function AllInWarehouse() {
               )}
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
-                <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
+                <div className="space-y-3 rounded-xl border border-white/[0.10] bg-white/[0.05] p-3">
                   <WarehouseGalleryEditor images={newProduct.images} title={newProduct.titleRo} onChange={setNewProductPhotoGallery} uploading={newProductSaving} onUpload={(files)=>uploadGalleryFiles(files,"new")} />
-                  <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
+                  <div className="rounded-xl border border-white/[0.10] bg-black/10 p-3 text-xs text-white/60">
                     <p>Beszállítói kód: {newProduct.supplierProductCode || "nincs megadva"}</p>
                     <p className="mt-1">Vonalkód / SKU alap: {newProduct.barcode || "nincs megadva"}</p>
                     <p className="mt-1">S/N/COD: {newProduct.snCod || "nincs megadva"}</p>
@@ -19220,12 +19220,12 @@ export default function AllInWarehouse() {
                 </div>
 
                 <div className="grid gap-4">
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                  <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Edit3 size={16} /> Alapadatok</div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={label}><span className="inline-flex items-center gap-1.5">Terméknév románul<span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#ed001c] text-[10px] font-bold leading-none text-white" title="Kötelező" aria-label="kötelező">!</span></span><input id="new-product-required-title" required aria-required="true" className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
                       <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
-                      <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
+                      <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/[0.45]" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <WarehouseSingleSelect
                         labelText="Beszállító / forrás"
                         value={newProduct.supplierId}
@@ -19287,7 +19287,7 @@ export default function AllInWarehouse() {
                     </div>
                   </section>
 
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                  <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <label className={label}>Termékkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
@@ -19324,7 +19324,7 @@ export default function AllInWarehouse() {
                 </div>
               </div>
 
-              <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+              <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm text-white/88">Kezdő készlet célhelyenként</p>
@@ -19336,9 +19336,9 @@ export default function AllInWarehouse() {
                   {stockLocationRows.map((loc) => {
                     const key = locationKey(loc);
                     return (
-                      <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2 text-sm text-white/78">
+                      <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-2 text-sm text-white/78">
                         <span className="min-w-0 truncate">{loc.name || loc.code}</span>
-                        <input className="h-9 w-24 rounded-lg border border-white/16 bg-[#303a4c] px-2 text-right text-white outline-none focus:border-white/45" value={newProductStockRows[key] || ""} onChange={(e) => setNewProductLocationQty(loc, e.target.value)} inputMode="numeric" placeholder="0" />
+                        <input className="h-9 w-24 rounded-lg border border-white/[0.12] bg-[#303a4c] px-2 text-right text-white outline-none focus:border-white/[0.45]" value={newProductStockRows[key] || ""} onChange={(e) => setNewProductLocationQty(loc, e.target.value)} inputMode="numeric" placeholder="0" />
                       </label>
                     );
                   })}
@@ -19346,7 +19346,7 @@ export default function AllInWarehouse() {
                 </div>
               </section>
 
-              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-white/12 pt-4">
+              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-white/[0.10] pt-4">
                 
                 <div className="flex gap-2">
                   <button className={btnSoft} type="button" onClick={closeNewProductModal} disabled={newProductSaving}>Mégse</button>
@@ -19378,7 +19378,7 @@ export default function AllInWarehouse() {
                 <p className="text-xs uppercase tracking-[0.18em] text-red-50/78">{bulkProductDeleteTarget.context === "incoming" ? "Importból kijelölt termékek törlése" : "Kijelölt termékek törlése"}</p>
                 <h2 className="mt-1 text-xl text-white">Biztosan törlöd a kijelölt termékeket?</h2>
               </div>
-              <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-white/15 px-3 text-xs text-white hover:bg-white/20" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button"><X size={14} /> Bezárás</button>
+              <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/[0.18] bg-white/15 px-3 text-xs text-white hover:bg-white/20" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button"><X size={14} /> Bezárás</button>
             </div>
             <div className="space-y-4 p-4">
               <div className="rounded-2xl border border-red-200/45 bg-red-600/25 px-3 py-3">
@@ -19392,7 +19392,7 @@ export default function AllInWarehouse() {
 
               <div className="max-h-56 overflow-auto rounded-2xl border border-red-200/25 bg-red-950/25 p-2">
                 {bulkProductDeleteTarget.items.slice(0, 8).map((item) => (
-                  <div key={selectedVariantIdFromItem(item)} className="mb-1 last:mb-0 rounded-xl border border-white/12 bg-white/10 px-3 py-2 text-sm">
+                  <div key={selectedVariantIdFromItem(item)} className="mb-1 last:mb-0 rounded-xl border border-white/[0.10] bg-white/10 px-3 py-2 text-sm">
                     <div className="text-white">{item.title_ro || item.shopify_title || itemProductCode(item) || selectedVariantIdFromItem(item)}</div>
                     <div className="mt-0.5 text-xs text-red-50/70">{item.brand_name || "Nincs márka"} • {itemMainCategoryLabel(item)} • {displayColorName(item.color_name, item.color_code)} • {item.size || "nincs méret"}</div>
                   </div>
@@ -19401,7 +19401,7 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 pt-1">
-                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/24 bg-white/10 px-4 text-sm text-white hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button">Mégse</button>
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/[0.18] bg-white/10 px-4 text-sm text-white hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button">Mégse</button>
                 <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-100 bg-[#d31126] px-4 text-sm text-white shadow-[0_12px_30px_rgba(211,17,38,0.32)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-60" onClick={confirmDeleteSelectedProducts} disabled={saving} type="button">
                   <Trash2 size={16} /> {saving ? "Törlés folyamatban..." : "Igen, törlés"}
                 </button>
@@ -19413,8 +19413,8 @@ export default function AllInWarehouse() {
 
       {productDeleteTarget && (
         <div className={modalWrap}>
-          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b] px-4 py-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Termék törlése</p>
                 <h2 className="mt-1 text-lg text-white">Biztosan törlöd?</h2>
@@ -19439,7 +19439,7 @@ export default function AllInWarehouse() {
       {taxonomyOpen && (
         <div className={modalWrap}>
           <div className={taxonomyModal}>
-            <div className="sticky top-0 z-10 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+            <div className="sticky top-0 z-10 border-b border-white/[0.10] bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1 pr-2">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
@@ -19450,7 +19450,7 @@ export default function AllInWarehouse() {
               </div>
             </div>
             <div className="space-y-3 p-4">
-              <div className="inline-flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-black/10 p-1">
+              <div className="inline-flex flex-wrap gap-2 rounded-2xl border border-white/[0.08] bg-black/10 p-1">
                 <button className={taxonomyTab === "categories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("categories"); setOpenTaxonomyMenu(null); }}>
                   Főkategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{mainCategories.length || categories.length}</span>
                 </button>
@@ -19512,7 +19512,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">{"Főkategória lista"}</p>
                         <p className="text-[11px] text-white/50">Aktív elemek törzsrendi kezelése.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{mainCategories.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{mainCategories.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {mainCategories.map((c, index) => (
@@ -19520,7 +19520,7 @@ export default function AllInWarehouse() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{categoryLabel(c)}</p>
-                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/50">RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
                             {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
@@ -19533,7 +19533,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!mainCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív főkategória.</p>}
+                      {!mainCategories.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív főkategória.</p>}
                     </div>
                   </section>
                 </div>
@@ -19576,7 +19576,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Alkategória / terméktípus lista</p>
                         <p className="text-[11px] text-white/50">Főkategória szerint kötött aktív terméktípusok.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{subCategories.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{subCategories.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {subCategories.map((c, index) => (
@@ -19584,7 +19584,7 @@ export default function AllInWarehouse() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{categoryLabel(c)}</p>
-                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/50">Főkategória: {subCategoryParentLabel(c)} • RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
                             {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
@@ -19603,7 +19603,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!subCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória / terméktípus.</p>}
+                      {!subCategories.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória / terméktípus.</p>}
                     </div>
                   </section>
                 </div>
@@ -19652,7 +19652,7 @@ export default function AllInWarehouse() {
                             <input className={`${taxonomyInput} w-full pl-9`} value={subcategorySizeSearch} onChange={(e) => setSubcategorySizeSearch(e.target.value)} placeholder="pl. 38, 39, M, XL" />
                           </div>
                         </label>
-                        <div className="mt-2 max-h-[39vh] overflow-y-auto rounded-xl border border-white/12 bg-black/10 p-2.5">
+                        <div className="mt-2 max-h-[39vh] overflow-y-auto rounded-xl border border-white/[0.10] bg-black/10 p-2.5">
                           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                             {sizeTypes.filter((row) => row.is_active !== false)
                               .filter((row) => {
@@ -19662,7 +19662,7 @@ export default function AllInWarehouse() {
                               }).slice().sort(compareWarehouseSizeTypes).map((row) => {
                                 const chosen = subcategorySizeDraft.includes(String(row.id));
                                 return (
-                                  <label key={row.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] transition ${chosen ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/25 text-white" : "border-white/10 bg-white/[0.04] text-white/75 hover:border-white/30"}`}>
+                                  <label key={row.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] transition ${chosen ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/25 text-white" : "border-white/[0.08] bg-white/[0.04] text-white/75 hover:border-white/[0.18]"}`}>
                                     <input className={selectBox} type="checkbox" checked={chosen} disabled={taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)}
                                       onChange={(e) => setSubcategorySizeDraft((prev) => e.target.checked ? [...new Set([...prev, String(row.id)])] : prev.filter((id) => id !== String(row.id)))} />
                                     <span className="truncate">{sizeTypeLabel(row)}</span>
@@ -19671,7 +19671,7 @@ export default function AllInWarehouse() {
                               })}
                           </div>
                         </div>
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.08] pt-3">
                           <span className="text-xs text-white/55">{subcategorySizesDirty ? "Nem mentett módosítás" : "Nincs új változtatás"}</span>
                           <button className={taxonomyPrimaryBtn} type="button" onClick={() => void saveSubcategorySizeDraft()}
                             disabled={!subcategorySizesDirty || taxonomyBusy || subcategorySizeLoading || Boolean(subcategorySizeLoadError)}>
@@ -19684,7 +19684,7 @@ export default function AllInWarehouse() {
                         {!subcategorySizeDraft.length && <p className="mt-2 text-[11px] text-amber-100/80">Nincs kijelölt méret: ez az alkategória még nincs konfigurálva. Cipőknél addig csak a számozott méretek jelennek meg ajánlásként.</p>}
                       </>
                     ) : (
-                      <p className="mt-4 rounded-xl border border-dashed border-white/15 p-5 text-center text-xs text-white/50">Válassz egy alkategóriát a méretek beállításához.</p>
+                      <p className="mt-4 rounded-xl border border-dashed border-white/[0.12] p-5 text-center text-xs text-white/50">Válassz egy alkategóriát a méretek beállításához.</p>
                     )}
                   </section>
                   <section className={taxonomyCard}>
@@ -19696,7 +19696,7 @@ export default function AllInWarehouse() {
                         const assigned = sizeTypes.filter((size) => linked.has(String(size.id))).slice().sort(compareWarehouseSizeTypes).map(sizeTypeLabel);
                         return (
                           <button key={row.id} type="button" disabled={subcategorySizeLoading || taxonomyBusy}
-                            className={`w-full rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-60 ${editingSizeSubcategoryId === String(row.id) ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/18" : "border-white/10 bg-black/10 hover:border-[#7bd7d4]/25"}`}
+                            className={`w-full rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-60 ${editingSizeSubcategoryId === String(row.id) ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/18" : "border-white/[0.08] bg-black/10 hover:border-[#7bd7d4]/25"}`}
                             onClick={() => selectSubcategoryForSizes(String(row.id))}>
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-sm text-white">{categoryLabel(row)}</span>
@@ -19740,7 +19740,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Nemek listája</p>
                         <p className="text-[11px] text-white/50">A termékekhez használható nemek.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{genderTypes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{genderTypes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {genderTypes.map((g, index) => (
@@ -19748,7 +19748,7 @@ export default function AllInWarehouse() {
                           <div>
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{g.name}</p>
-                              {g.sort_order !== undefined && g.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{g.sort_order}</span>}
+                              {g.sort_order !== undefined && g.sort_order !== null && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{g.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/45">Kód: {g.code}</p>
                             {!!g.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {g.aliases.join(", ")}</p>}
@@ -19761,7 +19761,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!genderTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív elem.</p>}
+                      {!genderTypes.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív elem.</p>}
                     </div>
                   </section>
                 </div>
@@ -19799,7 +19799,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Színcsoportok</p>
                         <p className="text-[11px] text-white/50">A főszínek alatt látszanak a hozzájuk rendelt meglévő színek.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorGroups.length} csoport</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorGroups.length} csoport</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {colorGroups.map((group, index) => {
@@ -19807,12 +19807,12 @@ export default function AllInWarehouse() {
                         return (
                           <div key={group.id} className={taxonomyRow}>
                             <div className="flex min-w-0 items-start gap-3">
-                              <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
+                              <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className="text-sm text-white">{colorGroupLabel(group)}</p>
                                   <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]">{children.length} szín</span>
-                                  {group.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/45">{group.hex}</span>}
+                                  {group.hex && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/45">{group.hex}</span>}
                                 </div>
                                 <p className="mt-0.5 text-[11px] text-white/50">RO: {group.name_ro || "-"} • HU: {group.name_hu || "-"}</p>
                                 <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{children.length ? children.map(colorTypeLabel).join(", ") : "Még nincs szín ehhez a csoporthoz rendelve."}</p>
@@ -19827,7 +19827,7 @@ export default function AllInWarehouse() {
                           </div>
                         );
                       })}
-                      {!colorGroups.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Még nincs színcsoport. Hozz létre például Kék, Piros, Zöld főszíneket.</p>}
+                      {!colorGroups.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Még nincs színcsoport. Hozz létre például Kék, Piros, Zöld főszíneket.</p>}
                     </div>
                   </section>
                 </div>
@@ -19878,7 +19878,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Szín lista</p>
                         <p className="text-[11px] text-white/50">Fordításokkal és import aliasokkal együtt.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorTypes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorTypes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {colorTypes.map((c, index) => {
@@ -19886,12 +19886,12 @@ export default function AllInWarehouse() {
                         return (
                           <div key={c.id} className={taxonomyRow}>
                             <div className="flex min-w-0 flex-1 items-start gap-3">
-                              <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                              <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={c.hex ? { backgroundColor: c.hex } : undefined} />
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className="text-sm text-white">{c.name_ro}</p>
-                                  {group ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]"><span className="h-2.5 w-2.5 rounded-full border border-white/25" style={group.hex ? { backgroundColor: group.hex } : undefined} />{colorGroupLabel(group)}</span> : <span className="rounded-full border border-amber-200/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100/75">Nincs főszín</span>}
-                                  {c.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">{c.hex}</span>}
+                                  {group ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]"><span className="h-2.5 w-2.5 rounded-full border border-white/[0.18]" style={group.hex ? { backgroundColor: group.hex } : undefined} />{colorGroupLabel(group)}</span> : <span className="rounded-full border border-amber-200/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100/75">Nincs főszín</span>}
+                                  {c.hex && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">{c.hex}</span>}
                                 </div>
                                 <p className="mt-0.5 text-[11px] text-white/50">HU: {c.name_hu || "-"} • EN: {c.name_en || "-"} • DE: {c.name_de || "-"}</p>
                                 {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
@@ -19920,7 +19920,7 @@ export default function AllInWarehouse() {
                           </div>
                         );
                       })}
-                      {!colorTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
+                      {!colorTypes.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
                     </div>
                   </section>
                 </div>
@@ -19972,18 +19972,18 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Márka színkód lista</p>
                         <p className="text-[11px] text-white/50">Importnál például Under Armour + 100 → fekete/negru.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandColorCodes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandColorCodes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {brandColorCodes.map((row, index) => (
                         <div key={row.id} className={taxonomyRow}>
                           <div className="flex min-w-0 items-start gap-3">
-                            <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={row.color_hex ? { backgroundColor: row.color_hex } : undefined} />
+                            <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={row.color_hex ? { backgroundColor: row.color_hex } : undefined} />
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="text-sm text-white">{row.brand_name || row.brand_code || "-"}</p>
                                 <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">{row.color_code}</span>
-                                <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.color_name_hu || row.color_name_ro || row.color_type_code || "-"}</span>
+                                <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.color_name_hu || row.color_name_ro || row.color_type_code || "-"}</span>
                               </div>
                               <p className="mt-0.5 text-[11px] text-white/50">RO: {row.color_name_ro || "-"} • HU: {row.color_name_hu || "-"} • HEX: {row.color_hex || "-"}</p>
                               {row.notes && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{row.notes}</p>}
@@ -19998,7 +19998,7 @@ export default function AllInWarehouse() {
                         </div>
                       ))}
                       {!brandColorCodes.length && (
-                        <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/60">
+                        <div className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/60">
                           Nincs aktív márka színkód. Ha az SQL már lefutott, akkor az aif.js backend még nincs frissen deployolva.
                         </div>
                       )}
@@ -20039,7 +20039,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Standard méret lista</p>
                         <p className="text-[11px] text-white/50">Természetes sorrendben jelenik meg. Ami termékhez van társítva, azt a rendszer nem engedi törölni.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{sizeTypes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{sizeTypes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {sizeTypes.map((row, index) => (
@@ -20058,7 +20058,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!sizeTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív standard méret.</p>}
+                      {!sizeTypes.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív standard méret.</p>}
                     </div>
                   </section>
                 </div>
@@ -20110,7 +20110,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Márkaméret lista</p>
                         <p className="text-[11px] text-white/50">Importnál például Adidas + US 8.5 → EU 42.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandSizeCodes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandSizeCodes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {brandSizeCodes.map((row, index) => (
@@ -20119,7 +20119,7 @@ export default function AllInWarehouse() {
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{row.brand_name || row.brand_code || "-"}</p>
                               <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">{row.size_code}</span>
-                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.size_name || row.size_type_code || "-"}</span>
+                              <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.size_name || row.size_type_code || "-"}</span>
                             </div>
                             {row.notes && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{row.notes}</p>}
                           </div>
@@ -20131,7 +20131,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!brandSizeCodes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív márkaméret.</p>}
+                      {!brandSizeCodes.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív márkaméret.</p>}
                     </div>
                   </section>
                 </div>
@@ -20168,7 +20168,7 @@ export default function AllInWarehouse() {
                         <p className="text-sm text-white/88">Összetevő lista</p>
                         <p className="text-[11px] text-white/50">Import nevek hivatalos román összetevőkre fordítva.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{materialTypes.length} elem</span>
+                      <span className="rounded-full border border-white/[0.08] bg-black/10 px-2 py-1 text-[11px] text-white/55">{materialTypes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {materialTypes.map((m, index) => (
@@ -20176,7 +20176,7 @@ export default function AllInWarehouse() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{m.name_hu || m.name_ro}</p>
-                              {m.sort_order !== undefined && m.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{m.sort_order}</span>}
+                              {m.sort_order !== undefined && m.sort_order !== null && <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{m.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/50">RO: {m.name_ro || "-"} • HU: {m.name_hu || "-"} • EN: {m.name_en || "-"} • DE: {m.name_de || "-"}</p>
                             {!!m.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {m.aliases.join(", ")}</p>}
@@ -20189,7 +20189,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!materialTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív összetevő.</p>}
+                      {!materialTypes.length && <p className="rounded-xl border border-white/[0.08] bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív összetevő.</p>}
                     </div>
                   </section>
                 </div>
@@ -20202,7 +20202,7 @@ export default function AllInWarehouse() {
 
       {deleteTarget && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/64 px-4 py-6 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] p-4 shadow-2xl">
+          <div className="w-full max-w-md rounded-2xl border border-white/[0.14] bg-[#4b5362] p-4 shadow-2xl">
             <div className="flex items-start gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-300/30 bg-[#cf1028] text-white shadow-[0_0_22px_rgba(207,16,40,0.35)]">
                 <Trash2 size={18} />
@@ -20216,7 +20216,7 @@ export default function AllInWarehouse() {
                     : "A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek."}</p>
               </div>
             </div>
-            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white">
+            <div className="mt-3 rounded-xl border border-white/[0.10] bg-[#354153] px-3 py-2 text-sm text-white">
               {deleteTarget.name}
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -20261,7 +20261,7 @@ export default function AllInWarehouse() {
       {detail && (
         <div className={modalWrap}>
           <div className={modal}>
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b] px-4 py-3">
               <div>
                 <p className="text-sm text-white/65">Termékadatlap</p>
                 <h2 className="text-xl">{detail.item?.title_ro || "Termék"}</h2>
@@ -20296,7 +20296,7 @@ export default function AllInWarehouse() {
               )}
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
-                <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
+                <div className="space-y-3 rounded-xl border border-white/[0.10] bg-white/[0.05] p-3">
                   {galleryRecovery.length > 0 && (
                     <div className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-2.5 text-xs text-amber-50">
                       <p>{galleryRecovery.length} korábban feltöltött képet nem sikerült tartósan visszaigazolni. Az URL-ek ebben a böngészőfülben megmaradtak.</p>
@@ -20306,7 +20306,7 @@ export default function AllInWarehouse() {
                     </div>
                   )}
                   <WarehouseGalleryEditor images={edit.images} title={edit.titleRo} onChange={setEditedPhotoGallery} uploading={saving} statusText={galleryNotice} onUpload={(files)=>uploadGalleryFiles(files,"edit")} />
-                  <div className="space-y-2.5 rounded-2xl border border-white/14 bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+                  <div className="space-y-2.5 rounded-2xl border border-white/[0.12] bg-[#354153]/78 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="rounded-xl border border-[#7bd7d4]/28 bg-[#203f49]/82 px-3 py-2.5">
                       <div className="text-[9px] uppercase tracking-[0.14em] text-[#bfe9e6]/72">Aktuális termékkód</div>
                       <div className="mt-1 break-words font-mono text-[13px] leading-snug text-[#e8fffd]" title={edit.supplierProductCode || ""}>
@@ -20343,8 +20343,8 @@ export default function AllInWarehouse() {
                       );
                     })()}
 
-                    <div className="overflow-hidden rounded-xl border border-white/12 bg-black/10">
-                      <div className="border-b border-white/10 bg-white/[0.035] px-3 py-2 text-[9px] uppercase tracking-[0.14em] text-white/42">Technikai azonosítók</div>
+                    <div className="overflow-hidden rounded-xl border border-white/[0.10] bg-black/10">
+                      <div className="border-b border-white/[0.08] bg-white/[0.035] px-3 py-2 text-[9px] uppercase tracking-[0.14em] text-white/42">Technikai azonosítók</div>
                       {[
                         { label: "Belső azonosító", value: detail.item?.internal_sku || "-", mono: true },
                         { label: "Vonalkód / SKU", value: edit.barcode || "nincs megadva", mono: true },
@@ -20364,12 +20364,12 @@ export default function AllInWarehouse() {
                 </div>
 
                 <div className="grid gap-4">
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                  <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Edit3 size={16} /> Alapadatok</div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={label}>Terméknév románul<input className={input} value={edit.titleRo} onChange={(e) => setEdit((x) => ({ ...x, titleRo: e.target.value }))} /></label>
                       <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
-                      <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
+                      <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/[0.14] bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/[0.45]" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <WarehouseSingleSelect labelText="Márka" value={edit.brandCode} emptyValue="" emptyText="Nincs beállítva" options={brands.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))} onChange={(next) => setEdit((x) => ({ ...x, brandCode: next }))} />
                       <WarehouseSingleSelect labelText="Főkategória" value={edit.categoryCode} emptyValue="" emptyText="Nincs beállítva" options={categorySelectOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))} onChange={(next) => setEdit((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))} />
                       <WarehouseSingleSelect labelText="Alkategória / terméktípus" value={edit.subCategoryCode} emptyValue="" emptyText="Nincs beállítva" noOptionsText="Nincs alkategória." options={editSubCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))} onChange={(next) => { const found = subCategories.find((c) => categoryValueMatches(c, next)); setEdit((x) => ({ ...x, subCategoryCode: next, productType: x.productType || (found ? categoryLabel(found) : "") })); }} />
@@ -20389,7 +20389,7 @@ export default function AllInWarehouse() {
                     </div>
                   </section>
 
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                  <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <label className={label}>Termékkód<input className={input} value={edit.supplierProductCode} onChange={(e) => setEdit((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 1329582-402" /></label>
@@ -20442,7 +20442,7 @@ export default function AllInWarehouse() {
                         <div className="relative">
                           {detailBrandColorMapping ? (
                             <span
-                              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/35 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
+                              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/[0.18] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
                               style={detailMappedColorHex ? { backgroundColor: detailMappedColorHex } : undefined}
                             />
                           ) : null}
@@ -20532,14 +20532,14 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="grid gap-4 lg:grid-cols-3">
-                <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                   <p className="mb-3 text-sm text-white/80">Készlet célhelyenként</p>
                   <div className="space-y-2 text-sm">
                     {(detail.stock || []).map((s) => <div key={s.location_id} className="flex justify-between gap-3 rounded-lg bg-black/10 px-3 py-2"><span>{s.location_name}</span><span>{n(s.qty)} / elérhető {n(s.available_qty)}</span></div>)}
                     {!detail.stock?.length && <p className="text-white/55">Nincs készletadat.</p>}
                   </div>
                 </section>
-                <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                   <p className="mb-3 whitespace-nowrap text-sm text-white/80">Beszállítói kapcsolat</p>
                   <div className="space-y-3 text-sm">
                     <WarehouseSingleSelect
@@ -20554,7 +20554,7 @@ export default function AllInWarehouse() {
                         .map((row) => ({ value: String(row.id), label: String(row.name || row.code || row.id) }))}
                       onChange={(next) => setEdit((x) => ({ ...x, supplierId: next }))}
                     />
-                    <div className="grid gap-2 rounded-xl border border-white/10 bg-black/10 p-3 text-xs text-white/65">
+                    <div className="grid gap-2 rounded-xl border border-white/[0.08] bg-black/10 p-3 text-xs text-white/65">
                       <div className="flex justify-between gap-3"><span>Termékkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.supplierProductCode || "-"}</strong></div>
                       <div className="flex justify-between gap-3"><span>Színkód</span><strong className="max-w-[60%] truncate text-right text-white">{edit.colorCode || detail.item?.supplier_color_code || "-"}</strong></div>
                       <div className="flex justify-between gap-3"><span>Méret</span><strong className="max-w-[60%] truncate text-right text-white">{edit.size || detail.item?.supplier_size || "-"}</strong></div>
@@ -20566,7 +20566,7 @@ export default function AllInWarehouse() {
                     ) : null}
                   </div>
                 </section>
-                <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                   <p className="mb-3 text-sm text-white/80">Hiányzó adatok</p>
                   <div className="flex flex-wrap gap-2">
                     {missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).map((x) => <span key={x} className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-100">{x}</span>)}
@@ -20575,7 +20575,7 @@ export default function AllInWarehouse() {
                 </section>
               </div>
 
-              <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap items-center justify-end gap-2 border-t border-white/16 bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
+              <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap items-center justify-end gap-2 border-t border-white/[0.12] bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
                 {galleryNotice ? (
                   <span className={`mr-auto max-w-full truncate text-[11px] md:max-w-[54%] ${galleryNotice.startsWith("HIBA") ? "text-rose-200" : "text-[#bbf9ed]"}`} title={galleryNotice} role="status">
                     {galleryNotice}
@@ -20607,7 +20607,7 @@ export default function AllInWarehouse() {
           }}
         >
           <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-rose-200/25 bg-[#4b5362] text-white shadow-[0_28px_90px_rgba(0,0,0,.62)]">
-            <div className="flex items-start gap-3 border-b border-white/12 bg-[#3d4656] px-5 py-4">
+            <div className="flex items-start gap-3 border-b border-white/[0.10] bg-[#3d4656] px-5 py-4">
               <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/30 bg-rose-500/16 text-rose-100">
                 <AlertTriangle size={21} />
               </span>
@@ -20635,7 +20635,7 @@ export default function AllInWarehouse() {
                 </>
               )}
             </div>
-            <div className="flex justify-end border-t border-white/12 bg-[#3d4656] px-5 py-3">
+            <div className="flex justify-end border-t border-white/[0.10] bg-[#3d4656] px-5 py-3">
               <button className={btn} type="button" onClick={() => setActivationBlockMissing(null)}><X size={15} /> Bezárás</button>
             </div>
           </div>
@@ -20662,7 +20662,7 @@ export default function AllInWarehouse() {
           }}
         >
           <div className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[24px] border border-rose-200/30 bg-[#414b5b] shadow-[0_30px_90px_rgba(2,6,23,.58)]">
-            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4c1d28] via-[#3d2b38] to-[#344154] px-4 py-3.5">
+            <div className="flex items-start justify-between gap-3 border-b border-white/[0.10] bg-gradient-to-r from-[#4c1d28] via-[#3d2b38] to-[#344154] px-4 py-3.5">
               <div className="flex min-w-0 items-start gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/35 bg-[#d31126] text-white">
                   <AlertTriangle size={20} />
@@ -20681,7 +20681,7 @@ export default function AllInWarehouse() {
             <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3.5">
               {duplicateSkuGroups.map((group) => (
                 <section key={group.sku} className="overflow-hidden rounded-2xl border border-rose-200/22 bg-[#354052]">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#3a3140] px-3 py-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-[#3a3140] px-3 py-2.5">
                     <div>
                       <p className="text-[9px] uppercase tracking-[0.12em] text-rose-100/55">Ütköző SKU</p>
                       <p className="mt-0.5 font-mono text-sm text-white">{group.sku}</p>
@@ -20720,7 +20720,7 @@ export default function AllInWarehouse() {
               ))}
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/48">
+            <div className="flex items-center justify-between gap-3 border-t border-white/[0.10] bg-[#303a4c] px-4 py-3 text-[11px] text-white/48">
               <span>ESC vagy Bezárás • minden ütköző SKU külön csoportban</span>
               <button className={btnSoft} type="button" onClick={() => setDuplicateSkuOpen(false)}><X size={14} /> Bezárás</button>
             </div>
@@ -20730,8 +20730,8 @@ export default function AllInWarehouse() {
 
       {barcodeScanner && (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/65 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
-            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b] px-4 py-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Kamera / vonalkód</p>
                 <h2 className="mt-1 flex items-center gap-2 text-lg"><Barcode size={18} /> {barcodeScanner.title}</h2>
@@ -20746,12 +20746,12 @@ export default function AllInWarehouse() {
                 <div className="pointer-events-none absolute left-10 right-10 top-1/2 border-t border-[#7bd7d4]/90 shadow-[0_0_14px_rgba(123,215,212,0.9)]" />
               </div>
 
-              <div className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2 text-sm text-white/75">
+              <div className="rounded-xl border border-white/[0.10] bg-[#3f4959] px-3 py-2 text-sm text-white/75">
                 {barcodeScannerStatus || "Kamera előkészítése..."}
               </div>
 
               <form
-                className="grid gap-2 rounded-xl border border-white/12 bg-white/[0.05] p-3 sm:grid-cols-[1fr,auto]"
+                className="grid gap-2 rounded-xl border border-white/[0.10] bg-white/[0.05] p-3 sm:grid-cols-[1fr,auto]"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void applyScannedBarcode(barcodeScannerManualValue);
@@ -20777,7 +20777,7 @@ export default function AllInWarehouse() {
       )}
 
       {(busy || inventoryLoading) && (
-        <div className="fixed bottom-4 right-4 z-[90] rounded-xl border border-white/15 bg-[#404a5b] px-4 py-3 text-sm text-white/80 shadow-xl">
+        <div className="fixed bottom-4 right-4 z-[90] rounded-xl border border-white/[0.12] bg-[#404a5b] px-4 py-3 text-sm text-white/80 shadow-xl">
           <RefreshCw className="mr-2 inline animate-spin" size={15} />
           {busy
             ? "A raktár első adatai betöltődnek..."
