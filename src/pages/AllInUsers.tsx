@@ -394,6 +394,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const iconBtn =
     "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-45";
 
+  const [createCodeOpen, setCreateCodeOpen] = useState(false);
   const [shops, setShops] = useState<Shop[]>([]);
   const [shopsErr, setShopsErr] = useState("");
   const [shopId, setShopId] = useState("csikszereda");
@@ -1024,36 +1025,15 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <UserPlus className="h-4 w-4" /> Új belépési kód létrehozása
               </div>
             </div>
-            <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/55">
-              {shopLabel}
-            </span>
+            <button type="button" className={btnSoft} aria-expanded={createCodeOpen} aria-controls="allin-create-code" onClick={() => setCreateCodeOpen(open => !open)}>
+              <ChevronDown className={`h-4 w-4 transition-transform ${createCodeOpen ? "rotate-180" : ""}`} />
+              {createCodeOpen ? "Összecsukás" : "Új kód létrehozása"}
+            </button>
           </div>
 
-          <div className="space-y-3 p-3 sm:p-4">
-            <div className="grid min-w-0 grid-cols-2 gap-2.5 lg:grid-cols-[minmax(220px,0.9fr)_minmax(180px,0.65fr)_minmax(240px,1fr)_auto] lg:items-end">
-              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Helyszín
-                <AllInSelect
-                  value={shopId}
-                  options={shops.map((shop) => ({ value: shop.id, label: shop.name }))}
-                  onChange={setShopId}
-                  ariaLabel="Helyszín"
-                  placeholder="Válassz helyszínt"
-                />
-              </label>
-
-              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Lista
-                <AllInSelect
-                  value={status}
-                  options={[
-                    { value: "active", label: "Aktív" },
-                    { value: "inactive", label: "Inaktív" },
-                    { value: "all", label: "Összes" },
-                  ]}
-                  onChange={(value) => setStatus(value as "active" | "inactive" | "all")}
-                  ariaLabel="Lista állapota"
-                />
-              </label>
-
+          {createCodeOpen && <div id="allin-create-code" className="space-y-3 p-3 sm:p-4">
+            <p className="text-xs text-white/60">Helyszín: {shopLabel}</p>
+            <div className="grid min-w-0 grid-cols-2 gap-2.5 lg:grid-cols-[minmax(240px,1fr)_auto] lg:items-end">
               <label className="col-span-2 grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46 lg:col-span-1">Dolgozó neve
                 <input
                   value={name}
@@ -1095,7 +1075,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <pre className="overflow-x-auto whitespace-pre-wrap break-all px-4 py-4 font-mono text-base text-[#d7fffd]">{outText}</pre>
               </div>
             ) : null}
-          </div>
+          </div>}
         </section>
 
         <section className={panel}>
@@ -1118,6 +1098,32 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
           </div>
 
           <div className="p-3 sm:p-4">
+            <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Helyszín
+                <AllInSelect
+                  value={shopId}
+                  options={shops.map((shop) => ({ value: shop.id, label: shop.name }))}
+                  onChange={setShopId}
+                  ariaLabel="Helyszín"
+                  placeholder="Válassz helyszínt"
+                />
+              </label>
+
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.09em] text-white/46">Lista
+                <AllInSelect
+                  value={status}
+                  options={[
+                    { value: "active", label: "Aktív" },
+                    { value: "inactive", label: "Inaktív" },
+                    { value: "all", label: "Összes" },
+                  ]}
+                  onChange={(value) => setStatus(value as "active" | "inactive" | "all")}
+                  ariaLabel="Lista állapota"
+                />
+              </label>
+
+            </div>
+
             {listBusy && !items.length ? (
               <div className="flex min-h-48 items-center justify-center text-sm text-white/48">
                 <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Kódok betöltése…
