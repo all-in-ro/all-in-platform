@@ -2143,6 +2143,36 @@ export default function AllInShopOperations({
   const [stockQuery, setStockQuery] = useState("");
   const [stockData, setStockData] = useState<AifShopStockOverviewResponse | null>(null);
   const [galleryProduct, setGalleryProduct] = useState<AifShopSaleCatalogItem | null>(null);
+  const [imagePermission, setImagePermission] = useState<{actor:string; location:string; allowed:boolean} | null>(null);
+  const canManageImages = imagePermission?.actor === actor && imagePermission?.location === locationCode && imagePermission.allowed;
+  useEffect(() => {
+    setImagePermission(null);
+    if (!open) return;
+    let cancelled = false;
+    let inFlight = false;
+    let controller: AbortController | null = null;
+    const refresh = async () => {
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      controller = new AbortController();
+      const timer = window.setTimeout(() => controller?.abort(), 15000);
+      try {
+        const result = await sellerGalleryFetch<{canManageImages:boolean}>("/api/aif/shop-modules/image-permission", {signal:controller.signal});
+        if (!cancelled) {
+          setImagePermission({actor,location:locationCode,allowed:result.canManageImages === true});
+          if (result.canManageImages !== true) setGalleryProduct(null);
+        }
+      } catch {
+        if (!cancelled) { setImagePermission(null); setGalleryProduct(null); }
+      } finally { window.clearTimeout(timer); inFlight = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30000);
+    const visible = () => { if (document.visibilityState === "visible") void refresh(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { cancelled = true; controller?.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [open, actor, locationCode]);
+
   const [stockLoading, setStockLoading] = useState(false);
   const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
   const [productFilters, setProductFilters] = useState<ProductFilters>(() => emptyProductFilters());
@@ -3541,7 +3571,7 @@ export default function AllInShopOperations({
                         <h3 className="truncate text-[15px] text-white" title={item.title}>{item.title}</h3>
                         <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
                         <p className="mt-1.5 truncate text-[10px] text-white/47">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p>
-                        {!browsingOtherLocation ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
+                        {!browsingOtherLocation && canManageImages ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
                       </div>
                       <div className="col-span-2 flex justify-end sm:col-span-1">
                         <SellerProductPriceStock item={item} />
@@ -3635,7 +3665,7 @@ export default function AllInShopOperations({
                         <h3 className="truncate text-[15px] text-white" title={item.title}>{item.title}</h3>
                         <p className="mt-1 truncate text-[11px] text-white/52">{[item.brandName, item.subcategoryName || item.categoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p>
                         <p className="mt-1.5 truncate text-[10px] text-white/47">{productCode(item)}{item.barcode ? ` • ${item.barcode}` : ""}</p>
-                        {!browsingOtherLocation ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
+                        {!browsingOtherLocation && canManageImages ? <SellerGalleryButton onClick={() => setGalleryProduct(item)} /> : null}
                       </div>
                       <div className="col-span-2 flex justify-end sm:col-span-1">
                         <SellerProductPriceStock item={item} showPhysical />
@@ -4722,7 +4752,7 @@ export default function AllInShopOperations({
           ) : null}
         </div>
 
-        {galleryProduct ? <SellerProductGalleryModal
+        {galleryProduct && canManageImages ? <SellerProductGalleryModal
           key={galleryProduct.variantId}
           item={galleryProduct}
           onClose={() => setGalleryProduct(null)}

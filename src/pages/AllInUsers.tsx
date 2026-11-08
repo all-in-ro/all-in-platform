@@ -59,6 +59,15 @@ function ModuleChecklist({value,onChange,disabled = false}: {
   </div>;
 }
 
+function ImagePermissionCheckbox({value,onChange,disabled = false}: {
+  value:boolean; onChange:(value:boolean)=>void; disabled?:boolean;
+}) {
+  return <label className="flex items-start gap-3 rounded-xl border border-[#7bd7d4]/30 bg-[#263548] p-3 text-white">
+    <input type="checkbox" checked={value} disabled={disabled} onChange={event=>onChange(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-[#2a8d8b]" />
+    <span><span className="block text-sm">Termékképek kezelése</span><span className="mt-1 block text-xs text-white/60">Feltöltés, csere, törlés, sorrend és fő kép módosítása. Csak ennek a dolgozónak engedélyezed; alapból tiltott.</span></span>
+  </label>;
+}
+
 type Shop = { id: string; name: string };
 
 type CodeItem = {
@@ -404,6 +413,9 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [newUserCanManageImages, setNewUserCanManageImages] = useState(false);
+  const userPermissionRequest = useRef(0);
+  const [userCanManageImages, setUserCanManageImages] = useState(false);
   const [newUserModules, setNewUserModules] = useState<ModuleKey[]>(() => initialModules("csikszereda"));
   const [newUserModuleBusy, setNewUserModuleBusy] = useState(false);
   const [userModuleItem, setUserModuleItem] = useState<CodeItem | null>(null);
@@ -458,7 +470,9 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   }, [apiBase, shopId]);
 
   async function openUserModuleEditor(item: CodeItem) {
+    const request = ++userPermissionRequest.current;
     setUserModuleItem(item);
+    setUserCanManageImages(false);
     setUserModuleBusy(true);
     setUserModuleError("");
     setUserModuleSelection(initialModules(item.shopId));
@@ -466,9 +480,12 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       const response=await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(item.id)}`, {credentials:"include",cache:"no-store"});
       const data=await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (request !== userPermissionRequest.current) return;
+      if (typeof data.canManageImages !== "boolean") throw new Error("A képszerkesztési engedélyhez előbb telepítsd a frissített backendet.");
       setUserModuleSelection(parsedModules(data.modules,item.shopId));
-    } catch(e) {setUserModuleError(e instanceof Error ? e.message : "Nem tölthető be.");}
-    finally {setUserModuleBusy(false);}
+      setUserCanManageImages(data.canManageImages === true);
+    } catch(e) {if (request === userPermissionRequest.current) setUserModuleError(e instanceof Error ? e.message : "Nem tölthető be.");}
+    finally {if (request === userPermissionRequest.current) setUserModuleBusy(false);}
   }
 
   async function saveUserModules() {
@@ -476,11 +493,11 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     setUserModuleSaving(true); setUserModuleError("");
     try {
       const response=await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(userModuleItem.id)}`, {
-        method:"PUT",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify({modules:userModuleSelection}),
+        method:"PUT",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify({modules:userModuleSelection,canManageImages:userCanManageImages}),
       });
       const data=await response.json().catch(()=>({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setPageNotice(`${userModuleItem.name || "A dolgozó"} kártyái elmentve.`);
+      setPageNotice(`${userModuleItem.name || "A dolgozó"} jogosultságai elmentve.`);
       setUserModuleItem(null);
     }catch(e){setUserModuleError(e instanceof Error?e.message:"A mentés nem sikerült.");}
     finally{setUserModuleSaving(false);}
@@ -589,20 +606,21 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       const text = await response.text().catch(() => "");
       if (!response.ok) throw new Error(text || `HTTP ${response.status}`);
 
+      setNewUserCanManageImages(false);
       setOutText(text);
       setName("");
       const newCodes = await fetchList();
       const generatedCode = text.match(/Kód:\s*([^\s]+)/i)?.[1] || "";
       const created = newCodes.find(item => item.shopId === shopId && item.code === generatedCode);
       if (!created) {
-        setErr("A belépési kód elkészült, de nem sikerült megtalálni az új kódot a modulbeállítás mentéséhez. A Modulok gombbal pótolható.");
+        setErr("A belépési kód elkészült, de nem sikerült megtalálni az új kódot a modulbeállítás mentéséhez. A Jogosultságok gombbal pótolható.");
       } else {
         const configResponse = await fetch(`${apiBase}/aif/shop-modules/user/${encodeURIComponent(created.id)}`, {
           method: "PUT", credentials: "include", headers: {"content-type":"application/json"},
-          body: JSON.stringify({ modules: newUserModules }),
+          body: JSON.stringify({ modules: newUserModules, canManageImages: newUserCanManageImages }),
         });
         const data = await configResponse.json().catch(() => ({}));
-        if (!configResponse.ok) throw new Error(`A belépőkód elkészült, de a modulbeállítás mentése nem sikerült: ${data.error || `HTTP ${configResponse.status}`}. A Modulok gombbal újrapróbálható.`);
+        if (!configResponse.ok) throw new Error(`A belépőkód elkészült, de a modulbeállítás mentése nem sikerült: ${data.error || `HTTP ${configResponse.status}`}. A Jogosultságok gombbal újrapróbálható.`);
         setPageNotice("A belépőkód és az engedélyezett kártyák elmentve.");
       }
     } catch (error: any) {
@@ -1055,6 +1073,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="flex gap-2"><button type="button" className={btnSoft} onClick={()=>setNewUserModules([...allModuleKeys])}>Mind</button><button type="button" className={btnSoft} onClick={()=>setNewUserModules([])}>Egyik sem</button></div>
               </div>
               <ModuleChecklist value={newUserModules} onChange={setNewUserModules} disabled={newUserModuleBusy || busy}/>
+              <div className="mt-3"><ImagePermissionCheckbox value={newUserCanManageImages} onChange={setNewUserCanManageImages} disabled={newUserModuleBusy || busy}/></div>
             </div>
 
             {err ? (
@@ -1171,7 +1190,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                             <Power className="h-4 w-4" />
                             {inactive ? "Aktiválás" : "Inaktiválás"}
                           </button>
-                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-white/18 bg-[#354153] px-2 text-[10px] text-white"><SlidersHorizontal className="h-3.5 w-3.5"/> Modulok</button>
+                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-white/18 bg-[#354153] px-2 text-[10px] text-white"><SlidersHorizontal className="h-3.5 w-3.5"/> Jogosultságok</button>
                           <button
                             type="button"
                             className="inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2 text-[10px] text-white transition hover:bg-[#319c99] disabled:opacity-45"
@@ -1233,7 +1252,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                         </div>
                         <div className="text-xs text-white/52">{fmt(item.createdAt)}</div>
                         <div className="flex items-center justify-end gap-2">
-                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-xs text-white hover:bg-[#3e4d63]"><SlidersHorizontal className="h-4 w-4"/> Modulok</button>
+                          <button type="button" onClick={() => void openUserModuleEditor(item)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-xs text-white hover:bg-[#3e4d63]"><SlidersHorizontal className="h-4 w-4"/> Jogosultságok</button>
                           <button
                             type="button"
                             className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2.5 text-xs text-white transition hover:bg-[#319c99] disabled:opacity-45"
@@ -1343,7 +1362,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
         <div className="fixed inset-0 z-[185] grid place-items-center bg-[#0f172a]/85 p-3 backdrop-blur-md" onMouseDown={event=>{if(event.currentTarget===event.target && !userModuleSaving)setUserModuleItem(null);}}>
           <section role="dialog" aria-modal="true" className="w-full max-w-[900px] overflow-hidden rounded-[26px] border border-[#9be9e5]/36 bg-[#303a4c] shadow-2xl">
             <header className="flex items-center justify-between gap-3 border-b border-white/13 bg-[#285c60] p-4"><div><p className="text-[10px] uppercase tracking-[.12em] text-white/53">Belépőkódhoz tartozó jogosultságok</p><h2 className="mt-1 text-lg">{userModuleItem.name || "Dolgozó"} • {shopName(userModuleItem.shopId)}</h2></div><button className={iconBtn} onClick={()=>setUserModuleItem(null)} disabled={userModuleSaving} aria-label="Bezárás"><X size={17}/></button></header>
-            <div className="space-y-3 p-4"><p className="text-xs text-white/55">A kikapcsolt modul kártyája szürke és nem nyitható meg. A többi eladót nem érinti.</p><ModuleChecklist value={userModuleSelection} onChange={setUserModuleSelection} disabled={userModuleBusy || userModuleSaving}/>{userModuleBusy?<p className="text-xs text-white/53">Beállítások betöltése...</p>:null}{userModuleError?<p className="rounded-xl border border-red-300/40 bg-red-600/14 p-3 text-xs text-red-100">{userModuleError}</p>:null}</div>
+            <div className="space-y-3 p-4"><p className="text-xs text-white/55">A kikapcsolt modul kártyája szürke és nem nyitható meg. A többi eladót nem érinti.</p><ModuleChecklist value={userModuleSelection} onChange={setUserModuleSelection} disabled={userModuleBusy || userModuleSaving}/><ImagePermissionCheckbox value={userCanManageImages} onChange={setUserCanManageImages} disabled={userModuleBusy || userModuleSaving || Boolean(userModuleError)}/>{userModuleBusy?<p className="text-xs text-white/53">Beállítások betöltése...</p>:null}{userModuleError?<p className="rounded-xl border border-red-300/40 bg-red-600/14 p-3 text-xs text-red-100">{userModuleError}</p>:null}</div>
             <footer className="flex justify-end gap-2 border-t border-white/12 p-4"><button type="button" className={btnSoft} onClick={()=>setUserModuleItem(null)} disabled={userModuleSaving}>Mégse</button><button type="button" className={btnPrimary} disabled={userModuleBusy || userModuleSaving || Boolean(userModuleError)} onClick={()=>void saveUserModules()}>{userModuleSaving?"Mentés...":"Mentés"}</button></footer>
           </section>
         </div>
