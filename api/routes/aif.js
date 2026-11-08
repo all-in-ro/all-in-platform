@@ -14379,6 +14379,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           : Array.isArray(body.stock)
             ? body.stock
             : [];
+    const quantityInputs = stockRowsInput.length
+      ? stockRowsInput.map(row => row?.qty ?? row?.quantity ?? row?.count ?? 0)
+      : [src.qty ?? body.qty ?? body.quantity ?? body.stockQty ?? body.stock_qty ?? 0];
+    if (quantityInputs.some(value => {
+      const qty = Number(value);
+      return !Number.isSafeInteger(qty) || qty < 0;
+    })) return res.status(400).json({ error: "A kezdőkészlet csak nulla vagy pozitív egész szám lehet." });
     const directQty = toInt(src.qty ?? body.qty ?? body.quantity ?? body.stockQty ?? body.stock_qty) || 0;
     const locationInput = body.targetLocationId || body.target_location_id || body.locationId || body.location_id || body.locationCode || body.location || src.targetLocationId || src.locationId;
     const supplierInput = body.supplierId || body.supplier_id || body.supplierCode || body.supplier || src.supplierId || src.supplierCode;
@@ -14391,7 +14398,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const qty = toInt(row?.qty ?? row?.quantity ?? row?.count) || 0;
       return sum + Math.max(0, Math.floor(qty));
     }, 0);
-    if (requestedQty <= 0) return res.status(400).json({ error: "Legalább egy célhelyhez pozitív készletmennyiséget kell megadni." });
 
     const client = await pool.connect();
     try {
@@ -14401,16 +14407,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureAifSizeTables(client);
 
       let fallbackLocation = null;
-      if (locationInput) fallbackLocation = await findByIdOrCode(client, "aif_locations", locationInput);
+      if (requestedQty > 0 && locationInput) fallbackLocation = await findByIdOrCode(client, "aif_locations", locationInput);
       if (fallbackLocation && fallbackLocation.is_active === false) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "A kiválasztott célhely inaktív." });
       }
-      if (!fallbackLocation) {
+      if (requestedQty > 0 && !fallbackLocation) {
         const defaultLocationId = await getDefaultLocationId(client);
         if (defaultLocationId) fallbackLocation = await findByIdOrCode(client, "aif_locations", defaultLocationId);
       }
-      if (!fallbackLocation) {
+      if (requestedQty > 0 && !fallbackLocation) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Cél hely kiválasztása kötelező." });
       }
@@ -14432,7 +14438,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         preparedStockByLocation.set(key, current);
       }
 
-      if (!preparedStockByLocation.size) {
+      if (requestedQty > 0 && !preparedStockByLocation.size) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Nincs pozitív készletmennyiség egyik célhelyhez sem." });
       }
