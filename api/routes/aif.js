@@ -2390,7 +2390,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }))
       .filter((row) => row.qty > 0);
     const affectedQty = locationBreakdown.reduce((sum, row) => sum + row.qty, 0);
-    if (affectedQty <= 0) return null;
+    if (affectedQty <= 0 && args.includeZeroStock !== true) return null;
 
     const sourceType = text(args.sourceType || args.source_type || 'manual_edit') || 'manual_edit';
     const sourceId = text(args.sourceId || args.source_id) || null;
@@ -17645,6 +17645,100 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } finally {
       client.release();
     }
+  });
+
+  // Manual repricing uses the same document and movement audit as the product editor.
+  function parseManualPrice(value) {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    const str = String(value).trim().replace(',', '.');
+    if (!/^\d+(?:\.\d{1,2})?$/.test(str)) return null;
+    const result = Number(str);
+    return Number.isFinite(result) && result >= 0 && result <= 99999999.99 ? result : null;
+  }
+
+  router.post('/price-change-documents/manual-preview', requireAdminOrSecret, async (req, res) => {
+    const ids = Array.isArray(req.body?.variantIds) ? [...new Set(req.body.variantIds.map(String))] : [];
+    if (!ids.length || ids.length > 500 || ids.some(id => !isUuidText(id))) return res.status(400).json({ error: 'Jelölj ki 1–500 termékváltozatot.' });
+    try {
+      const result = await pool.query(`SELECT v.id AS variant_id, v.barcode, v.internal_sku,
+        v.size, v.color_name, v.sell_price, m.title_ro,
+        COALESCE((SELECT sum(GREATEST(s.qty,0)) FROM aif_stock s WHERE s.variant_id=v.id),0) AS qty
+        FROM aif_product_variants v JOIN aif_product_models m ON m.id=v.model_id
+        WHERE v.id=ANY($1::uuid[]) ORDER BY m.title_ro, v.color_name, v.size, v.id`, [ids]);
+      if (result.rows.length !== ids.length) return res.status(409).json({ error: 'Egy kijelölt termék már nem található. Frissítsd a listát.' });
+      res.json({ items: result.rows });
+    } catch (e) { res.status(500).json({ error: e.message || 'Az árak nem tölthetők be.' }); }
+  });
+
+  router.post('/price-change-documents/manual', requireAdminOrSecret, async (req, res) => {
+    const items = req.body?.items;
+    if (!Array.isArray(items) || !items.length || items.length > 500) return res.status(400).json({ error: '1–500 árváltozás menthető egyszerre.' });
+    const seen = new Set();
+    const changes = [];
+    for (const row of items) {
+      const id = String(row?.variantId || '');
+      const oldPrice = parseManualPrice(row?.expectedSellPrice);
+      const newPrice = parseManualPrice(row?.newSellPrice);
+      if (!isUuidText(id) || seen.has(id) || oldPrice === null || newPrice === null || newPrice <= 0) return res.status(400).json({ error: 'Érvénytelen vagy ismétlődő termék, illetve hibás ár. Az új ár pozitív, legfeljebb két tizedesjegyű legyen.' });
+      seen.add(id);
+      changes.push({ id, oldPrice, newPrice });
+    }
+    let client;
+    try {
+      await ensureAifPriceChangeSchema();
+      await ensureAifRetailBookSchema();
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await client.query("SET LOCAL lock_timeout='5s'");
+      await client.query("SET LOCAL statement_timeout='60s'");
+      const ids = changes.map(row => row.id).sort();
+      const locked = await client.query('SELECT id,sell_price FROM aif_product_variants WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids]);
+      const current = new Map(locked.rows.map(row => [String(row.id), row]));
+      for (const row of changes) {
+        const actual = current.get(row.id);
+        if (!actual || actual.sell_price === null || Math.round(Number(actual.sell_price)*100) !== Math.round(row.oldPrice*100)) {
+          const error = new Error('Közben megváltozott egy termék ára. Töltsd újra az aktuális árakat; semmit nem mentettünk.');
+          error.status = 409; throw error;
+        }
+      }
+      const stock = await client.query('SELECT location_id,variant_id,qty FROM aif_stock WHERE variant_id=ANY($1::uuid[]) ORDER BY variant_id,location_id FOR UPDATE', [ids]);
+      const operation = (await client.query('SELECT gen_random_uuid()::text AS id')).rows[0].id;
+      const sourceId = `manual-bulk:${operation}`;
+      const updated = [];
+      let document = null;
+      for (const row of changes) {
+        if (Math.round(row.oldPrice*100) === Math.round(row.newPrice*100)) continue;
+        const stockRows = stock.rows.filter(s => String(s.variant_id) === row.id);
+        await client.query('UPDATE aif_product_variants SET sell_price=$2,updated_at=now() WHERE id=$1', [row.id,row.newPrice]);
+        const recorded = await recordAifPriceChangeDocumentLine(client, {
+          variantId: row.id, oldSellPrice: row.oldPrice, newSellPrice: row.newPrice,
+          sourceType: 'manual_edit', sourceId, actor: actorFrom(req), includeZeroStock: true,
+          note: 'Árváltoztatás a kijelölt termékeknél',
+          raw: { source: 'warehouse_bulk_price', changedFields: ['sell_price'] },
+        });
+        if (!recorded) throw new Error('Az árváltozási bizonylat nem jött létre. Semmit nem mentettünk.');
+        document = recorded.document;
+        const location = stockRows[0];
+        if (location) {
+          const logged = await insertStockMovementSafe(client, {
+            movementType: 'manual_adjustment', sourceType: 'price_change', sourcePrefix: 'price',
+            fallbackSourceType: 'manual_stock_edit', variantId: row.id,
+            locationId: location.location_id, qtyDelta: 0, qtyBefore: Number(location.qty), qtyAfter: Number(location.qty), actor: actorFrom(req),
+            raw: { reason: 'price_change', source: 'warehouse_bulk_price', documentId: document.id,
+              documentNumber: document.document_number, changedFields: ['sell_price'],
+              sellPriceBefore: row.oldPrice, sellPriceAfter: row.newPrice,
+              priceChanges: [{ key: 'sellPrice', label: 'Eladási ár', oldValue: row.oldPrice, newValue: row.newPrice }] },
+          });
+          if (!logged) throw new Error('Az árnapló mentése sikertelen. Semmit nem mentettünk.');
+        }
+        updated.push({ variant_id: row.id, sell_price: row.newPrice });
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true, items: updated, documentId: document?.id || null, documentNumber: document?.document_number || null });
+    } catch (e) {
+      if (client) { try { await client.query('ROLLBACK'); } catch {} }
+      res.status(e.status || 500).json({ error: e.message || 'Az árváltoztatás sikertelen.' });
+    } finally { client?.release(); }
   });
 
   router.get("/price-change-documents", requireAuthed, async (req, res) => {
