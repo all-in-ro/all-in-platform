@@ -44,6 +44,9 @@ import {
   apiAifAddItemsToOpenPurchaseOrders,
   apiAifGetPurchaseOrder,
   apiAifListPurchaseOrders,
+  apiAifPreviewManualPrices,
+  apiAifSaveManualPrices,
+  type AifManualPriceRow,
   apiAifListPriceChangeDocuments,
   apiAifGetPriceChangeDocument,
   type AifPriceChangeDocumentSummary,
@@ -7974,6 +7977,68 @@ export default function AllInWarehouse() {
   const [labelRelabelPriceError, setLabelRelabelPriceError] = useState("");
   const labelRelabelPriceSubmitLockRef = useRef(false);
   const labelRelabelPriceDialogRef = useRef<HTMLDivElement | null>(null);
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
+  const [bulkPriceBusy, setBulkPriceBusy] = useState(false);
+  const [bulkPriceLoading, setBulkPriceLoading] = useState(false);
+  const [bulkPriceRows, setBulkPriceRows] = useState<Array<AifManualPriceRow & { newPrice: string }>>([]);
+  const [bulkPriceError, setBulkPriceError] = useState("");
+  const [bulkPriceSaved, setBulkPriceSaved] = useState<{ id: string; number: string } | null>(null);
+  const bulkPriceIdsRef = useRef<string[]>([]);
+  const bulkPriceRequestRef = useRef(0);
+
+  async function loadBulkPriceRows(ids: string[]) {
+    const request = ++bulkPriceRequestRef.current;
+    setBulkPriceLoading(true);
+    setBulkPriceError("");
+    setBulkPriceRows([]);
+    try {
+      const result = await apiAifPreviewManualPrices(ids);
+      if (request !== bulkPriceRequestRef.current) return;
+      setBulkPriceRows(result.items.map(row => ({ ...row, newPrice: row.sell_price == null ? "" : Number(row.sell_price).toFixed(2) })));
+    } catch (error) {
+      if (request === bulkPriceRequestRef.current) setBulkPriceError(error instanceof Error ? error.message : "Az árak nem tölthetők be.");
+    } finally {
+      if (request === bulkPriceRequestRef.current) setBulkPriceLoading(false);
+    }
+  }
+
+  function openBulkPriceEditor(targets: InventoryItem[]) {
+    const ids = Array.from(new Set(targets.map(selectedVariantIdFromItem).filter(Boolean)));
+    if (!ids.length) return;
+    bulkPriceIdsRef.current = ids;
+    setSelectedActionTargets([]);
+    setBulkPriceSaved(null);
+    setBulkPriceOpen(true);
+    void loadBulkPriceRows(ids);
+  }
+
+  const bulkPriceChanged = bulkPriceRows.filter(row => row.newPrice.trim().replace(",", ".") !== "" && Number(row.newPrice.replace(",", ".")) !== Number(row.sell_price));
+
+  async function saveBulkPrices() {
+    if (bulkPriceBusy || bulkPriceLoading) return;
+    setBulkPriceError("");
+    const invalid = bulkPriceRows.find(row => row.sell_price == null || !/^\d+(?:[.,]\d{1,2})?$/.test(row.newPrice.trim()) || Number(row.newPrice.replace(",", ".")) <= 0);
+    if (invalid) { setBulkPriceError(`Ellenőrizd az árat: ${invalid.title_ro} / ${invalid.size || "–"}. Pozitív ár, legfeljebb két tizedesjeggyel.`); return; }
+    if (!bulkPriceChanged.length) return;
+    setBulkPriceBusy(true);
+    try {
+      const result = await apiAifSaveManualPrices(bulkPriceChanged.map(row => ({ variantId: row.variant_id, expectedSellPrice: row.sell_price!, newSellPrice: row.newPrice.trim() })));
+      const prices = new Map(result.items.map(row => [row.variant_id, row.sell_price]));
+      const patchRows = (rows: InventoryItem[]) => rows.map(row => prices.has(selectedVariantIdFromItem(row)) ? { ...row, sell_price: prices.get(selectedVariantIdFromItem(row))! } : row);
+      setItems(patchRows);
+      setCatalogSearchItems(patchRows);
+      setIncomingFocusItems(patchRows);
+      setInactiveProductsItems(patchRows);
+      setPersistedSelectedItems(patchRows);
+      warehouseBootstrapCache = null;
+      warehouseInactiveProductsCache = null;
+      setBulkPriceRows(rows => rows.map(row => prices.has(row.variant_id) ? { ...row, sell_price: prices.get(row.variant_id)!, newPrice: String(prices.get(row.variant_id)) } : row));
+      if (result.documentId) setBulkPriceSaved({ id: result.documentId, number: result.documentNumber || "Bizonylat" });
+    } catch (error) {
+      setBulkPriceError(error instanceof Error ? error.message : "Az árváltoztatás sikertelen.");
+    } finally { setBulkPriceBusy(false); }
+  }
+
   const [priceChangeArchiveOpen, setPriceChangeArchiveOpen] = useState(false);
   const [priceChangeArchiveBusy, setPriceChangeArchiveBusy] = useState(false);
   const [priceChangeArchiveSearch, setPriceChangeArchiveSearch] = useState("");
@@ -17359,6 +17424,34 @@ export default function AllInWarehouse() {
         </section>
       </div>
 
+      {bulkPriceOpen && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-labelledby="bulk-price-title" className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/[0.14] bg-[#4b5362] text-white shadow-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.10] bg-[#404a5b] px-4 py-3">
+              <div><h2 id="bulk-price-title" className="text-lg">Árváltoztatás</h2><p className="text-xs text-white/55">{bulkPriceIdsRef.current.length} termék • Eladási ár, RON</p></div>
+              <button className={btnSoft} disabled={bulkPriceBusy} onClick={() => { ++bulkPriceRequestRef.current; setBulkPriceOpen(false); }} type="button"><X size={15} /> Bezárás</button>
+            </div>
+            <div className="min-h-0 overflow-auto p-4">
+              {bulkPriceError && <div role="alert" className="mb-3 rounded-xl border border-red-300/20 bg-red-500/10 p-3 text-sm text-red-100">{bulkPriceError}<button className={`${btnSoft} ml-3`} disabled={bulkPriceBusy || bulkPriceLoading} type="button" onClick={() => void loadBulkPriceRows(bulkPriceIdsRef.current)}>Árak újratöltése</button></div>}
+              {bulkPriceSaved && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#7bd7d4]/30 bg-[#203f49] p-3 text-sm"><span>Árváltoztatás mentve • {bulkPriceSaved.number}</span><button className={btnSoft} type="button" disabled={bulkPriceBusy} onClick={() => { setBulkPriceOpen(false); setSelectedPanelOpen(false); setPriceChangeArchiveOpen(true); void loadPriceChangeArchive(""); void openPriceChangeDocumentDetail(bulkPriceSaved.id); }}>Bizonylat megnyitása</button></div>}
+              {bulkPriceLoading ? <p className="py-8 text-center text-white/60">Aktuális árak betöltése...</p> : <table className="w-full min-w-[620px] text-sm">
+                <thead className="text-left text-xs text-white/55"><tr><th className="p-2 font-normal">Termék / méret</th><th className="p-2 text-right font-normal">Készlet</th><th className="p-2 text-right font-normal">Jelenlegi ár</th><th className="w-36 p-2 font-normal">Új ár</th></tr></thead>
+                <tbody>{bulkPriceRows.map(row => <tr key={row.variant_id} className="border-t border-white/[0.08]">
+                  <td className="p-2"><p className="max-w-md truncate" title={row.title_ro}>{row.title_ro}</p><p className="mt-1 text-xs text-white/50">{row.color_name} • {row.size} • {row.barcode || row.internal_sku}</p></td>
+                  <td className="p-2 text-right tabular-nums">{Number(row.qty)} db</td>
+                  <td className="p-2 text-right tabular-nums">{row.sell_price == null ? "–" : Number(row.sell_price).toLocaleString("hu-HU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td className="p-2"><input className={`${input} w-full text-right tabular-nums`} aria-label={`Új ár: ${row.title_ro}, ${row.size || ""}`} inputMode="decimal" disabled={bulkPriceBusy} value={row.newPrice} onChange={e => { const value = e.target.value; setBulkPriceSaved(null); setBulkPriceRows(rows => rows.map(item => item.variant_id === row.variant_id ? { ...item, newPrice: value } : item)); }} /></td>
+                </tr>)}</tbody>
+              </table>}
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t border-white/[0.10] bg-[#404a5b] px-4 py-3">
+              <span className="text-xs text-white/60">{bulkPriceChanged.length} módosított ár</span>
+              <button className={primaryBtn} disabled={bulkPriceBusy || bulkPriceLoading || !bulkPriceChanged.length} onClick={() => void saveBulkPrices()} type="button"><Save size={15} /> {bulkPriceBusy ? "Mentés..." : "Árváltoztatás mentése"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedPanelOpen && (
         <div className={modalWrap}>
           <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/[0.14] bg-[#4b5362] shadow-2xl">
@@ -17368,6 +17461,7 @@ export default function AllInWarehouse() {
                 <h2 className="mt-1 text-lg text-white">{selectedCount} termék kijelölve</h2>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
+                <button className={primaryBtn} type="button" disabled={!selectedItems.length} onClick={() => openBulkPriceEditor(selectedItems)}><Receipt size={15} /> Árváltoztatás</button>
                 <button className={selectedWorkButtonClass("label")} type="button" disabled={!selectedWorkCounts.label} onClick={() => setSelectedWorkPanel("label")} title="Vonalkód / címke listára tett termékek">
                   <Barcode size={15} /> Vonalkód / címke {selectedWorkCounts.label > 0 ? `(${selectedWorkCounts.label})` : ""}
                 </button>
@@ -17944,6 +18038,7 @@ export default function AllInWarehouse() {
                 </div>
               )}
               <div className="grid gap-2">
+                <button className={`${btnSoft} w-full justify-start`} onClick={() => openBulkPriceEditor(selectedActionTargets)} type="button"><Receipt size={16} /> Árváltoztatás</button>
                 <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2 py-2 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "label")} type="button">
                   <span className="inline-flex items-center gap-2"><Barcode size={16} /> Vonalkód / címke</span>
                   <span className="text-xs text-white/55">címkelista</span>
