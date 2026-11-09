@@ -6018,3 +6018,19 @@ export function apiAifReceiveShopifyReturn(order: string, body: AifShopifyReturn
 export function apiAifResolveShopifyQuarantine(id: string, body: {idempotencyKey:string;quantity:number;action:'restock'|'writeoff';note:string}) {
   return fetchAifJSON<{ok:true;duplicate:boolean;documentNumber:string}>(`/shopify/warehouse/shop/source/quarantine/${encodeURIComponent(id)}/resolve`,{method:'POST',body:JSON.stringify(body)});
 }
+
+
+export type AifManualPriceRow = {
+  variant_id: string; title_ro: string; barcode: string | null; internal_sku: string;
+  size: string | null; color_name: string | null; sell_price: number | string | null; qty: number | string;
+};
+export function apiAifPreviewManualPrices(variantIds: string[]) {
+  return fetchAifJSON<{ items: AifManualPriceRow[] }>("/price-change-documents/manual-preview", {
+    method: "POST", body: JSON.stringify({ variantIds }),
+  });
+}
+export function apiAifSaveManualPrices(items: Array<{ variantId: string; expectedSellPrice: number | string; newSellPrice: string }>) {
+  return fetchAifJSON<{ ok: boolean; items: Array<{ variant_id: string; sell_price: number }>; documentId: string | null; documentNumber: string | null }>("/price-change-documents/manual", {
+    method: "POST", body: JSON.stringify({ items }),
+  });
+}
