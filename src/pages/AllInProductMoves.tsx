@@ -2039,6 +2039,7 @@ export default function AllInProductMoves() {
   const [type, setType] = useState<ArchiveFilter>("all");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [listRevision, setListRevision] = useState(0);
   const [filteredPdfBusy, setFilteredPdfBusy] = useState(false);
   const [baseLoading, setBaseLoading] = useState(false);
   const [error, setError] = useState("");
@@ -2100,6 +2101,26 @@ export default function AllInProductMoves() {
   const scanQueueRunningRef = useRef(false);
   const productSearchRequestIdRef = useRef(0);
   const draftListScrollRef = useRef<HTMLDivElement | null>(null);
+  const listRequestIdRef = useRef(0);
+  const listControllerRef = useRef<AbortController | null>(null);
+
+  const cancelListRequest = useCallback(() => {
+    listRequestIdRef.current += 1;
+    listControllerRef.current?.abort();
+    listControllerRef.current = null;
+  }, []);
+
+  const refreshArchive = useCallback(() => {
+    cancelListRequest();
+    setListRevision((current) => current + 1);
+  }, [cancelListRequest]);
+
+  function showLatestDocuments() {
+    // Mentés után ne a mentés előtti oldal/szűrés régi closure-je töltsön.
+    // A következő render már az összes bizonylat első oldalát kéri le.
+    clearFilters();
+    refreshArchive();
+  }
 
   const loadSettings = useCallback(async () => {
     // Ezek független számlálók. A receptió AVZ-sorozata nem azonos a
@@ -2137,6 +2158,10 @@ export default function AllInProductMoves() {
   }, []);
 
   const loadList = useCallback(async () => {
+    cancelListRequest();
+    const requestId = listRequestIdRef.current;
+    const controller = new AbortController();
+    listControllerRef.current = controller;
     setLoading(true);
     setError("");
     try {
@@ -2149,20 +2174,51 @@ export default function AllInProductMoves() {
       if (fromLocation) query.set("fromLocation", fromLocation);
       if (toLocation) query.set("toLocation", toLocation);
       if (type !== "all") query.set("type", type);
-      const result = await fetchJson<ListResponse>(`/stock-transfer-documents?${query.toString()}`);
+      const result = await fetchJson<ListResponse>(`/stock-transfer-documents?${query.toString()}`, { signal: controller.signal });
+      if (controller.signal.aborted || requestId !== listRequestIdRef.current) return;
       setItems(result.items || []);
       setTotals(result.totals || { total: 0, official: 0, legacy: 0, cancelled: 0, totalQty: 0 });
       setPageNo(result.page || 1);
       setPages(result.pages || 1);
       if (result.locations?.length) setLocations(result.locations);
     } catch (loadError: any) {
+      if (controller.signal.aborted || requestId !== listRequestIdRef.current) return;
       setError(loadError?.message || "A készletbizonylatok betöltése nem sikerült.");
     } finally {
-      setLoading(false);
+      if (requestId === listRequestIdRef.current) {
+        listControllerRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [from, fromLocation, limit, pageNo, search, to, toLocation, type]);
+  }, [cancelListRequest, from, fromLocation, limit, pageNo, search, to, toLocation, type]);
 
-  useEffect(() => { void loadList(); }, [loadList]);
+  useEffect(() => {
+    void loadList();
+    return cancelListRequest;
+  }, [cancelListRequest, loadList, listRevision]);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(refreshArchive, 200);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === stockMovesChangedStorageKey) refreshWhenVisible();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(stockMovesChangedEventName, refreshWhenVisible);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(stockMovesChangedEventName, refreshWhenVisible);
+    };
+  }, [refreshArchive]);
   useEffect(() => {
     void Promise.all([loadSettings(), loadBaseData()]).catch((loadError) => setError(loadError?.message || "Az oldal előkészítése nem sikerült."));
   }, [loadBaseData, loadSettings]);
@@ -3036,7 +3092,8 @@ export default function AllInProductMoves() {
         });
         setEditingDraftNumber(String(result.documentNumber || editingDraftNumber || "Előkészítés"));
         setMessage(`${result.documentNumber || "Az előkészítés"} mentve. Visszaállítva: ${quantity(result.restoredQty || 0)} db, hozzáadva: ${quantity(result.addedQty || 0)} db.`);
-        await Promise.all([loadList(), loadBaseData()]);
+        showLatestDocuments();
+        await loadBaseData();
         if (closeAfterSave) {
           setCreateOpen(false);
           resetDraft(draftType);
@@ -3077,7 +3134,8 @@ export default function AllInProductMoves() {
         setEditingDraftNumber(String(result.documentNumber || "Előkészítés"));
         setEditingDocumentStatus("preparation");
         setMessage(`${result.documentNumber || "Az előkészítés"} mentve. A sérült termék készlete már kivezetésre került.`);
-        await Promise.all([loadList(), loadBaseData()]);
+        showLatestDocuments();
+        await loadBaseData();
         if (closeAfterSave) {
           setCreateOpen(false);
           resetDraft(draftType);
@@ -3109,7 +3167,7 @@ export default function AllInProductMoves() {
       setEditingDraftNumber(String(result.documentNumber || editingDraftNumber || "Előkészítés"));
       setEditingDocumentStatus("draft");
       setMessage(`${result.documentNumber || "Az előkészítés"} mentve. A készlet még nem változott.`);
-      await loadList();
+      showLatestDocuments();
       if (closeAfterSave) {
         setCreateOpen(false);
         resetDraft(draftType);
@@ -3144,7 +3202,8 @@ export default function AllInProductMoves() {
       setCreateOpen(false);
       resetDraft(draftType);
       setMessage(`${number || "A bizonylat"} lezárva. A következő tétel új előkészítést indít.`);
-      await Promise.all([loadList(), loadBaseData(), loadSettings()]);
+      showLatestDocuments();
+      await Promise.all([loadBaseData(), loadSettings()]);
       if (closedId) await openDetailById(closedId);
     } catch (closeError: any) {
       setError(closeError?.message || "Az előkészítés lezárása nem sikerült.");
@@ -3181,7 +3240,8 @@ export default function AllInProductMoves() {
         setCreateOpen(false);
         resetDraft(draftType);
         setMessage(`${prepared.documentNumber || "A sérülttermék-bizonylat"} lezárva. A készlet kivezetve marad.`);
-        await Promise.all([loadList(), loadBaseData(), loadSettings()]);
+        showLatestDocuments();
+        await Promise.all([loadBaseData(), loadSettings()]);
         await openDetailById(preparedId);
       } catch (saveError: any) {
         setError(saveError?.message || "A sérülttermék-előkészítés lezárása nem sikerült.");
@@ -3217,7 +3277,8 @@ export default function AllInProductMoves() {
       setCreateOpen(false);
       resetDraft(draftType);
       setMessage(`${result.documentNumber || "A bizonylat"} véglegesítve: ${quantity(result.totalQty || 0)} db, ${moneyRon(result.totalValue || 0)}. A készlet és a mozgásnapló frissült.`);
-      await Promise.all([loadList(), loadBaseData(), loadSettings()]);
+      showLatestDocuments();
+      await Promise.all([loadBaseData(), loadSettings()]);
       if (result.documentId) await openDetailById(result.documentId);
     } catch (saveError: any) {
       setError(saveError?.message || "A készletbizonylat véglegesítése nem sikerült.");
@@ -3232,7 +3293,7 @@ export default function AllInProductMoves() {
       await fetchJson(`/stock-transfer-documents/${encodeURIComponent(item.id)}/close`, { method: "POST", body: "{}" });
       setMessage(`${item.document_number} lezárva. A következő tétel új előkészítést indít.`);
       if (detail?.document.id === item.id) setDetail(null);
-      await loadList();
+      showLatestDocuments();
     } catch (closeError: any) {
       setError(closeError?.message || "Az előkészítés lezárása nem sikerült.");
     }
@@ -3244,7 +3305,7 @@ export default function AllInProductMoves() {
       await fetchJson(`/stock-transfer-documents/${encodeURIComponent(item.id)}/reopen`, { method: "POST", body: "{}" });
       setMessage(`${displayDocumentNumber(item)} visszaállítva Előkészítésre. A következő tételek ismét ehhez a dokumentumhoz kerülnek.`);
       setDetail(null);
-      await loadList();
+      showLatestDocuments();
       await openDraftForEdit(item.id);
     } catch (reopenError: any) {
       setError(reopenError?.message || "A bizonylat nem állítható vissza előkészítésre.");
@@ -3259,6 +3320,7 @@ export default function AllInProductMoves() {
   function applySearch() {
     setPageNo(1);
     setSearch(searchDraft.trim());
+    refreshArchive();
   }
 
   function clearFilters() {
@@ -3441,7 +3503,8 @@ export default function AllInProductMoves() {
         if (detail?.document.id === target.id) setDetail(null);
         setDeleteTarget(null);
         setMessage(`${number} törölve. A bizonylat készletmozgása vissza lett fordítva, visszaállított mennyiség: ${quantity(result.restoredQty || target.total_qty || 0)} db.`);
-        await Promise.all([loadList(), loadBaseData()]);
+        refreshArchive();
+        await loadBaseData();
         return;
       }
 
@@ -3482,7 +3545,7 @@ export default function AllInProductMoves() {
       if (detail?.document.id === target.id) setDetail(null);
       setDeleteTarget(null);
       setMessage(`${number} véglegesen törölve. A raktárkészlet változatlan maradt.`);
-      await loadList();
+      refreshArchive();
     } catch (deleteError: any) {
       setError(deleteError?.message || "A bizonylat törlése nem sikerült.");
     } finally {
@@ -3577,7 +3640,7 @@ export default function AllInProductMoves() {
                 <p className="mt-0.5 truncate text-[10px] text-white/44">{quantity(totals.total)} találat{activeFilterCount ? ` • ${activeFilterCount} szűrő` : ""}</p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                <button type="button" onClick={() => void loadList()} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /></button>
+                <button type="button" onClick={refreshArchive} disabled={loading} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97] disabled:opacity-45" aria-label="Frissítés"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /></button>
                 <button type="button" onClick={goHome} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.055] text-white active:scale-[0.97]" aria-label="Kezdőlap"><Home size={17} /></button>
               </div>
             </div>
@@ -3600,7 +3663,7 @@ export default function AllInProductMoves() {
               {settings?.internal_transfer ? <span className="hidden rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[10px] text-[#cffffd]/78 md:inline">Következő: {settings.internal_transfer.previewNumber}</span> : null}
               <button type="button" className={primaryBtn} onClick={() => openCreate("internal_transfer")}><Plus size={15} /> Új bizonylat</button>
               <button type="button" className={iconBtn} onClick={() => openSettings("reception")} title="Admin beállítások" aria-label="Admin beállítások"><Settings size={16} /></button>
-              <button type="button" className={btnSoft} onClick={() => void loadList()} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button type="button" className={btnSoft} onClick={refreshArchive} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
               <button type="button" className={btn} onClick={goHome}><Home size={15} /> Kezdőlap</button>
             </div>
           </div>
@@ -3673,7 +3736,7 @@ export default function AllInProductMoves() {
             <label className={label}>Forrás<CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
             <label className={label}>Cél / partner<CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} /></label>
             <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "shopify_transfer", label: "Shopify átadás" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
-            <div className="flex items-end gap-2 lg:col-span-4 xl:col-span-7"><button type="button" className={primaryBtn} onClick={applySearch}><Search size={15} /> Keresés</button><button type="button" className={btnSoft} onClick={clearFilters}><X size={15} /> Szűrők törlése</button></div>
+            <div className="flex items-end gap-2 lg:col-span-4 xl:col-span-7"><button type="button" className={primaryBtn} onClick={applySearch}><Search size={15} /> Keresés</button><button type="button" className={btnSoft} onClick={() => { clearFilters(); refreshArchive(); }}><X size={15} /> Szűrők törlése</button></div>
           </div>
         </section>
 
@@ -3829,8 +3892,8 @@ export default function AllInProductMoves() {
             </div>
 
             <footer className="grid grid-cols-[0.9fr_1.35fr] gap-2 border-t border-white/10 bg-[#293548] p-2.5">
-              <button type="button" onClick={() => { clearFilters(); setSearchDraft(""); }} className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[10px] text-white active:scale-[0.98]">Alaphelyzet</button>
-              <button type="button" onClick={() => { setPageNo(1); setSearch(searchDraft.trim()); setMobileFiltersOpen(false); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[11px] text-white active:scale-[0.98]"><Search size={14} /> Alkalmazás</button>
+              <button type="button" onClick={() => { clearFilters(); refreshArchive(); }} className="h-10 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-[10px] text-white active:scale-[0.98]">Alaphelyzet</button>
+              <button type="button" onClick={() => { setPageNo(1); setSearch(searchDraft.trim()); refreshArchive(); setMobileFiltersOpen(false); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/42 bg-[#2a8d8b] px-4 text-[11px] text-white active:scale-[0.98]"><Search size={14} /> Alkalmazás</button>
             </footer>
           </section>
         </div>,
