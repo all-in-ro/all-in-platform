@@ -18491,7 +18491,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE NOT EXISTS (
            SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
          )
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, id DESC
          LIMIT 4000`
       );
 
@@ -18633,9 +18633,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
       }
       items.sort((a, b) => {
-        const dateCompare = String(aifDocumentDateFromRow(b) || '').localeCompare(String(aifDocumentDateFromRow(a) || ''));
-        if (dateCompare) return dateCompare;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        // Az újonnan rögzített bizonylat legyen elöl, akkor is, ha más
+        // bizonylat Aviz-dátuma jövőbeli. A dátumszűrő továbbra is az
+        // Aviz dátumát használja; csak az archívum sorrendje változik.
+        const createdCompare = (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0);
+        if (createdCompare) return createdCompare;
+        const numberCompare = String(b.document_number || '').localeCompare(String(a.document_number || ''), 'hu', { numeric: true });
+        if (numberCompare) return numberCompare;
+        return String(b.id || '').localeCompare(String(a.id || ''));
       });
       const total = items.length;
       const pages = Math.max(1, Math.ceil(total / limit));
