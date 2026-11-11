@@ -33410,17 +33410,36 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [id, location.id, restrictToActor, sessionActor]
         );
         if (!header.rowCount) return res.status(404).json({ error: "A csere nem található ennél az üzletnél vagy eladónál." });
-        const e = header.rows[0];
+        let e = header.rows[0];
+        // One batch can have several returned items but only one financial header.
+        let returnHeaders = [e];
+        const batchId = e.original_snapshot?.returnBatchId;
+        if (batchId) {
+          const batch = await pool.query(
+            `SELECT * FROM aif_shop_exchanges
+             WHERE location_id=$1 AND original_snapshot->>'returnBatchId'=$2
+               AND status=$3 AND actor IS NOT DISTINCT FROM $4
+             ORDER BY created_at, id`,
+            [e.location_id, String(batchId), e.status, e.actor]
+          );
+          const primary = batch.rows.filter(row => row.original_snapshot?.returnBatchPrimary === true);
+          const expectedCount = aifNumber(primary[0]?.original_snapshot?.returnBatchCount);
+          if (primary.length !== 1 || (expectedCount > 0 && batch.rows.length !== expectedCount)) {
+            return res.status(409).json({ error: "A csere összetartozó tételei hiányosak, ellenőrzés szükséges." });
+          }
+          returnHeaders = batch.rows;
+          e = primary[0];
+        }
 
         const [linesResult, returnedResult, paymentsResult] = await Promise.all([
           pool.query(
             `SELECT
                ${commonLineSelect("el")},
                el.quantity,
-               el.unit_price AS list_price,
+               COALESCE((el.raw->'discount'->>'listPrice')::numeric, el.unit_price) AS list_price,
                el.unit_price,
-               0::numeric AS discount_amount,
-               0::numeric AS discount_percent,
+               COALESCE((el.raw->'discount'->>'unitDiscount')::numeric, 0) AS discount_amount,
+               COALESCE((el.raw->'discount'->>'discountPercent')::numeric, 0) AS discount_percent,
                el.line_total
              FROM aif_shop_exchange_lines el
              LEFT JOIN aif_product_variants v ON v.id=el.variant_id
@@ -33493,7 +33512,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  v2.updated_at DESC NULLS LAST
                LIMIT 1
              ) model_image ON true
-             WHERE sl.id=e.source_sale_line_id
+             WHERE sl.id=$1
              LIMIT 1`,
             [e.source_sale_line_id]
           ),
@@ -33535,7 +33554,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
         }));
         const replacementLines = linesResult.rows.map(mapLine);
-        const returnedLine = returnedResult.rows[0] ? mapLine(returnedResult.rows[0]) : null;
+        const originalLine = returnedResult.rows[0] ? mapLine(returnedResult.rows[0]) : null;
+        const returnedLines = returnHeaders.map((row) => {
+          const snapshot = row.original_snapshot || {};
+          const product = snapshot.product || {};
+          const fallback = String(row.id) === String(e.id) ? originalLine : null;
+          return {
+            ...fallback,
+            id: String(row.id),
+            lineNo: 0,
+            variantId: row.source_variant_id ? String(row.source_variant_id) : null,
+            productTitle: product.title || fallback?.productTitle || "Ismeretlen termék",
+            productCode: product.productCode || fallback?.productCode || null,
+            barcode: product.barcode || fallback?.barcode || null,
+            brandName: product.brandName || fallback?.brandName || null,
+            colorName: product.colorName || fallback?.colorName || null,
+            size: product.size || fallback?.size || null,
+            imageUrl: product.imageUrl || fallback?.imageUrl || null,
+            quantity: aifNumber(row.returned_qty),
+            unitPrice: aifNumber(row.return_unit_credit),
+            lineTotal: aifNumber(row.return_credit),
+            listPrice: aifNumber(snapshot.listPrice ?? fallback?.listPrice ?? row.return_unit_credit),
+            discountAmount: Math.max(0, aifRoundMoney(aifNumber(snapshot.listPrice ?? fallback?.listPrice ?? row.return_unit_credit) - aifNumber(row.return_unit_credit))),
+            discountPercent: aifNumber(snapshot.discountPercent ?? fallback?.discountPercent),
+          };
+        });
+        const returnedLine = returnedLines[0] || null;
+        const returnCredit = aifRoundMoney(returnedLines.reduce((sum, line) => sum + line.lineTotal, 0));
+        const returnedQty = returnedLines.reduce((sum, line) => sum + line.quantity, 0);
+        const replacementSubtotal = aifRoundMoney(replacementLines.reduce((sum, line) => sum + line.listPrice * line.quantity, 0));
         const paymentLabel = payments.length
           ? Array.from(new Set(payments.map((row) => row.label))).join(", ")
           : e.settlement_direction === "none"
@@ -33555,8 +33602,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           customerName: e.customer_name || null,
           customerPhone: e.customer_phone || null,
           note: e.note || null,
-          subtotal: aifNumber(e.replacement_total),
-          discountTotal: 0,
+          subtotal: replacementSubtotal,
+          discountTotal: aifRoundMoney(replacementSubtotal - aifNumber(e.replacement_total)),
           total: aifNumber(e.difference),
           paidTotal: aifNumber(e.settlement_amount),
           balanceDue: 0,
@@ -33566,14 +33613,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           payments,
           lines: replacementLines,
           returnedLine,
+          returnedLines,
           exchange: {
-            returnedQty: aifNumber(e.returned_qty),
-            returnCredit: aifNumber(e.return_credit),
+            returnedQty,
+            returnCredit,
             replacementTotal: aifNumber(e.replacement_total),
             difference: aifNumber(e.difference),
             settlementDirection: e.settlement_direction || null,
             settlementMethod: e.settlement_method || null,
             settlementAmount: aifNumber(e.settlement_amount),
+            voucherRestored: aifNumber(e.original_snapshot?.voucherRefund?.restored),
           },
           location: { id: String(location.id), code: location.code, name: location.name },
         });
