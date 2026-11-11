@@ -3619,7 +3619,7 @@ export default function AllInShopOperations({
                     <div className="rounded-2xl border border-white/12 bg-[#303a4c] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Termékváltozat</p><p className="mt-2 text-2xl">{stockSummary.variantCount}</p></div>
                     <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/58">Elérhető készlet</p><p className="mt-2 text-2xl text-[#d7fffd]">{stockSummary.availableQty} db</p></div>
                     <div className="rounded-2xl border border-white/12 bg-[#303a4c] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Foglalt</p><p className="mt-2 text-2xl">{stockSummary.reservedQty} db</p></div>
-                    <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/58">Eladási érték</p><p className="mt-2 text-2xl text-[#d7fffd]">{formatMoney(stockSummary.retailValue)}</p></div>
+                    <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/58">Elérhető készlet értéke</p><p className="mt-2 text-2xl text-[#d7fffd]">{formatMoney(stockSummary.retailValue)}</p></div>
                     <div className={`rounded-2xl border p-3 ${stockSummary.lowStockVariants > 0 ? "border-red-300/55 bg-red-600/25" : "border-white/12 bg-[#303a4c]"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/52">Alacsony készlet</p><p className="mt-2 text-2xl">{stockSummary.lowStockVariants}</p></div>
                   </div>
                 ) : null}
