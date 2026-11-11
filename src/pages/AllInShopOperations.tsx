@@ -1564,6 +1564,78 @@ function CustomerQuickViewModal({
 }
 
 
+function DailyExchangeDetails({ locationCode, exchangeId }: { locationCode: string; exchangeId: string }) {
+  const [detail, setDetail] = useState<AifShopSaleDetailResponse | null>(null);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setDetail(null);
+    setError("");
+    apiAifShopSaleDetail({ location: locationCode, id: exchangeId, recordType: "exchange" })
+      .then(result => {
+        if (!active) return;
+        if (!result.exchange) throw new Error("A csere részletei nem érhetők el.");
+        setDetail(result);
+      })
+      .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : "A csere részletei nem tölthetők be."); });
+    return () => { active = false; };
+  }, [locationCode, exchangeId, retry]);
+
+  if (error) return <div role="alert" className="rounded-xl bg-rose-500/10 p-3 text-sm text-rose-100">
+    {error} <button type="button" className="ml-3 rounded-lg border border-white/15 px-3 py-1 text-white" onClick={() => setRetry(value => value + 1)}>Újrapróbálás</button>
+  </div>;
+  if (!detail?.exchange) return <p role="status" className="p-3 text-sm text-white/60">Csere részleteinek betöltése…</p>;
+  const exchange = detail.exchange;
+  const returned = detail.returnedLines || (detail.returnedLine ? [{ ...detail.returnedLine, quantity: exchange.returnedQty, lineTotal: exchange.returnCredit }] : []);
+  const difference = numberValue(exchange.difference);
+  const productList = (title: string, lines: typeof detail.lines) => (
+    <section className="min-w-0 rounded-2xl border border-white/10 bg-black/10 p-3">
+      <h4 className="mb-2 flex items-center gap-2 text-sm text-[#bdf8f5]"><ArrowRightLeft size={15} />{title}</h4>
+      {lines.length ? lines.map((line, index) => (
+        <div key={`${line.id}-${index}`} className="flex gap-3 border-t border-white/[0.08] py-3 first:border-t-0">
+          <ProductImage src={line.imageUrl} title={line.productTitle || "Termék"} compact />
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-sm text-white">{line.productTitle || "Ismeretlen termék"}</p>
+            <p className="mt-1 text-xs text-white/55">{[line.colorName, line.size, line.barcode || line.productCode].filter(Boolean).join(" • ")}</p>
+            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-white/70">
+              <span>{line.quantity} db × {formatMoney(line.unitPrice)}</span>
+              <span className="text-sm tabular-nums text-white">{formatMoney(line.lineTotal)}</span>
+            </div>
+            {numberValue(line.listPrice) > numberValue(line.unitPrice) + 0.005 ? <p className="mt-1 text-xs text-amber-100/80">
+              Eredeti ár: {formatMoney(line.listPrice)} / db · Kedvezmény: {formatMoney((numberValue(line.listPrice) - numberValue(line.unitPrice)) * numberValue(line.quantity))}
+            </p> : null}
+          </div>
+        </div>
+      )) : <p className="py-2 text-xs text-white/50">Nincs megjeleníthető terméksor.</p>}
+    </section>
+  );
+  return <div className="space-y-3 rounded-2xl border border-[#8ee6e2]/15 bg-[#243245] p-3 sm:p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/55">
+      <span>{detail.saleNumber} · {formatExactDateTime(detail.soldAt)}</span>
+      {detail.actor ? <span>Rögzítette: {detail.actor}</span> : null}
+    </div>
+    <div className="grid gap-3 xl:grid-cols-2">
+      {productList("Visszahozott termékek", returned)}
+      {productList("Elvitt termékek", detail.lines)}
+    </div>
+    <div className="grid gap-2 sm:grid-cols-3">
+      {[
+        ["Visszahozott érték", exchange.returnCredit],
+        ["Elvitt érték kedvezmény után", exchange.replacementTotal],
+        [difference > 0.005 ? "Különbözet · vevő ráfizetése" : difference < -0.005 ? "Különbözet · vevő javára" : "Értékazonos csere", Math.abs(difference)],
+      ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white/[0.04] px-3 py-2">
+        <p className="text-[11px] text-white/55">{label}</p><p className="mt-1 text-lg tabular-nums text-white">{formatMoney(Number(amount))}</p>
+      </div>)}
+    </div>
+    {numberValue(exchange.settlementAmount) > 0.005 ? <p className="text-xs text-[#bdf8f5]">
+      {exchange.settlementDirection === "out" ? "Visszafizetve a vevőnek" : "Vevőtől átvéve"}: {formatMoney(exchange.settlementAmount)} · {detail.paymentLabel}
+    </p> : null}
+    {numberValue(exchange.voucherRestored) > 0.005 ? <p className="text-xs text-[#bdf8f5]">Utalványra visszaírva: {formatMoney(exchange.voucherRestored)}</p> : null}
+    {detail.note ? <p className="text-xs text-white/55">{detail.note}</p> : null}
+  </div>;
+}
+
 function DailySaleDetailModal({
   sale,
   detail,
@@ -1690,27 +1762,27 @@ function DailySaleDetailModal({
             </div>
           </div>
 
-          {isExchange && detail?.returnedLine ? (
-            <section className="mt-4 rounded-[22px] border border-[#9be9e5]/24 bg-[#244f55] p-3">
+          {isExchange && detail ? (detail.returnedLines || (detail.returnedLine ? [{ ...detail.returnedLine, quantity: detail.exchange?.returnedQty || 0, lineTotal: detail.exchange?.returnCredit || 0 }] : [])).map((line, index) => (
+            <section key={`${line.id}-${index}`} className="mt-4 rounded-[22px] border border-[#9be9e5]/24 bg-[#244f55] p-3">
               <p className="mb-2 text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/65">Visszahozott termék</p>
               <div className="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:items-center">
-                <ProductImage src={detail.returnedLine.imageUrl} title={detail.returnedLine.productTitle || "Termék"} large />
+                <ProductImage src={line.imageUrl} title={line.productTitle || "Termék"} large />
                 <div className="min-w-0">
-                  <p className="text-base text-white">{detail.returnedLine.productTitle || "Ismeretlen termék"}</p>
+                  <p className="text-base text-white">{line.productTitle || "Ismeretlen termék"}</p>
                   <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-white/72">
-                    {detail.returnedLine.brandName ? <span>{detail.returnedLine.brandName}</span> : null}
-                    {detail.returnedLine.size ? <span>Méret: {detail.returnedLine.size}</span> : null}
-                    {detail.returnedLine.colorName ? <span>Szín: {detail.returnedLine.colorName}</span> : null}
+                    {line.brandName ? <span>{line.brandName}</span> : null}
+                    {line.size ? <span>Méret: {line.size}</span> : null}
+                    {line.colorName ? <span>Szín: {line.colorName}</span> : null}
                   </div>
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] text-white/45">Visszahozva</p>
-                  <p className="mt-1 text-xl text-white">{detail.exchange?.returnedQty || 0} db</p>
-                  <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(detail.exchange?.returnCredit || 0)}</p>
+                  <p className="mt-1 text-xl text-white">{line.quantity} db</p>
+                  <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(line.lineTotal)}</p>
                 </div>
               </div>
             </section>
-          ) : null}
+          )) : null}
 
           {error ? (
             <div className="mt-4 rounded-2xl border border-rose-200/30 bg-rose-500/14 px-4 py-3 text-sm text-rose-50">
@@ -2222,6 +2294,7 @@ export default function AllInShopOperations({
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
   const [saleDetailError, setSaleDetailError] = useState("");
+  const [expandedExchangeKey, setExpandedExchangeKey] = useState<string | null>(null);
   const [employeeSalesTarget, setEmployeeSalesTarget] = useState<AifShopShiftDayEmployee | null>(null);
   const [employeeSalesData, setEmployeeSalesData] = useState<AifShopDailySummaryResponse | null>(null);
   const [employeeSalesLoading, setEmployeeSalesLoading] = useState(false);
@@ -4422,6 +4495,8 @@ export default function AllInShopOperations({
                         : normalPriceTotal > 0.005 && discountValue > 0.005
                           ? (discountValue / normalPriceTotal) * 100
                           : 0;
+                      const exchangeKey = `${locationCode}:${summaryDate}:${item.saleId}:${item.lineId || item.key}`;
+                      const exchangeExpanded = expandedExchangeKey === exchangeKey;
                       const PaymentIcon = paymentKey.includes("készpénz")
                         ? Banknote
                         : paymentKey.includes("bankkártya") || paymentKey.includes("kártya")
@@ -4461,7 +4536,12 @@ export default function AllInShopOperations({
                                 {item.title}
                               </p>
                               {item.recordType === "exchange" ? (
-                                <span className="shrink-0 rounded-md bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#cffffd]">Csere</span>
+                                <button type="button" aria-expanded={exchangeExpanded}
+                                  aria-controls={`exchange-${item.lineId || item.key}`}
+                                  onClick={() => setExpandedExchangeKey(exchangeExpanded ? null : exchangeKey)}
+                                  className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#8ee6e2]/20 bg-[#2a8d8b]/20 px-2.5 text-xs text-[#cffffd] transition hover:bg-[#2a8d8b]/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8ee6e2]">
+                                  <ArrowRightLeft size={13} />Csere<ChevronDown size={13} className={exchangeExpanded ? "rotate-180" : ""} />
+                                </button>
                               ) : null}
                               {settlement ? (
                                 <span className="shrink-0 rounded-md border border-[#b9f5f2]/52 bg-[#2a8d8b] px-2.5 py-1 text-[10px] text-white shadow-[0_3px_10px_rgba(42,141,139,0.22)]">
@@ -4657,6 +4737,11 @@ export default function AllInShopOperations({
                               ) : null}
                             </div>
                           </div>
+                          {item.recordType === "exchange" && exchangeExpanded ? (
+                            <div id={`exchange-${item.lineId || item.key}`} className="col-span-full min-w-0" role="region" aria-label="Csere részletei">
+                              <DailyExchangeDetails key={exchangeKey} locationCode={locationCode} exchangeId={String(item.saleId)} />
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
