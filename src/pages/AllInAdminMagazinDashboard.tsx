@@ -2041,6 +2041,7 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
+  const estimatedPriceVariants = Number((stock as { estimatedPriceVariants?: number } | undefined)?.estimatedPriceVariants || 0);
   const historicalCreditSales = useMemo(
     () => (data?.recentSales || []).filter((sale) =>
       !isPaymentSettlement(sale)
@@ -2647,7 +2648,7 @@ export default function AllInAdminMagazinDashboard({
                 ["Készlet", `${integer(stock?.totalQty)} db`, Boxes],
                 ["Elérhető", `${integer(stock?.availableQty)} db`, PackageCheck],
                 ["Foglalt", `${integer(stock?.reservedQty)} db`, Clock3],
-                ["Szabad készletérték", money(stock?.retailValue), CircleDollarSign],
+                [stockSnapshotHistorical ? "Készletérték" : "Szabad készletérték", money(stock?.retailValue), CircleDollarSign],
                 ["Alacsony készlet", integer(stock?.lowStockVariants), AlertTriangle],
               ].map(([title, value, Icon]) => (
                 <div key={String(title)} className="rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
@@ -2656,9 +2657,11 @@ export default function AllInAdminMagazinDashboard({
                     <Icon size={14} className="text-[#8ee6e2]" />
                   </div>
                   <p className="mt-2 text-lg text-white">{String(value)}</p>
-                  {String(title) === "Szabad készletérték" ? (
-                    <p className="mt-1 text-[10px] leading-4 text-white/52" title="A foglalt darabok nélkül, az üzlet könyv szerinti eladási értékén számolva.">
-                      Könyvérték • foglalt nélkül
+                  {["Szabad készletérték", "Készletérték"].includes(String(title)) ? (
+                    <p className="mt-1 text-[10px] leading-4 text-white/52" title={stockSnapshotHistorical ? "A múltbeli foglalás nem rekonstruálható; a teljes visszaszámolt készlet értéke." : "Elérhető darabszám × aktuális eladási ár. A vásárlói kedvezmény nem árazza át a bent maradt készletet."}>
+                      {stockSnapshotHistorical
+                        ? estimatedPriceVariants > 0 ? `Becsült ár: ${estimatedPriceVariants} változat • korabeli foglalás nélkül` : "Korabeli árak • korabeli foglalás nélkül"
+                        : "Aktuális eladási áron • foglalt nélkül"}
                     </p>
                   ) : null}
                 </div>
