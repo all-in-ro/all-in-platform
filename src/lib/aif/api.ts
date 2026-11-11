@@ -3775,6 +3775,7 @@ export type AifShopSaleDetailResponse = {
   payments: AifShopSaleDetailPayment[];
   lines: AifShopSaleDetailLine[];
   returnedLine?: AifShopSaleDetailLine | null;
+  returnedLines?: AifShopSaleDetailLine[];
   exchange?: {
     returnedQty: number;
     returnCredit: number;
@@ -3783,6 +3784,7 @@ export type AifShopSaleDetailResponse = {
     settlementDirection?: string | null;
     settlementMethod?: string | null;
     settlementAmount: number;
+    voucherRestored?: number;
   } | null;
   location: { id: string; code: string; name: string };
 };
