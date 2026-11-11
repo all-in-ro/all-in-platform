@@ -2617,19 +2617,27 @@ function warehouseRelabelPrintHtml(detail: AifPriceChangeDocumentDetail, key: st
   const group = warehouseRelabelGroups(detail).find((entry) => entry.key === key);
   if (!group) throw new Error("Hiányos vagy eltérő üzletenkénti készletbontás. A bolti lap nem nyomtatható.");
   const esc = (value: unknown) => labelEscapeHtml(String(value ?? ""));
-  const money = (value: unknown) => Number(value).toLocaleString("hu-HU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (value: unknown) => Number(value).toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const normalizedName = group.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const locationName = normalizedName.includes("csikszereda") || normalizedName.includes("miercurea") ? "Miercurea Ciuc"
+    : normalizedName.includes("kezdivasarhely") || normalizedName.includes("targu secuiesc") ? "Târgu Secuiesc"
+    : normalizedName === "raktar" ? "Depozit" : normalizedName === "shopify raktar" ? "Depozit Shopify" : group.name;
+  const oldCents = group.lines.reduce((sum, { line, qty }) => sum + Math.round(Number(line.old_sell_price) * qty * 100), 0);
+  const newCents = group.lines.reduce((sum, { line, qty }) => sum + Math.round(Number(line.new_sell_price) * qty * 100), 0);
+  const difference = (newCents - oldCents) / 100;
   const pages: string[] = [];
   for (let start = 0; start < group.lines.length; start += 35) {
     const rows = group.lines.slice(start, start + 35).map(({ line, qty }, i) => `<tr>
       <td>${start + i + 1}</td><td class="product"><b>${esc(line.product_title || line.product_code)}</b><small>${esc([line.product_code, line.barcode, line.color_name, line.size].filter(Boolean).join(" • "))}</small></td>
       <td>${esc(qty)}</td><td class="money">${money(line.old_sell_price)}</td><td class="money"><b>${money(line.new_sell_price)}</b></td><td class="check">□</td></tr>`).join("");
-    pages.push(`<section><header><div class="brand">ALLINFASHION</div><h1>ÁTCÍMKÉZÉSI LAP — ${esc(group.name)}</h1><div>${esc(detail.item.document_number)} • ${esc(warehousePriceChangeDate(detail.item.document_date))}${detail.item.invoice_number ? ` • Számla: ${esc(detail.item.invoice_number)}` : ""}</div></header>
-      <table><colgroup><col style="width:6%"><col style="width:49%"><col style="width:8%"><col style="width:15%"><col style="width:15%"><col style="width:7%"></colgroup><thead><tr><th>#</th><th>Termék / azonosító / szín / méret</th><th>Db</th><th>Régi ár<br>RON/db</th><th>Új ár<br>RON/db</th><th>Kész</th></tr></thead><tbody>${rows}</tbody></table>
-      <footer><span>Átcímkézendő összesen: ${esc(group.qty)} db • ${esc(group.name)}</span><span>${Math.floor(start / 35) + 1} / ${Math.ceil(group.lines.length / 35)}</span></footer>
-      <p class="note">Az árváltozáskor meglévő készlet alapján. Belső bolti munkalap.</p></section>`);
+    pages.push(`<section><header><div class="brand">ALLINFASHION</div><h1>FIȘĂ DE REETICHETARE — ${esc(locationName)}</h1><div>${esc(detail.item.document_number)} • ${esc(warehousePriceChangeDate(detail.item.document_date))}${detail.item.invoice_number ? ` • Factura: ${esc(detail.item.invoice_number)}` : ""}</div></header>
+      <table><colgroup><col style="width:6%"><col style="width:49%"><col style="width:8%"><col style="width:15%"><col style="width:15%"><col style="width:7%"></colgroup><thead><tr><th>#</th><th>Articol / cod / culoare / mărime</th><th>Buc.</th><th>Preț vechi<br>RON/buc.</th><th>Preț nou<br>RON/buc.</th><th>Gata</th></tr></thead><tbody>${rows}</tbody></table>
+      <footer><span>Total de reetichetat: ${esc(group.qty)} buc. • ${esc(locationName)}</span><span>${Math.floor(start / 35) + 1} / ${Math.ceil(group.lines.length / 35)}</span></footer>
+      ${start + 35 >= group.lines.length ? `<div class="difference"><span>Diferența de preț</span><strong>${money(difference)} RON</strong></div>` : ""}
+      <p class="note">Cantitățile reprezintă stocul existent la modificarea prețului. Fișă internă de lucru.</p></section>`);
   }
-  return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>${esc(detail.item.document_number)} — ${esc(group.name)} — Átcímkézés</title><style>
-    @page{size:A4 portrait;margin:10mm}*{box-sizing:border-box}body{margin:0;color:#172033;font:10px Arial,sans-serif}section{break-after:page}section:last-child{break-after:auto}header{border-bottom:2px solid #108d8b;padding-bottom:3mm}.brand{letter-spacing:2px;font-size:9px}h1{font-size:17px;margin:2mm 0}table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:4mm}th,td{border:1px solid #c4cbd0;padding:1.3mm 1mm}th{font-size:9px;background:#eef3f3}td{text-align:center}tr{break-inside:avoid}.product{text-align:left}.product b,.product small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.product b{font-size:9px}.product small{font-size:8px;color:#586271;margin-top:0.5mm}.money{text-align:right;white-space:nowrap}.check{font-size:15px}footer{display:flex;justify-content:space-between;margin-top:4mm;font-weight:bold}.note{font-size:8px;color:#586271}
+  return `<!doctype html><html lang="ro"><head><meta charset="utf-8"><title>${esc(detail.item.document_number)} — ${esc(locationName)} — Reetichetare</title><style>
+    @page{size:A4 portrait;margin:10mm}*{box-sizing:border-box}body{margin:0;color:#172033;font:10px Arial,sans-serif}section{break-after:page}section:last-child{break-after:auto}header{border-bottom:2px solid #108d8b;padding-bottom:3mm}.brand{letter-spacing:2px;font-size:9px}h1{font-size:17px;margin:2mm 0}table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:4mm}th,td{border:1px solid #c4cbd0;padding:1.3mm 1mm}th{font-size:9px;background:#eef3f3}td{text-align:center}tr{break-inside:avoid}.product{text-align:left}.product b,.product small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.product b{font-size:9px}.product small{font-size:8px;color:#586271;margin-top:0.5mm}.money{text-align:right;white-space:nowrap}.check{font-size:15px}footer{display:flex;justify-content:space-between;margin-top:4mm;font-weight:bold}.difference{display:flex;justify-content:space-between;align-items:center;border:1px solid #c4d7d4;background:#f0f7f6;padding:3mm;margin-top:3mm;break-inside:avoid}.difference strong{font-size:14px}.note{font-size:8px;color:#586271}
     </style></head><body>${pages.join("")}</body></html>`;
 }
 
