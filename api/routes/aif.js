@@ -2482,6 +2482,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         JSON.stringify(locationBreakdown), JSON.stringify({ ...(args.rawLine || args.raw_line || {}), sourceType, sourceId }),
       ]
     );
+    if (!args.beforeAt && !(args.raw || args.raw_line || args.rawLine || {}).backfilled) {
+      await ensureAifRetailBookSchema(client);
+      await client.query(`/* aif_live_retail_reprice */
+        INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
+        SELECT location_id,variant_id,qty,round(GREATEST(qty,0)::numeric * $2::numeric,2),false,now()
+        FROM aif_stock WHERE variant_id=$1 ORDER BY location_id
+        ON CONFLICT (location_id,variant_id) DO UPDATE
+        SET qty=EXCLUDED.qty,book_value=EXCLUDED.book_value,seeded=false,updated_at=now()`,
+        [variantId,newPrice]);
+    }
     await refreshAifPriceChangeDocumentTotals(client, document.id);
     return { document, line: line.rows[0], affectedQty, locationBreakdown };
   }
@@ -2662,30 +2672,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return text(raw.movementGroupId || raw.movement_group_id || raw.documentOperationId || raw.document_operation_id || raw.transferId || raw.transfer_id || raw.documentId || raw.document_id || sourceId) || null;
   }
 
-  async function aifRetailIncomingUnitPrice(client, { sourceType, sourceId, variantId, raw = {} }) {
-    const direct = aifPriceNumber(raw.unitPrice ?? raw.unit_price ?? raw.listPrice ?? raw.list_price ?? raw.sellPrice ?? raw.sell_price);
-    if (direct !== null) return direct;
-    if (String(sourceType || '').toLowerCase() === 'import_batch') {
-      const rowId = text(raw.rowId || raw.row_id);
-      if (rowId) {
-        const row = await client.query(`SELECT COALESCE(sell_price_ron,sell_price) AS price FROM aif_import_rows WHERE id::text=$1 LIMIT 1`, [rowId]);
-        const price = aifPriceNumber(row.rows[0]?.price);
-        if (price !== null) return price;
-      }
-      if (sourceId) {
-        const row = await client.query(
-          `SELECT COALESCE(sell_price_ron,sell_price) AS price
-           FROM aif_import_rows
-           WHERE batch_id::text=$1 AND variant_id::text=$2 AND status='committed'
-           ORDER BY row_no DESC,id DESC LIMIT 1`,
-          [String(sourceId), String(variantId)]
-        );
-        const price = aifPriceNumber(row.rows[0]?.price);
-        if (price !== null) return price;
-      }
+  async function aifRetailIncomingUnitPrice(client, { variantId }) {
+    const retail = await client.query(`/* aif_current_retail_price */ SELECT sell_price FROM aif_product_variants WHERE id=$1`, [variantId]);
+    const price = aifPriceNumber(retail.rows[0]?.sell_price);
+    if (price === null || price < 0) {
+      throw new Error('Hiányzó vagy hibás eladási ár: a készletérték nem számolható.');
     }
-    const variant = await client.query(`SELECT sell_price FROM aif_product_variants WHERE id=$1 LIMIT 1`, [variantId]);
-    return aifPriceNumber(variant.rows[0]?.sell_price) ?? 0;
+    return price;
   }
 
   async function applyAifRetailBookMovement(client, args = {}) {
@@ -2718,6 +2711,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       bookQty = qtyBefore;
     }
 
+    // Reconcile the live selling-value basis; never use the customer's discounted payment.
+    const storedBeforeValue = beforeValue;
+    const retailUnitPrice = await aifRetailIncomingUnitPrice(client, args);
+    beforeValue = Math.round(Math.max(0, qtyBefore) * retailUnitPrice * 100) / 100;
+    bookQty = qtyBefore;
     const transferKey = aifRetailTransferKey(args.sourceType, args.sourceId, args.raw || {});
     let movementValue = 0;
     let unitBookValue = bookQty > 0 ? beforeValue / bookQty : 0;
@@ -2779,6 +2777,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       afterValue = Math.round((beforeValue + movementValue) * 100) / 100;
     }
 
+    const calculatedAfterValue = afterValue;
+    afterValue = Math.round(Math.max(0, qtyAfter) * retailUnitPrice * 100) / 100;
     if (qtyAfter <= 0.0001) afterValue = 0;
     await client.query(
       `INSERT INTO aif_stock_retail_book (location_id,variant_id,qty,book_value,seeded,updated_at)
@@ -2793,7 +2793,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       retailBookValueAfter: Math.round(afterValue * 100) / 100,
       retailBookMovementValue: Math.round(movementValue * 100) / 100,
       retailBookUnitValue: Math.round(unitBookValue * 100) / 100,
-      retailBookMethod: transferKey ? 'weighted_average_transfer' : 'weighted_average',
+      retailBookStoredValueBefore: Math.round(storedBeforeValue * 100) / 100,
+      retailBookRevaluationBefore: Math.round((beforeValue - storedBeforeValue) * 100) / 100,
+      retailBookRevaluationAfter: Math.round((afterValue - calculatedAfterValue) * 100) / 100,
+      retailBookMethod: 'current_retail_price', 
     };
   }
 
@@ -22201,15 +22204,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        COALESCE(sum((icl.counted_qty - icl.expected_qty)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS diff_qty,
        COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS missing_qty,
        COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS extra_qty,
-       COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS missing_sell_value,
-       COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS extra_sell_value,
-       COALESCE(sum((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS diff_sell_value,
+       COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0) * (CASE WHEN ic.status IN ('draft','counting','review') THEN COALESCE(v.sell_price,icl.sell_price,0) ELSE COALESCE(icl.sell_price,0) END)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS missing_sell_value,
+       COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0) * (CASE WHEN ic.status IN ('draft','counting','review') THEN COALESCE(v.sell_price,icl.sell_price,0) ELSE COALESCE(icl.sell_price,0) END)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS extra_sell_value,
+       COALESCE(sum((icl.counted_qty - icl.expected_qty) * (CASE WHEN ic.status IN ('draft','counting','review') THEN COALESCE(v.sell_price,icl.sell_price,0) ELSE COALESCE(icl.sell_price,0) END)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS diff_sell_value,
        COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS missing_buy_value,
        COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS extra_buy_value,
        COALESCE(sum((icl.counted_qty - icl.expected_qty) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS diff_buy_value
      FROM aif_inventory_counts ic
      JOIN aif_locations l ON l.id=ic.location_id
      LEFT JOIN aif_inventory_count_lines icl ON icl.count_id=ic.id
+     LEFT JOIN aif_product_variants v ON v.id=icl.variant_id
      ${whereSql}
      GROUP BY ic.id, l.id`;
   }
@@ -22226,9 +22230,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          icl.counted_qty, (icl.counted_qty - icl.expected_qty) AS diff_qty,
          GREATEST(icl.expected_qty - icl.counted_qty, 0) AS missing_qty,
          GREATEST(icl.counted_qty - icl.expected_qty, 0) AS extra_qty,
-         icl.buy_price, icl.sell_price,
+         icl.buy_price, CASE WHEN ic.status IN ('draft','counting','review') THEN COALESCE(v.sell_price,icl.sell_price,0) ELSE COALESCE(icl.sell_price,0) END AS sell_price,
          ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.buy_price,0))::numeric(14,2) AS diff_buy_value,
-         ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0))::numeric(14,2) AS diff_sell_value,
+         ((icl.counted_qty - icl.expected_qty) * (CASE WHEN ic.status IN ('draft','counting','review') THEN COALESCE(v.sell_price,icl.sell_price,0) ELSE COALESCE(icl.sell_price,0) END))::numeric(14,2) AS diff_sell_value,
          icl.note, icl.raw, icl.created_at, icl.updated_at,
          l.id AS location_id, l.code AS location_code, l.name AS location_name,
          v.internal_sku, v.barcode, v.sn_cod, COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
@@ -22562,6 +22566,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
+      await client.query(`UPDATE aif_inventory_count_lines l
+        SET sell_price=COALESCE(v.sell_price,l.sell_price)
+        FROM aif_product_variants v WHERE l.count_id=$1 AND v.id=l.variant_id`, [item.id]);
       await client.query(
         `UPDATE aif_inventory_counts
          SET status='committed', committed_at=now(), updated_at=now(),
@@ -31051,16 +31058,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0)::numeric AS available_qty,
              COALESCE(sum(
                ${shopifyStock ? 'GREATEST(COALESCE(s.qty,0),0)' : 'GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)'} *
-               CASE
-                 WHEN COALESCE(rb.qty,0) > 0 THEN COALESCE(rb.book_value,0) / rb.qty
-                 ELSE COALESCE(v.sell_price,0)
-               END
+               COALESCE(v.sell_price,0)
              ),0)::numeric AS retail_value,
              count(*) FILTER (WHERE COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) BETWEEN 1 AND 2)::int AS low_stock_variants
            FROM aif_stock s
            JOIN aif_product_variants v ON v.id=s.variant_id
            JOIN aif_product_models m ON m.id=v.model_id
-           LEFT JOIN aif_stock_retail_book rb ON rb.location_id=s.location_id AND rb.variant_id=s.variant_id
            WHERE s.location_id=$1
              AND ${shopifyStock ? 'COALESCE(s.qty,0) > 0' : 'COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) > 0'}
              AND COALESCE(v.status,'active')='active'
