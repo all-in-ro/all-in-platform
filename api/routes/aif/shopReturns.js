@@ -24,6 +24,42 @@ export default function createAifShopReturnsRouter({
   const tokenHash = (value) => createHash("sha256").update(String(value || "")).digest("hex");
   const oneTimeCode = () => String(randomInt(1000, 10000));
 
+  function readReplacementDiscount(input) {
+    const fail = (message) => { throw Object.assign(new Error(message), { statusCode: 400, code: 'exchange_discount_invalid' }); };
+    const mode = input.discountMode ?? 'amount';
+    if (!['amount', 'percent'].includes(mode)) fail('Érvénytelen kedvezménytípus.');
+    const raw = String(input.discountValue ?? 0).trim().replace(',', '.');
+    if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) fail('A kedvezmény nem negatív szám lehet, legfeljebb két tizedessel.');
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value > 99999999.99 || (mode === 'percent' && value > 100)) fail('Érvénytelen kedvezményérték.');
+    const expected = input.expectedListPrice;
+    if (expected != null && (typeof expected !== 'number' || !Number.isFinite(expected) || expected < 0)) fail('Érvénytelen eredeti ár.');
+    return { mode, value, expectedListPrice: expected };
+  }
+
+  function priceReplacement(price, quantity, discount) {
+    const cents = Math.round((price + Number.EPSILON) * 100);
+    const hundredths = Math.round(discount.value * 100);
+    if (discount.expectedListPrice != null && Math.round(discount.expectedListPrice * 100) !== cents) {
+      throw Object.assign(new Error('A csere-termék ára közben megváltozott. Keresd ki újra a terméket.'), { statusCode: 409, code: 'exchange_price_changed' });
+    }
+    if (discount.mode === 'amount' && hundredths > cents) {
+      throw Object.assign(new Error('A kedvezmény nem lehet nagyobb a termék egységáránál.'), { statusCode: 400, code: 'exchange_discount_invalid' });
+    }
+    // A nettó egységárat kerekítjük: 79,50 - 5% = 75,53.
+    const netCents = discount.mode === 'percent'
+      ? Math.round(cents * (10000 - hundredths) / 10000)
+      : cents - hundredths;
+    return {
+      unitPrice: netCents / 100,
+      lineTotal: aifRoundMoney(netCents * quantity / 100),
+      discount: { mode: discount.mode, value: discount.value, listPrice: cents / 100,
+        unitDiscount: (cents - netCents) / 100,
+        discountPercent: discount.mode === 'percent' ? discount.value : (cents ? aifRoundMoney((cents - netCents) * 100 / cents) : 0) },
+    };
+  }
+
+
   // A cserekent kiadott termek is onallo, ujra visszaveheto bizonylatsor.
   // A gyoker-eladasra hivatkozas megmarad, de nem novelheti az eredeti
   // eladas visszavett darabszamat. Ezert uj, kulon FK szukseges.
@@ -111,10 +147,10 @@ export default function createAifShopReturnsRouter({
         colorName: row.color_name || null, size: row.size || null,
         imageUrl: row.image_url || null,
       },
-      listPrice: priceVisible ? amount : null,
+      listPrice: priceVisible ? aifNumber(row.replacement_raw?.discount?.listPrice ?? amount) : null,
       unitPrice: priceVisible ? amount : null,
-      discountAmount: priceVisible ? 0 : null,
-      discountPercent: priceVisible ? 0 : null,
+      discountAmount: priceVisible ? aifNumber(row.replacement_raw?.discount?.unitDiscount) : null,
+      discountPercent: priceVisible ? aifNumber(row.replacement_raw?.discount?.discountPercent) : null,
       lineTotal: priceVisible ? aifNumber(row.line_total) : null,
       saleTotal: priceVisible ? aifNumber(row.sale_total) : null,
     };
@@ -124,7 +160,7 @@ export default function createAifShopReturnsRouter({
     const result = await client.query(
       `SELECT
          el.id AS source_exchange_line_id, el.exchange_id AS parent_exchange_id,
-         el.variant_id, el.quantity, el.unit_price, el.line_total, el.buy_price_snapshot,
+         el.variant_id, el.quantity, el.unit_price, el.line_total, el.raw AS replacement_raw, el.buy_price_snapshot,
          COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),'Ismeretlen termek') AS product_title,
          COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
          COALESCE(NULLIF(el.barcode,''),NULLIF(v.barcode,'')) AS barcode,
@@ -539,7 +575,7 @@ export default function createAifShopReturnsRouter({
       if (!search) return res.json({ ok:true, items:[], count:0 });
       const results = await pool.query(
         `SELECT el.id::text AS source_exchange_line_id, el.exchange_id AS parent_exchange_id,
-                el.variant_id, el.quantity, el.unit_price, el.line_total,
+                el.variant_id, el.quantity, el.unit_price, el.line_total, el.raw AS replacement_raw,
                 COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),'Ismeretlen termek') AS product_title,
                 COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,'')) AS product_code,
                 COALESCE(NULLIF(el.barcode,''),NULLIF(v.barcode,'')) AS barcode,
@@ -1021,6 +1057,7 @@ export default function createAifShopReturnsRouter({
                'variantId', el.variant_id::text,
                'quantity', el.quantity,
                'unitPrice', el.unit_price,
+               'discount', el.raw->'discount',
                'lineTotal', el.line_total,
                'title', COALESCE(NULLIF(el.product_title,''), NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék'),
                'productCode', COALESCE(NULLIF(el.product_code,''), NULLIF(sc.supplier_product_code,''), NULLIF(m.model_code,''), NULLIF(v.internal_sku,'')),
@@ -1093,6 +1130,11 @@ export default function createAifShopReturnsRouter({
             variantId: String(line.variantId || ""),
             quantity: aifNumber(line.quantity),
             unitPrice: aifNumber(line.unitPrice),
+            listPrice: aifNumber(line.discount?.listPrice ?? line.unitPrice),
+            discountMode: line.discount?.mode || null,
+            discountValue: aifNumber(line.discount?.value),
+            discountAmount: aifNumber(line.discount?.unitDiscount),
+            discountPercent: aifNumber(line.discount?.discountPercent),
             lineTotal: aifNumber(line.lineTotal),
             title: line.title || "Ismeretlen termék",
             productCode: line.productCode || null,
@@ -1646,7 +1688,7 @@ export default function createAifShopReturnsRouter({
           throw errorResponse("Duplikalt vagy ervenytelen csere-termek.", "return_batch_replacement_invalid", 400);
         }
         seenVariants.add(variantId);
-        replacements.push({ variantId, quantity });
+        replacements.push({ variantId, quantity, discount: readReplacementDiscount(inputRow) });
       }
 
       const returnQtyByVariant = new Map();
@@ -1703,8 +1745,7 @@ export default function createAifShopReturnsRouter({
         if (!Number.isFinite(price) || price < 0) {
           throw errorResponse(`${product.title}: ervenytelen eladasi ar.`, "return_batch_replacement_price", 400);
         }
-        item.unitPrice = aifRoundMoney(price);
-        item.lineTotal = aifRoundMoney(item.unitPrice * item.quantity);
+        Object.assign(item, priceReplacement(price, item.quantity, item.discount));
         item.buyPrice = product.buy_price == null ? null : aifRoundMoney(product.buy_price);
         item.product = product;
       }
@@ -1778,7 +1819,7 @@ export default function createAifShopReturnsRouter({
             text(body.note) || null, row.auth?.id || null, JSON.stringify(snapshot),
             JSON.stringify(primary ? replacements.map(x => ({
               variantId: x.variantId, quantity: x.quantity, unitPrice: x.unitPrice,
-              lineTotal: x.lineTotal, buyPrice: x.buyPrice,
+              lineTotal: x.lineTotal, buyPrice: x.buyPrice, discount: x.discount,
             })) : []), requestId,
           ]
         );
@@ -1797,7 +1838,7 @@ export default function createAifShopReturnsRouter({
            p.title || null, p.supplier_product_code || p.model_code || p.internal_sku || null,
            p.barcode || null, p.brand_name || null, p.color_name || p.color_code || null,
            p.size || null, p.image_url || null,
-           JSON.stringify({ source: "shop_exchange_batch", returnBatchId: batchId })]
+           JSON.stringify({ source: "shop_exchange_batch", returnBatchId: batchId, discount: item.discount })]
         );
       }
       const runningQty = new Map(Array.from(variantMap, ([variantId, row]) => [variantId, aifNumber(row.qty)]));
@@ -2013,7 +2054,7 @@ export default function createAifShopReturnsRouter({
         if(!isUuidText(id)||!Number.isSafeInteger(qty)||qty<=0||seenVariants.has(id))
           throw fail('Ervenytelen vagy ismetelt csere-termek.','chain_replacement_invalid',400);
         seenVariants.add(id);
-        replacements.push({id,qty});
+        replacements.push({id,qty,discount:readReplacementDiscount(row)});
       }
       const returnsByVariant=new Map();
       for(const r of sourceRows){
@@ -2050,7 +2091,8 @@ export default function createAifShopReturnsRouter({
         if(r.qty>available)throw fail(`${v.title}: nem eleg a keszlet (${available} db).`,'chain_insufficient_stock');
         const unit=Number(v.sell_price);
         if(!Number.isFinite(unit)||unit<0)throw fail(`${v.title}: hianyzik az eladasi ar.`,'chain_missing_replacement_price');
-        r.product=v;r.unit=aifRoundMoney(unit);r.total=aifRoundMoney(r.unit*r.qty);
+        const priced=priceReplacement(unit,r.qty,r.discount);
+        r.product=v;r.unit=priced.unitPrice;r.total=priced.lineTotal;r.discount=priced.discount;
         r.buy=v.buy_price==null?null:aifRoundMoney(v.buy_price);
       }
       const totalCredit=aifRoundMoney(sourceRows.reduce((n,r)=>n+r.credit,0));
@@ -2100,7 +2142,7 @@ export default function createAifShopReturnsRouter({
           r.line.customer_name||null,r.line.customer_phone||null,actor,text(body.note)||null,
           r.auth?.id || null,
           JSON.stringify(snap),JSON.stringify(primary?replacements.map(x=>({
-            variantId:x.id,quantity:x.qty,unitPrice:x.unit,lineTotal:x.total,buyPrice:x.buy,
+            variantId:x.id,quantity:x.qty,unitPrice:x.unit,lineTotal:x.total,buyPrice:x.buy,discount:x.discount,
           })):[]),requestId,
         ]);
         headers.push({header:created.rows[0],source:r});
@@ -2116,7 +2158,7 @@ export default function createAifShopReturnsRouter({
           main.id,lineNo++,r.id,r.qty,r.unit,r.total,r.buy,
           v.title||null,v.supplier_product_code||v.model_code||v.internal_sku||null,
           v.barcode||null,v.brand_name||null,v.color_name||v.color_code||null,v.size||null,v.image_url||null,
-          JSON.stringify({source:'shop_exchange_chain',parentExchangeId:parentId,rootSaleId}),
+          JSON.stringify({source:'shop_exchange_chain',parentExchangeId:parentId,rootSaleId,discount:r.discount}),
         ]);
       }
       const running=new Map(Array.from(byVariant,([id,v])=>[id,aifNumber(v.qty)]));
@@ -2351,7 +2393,7 @@ export default function createAifShopReturnsRouter({
           throw error;
         }
         seen.add(variantId);
-        replacements.push({ variantId, quantity });
+        replacements.push({ variantId, quantity, discount: readReplacementDiscount(input) });
       }
 
       const variantIdsToLock = Array.from(new Set([String(source.variant_id), ...replacements.map((item) => item.variantId)])).sort();
@@ -2422,8 +2464,7 @@ export default function createAifShopReturnsRouter({
           error.statusCode = 400;
           throw error;
         }
-        replacement.unitPrice = aifRoundMoney(unitPrice);
-        replacement.lineTotal = aifRoundMoney(unitPrice * replacement.quantity);
+        Object.assign(replacement, priceReplacement(unitPrice, replacement.quantity, replacement.discount));
         replacement.buyPrice = stock.buy_price === null || stock.buy_price === undefined || stock.buy_price === ""
           ? null
           : aifRoundMoney(stock.buy_price);
@@ -2519,6 +2560,7 @@ export default function createAifShopReturnsRouter({
             unitPrice: item.unitPrice,
             lineTotal: item.lineTotal,
             buyPrice: item.buyPrice,
+            discount: item.discount,
           }))),
           idempotencyKey,
         ]
@@ -2550,6 +2592,7 @@ export default function createAifShopReturnsRouter({
             stock.image_url || null,
             JSON.stringify({
               source: "shop_exchange",
+              discount: item.discount,
               availableBefore: aifNumber(stock.qty) - aifNumber(stock.reserved_qty),
               buyPriceSource: item.buyPrice === null ? "missing" : "exchange_time_variant",
             }),
