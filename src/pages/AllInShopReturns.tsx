@@ -54,6 +54,7 @@ function replacementPrice(line: ReplacementLine) {
   return { unit: net / 100, total: net * line.quantity / 100, discount: (cents - net) / 100 };
 }
 
+
 type AuthorizationState = {
   saleLineId: string;
   item: AifShopReturnAuthorizationRequest;
