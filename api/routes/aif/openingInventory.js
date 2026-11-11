@@ -929,7 +929,9 @@ export default function createAifOpeningInventoryRouter({
          l.system_qty_start, l.system_reserved_start,
          l.trusted_net_qty, l.trusted_in_qty, l.trusted_out_qty, l.known_min_qty,
          l.counted_qty,
-         l.buy_price, l.sell_price, l.first_scanned_at, l.last_scanned_at, l.last_scanned_by,
+         l.buy_price,
+         CASE WHEN $3::boolean THEN COALESCE(v.sell_price,l.sell_price) ELSE l.sell_price END AS sell_price,
+         l.first_scanned_at, l.last_scanned_at, l.last_scanned_by,
          l.auto_zeroed, l.note, l.raw, l.created_at, l.updated_at,
          COALESCE(st.qty,0)::numeric AS current_system_qty,
          COALESCE(st.reserved_qty,0)::numeric AS current_reserved_qty,
@@ -979,7 +981,7 @@ export default function createAifOpeningInventoryRouter({
          v.color_name ASC NULLS LAST,
          v.size ASC
        ${lock ? "FOR UPDATE OF l" : ""}`,
-      [session.id, session.location_id],
+      [session.id, session.location_id, ACTIVE_STATUSES.has(session.status)],
     );
 
     const cutoff = session.applied_at || session.cancelled_at || null;
