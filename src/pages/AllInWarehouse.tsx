@@ -2585,6 +2585,54 @@ function warehousePriceChangeDate(value: unknown) {
   return match ? `${match[3]}.${match[2]}.${match[1]}` : raw || "-";
 }
 
+type WarehouseRelabelGroup = {
+  key: string; name: string; qty: number;
+  lines: Array<{ line: AifPriceChangeDocumentDetail["lines"][number]; qty: number }>;
+};
+
+function warehouseRelabelGroups(detail: AifPriceChangeDocumentDetail) {
+  const groups = new Map<string, WarehouseRelabelGroup>();
+  for (const line of detail.lines) {
+    const breakdown = line.location_breakdown;
+    if (!Array.isArray(breakdown) || !breakdown.length) return [];
+    let total = 0;
+    for (const row of breakdown) {
+      const qty = Number(row.qty);
+      const key = row.locationId || row.locationCode || row.locationName;
+      if (!key || !Number.isFinite(qty) || qty < 0) return [];
+      total += qty;
+      if (!qty) continue;
+      const name = row.locationName || row.locationCode || "Üzlet";
+      const group = groups.get(key) || { key, name, qty: 0, lines: [] };
+      group.qty += qty;
+      group.lines.push({ line, qty });
+      groups.set(key, group);
+    }
+    if (!Number.isFinite(Number(line.affected_qty)) || Math.abs(total - Number(line.affected_qty)) > 0.0001) return [];
+  }
+  return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name, "hu"));
+}
+
+function warehouseRelabelPrintHtml(detail: AifPriceChangeDocumentDetail, key: string) {
+  const group = warehouseRelabelGroups(detail).find((entry) => entry.key === key);
+  if (!group) throw new Error("Hiányos vagy eltérő üzletenkénti készletbontás. A bolti lap nem nyomtatható.");
+  const esc = (value: unknown) => labelEscapeHtml(String(value ?? ""));
+  const money = (value: unknown) => Number(value).toLocaleString("hu-HU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pages: string[] = [];
+  for (let start = 0; start < group.lines.length; start += 35) {
+    const rows = group.lines.slice(start, start + 35).map(({ line, qty }, i) => `<tr>
+      <td>${start + i + 1}</td><td class="product"><b>${esc(line.product_title || line.product_code)}</b><small>${esc([line.product_code, line.barcode, line.color_name, line.size].filter(Boolean).join(" • "))}</small></td>
+      <td>${esc(qty)}</td><td class="money">${money(line.old_sell_price)}</td><td class="money"><b>${money(line.new_sell_price)}</b></td><td class="check">□</td></tr>`).join("");
+    pages.push(`<section><header><div class="brand">ALLINFASHION</div><h1>ÁTCÍMKÉZÉSI LAP — ${esc(group.name)}</h1><div>${esc(detail.item.document_number)} • ${esc(warehousePriceChangeDate(detail.item.document_date))}${detail.item.invoice_number ? ` • Számla: ${esc(detail.item.invoice_number)}` : ""}</div></header>
+      <table><colgroup><col style="width:6%"><col style="width:49%"><col style="width:8%"><col style="width:15%"><col style="width:15%"><col style="width:7%"></colgroup><thead><tr><th>#</th><th>Termék / azonosító / szín / méret</th><th>Db</th><th>Régi ár<br>RON/db</th><th>Új ár<br>RON/db</th><th>Kész</th></tr></thead><tbody>${rows}</tbody></table>
+      <footer><span>Átcímkézendő összesen: ${esc(group.qty)} db • ${esc(group.name)}</span><span>${Math.floor(start / 35) + 1} / ${Math.ceil(group.lines.length / 35)}</span></footer>
+      <p class="note">Az árváltozáskor meglévő készlet alapján. Belső bolti munkalap.</p></section>`);
+  }
+  return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>${esc(detail.item.document_number)} — ${esc(group.name)} — Átcímkézés</title><style>
+    @page{size:A4 portrait;margin:10mm}*{box-sizing:border-box}body{margin:0;color:#172033;font:10px Arial,sans-serif}section{break-after:page}section:last-child{break-after:auto}header{border-bottom:2px solid #108d8b;padding-bottom:3mm}.brand{letter-spacing:2px;font-size:9px}h1{font-size:17px;margin:2mm 0}table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:4mm}th,td{border:1px solid #c4cbd0;padding:1.3mm 1mm}th{font-size:9px;background:#eef3f3}td{text-align:center}tr{break-inside:avoid}.product{text-align:left}.product b,.product small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.product b{font-size:9px}.product small{font-size:8px;color:#586271;margin-top:0.5mm}.money{text-align:right;white-space:nowrap}.check{font-size:15px}footer{display:flex;justify-content:space-between;margin-top:4mm;font-weight:bold}.note{font-size:8px;color:#586271}
+    </style></head><body>${pages.join("")}</body></html>`;
+}
+
 function warehousePriceChangePrintDocumentHtml(detail: AifPriceChangeDocumentDetail) {
   const item = detail.item || ({} as AifPriceChangeDocumentSummary);
   const lines = Array.isArray(detail.lines) ? detail.lines : [];
@@ -13504,12 +13552,18 @@ export default function AllInWarehouse() {
     }
   }
 
-  function printPriceChangeDocument(detailData = priceChangeDetail) {
+  function printPriceChangeDocument(detailData = priceChangeDetail, locationKey?: string) {
     if (!detailData?.item) {
       setMessage("Nincs megnyitott árváltozási bizonylat.");
       return;
     }
-    const html = warehousePriceChangePrintDocumentHtml(detailData);
+    let html: string;
+    try {
+      html = locationKey ? warehouseRelabelPrintHtml(detailData, locationKey) : warehousePriceChangePrintDocumentHtml(detailData);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "A bolti lap nem készíthető el.");
+      return;
+    }
     const iframe = document.createElement("iframe");
     iframe.setAttribute("aria-hidden", "true");
     iframe.style.position = "fixed";
@@ -16542,7 +16596,7 @@ export default function AllInWarehouse() {
                   <div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/70">Hivatalos árváltozási nyilvántartás</p><h2 className="mt-0.5 text-xl text-white">Árváltozások</h2><p className="mt-0.5 text-[11px] text-white/58">{priceChangeDocumentTotal} bizonylat • visszamenőleges importtörténettel</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button className={btnSoft} type="button" disabled={!priceChangeDetail || priceChangeDetailBusy} onClick={() => printPriceChangeDocument()}><Printer size={15} /> PDF / Nyomtatás</button>
+                  <button className={btnSoft} type="button" disabled={!priceChangeDetail || priceChangeDetailBusy} onClick={() => printPriceChangeDocument()}><img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp" alt="" className="h-4 w-4 object-contain" /> PDF / Nyomtatás</button>
                   <button className={btnSoft} type="button" onClick={() => setPriceChangeArchiveOpen(false)}><X size={15} /> Bezárás</button>
                 </div>
               </div>
@@ -16580,7 +16634,14 @@ export default function AllInWarehouse() {
                           {priceChangeDetail.lines.map((line) => <div key={line.id} className="grid gap-2 px-3 py-2.5 md:grid-cols-[44px_minmax(240px,1fr)_80px_110px_110px_100px] md:items-center"><div className="h-10 w-10 overflow-hidden rounded-lg border border-white/[0.08] bg-[#263246]">{line.image_url ? <img src={line.image_url} alt="" className="h-full w-full object-cover" /> : null}</div><div className="min-w-0"><div className="truncate text-[12px] text-white">{line.product_title || line.product_code || "Termék"}</div><div className="mt-0.5 truncate text-[9px] text-white/42">{[line.brand_name,line.product_code,line.color_name,line.size].filter(Boolean).join(" • ")}</div></div><div className="text-center text-[12px] tabular-nums text-white">{Math.floor(n(line.affected_qty))} db</div><div className="text-right text-[12px] tabular-nums text-white/64">{money(line.old_sell_price)} RON</div><div className="text-right text-[13px] tabular-nums text-[#bff8f5]">{money(line.new_sell_price)} RON</div><div className="text-right text-[12px] tabular-nums text-orange-100">{money(line.difference_value)} RON</div></div>)}
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.08] bg-[#303c50] px-4 py-3 text-[11px] text-white/52"><span>Rögzítette: <strong className="font-normal text-white">{warehouseActorDisplay(priceChangeDetail.item.actor)}</strong></span><span>TVA különbözet: <strong className="font-normal text-white">{money(priceChangeDetail.item.difference_tva)} RON</strong></span><button className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail)}><Printer size={14} /> Hivatalos PDF</button></div>
+                      <div className="rounded-2xl border border-white/[0.08] bg-[#303c50] px-4 py-3">
+                        <p className="mb-2 text-xs text-white/65">Bolti átcímkézési lapok</p>
+                        <div className="flex flex-wrap gap-2">
+                          {warehouseRelabelGroups(priceChangeDetail).map((group) => <button key={group.key} className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail, group.key)}><img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp" alt="" className="h-4 w-4 object-contain" />{group.name} • {group.qty} db</button>)}
+                          {!warehouseRelabelGroups(priceChangeDetail).length && <span className="text-xs text-amber-200">Nincs teljes mentett üzletenkénti bontás ehhez a bizonylathoz.</span>}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.08] bg-[#303c50] px-4 py-3 text-[11px] text-white/52"><span>Rögzítette: <strong className="font-normal text-white">{warehouseActorDisplay(priceChangeDetail.item.actor)}</strong></span><span>TVA különbözet: <strong className="font-normal text-white">{money(priceChangeDetail.item.difference_tva)} RON</strong></span><button className={primaryBtn} type="button" onClick={() => printPriceChangeDocument(priceChangeDetail)}><img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/adobe-acrobat-reader-icon-free-png.webp" alt="" className="h-4 w-4 object-contain" /> Hivatalos PDF</button></div>
                     </div>
                   ) : <div className="flex h-full items-center justify-center text-sm text-white/45">Válassz egy árváltozási bizonylatot.</div>}
                 </section>
