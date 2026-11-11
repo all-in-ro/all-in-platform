@@ -877,12 +877,15 @@ export default function createAifAdminShopOverviewRouter(deps) {
                 END AS snapshot_reserved_qty,
                 CASE
                   WHEN $2::date >= ((now() AT TIME ZONE 'Europe/Bucharest')::date)
-                       AND COALESCE(rb.qty,0) > 0
-                    THEN COALESCE(rb.book_value,0)::numeric / rb.qty::numeric
+                    THEN COALESCE(v.sell_price,0)::numeric
+                  WHEN price_before.price IS NOT NULL THEN price_before.price
+                  WHEN price_after.price IS NOT NULL THEN price_after.price
                   WHEN hist.book_value_after IS NOT NULL AND COALESCE(hist.qty_after,0) > 0
                     THEN hist.book_value_after::numeric / hist.qty_after::numeric
                   ELSE COALESCE(v.sell_price,0)::numeric
-                END AS book_unit_value
+                END AS book_unit_value,
+                ($2::date < ((now() AT TIME ZONE 'Europe/Bucharest')::date)
+                  AND price_before.price IS NULL AND price_after.price IS NULL) AS estimated_price
               FROM candidate_variants cv
               LEFT JOIN aif_stock s
                 ON s.location_id=$1
@@ -892,9 +895,6 @@ export default function createAifAdminShopOverviewRouter(deps) {
               JOIN aif_product_models m ON m.id=v.model_id
               LEFT JOIN aif_brands b ON b.id=m.brand_id
               LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
-              LEFT JOIN aif_stock_retail_book rb
-                ON rb.location_id=$1
-               AND rb.variant_id=cv.variant_id
               LEFT JOIN LATERAL (
                 SELECT
                   NULLIF(sm.raw->>'retailBookValueAfter','')::numeric AS book_value_after,
@@ -907,9 +907,26 @@ export default function createAifAdminShopOverviewRouter(deps) {
                 ORDER BY sm.created_at DESC, sm.id DESC
                 LIMIT 1
               ) hist ON true
+              LEFT JOIN LATERAL (
+                SELECT pcl.new_sell_price::numeric AS price
+                FROM aif_price_change_document_lines pcl
+                JOIN aif_price_change_documents pd ON pd.id=pcl.document_id
+                WHERE pcl.variant_id=cv.variant_id AND pd.status='issued'
+                  AND pd.document_date <= $2::date
+                ORDER BY pd.document_date DESC,pd.created_at DESC,pcl.created_at DESC,pcl.id DESC LIMIT 1
+              ) price_before ON true
+              LEFT JOIN LATERAL (
+                SELECT pcl.old_sell_price::numeric AS price
+                FROM aif_price_change_document_lines pcl
+                JOIN aif_price_change_documents pd ON pd.id=pcl.document_id
+                WHERE pcl.variant_id=cv.variant_id AND pd.status='issued'
+                  AND pd.document_date > $2::date
+                ORDER BY pd.document_date ASC,pd.created_at ASC,pcl.created_at ASC,pcl.id ASC LIMIT 1
+              ) price_after ON true
               WHERE ${where.join(" AND ")}
             )
             SELECT
+              count(*) FILTER (WHERE snapshot_qty > 0 AND estimated_price)::int AS estimated_price_variants,
               count(*) FILTER (WHERE snapshot_qty > 0)::int AS variant_count,
               COALESCE(sum(snapshot_qty),0)::numeric AS total_qty,
               COALESCE(sum(snapshot_reserved_qty),0)::numeric AS reserved_qty,
@@ -2391,6 +2408,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         },
         stockSnapshot: {
           asOfDate: stockSnapshotDate,
+          estimatedPriceVariants: aifNumber(stockResult.rows[0]?.estimated_price_variants),
           variantCount: aifNumber(stockResult.rows[0]?.variant_count),
           totalQty: aifNumber(stockResult.rows[0]?.total_qty),
           reservedQty: aifNumber(stockResult.rows[0]?.reserved_qty),
