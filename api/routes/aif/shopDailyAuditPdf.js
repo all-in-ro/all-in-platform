@@ -173,6 +173,45 @@ export function aifDailyAuditCashEvents(m, date) {
  * Receipt/Sale identifiers stay in the database, but product SKU/barcode/color/size
  * are printed so each item remains traceable without long internal receipt IDs.
  */
+// Detail-only snapshots: never feed product values into the cash totals.
+export function aifAuditExchangeDetails(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const batch = row.original_snapshot?.returnBatchId;
+    const key = batch ? `${row.location_id}:${actorKey(row.actor)}:${batch}` : String(row.id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.values()].map(members => {
+    const primary = members.find(r => r.original_snapshot?.returnBatchPrimary === true) || members[0];
+    const returned = members.map(r => {
+      const snap = r.original_snapshot || {}, product = snap.product || {}, fallback = r.source_line || {};
+      return {
+        product_title: product.title || fallback.product_title || 'Ismeretlen termék',
+        product_code: product.productCode || fallback.product_code,
+        barcode: product.barcode || fallback.barcode,
+        color_name: product.colorName || fallback.color_name,
+        size: product.size || fallback.size,
+        quantity: moneyNumber(r.returned_qty), unit_price: moneyNumber(r.return_unit_credit),
+        list_price: moneyNumber(snap.listPrice ?? fallback.list_price ?? r.return_unit_credit),
+        line_total: moneyNumber(r.return_credit),
+      };
+    });
+    const replacement = (primary.replacement_lines || []).map(line => ({
+      ...line, list_price: moneyNumber(line.raw?.discount?.listPrice ?? line.unit_price),
+      quantity: moneyNumber(line.quantity), unit_price: moneyNumber(line.unit_price), line_total: moneyNumber(line.line_total),
+    }));
+    const expected = Number(primary.original_snapshot?.returnBatchCount || 1);
+    return {id:String(primary.id), number:primary.exchange_number, at:primary.created_at,
+      actor:primary.actor, customer:primary.customer_name || '', returned, replacement,
+      incomplete:expected !== members.length,
+      returnCredit:totalOf(returned,'line_total'), replacementTotal:moneyNumber(primary.replacement_total),
+      difference:moneyNumber(primary.difference), settlementAmount:moneyNumber(primary.settlement_amount),
+      settlementDirection:primary.settlement_direction, settlementMethod:primary.settlement_method,
+      voucherRestored:moneyNumber(primary.original_snapshot?.voucherRefund?.restored)};
+  }).sort((a,b)=>eventTime(a)-eventTime(b));
+}
+
 export function writeShopDailyAuditPdf(doc, report) {
   const normalFont = fontCandidates.find(f => fs.existsSync(f));
   const boldFont = boldCandidates.find(f => fs.existsSync(f));
@@ -266,7 +305,7 @@ export function writeShopDailyAuditPdf(doc, report) {
       const row=data[k],rh=rowHeight(row);
       const last = k===data.length-1;
       // Keep an ending subtotal directly below the last row, never on its own sheet.
-      if (y + rh + (last?footerHeight:0) > bottom) {
+      if (y + rh + (last?footerHeight + Number(sums?.keepAfter || 0):0) > bottom) {
         newPage(pageTitle);
         tableHeader();
       }
@@ -408,6 +447,29 @@ export function writeShopDailyAuditPdf(doc, report) {
       chronological(s.settlements,'paid_at').map((r,i)=>[String(i+1),bucharest(r.paid_at,'time'),productText(r),r.customer_name||'',String(r.quantity||''),fmt(r.gross),fmt(r.discount),fmt(r.amount)]),
       numberedProductWidths,
       {numeric:[0,4,5,6,7],cells:[[2,'ÖSSZESEN'],[4,qty(total(s.settlements,r=>r.quantity))],[5,fmt(total(s.settlements,r=>r.gross))],[6,fmt(total(s.settlements,r=>r.discount))],[7,fmt(total(s.settlements,r=>r.amount))]]});
+    for (const exchange of s.exchanges || []) {
+      const rows = [
+        ...exchange.returned.map(line => ({...line, direction:'Visszahozott'})),
+        ...exchange.replacement.map(line => ({...line, direction:'Elvitt'})),
+      ];
+      sectionTable(`Csere részletei · ${bucharest(exchange.at,'time')} · ${exchange.number}`,
+        ['Irány','Termék / azonosítók','Db','Rendes egységár','Kedvezmény','Elszámolt egységár','Érték (RON)'],
+        rows.map(r=>[r.direction,productText(r),qty(r.quantity),fmt(r.list_price),
+          fmt(moneyNumber((r.list_price-r.unit_price)*r.quantity)),fmt(r.unit_price),fmt(r.line_total)]),
+        [75,300,36,90,90,100,90],
+        {numeric:[2,3,4,5,6],keepAfter:24 + (exchange.customer?16:0) + (exchange.settlementAmount>0.005?16:0) + (exchange.voucherRestored>0.005?16:0) + (exchange.incomplete?16:0),cells:[[1,'Visszahozott érték'],[3,fmt(exchange.returnCredit)],
+          [5,'Elvitt érték'],[6,fmt(exchange.replacementTotal)]]});
+      if (exchange.customer) infoLine('Kliens',exchange.customer);
+      infoLine('Különbözet',exchange.difference>0.005
+        ? `Vevő ráfizetése: ${amount(exchange.difference)}`
+        : exchange.difference < -0.005 ? `Vevő javára: ${amount(-exchange.difference)}` : 'Értékazonos csere: 0,00 RON');
+      if (exchange.settlementAmount>0.005) infoLine(
+        exchange.settlementDirection==='out'?'Vevőnek visszafizetve':'Vevőtől átvéve',
+        `${amount(exchange.settlementAmount)} • ${receiptMethod(exchange.settlementMethod)}`);
+      if (exchange.voucherRestored>0.005) infoLine('Utalványra visszaírva',amount(exchange.voucherRestored));
+      if (exchange.incomplete) infoLine('Ellenőrzés szükséges','A csere összetartozó visszáru-tételei hiányosak.');
+      y += 6;
+    }
     const realPayments=s.payments.filter(r=>r.method!=='voucher');
     const voucherPayments=s.payments.filter(r=>r.method==='voucher'&&r.type!=='Utalvány visszaírása');
     const voucherReturns=s.payments.filter(r=>r.type==='Utalvány visszaírása');
@@ -881,6 +943,18 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       WHERE e.location_id=$1 AND e.status='completed'
       AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date ORDER BY e.created_at`,[id,date]),
   ]);
+  // Immutable exchange headers and item snapshots, including zero-difference exchanges.
+  const exchangeDetails = await client.query(`SELECT e.*, to_jsonb(sl) AS source_line,
+      COALESCE(repl.lines,'[]'::jsonb) AS replacement_lines
+    FROM aif_shop_exchanges e
+    LEFT JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(to_jsonb(el) ORDER BY el.line_no, el.id) AS lines
+      FROM aif_shop_exchange_lines el WHERE el.exchange_id=e.id
+    ) repl ON true
+    WHERE e.location_id=$1 AND e.status='completed'
+      AND (e.created_at AT TIME ZONE 'Europe/Bucharest')::date=$2::date
+    ORDER BY e.created_at,e.id`,[id,date]);
   // Az utalvany eladasa onallo penznaplo (nincs termeksor), a bevaltas
   // ellenorzott tender a normal ruhaeladasban. Mindketto AZNAPI esemény.
   const voucherTransactions=await client.query(`SELECT t.id::text,t.voucher_id::text,t.kind,
@@ -1009,6 +1083,7 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
       if(v)actors.add(v);
       if(r.to_actor)actors.add(r.to_actor);
     }
+    for(const r of exchangeDetails.rows)if(r.actor)actors.add(r.actor);
     for(const r of normalReceipts.rows)if(r.receipt_actor)actors.add(r.receipt_actor);
     for(const r of cashMoves.rows)if(r.requested_by)actors.add(r.requested_by);
     for(const transfer of accepted.rows){actors.add(transfer.from_actor);actors.add(transfer.to_actor);}
@@ -1170,7 +1245,8 @@ export async function loadShopDailyAudit({client,location,date,employee=null,han
         return {...n,products:n.productInfo?[n.productInfo]:(matched.length?matched:bySale)};
       })
       .sort((a,b)=>eventTime(a)-eventTime(b));
-    const section={actor,normal,credits,settlements:settlement,payments,notes,moves: moves.sort((a,b)=>eventTime(a)-eventTime(b)),shifts:shiftEvents,
+    const exchanges=aifAuditExchangeDetails(exchangeDetails.rows.filter(r=>matches(r.actor)&&withinShift({at:r.created_at},handover)));
+    const section={actor,normal,credits,exchanges,settlements:settlement,payments,notes,moves: moves.sort((a,b)=>eventTime(a)-eventTime(b)),shifts:shiftEvents,
       creditReceipts:new Set(credits.map(r=>r.sale_number))};
     section.totals=buildTotals(section);sections.push(section);
   }
@@ -1222,7 +1298,7 @@ async function aifActiveAuditDates(client,locationId,from,to) {
 
 export function aifBuildAuditPeriodReport(dayReports,{from,to,scope,location}) {
   const fields=['received','gross','discount','newSales','creditReceived','creditIssued','cash','card','bank','voucherIssued','voucherRedeemed','voucherRestored'];
-  const arrays=['normal','credits','settlements','payments','notes','moves','shifts'];
+  const arrays=['normal','credits','exchanges','settlements','payments','notes','moves','shifts'];
   const reportTotals=Object.fromEntries(fields.map(k=>[k,0]));
   const rollups=new Map();
   const sections=[];
