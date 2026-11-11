@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -11,6 +12,7 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowDownRight,
+  ArrowRightLeft,
   ArrowUpRight,
   BarChart3,
   Banknote,
@@ -54,6 +56,8 @@ import {
 } from "lucide-react";
 import {
   apiAifAdminDeleteShopSaleLine,
+  apiAifShopSaleDetail,
+  type AifShopSaleDetailResponse,
   apiAifShopDailyAuditPdfUrl,
   apiAifDownloadShopDailyAuditExcel,
   apiAifAdminShopOverview,
@@ -843,6 +847,78 @@ function HungarianDatePicker({
   );
 }
 
+
+function AdminExchangeDetails({ locationCode, exchangeId }: { locationCode: string; exchangeId: string }) {
+  const [detail, setDetail] = useState<AifShopSaleDetailResponse | null>(null);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setDetail(null);
+    setError("");
+    apiAifShopSaleDetail({ location: locationCode, id: exchangeId, recordType: "exchange" })
+      .then(result => {
+        if (!active) return;
+        if (!result.exchange) throw new Error("A csere részletei nem érhetők el.");
+        setDetail(result);
+      })
+      .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : "A csere részletei nem tölthetők be."); });
+    return () => { active = false; };
+  }, [locationCode, exchangeId, retry]);
+
+  if (error) return <div role="alert" className="rounded-xl bg-rose-500/10 p-3 text-sm text-rose-100">
+    {error} <button type="button" className="ml-3 rounded-lg border border-white/15 px-3 py-1 text-white" onClick={() => setRetry(value => value + 1)}>Újrapróbálás</button>
+  </div>;
+  if (!detail?.exchange) return <p role="status" className="p-3 text-sm text-white/60">Csere részleteinek betöltése…</p>;
+  const exchange = detail.exchange;
+  const returned = detail.returnedLines || (detail.returnedLine ? [{ ...detail.returnedLine, quantity: exchange.returnedQty, lineTotal: exchange.returnCredit }] : []);
+  const difference = numberValue(exchange.difference);
+  const productList = (title: string, lines: typeof detail.lines) => (
+    <section className="min-w-0 rounded-2xl border border-white/10 bg-black/10 p-3">
+      <h4 className="mb-2 flex items-center gap-2 text-sm text-[#bdf8f5]"><ArrowRightLeft size={15} />{title}</h4>
+      {lines.length ? lines.map((line, index) => (
+        <div key={`${line.id}-${index}`} className="flex gap-3 border-t border-white/[0.08] py-3 first:border-t-0">
+          <ProductThumb src={line.imageUrl} alt={line.productTitle || "Termék"} />
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-sm text-white">{line.productTitle || "Ismeretlen termék"}</p>
+            <p className="mt-1 text-xs text-white/55">{[line.colorName, line.size, line.barcode || line.productCode].filter(Boolean).join(" • ")}</p>
+            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-white/70">
+              <span>{line.quantity} db × {money(line.unitPrice)}</span>
+              <span className="text-sm tabular-nums text-white">{money(line.lineTotal)}</span>
+            </div>
+            {numberValue(line.listPrice) > numberValue(line.unitPrice) + 0.005 ? <p className="mt-1 text-xs text-amber-100/80">
+              Eredeti ár: {money(line.listPrice)} / db · Kedvezmény: {money((numberValue(line.listPrice) - numberValue(line.unitPrice)) * numberValue(line.quantity))}
+            </p> : null}
+          </div>
+        </div>
+      )) : <p className="py-2 text-xs text-white/50">Nincs megjeleníthető terméksor.</p>}
+    </section>
+  );
+  return <div className="space-y-3 rounded-2xl border border-[#8ee6e2]/15 bg-[#243245] p-3 sm:p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/55">
+      <span>{detail.saleNumber} · {dateTime(detail.soldAt)}</span>
+      {detail.actor ? <span>Rögzítette: {detail.actor}</span> : null}
+    </div>
+    <div className="grid gap-3 xl:grid-cols-2">
+      {productList("Visszahozott termékek", returned)}
+      {productList("Elvitt termékek", detail.lines)}
+    </div>
+    <div className="grid gap-2 sm:grid-cols-3">
+      {[
+        ["Visszahozott érték", exchange.returnCredit],
+        ["Elvitt érték kedvezmény után", exchange.replacementTotal],
+        [difference > 0.005 ? "Különbözet · vevő ráfizetése" : difference < -0.005 ? "Különbözet · vevő javára" : "Értékazonos csere", Math.abs(difference)],
+      ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white/[0.04] px-3 py-2">
+        <p className="text-[11px] text-white/55">{label}</p><p className="mt-1 text-lg tabular-nums text-white">{money(Number(amount))}</p>
+      </div>)}
+    </div>
+    {numberValue(exchange.settlementAmount) > 0.005 ? <p className="text-xs text-[#bdf8f5]">
+      {exchange.settlementDirection === "out" ? "Visszafizetve a vevőnek" : "Vevőtől átvéve"}: {money(exchange.settlementAmount)} · {detail.paymentLabel}
+    </p> : null}
+    {numberValue(exchange.voucherRestored) > 0.005 ? <p className="text-xs text-[#bdf8f5]">Utalványra visszaírva: {money(exchange.voucherRestored)}</p> : null}
+    {detail.note ? <p className="text-xs text-white/55">{detail.note}</p> : null}
+  </div>;
+}
 
 function adminSaleDeleteMessage(error: any) {
   const code = String(error?.code || "");
@@ -1688,6 +1764,7 @@ export default function AllInAdminMagazinDashboard({
   const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [showHistoricalCreditRows, setShowHistoricalCreditRows] = useState(false);
   const [eventLogRowNumberDescending, setEventLogRowNumberDescending] = useState(true);
+  const [expandedExchangeKey, setExpandedExchangeKey] = useState<string | null>(null);
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
   const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifAdminShopRecentSale | null>(null);
@@ -2806,9 +2883,14 @@ export default function AllInAdminMagazinDashboard({
                     const rowNumber = settlement
                       ? null
                       : eventLogRowNumbers.get(String(sale.lineId || sale.id || index)) ?? null;
+                    const isExchange = !settlement && (sale.recordType === "exchange" || sale.saleType === "exchange");
+                    const exchangeId = String(sale.exchangeId || sale.saleId || "");
+                    const exchangeKey = `${locationCode}:${applied.from}:${applied.to}:${applied.employee}:${exchangeId}:${sale.lineId || index}`;
+                    const exchangeExpanded = expandedExchangeKey === exchangeKey;
+                    const exchangeRegionId = `admin-exchange-${sale.lineId || sale.id || index}`;
                     return (
+                    <Fragment key={`${sale.recordType || "sale"}:${sale.lineId || sale.id || index}`}>
                     <tr
-                      key={sale.lineId}
                       className={`group border-t align-top ${
                         settlement
                           ? "border-[#9bc8ff]/18 bg-[#31506a]/24 hover:bg-[#365974]/32"
@@ -2899,14 +2981,20 @@ export default function AllInAdminMagazinDashboard({
                         <p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p>
                       </td>
                       <td className="min-w-[130px] px-2 py-3 text-center align-middle">
-                        <span
+                        {isExchange ? (
+                          <button type="button" aria-expanded={exchangeExpanded} aria-controls={exchangeRegionId}
+                            onClick={() => setExpandedExchangeKey(exchangeExpanded ? null : exchangeKey)}
+                            className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border border-[#8ee6e2]/20 bg-[#2a8d8b]/20 px-2.5 text-xs text-[#cffffd] transition hover:bg-[#2a8d8b]/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8ee6e2]">
+                            <ArrowRightLeft size={13} />Csere<ChevronDown size={13} className={exchangeExpanded ? "rotate-180" : ""} />
+                          </button>
+                        ) : <span
                           className={`inline-flex max-w-full items-center justify-center rounded-lg border px-2 py-1.5 text-[10px] leading-tight ${settlement
                             ? "whitespace-nowrap border-[#9bc8ff]/35 bg-[#3978b9]/15 text-[#d9ecff]"
                             : saleTypeBadge(sale.saleType, sale.balanceDue)}`}
                           title={settlement ? "Korábbi vásárlás tartozásának befizetése" : settlementTypeLabel(sale)}
                         >
                           {settlementTypeLabel(sale)}
-                        </span>
+                        </span>}
                       </td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="min-w-[205px] px-3 py-2.5 text-right">
@@ -2993,6 +3081,16 @@ export default function AllInAdminMagazinDashboard({
                         </div>
                       </td>
                     </tr>
+                    {isExchange && exchangeExpanded ? (
+                      <tr className="border-t border-[#8ee6e2]/10 bg-[#293548]">
+                        <td colSpan={10} className="p-3">
+                          <div id={exchangeRegionId} role="region" aria-label="Csere részletei">
+                            <AdminExchangeDetails key={exchangeKey} locationCode={locationCode} exchangeId={exchangeId} />
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                     );
                   })}
                 </tbody>
