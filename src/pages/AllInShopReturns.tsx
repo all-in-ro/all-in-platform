@@ -44,7 +44,15 @@ type Props = {
   onOpenShopify?: () => void;
 };
 
-type ReplacementLine = AifShopSaleCatalogItem & { quantity: number };
+type DiscountMode = "amount" | "percent";
+type ReplacementLine = AifShopSaleCatalogItem & { quantity: number; discountMode?: DiscountMode; discountValue?: number };
+
+function replacementPrice(line: ReplacementLine) {
+  const cents = Math.round((numberValue(line.sellPrice) + Number.EPSILON) * 100);
+  const value = Math.round(numberValue(line.discountValue) * 100);
+  const net = line.discountMode === "percent" ? Math.round(cents * (10000 - value) / 10000) : cents - value;
+  return { unit: net / 100, total: net * line.quantity / 100, discount: (cents - net) / 100 };
+}
 
 type AuthorizationState = {
   saleLineId: string;
@@ -174,6 +182,16 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   const [replacementResults, setReplacementResults] = useState<AifShopSaleCatalogItem[]>([]);
   const [replacementLoading, setReplacementLoading] = useState(false);
   const [replacementCart, setReplacementCart] = useState<ReplacementLine[]>([]);
+  const [discountTarget, setDiscountTarget] = useState<string | null>(null);
+  const [discountMode, setDiscountMode] = useState<DiscountMode>("amount");
+  const [discountDraft, setDiscountDraft] = useState("");
+  const discountDialogRef = useRef<HTMLFormElement | null>(null);
+  const discountLine = replacementCart.find((line) => line.variantId === discountTarget);
+  const discountText = discountDraft.trim().replace(",", ".");
+  const discountValue = Number(discountText);
+  const discountValid = /^\d+(?:\.\d{1,2})?$/.test(discountText) && Number.isFinite(discountValue) && discountValue >= 0
+    && discountValue <= (discountMode === "percent" ? 100 : numberValue(discountLine?.sellPrice));
+  const discountPreview = discountLine && discountValid ? replacementPrice({ ...discountLine, discountMode, discountValue }) : null;
   const replacementInputRef = useRef<HTMLInputElement | null>(null);
   const replacementTimerRef = useRef<number | null>(null);
 
@@ -221,7 +239,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
   const selectedCount = receiptLines.filter((item) => numberValue(selectedReturns[item.saleLineId]) > 0).length;
   const selectedQty = receiptLines.reduce((sum, item) => sum + numberValue(selectedReturns[item.saleLineId]), 0);
   const replacementTotal = useMemo(
-    () => replacementCart.reduce((sum, item) => sum + numberValue(item.sellPrice) * item.quantity, 0),
+    () => Math.round(replacementCart.reduce((sum, item) => sum + replacementPrice(item).total, 0) * 100) / 100,
     [replacementCart],
   );
   const difference = Math.round((replacementTotal - returnCredit + Number.EPSILON) * 100) / 100;
@@ -444,6 +462,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     setReplacementQuery("");
     setReplacementResults([]);
     setReplacementCart([]);
+    setDiscountTarget(null);
     setSettlementMethod("cash");
     setNote("");
     setError("");
@@ -464,6 +483,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     setReplacementQuery("");
     setReplacementResults([]);
     setReplacementCart([]);
+    setDiscountTarget(null);
     setSettlementMethod("cash");
     setNote("");
     setAuthorization(null);
@@ -542,7 +562,23 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     }));
   }
 
+  function openDiscount(line: ReplacementLine) {
+    if (submitting) return;
+    setDiscountMode(line.discountMode || "amount");
+    setDiscountDraft(String(line.discountValue || 0).replace(".", ","));
+    setDiscountTarget(line.variantId);
+  }
+
+  function applyDiscount(remove = false) {
+    if (!discountLine || submitting || (!remove && !discountValid)) return;
+    invalidateRequest();
+    setReplacementCart((current) => current.map((line) => line.variantId === discountTarget
+      ? { ...line, discountMode: remove ? "amount" : discountMode, discountValue: remove ? 0 : discountValue } : line));
+    setDiscountTarget(null);
+  }
+
   async function completeExchange() {
+    if (submitting || discountTarget) return;
     if (!selectedSource || !receiptReady) return;
     const chosen = receiptLines.filter((item) => numberValue(selectedReturns[item.saleLineId]) > 0);
     if (!chosen.length) {
@@ -573,7 +609,9 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     try {
       const input = {
         location: locationCode,
-        replacements: replacementCart.map((item) => ({ variantId: item.variantId, quantity: item.quantity })),
+        replacements: replacementCart.map((item) => ({ variantId: item.variantId, quantity: item.quantity,
+          discountMode: item.discountMode || "amount", discountValue: item.discountValue || 0,
+          expectedListPrice: numberValue(item.sellPrice) })),
         settlementMethod: settlementDirection === "none" ? null : settlementMethod,
         note: note.trim() || null,
         idempotencyKey: requestKeyRef.current,
@@ -675,6 +713,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (discountTarget) { event.preventDefault(); setDiscountTarget(null); return; }
       if (success) {
         setSuccess(null);
         resetWorkflow();
@@ -693,7 +732,15 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
       cancelSearchTimer();
       cancelReplacementTimer();
     };
-  }, [onClose, open, selectedSource, success]);
+  }, [onClose, open, selectedSource, success, discountTarget]);
+
+  useEffect(() => {
+    if (!discountTarget || !open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const input = discountDialogRef.current?.querySelector<HTMLInputElement>("input");
+    input?.focus(); input?.select();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, [discountTarget, open]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -749,7 +796,7 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                         <p className="mt-1 text-[11px] text-white/45">{formatDateTime(item.createdAt)} • {item.actor || "–"} • Eredet: {item.sourceLocation.name}</p>
                       </div>
                       <div><p className="text-[9px] uppercase text-white/38">Visszavett érték</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(totalCredit)}</p></div>
-                      <div><p className="text-[9px] uppercase text-white/38">Új termékek</p><p className="mt-1 text-sm">{formatMoney(totalReplacement)}</p></div>
+                      <div><p className="text-[9px] uppercase text-white/38">Új termékek</p><p className="mt-1 text-sm">{formatMoney(totalReplacement)}</p>{group.flatMap((row) => row.replacementLines || []).filter((line) => numberValue(line.discountAmount) > 0).map((line) => <p key={line.id} className="mt-1 text-[11px] text-[#9be9e5]">{line.title} • {line.quantity} db • Kedv. {line.discountMode === "percent" ? `${line.discountValue}%` : `${formatMoney(line.discountValue)} / db`} • {formatMoney(line.listPrice)} → {formatMoney(line.unitPrice)} / db</p>)}</div>
                       <div className={`rounded-xl border px-3 py-2 text-right ${totalDifference > 0 ? "border-amber-200/25 bg-amber-400/10 text-amber-50" : totalDifference < 0 ? "border-sky-200/25 bg-sky-400/10 text-sky-50" : "border-[#7bd7d4]/25 bg-[#2a8d8b]/12 text-[#d7fffd]"}`}>
                         <p className="text-[9px] uppercase opacity-60">Különbözet</p><p className="mt-1 text-sm">{formatMoney(totalDifference)}</p>
                       </div>
@@ -964,8 +1011,11 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
                     {replacementCart.map((line) => (
                       <div key={line.variantId} className="grid grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3">
                         <span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl bg-white/95">{line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <PackageSearch size={22} className="text-[#526173]" />}</span>
-                        <div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 truncate text-[10px] text-white/45">{[line.colorName, line.size, productCode(line)].filter(Boolean).join(" • ")}</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(numberValue(line.sellPrice) * line.quantity)}</p></div>
-                        <div className="inline-grid grid-cols-[36px_42px_36px] overflow-hidden rounded-xl border border-white/12 bg-[#253144]"><button type="button" onClick={() => setReplacementQty(line.variantId, line.quantity - 1)} className="h-10 hover:bg-white/8"><Minus size={14} className="mx-auto" /></button><span className="inline-flex h-10 items-center justify-center border-x border-white/10">{line.quantity}</span><button type="button" onClick={() => setReplacementQty(line.variantId, line.quantity + 1)} className="h-10 hover:bg-white/8"><Plus size={14} className="mx-auto" /></button></div>
+                        <div className="min-w-0"><p className="truncate text-sm">{line.title}</p><p className="mt-1 truncate text-[10px] text-white/45">{[line.colorName, line.size, productCode(line)].filter(Boolean).join(" • ")}</p><p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(replacementPrice(line).total)}</p>{numberValue(line.discountValue) > 0 ? <p className="mt-1 text-[11px] text-white/55"><span className="line-through">{formatMoney(numberValue(line.sellPrice) * line.quantity)}</span> • Kedv. {line.discountMode === "percent" ? `${line.discountValue}%` : `${formatMoney(line.discountValue)} / db`}</p> : null}</div>
+                        <div className="flex flex-col items-end gap-2">
+                          <button type="button" disabled={submitting} onClick={() => openDiscount(line)} className="inline-flex h-9 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/20 px-3 text-xs text-[#d7fffd] hover:bg-[#2a8d8b]/35 disabled:opacity-50">Kedvezmény</button>
+                          <div className="inline-grid grid-cols-[36px_42px_36px] overflow-hidden rounded-xl border border-white/12 bg-[#253144]"><button type="button" onClick={() => setReplacementQty(line.variantId, line.quantity - 1)} className="h-10 hover:bg-white/8"><Minus size={14} className="mx-auto" /></button><span className="inline-flex h-10 items-center justify-center border-x border-white/10">{line.quantity}</span><button type="button" onClick={() => setReplacementQty(line.variantId, line.quantity + 1)} className="h-10 hover:bg-white/8"><Plus size={14} className="mx-auto" /></button></div>
+                        </div>
                       </div>
                     ))}
                     {!replacementCart.length ? <div className="flex min-h-[120px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/40"><ShoppingBag size={28} /><p className="mt-2 text-xs">Ha nem adsz hozzá új terméket, a folyamat sima visszáruként zárható le.</p></div> : null}
@@ -1028,6 +1078,37 @@ export default function AllInShopReturns({ open, actor, locationCode, locationNa
           <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Bezárás</button>
         </footer>
       </section>
+
+      {discountLine ? (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#111827]/75 p-4 backdrop-blur-md">
+          <form ref={discountDialogRef} role="dialog" aria-modal="true" aria-labelledby="exchange-discount-title"
+            onSubmit={(event) => { event.preventDefault(); applyDiscount(); }}
+            onKeyDown={(event) => {
+              if (event.key !== "Tab") return;
+              const nodes = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'));
+              const first = nodes[0], last = nodes[nodes.length - 1];
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+            }}
+            className="w-full max-w-[440px] overflow-hidden rounded-2xl border border-white/[0.16] bg-[#354153] text-white shadow-2xl">
+            <header className="flex items-center justify-between border-b border-white/[0.10] px-5 py-4">
+              <h3 id="exchange-discount-title" className="text-lg">Kedvezmény</h3>
+              <button type="button" onClick={() => setDiscountTarget(null)} aria-label="Kedvezményablak bezárása" className="rounded-lg p-2 hover:bg-white/10"><X size={18} /></button>
+            </header>
+            <div className="space-y-4 p-5">
+              <div><p className="truncate text-sm">{discountLine.title}</p><p className="mt-1 text-xs text-white/55">{[discountLine.colorName, discountLine.size].filter(Boolean).join(" • ")} • {discountLine.quantity} db</p></div>
+              <div className="grid grid-cols-2 gap-2">{([['amount', 'Érték (RON / db)'], ['percent', 'Százalék (%)']] as const).map(([mode, title]) => <button key={mode} type="button" aria-pressed={discountMode === mode} onClick={() => setDiscountMode(mode)} className={`h-11 rounded-xl border text-sm ${discountMode === mode ? 'border-[#7bd7d4]/50 bg-[#2a8d8b]' : 'border-white/[0.14] bg-white/[0.04]'}`}>{title}</button>)}</div>
+              <label className="block text-xs text-white/65">{discountMode === "amount" ? "Kedvezmény (RON / db)" : "Kedvezmény (%)"}<input aria-label="Kedvezmény értéke" inputMode="decimal" value={discountDraft} onChange={(event) => setDiscountDraft(event.target.value)} className="mt-2 h-12 w-full rounded-xl border border-white/[0.18] bg-[#293548] px-3 text-xl text-white outline-none focus:border-[#7bd7d4]" /></label>
+              {!discountValid ? <p role="alert" className="text-xs text-red-300">{discountMode === "percent" ? "0–100 közötti százalékot adj meg, legfeljebb két tizedessel." : `0–${formatMoney(discountLine.sellPrice)} közötti összeget adj meg, legfeljebb két tizedessel.`}</p> : null}
+              <div className="flex items-center justify-between rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/15 p-3"><span className="text-xs text-white/65">{formatMoney(discountLine.sellPrice)} →</span><span className="text-lg text-[#d7fffd]">{discountPreview ? formatMoney(discountPreview.unit) : '–'} / db</span></div>
+            </div>
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.10] p-4">
+              <button type="button" onClick={() => applyDiscount(true)} className="h-10 rounded-xl border border-white/[0.14] px-3 text-xs">Törlés</button>
+              <div className="flex gap-2"><button type="button" onClick={() => setDiscountTarget(null)} className="h-10 rounded-xl border border-white/[0.14] px-3 text-xs">Mégse</button><button type="submit" disabled={!discountValid || submitting} className="h-10 rounded-xl bg-[#2a8d8b] px-4 text-sm disabled:opacity-45">Alkalmazás</button></div>
+            </footer>
+          </form>
+        </div>
+      ) : null}
 
       {success ? (
         <div className="fixed inset-0 z-[390] flex items-center justify-center bg-[#111827]/82 p-4 backdrop-blur-sm">
