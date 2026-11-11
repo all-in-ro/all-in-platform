@@ -4821,6 +4821,11 @@ export type AifShopExchangeReplacementLine = {
   colorName?: string | null;
   size?: string | null;
   imageUrl?: string | null;
+  listPrice?: number;
+  discountMode?: "amount" | "percent" | null;
+  discountValue?: number;
+  discountAmount?: number;
+  discountPercent?: number;
 };
 
 export type AifShopExchangeHistoryItem = {
@@ -4977,7 +4982,7 @@ export function apiAifCompleteShopExchange(input: {
   location: string;
   saleLineId: string;
   returnedQty: number;
-  replacements: Array<{ variantId: string; quantity: number }>;
+  replacements: Array<{ variantId: string; quantity: number; discountMode?: "amount" | "percent"; discountValue?: number; expectedListPrice?: number }>;
   settlementMethod?: "cash" | "card" | "bank_transfer" | null;
   authorizationId?: string | null;
   unlockToken?: string | null;
