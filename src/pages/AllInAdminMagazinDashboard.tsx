@@ -2791,9 +2791,12 @@ export default function AllInAdminMagazinDashboard({
         </section>
 
         <section className="grid gap-3 xl:grid-cols-3">
-          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom szerint • hitel nélkül" items={data?.brands || []} icon={Tags} />
-          <RankingBars title="Alkategóriák" subtitle="Eladott darab szerint • hitel nélkül" items={data?.categories || []} valueMode="qty" icon={Layers3} />
-          <RankingBars title="Top termékek" subtitle="Forgalom szerint • hitel nélkül" items={data?.products || []} icon={ShoppingBag} />
+          <p className="col-span-full text-xs text-white/60">
+            A hitelbefizetés összege a befizetés napján jelenik meg. A hiteles termék darabszáma a terméksor teljes rendezésekor, egyszer számít bele. A napi új eladások száma ettől külön érték.
+          </p>
+          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.brands || []} icon={Tags} />
+          <RankingBars title="Alkategóriák" subtitle="Darab • rendezett hiteles termékekkel együtt" items={data?.categories || []} valueMode="qty" icon={Layers3} />
+          <RankingBars title="Top termékek" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.products || []} icon={ShoppingBag} />
         </section>
 
         <section className="grid gap-3">
