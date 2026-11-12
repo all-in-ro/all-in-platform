@@ -1,3 +1,4 @@
+import { creditSettlementStatisticsJoins } from "./creditSettlementStatistics.js";
 import express from "express";
 
 
@@ -1046,7 +1047,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       // Korábbi vásárlás későbbi kliensbefizetése:
       // csak megjelenítési eseményt készítünk az admin naplóhoz.
       // Nincs INSERT/UPDATE, nincs készletmozgás, és nem számít új eladásnak.
-      const buildSettlementLineFilters = (rangeFrom, rangeTo) => {
+      const buildSettlementLineFilters = (rangeFrom, rangeTo, statistics = false) => {
         const args = [location.id, rangeFrom, rangeTo];
         const where = [
           `s.location_id=$1`,
@@ -1054,7 +1055,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
           `p.customer_payment_id IS NOT NULL`,
           `abs(COALESCE(p.amount,0)) > 0`,
           `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
-          `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date <> (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date`,
+          statistics ? `s.sale_type='credit'` : `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date <> (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date`,
           `GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0`,
         ];
         const push = (value) => {
@@ -1112,6 +1113,32 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return { args, where: where.join(" AND ") };
       };
       const settlementLineFilters = buildSettlementLineFilters(from, to);
+      const creditRankingFilters = buildSettlementLineFilters(from, to, true);
+      const creditRankingResult = await pool.query(`
+        SELECT s.id::text AS sale_id,
+          COALESCE(NULLIF(sl.brand_name,''),'Ismeretlen márka') AS brand_name,
+          COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),
+            NULLIF(subc.name_ro,''),'Nincs alkategória') AS category_name,
+          COALESCE(NULLIF(sl.product_title,''),NULLIF(sl.product_code,''),
+            'Ismeretlen termék') AS product_name,
+          sl.product_code, credit_stats.amount AS revenue, credit_stats.qty,
+          CASE WHEN credit_stats.qty>0 THEN 'credit-sale:' || s.id::text END AS exchange_id
+        FROM aif_shop_sale_payments p
+        JOIN aif_shop_sales s ON s.id=p.sale_id
+        JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+        LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+        LEFT JOIN aif_product_models m ON m.id=v.model_id
+        LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(sum(e.returned_qty),0) AS returned_qty
+          FROM aif_shop_exchanges e WHERE e.source_sale_line_id=sl.id
+            AND e.status='completed' AND e.created_at<=p.paid_at
+        ) ret ON true
+        ${creditSettlementStatisticsJoins()}
+        WHERE ${creditRankingFilters.where} AND p.method<>'credit'
+          AND credit_stats.amount>0
+      `, creditRankingFilters.args);
+
 
       const [
         stockResult,
@@ -1206,7 +1233,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              AND fs.sale_type <> 'credit'
            GROUP BY COALESCE(NULLIF(sl.brand_name,''),'Ismeretlen márka')
            ORDER BY revenue DESC, qty DESC
-           LIMIT 12`,
+`,
           currentFilters.args
         ),
         pool.query(
@@ -1237,7 +1264,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              'Nincs alkategória'
            )
            ORDER BY qty DESC, revenue DESC
-           LIMIT 12`,
+`,
           currentFilters.args
         ),
         pool.query(
@@ -1256,7 +1283,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              AND fs.sale_type <> 'credit'
            GROUP BY COALESCE(NULLIF(sl.product_title,''),NULLIF(sl.product_code,''),'Ismeretlen termék')
            ORDER BY revenue DESC, qty DESC
-           LIMIT 12`,
+`,
           currentFilters.args
         ),
         pool.query(
@@ -2372,13 +2399,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return values.map(row=>({...row,share:whole?Math.abs(row.revenue)/whole*100:0}));
       }
       const brands=adjustPersonalRanking(
-        mergeRankingRows(brandResult.rows,exchangeImpactResult.rows,'brand_name'),
+        mergeRankingRows(brandResult.rows,[...exchangeImpactResult.rows,...creditRankingResult.rows],'brand_name'),
         t=>t.brand_name||'Ismeretlen márka');
       const categories=adjustPersonalRanking(
-        mergeRankingRows(categoryResult.rows,exchangeImpactResult.rows,'category_name'),
+        mergeRankingRows(categoryResult.rows,[...exchangeImpactResult.rows,...creditRankingResult.rows],'category_name'),
         t=>t.category_name||'Nincs alkategória');
       const products=adjustPersonalRanking(
-        mergeRankingRows(productResult.rows,exchangeImpactResult.rows,'product_name','product_code'),
+        mergeRankingRows(productResult.rows,[...exchangeImpactResult.rows,...creditRankingResult.rows],'product_name','product_code'),
         t=>t.product_title||t.product_code||'Ismeretlen termék',true);
 
       res.json({

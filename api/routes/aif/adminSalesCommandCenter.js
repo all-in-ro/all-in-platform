@@ -1,3 +1,4 @@
+import { creditSettlementStatisticsJoins } from "./creditSettlementStatistics.js";
 import express from "express";
 import { createHash } from "node:crypto";
 
@@ -648,7 +649,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         'live_sale'::text AS source,
         ('credit-payment:' || p.id::text || ':' || sl.id::text) AS record_id,
         NULL::text AS import_id,
-        NULL::text AS transaction_key,
+        CASE WHEN credit_stats.qty>0 THEN ('credit-sale:' || s.id::text) ELSE NULL::text END AS transaction_key,
         (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date AS happened_on,
         l.id::text AS location_id,
         l.code AS location_code,
@@ -664,7 +665,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         NULLIF(v.sn_cod,'') AS sn_cod,
         COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(sl.size,''),NULLIF(v.size,'')) AS size,
-        0::numeric AS quantity,
+        credit_stats.qty::numeric AS quantity,
         active.active_qty::numeric AS display_quantity,
         NULL::numeric AS aggregate_transactions,
         alloc.allocated_amount::numeric AS revenue,
@@ -768,6 +769,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
           ELSE 0::numeric
         END AS allocated_amount
       ) alloc
+      ${creditSettlementStatisticsJoins()}
       WHERE s.status='completed'
         AND s.sale_type='credit'
         AND p.customer_payment_id IS NOT NULL
