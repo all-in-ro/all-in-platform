@@ -1,3 +1,4 @@
+import AifOperationErrorDialog from "../components/AifOperationErrorDialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1092,6 +1093,11 @@ function receptionRowErrorMessages(row: any) {
   return source.map((value: unknown) => String(value || "").trim()).filter(Boolean);
 }
 
+function receptionRowHasActiveError(row: any) {
+  return row?.status !== 'committed' && row?.status !== 'ignored'
+    && (row?.status === 'error' || receptionRowErrorMessages(row).length > 0);
+}
+
 function stripReceptionRowErrorPrefix(message: unknown) {
   return String(message || "")
     .replace(/^A\(z\)\s+\d+\.\s+terméksor készletre vétele nem sikerült:\s*/i, "")
@@ -2002,6 +2008,12 @@ export default function AllInReceptions(_props: Props) {
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [operationError, setOperationError] = useState("");
+  const showError = useCallback((reason: unknown) => {
+    setMessage("");
+    setOperationError(String(reason || "A művelet nem sikerült.").trim());
+  }, []);
+  const closeOperationError = useCallback(() => setOperationError(""), []);
   const [search, setSearch] = useState("");
   const [supplier, setSupplier] = useState("");
   const [location, setLocation] = useState("");
@@ -2063,7 +2075,7 @@ export default function AllInReceptions(_props: Props) {
       setSalesTvaModalOpen(false);
       setMessage("Központi eladási TVA beállítás mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "A központi eladási TVA beállítás nem menthető.");
+      showError(e?.message || "A központi eladási TVA beállítás nem menthető.");
     } finally {
       setSalesTvaSettingsSaving(false);
     }
@@ -2108,7 +2120,7 @@ export default function AllInReceptions(_props: Props) {
       setAvizSettingsOpen(false);
       setMessage("Aviz számozás beállításai mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "Az Aviz számozás beállításai nem menthetők.");
+      showError(e?.message || "Az Aviz számozás beállításai nem menthetők.");
     } finally {
       setAvizSettingsSaving(false);
     }
@@ -2140,7 +2152,7 @@ export default function AllInReceptions(_props: Props) {
       setMeta(m);
       setItems(r.items || []);
     } catch (e: any) {
-      setMessage(e?.message || "A receptiók betöltése nem sikerült.");
+      showError(e?.message || "A receptiók betöltése nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -2179,7 +2191,7 @@ export default function AllInReceptions(_props: Props) {
   async function exportFilteredReceptionsPdf() {
     const reportWindow = window.open("", "_blank", "width=1260,height=860,scrollbars=yes,resizable=yes");
     if (!reportWindow) {
-      setMessage("A böngésző blokkolta a PDF ablakot. Engedélyezd a felugró ablakokat ehhez az oldalhoz.");
+      showError("A böngésző blokkolta a PDF ablakát. Engedélyezd a felugró ablakokat ehhez az oldalhoz.");
       return;
     }
 
@@ -2225,7 +2237,7 @@ export default function AllInReceptions(_props: Props) {
       window.setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e: any) {
       try { reportWindow.close(); } catch {}
-      setMessage(e?.message || "A szűrt receptió PDF export nem sikerült.");
+      showError(e?.message || "A szűrt receptió PDF export nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -2244,7 +2256,7 @@ export default function AllInReceptions(_props: Props) {
       setRowDrafts(buildDrafts(next.rows || []));
       setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
     } catch (e: any) {
-      setMessage(e?.message || "A receptió részletei nem tölthetők be.");
+      showError(e?.message || "A receptió részletei nem tölthetők be.");
     } finally {
       setBusy(false);
     }
@@ -2268,7 +2280,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("Receptió törölve.");
     } catch (e: any) {
-      setMessage(e?.message || "A receptió törlése nem sikerült.");
+      showError(e?.message || "A receptió törlése nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -2284,7 +2296,7 @@ export default function AllInReceptions(_props: Props) {
       const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
       openOfficialReceptionPdf(data, drafts, salesTvaSettings);
     } catch (e: any) {
-      setMessage(e?.message || "A PDF export nem sikerült.");
+      showError(e?.message || "A PDF export nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -2301,7 +2313,7 @@ export default function AllInReceptions(_props: Props) {
       const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
       openReceptionVerificationPdf(data, drafts, salesTvaSettings);
     } catch (e: any) {
-      setMessage(e?.message || "Az ellenőrző PDF export nem sikerült.");
+      showError(e?.message || "Az ellenőrző PDF export nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -2388,9 +2400,12 @@ export default function AllInReceptions(_props: Props) {
     if (rowStatusFilter === "all") return rows;
     if (rowStatusFilter === "committed") return rows.filter((r) => r.status === "committed");
     if (rowStatusFilter === "ignored") return rows.filter((r) => r.status === "ignored");
-    if (rowStatusFilter === "error") return rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
+    if (rowStatusFilter === "error") return rows.filter(receptionRowHasActiveError);
     return rows.filter((r) => r.status !== "committed" && r.status !== "ignored");
   }, [detail, rowStatusFilter]);
+
+  const errorRowCount = (detail?.rows || []).filter(receptionRowHasActiveError).length;
+  const selectedVisibleCount = visibleRows.filter(row => selectedRows.has(row.id) && rowCanWork(row) && !receptionRowHasActiveError(row)).length;
 
   const detailBalance = useMemo(() => {
     if (!detail) return null;
@@ -2425,7 +2440,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("A beszerzési TVA mód „Nincs TVA” értékre állítva. A számla most a terméksorokkal egyezik.");
     } catch (e: any) {
-      setMessage(e?.message || "A beszerzési TVA mód automatikus javítása nem sikerült.");
+      showError(e?.message || "A beszerzési TVA mód automatikus javítása nem sikerült.");
     } finally {
       setSavingHeader(false);
     }
@@ -2483,7 +2498,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("Receptió fejadatai mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "A receptió fejadatai nem menthetők.");
+      showError(e?.message || "A receptió fejadatai nem menthetők.");
     } finally {
       setSavingHeader(false);
     }
@@ -2508,7 +2523,7 @@ export default function AllInReceptions(_props: Props) {
       setReceptionDocumentEditOpen(false);
       setMessage("Aviz szám és receptió dátuma mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "Az Aviz szám és receptió dátuma nem menthető.");
+      showError(e?.message || "Az Aviz szám és receptió dátuma nem menthető.");
     } finally {
       setSavingHeader(false);
     }
@@ -2532,7 +2547,7 @@ export default function AllInReceptions(_props: Props) {
       if (targets.length === 1) setMoveToReceptionId(targets[0].id);
     } catch (e: any) {
       setMoveReceptionOptions([]);
-      setMessage(e?.message || "A cél receptiók betöltése nem sikerült.");
+      showError(e?.message || "A cél receptiók betöltése nem sikerült.");
     } finally {
       setMoveReceptionOptionsLoading(false);
     }
@@ -2551,11 +2566,11 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage(
         result.committedAfterMove
-          ? "Terméksor áthelyezve és készletre véve. A forrás és a cél receptió állapota újraszámolva."
-          : "Terméksor áthelyezve. A cél receptió addig Vázlat marad, amíg a sort készletre nem veszed."
+          ? "Terméksor áthelyezve és készletre véve."
+          : "Terméksor áthelyezve."
       );
     } catch (e: any) {
-      setMessage(
+      showError(
         e?.message || (commitAfterMove
           ? "Az áthelyezés és készletre vétel nem sikerült. A rendszer az egész műveletet visszavonta."
           : "A terméksor áthelyezése nem sikerült.")
@@ -2627,8 +2642,8 @@ export default function AllInReceptions(_props: Props) {
 
   function selectReadyRows() {
     if (!detail) return;
-    const ids = detail.rows
-      .filter((row) => row.status !== "committed" && row.status !== "ignored" && row.status !== "error")
+    const ids = visibleRows
+      .filter((row) => rowCanWork(row) && !receptionRowHasActiveError(row))
       .map((row) => row.id);
     setSelectedRows(new Set(ids));
   }
@@ -2649,15 +2664,18 @@ export default function AllInReceptions(_props: Props) {
     setSavingRows(true);
     setMessage("");
     try {
-      const editable = detail.rows.filter((row) => rowCanEdit(row));
+      const editable = visibleRows.filter((row) => rowCanEdit(row));
+      const savedIds = new Set(editable.map(row => String(row.id)));
+      const hiddenDrafts = Object.fromEntries(Object.entries(rowDrafts).filter(([id]) => !savedIds.has(id)));
       for (const row of editable) {
         await apiAifUpdateImportRow(row.id, rowPayload(row));
       }
       await reloadDetail(detail.item.id);
+      setRowDrafts(prev => ({...prev, ...hiddenDrafts}));
       await load();
       setMessage("Terméksorok mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "A terméksorok mentése nem sikerült.");
+      showError(e?.message || "A terméksorok mentése nem sikerült.");
     } finally {
       setSavingRows(false);
     }
@@ -2674,7 +2692,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("Terméksor mentve.");
     } catch (e: any) {
-      setMessage(e?.message || "A terméksor mentése nem sikerült.");
+      showError(e?.message || "A terméksor mentése nem sikerült.");
     } finally {
       setSavingRowId(null);
     }
@@ -2687,6 +2705,7 @@ export default function AllInReceptions(_props: Props) {
     document.body.style.overflow = "hidden";
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector("[data-aif-error-dialog]")) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
@@ -2771,8 +2790,8 @@ export default function AllInReceptions(_props: Props) {
         if (freshRow) setRowErrorTarget(freshRow);
       } catch {}
       const actionError = e?.message || 'A színválasztás és készletre vétel nem sikerült.';
-      setRowColorResolutionActionError(actionError);
-      setMessage(actionError);
+      setRowColorResolutionActionError('');
+      showError(actionError);
     } finally {
       setRowColorResolutionBusy(false);
     }
@@ -2804,20 +2823,25 @@ export default function AllInReceptions(_props: Props) {
       const failedIds = new Set(failedRows.map((row: any) => String(row?.id || '')).filter(Boolean));
       const firstError = (next?.rows || []).find((row: any) =>
         (failedIds.size ? failedIds.has(String(row.id)) : rowIds.includes(String(row.id))) &&
-        (row.status === 'error' || receptionRowErrorMessages(row).length)
+        row.status !== 'committed' && (row.status === 'error' || receptionRowErrorMessages(row).length)
       );
       setPriceReview(null);
       setPriceReviewChoices({});
       if (firstError) setRowErrorTarget(firstError);
       if (failedRows.length || firstError) {
-        setMessage(`${Number(result?.committed || 0)} sor készletre véve; ${failedRows.length || 1} sor ellenőrzendő. A hiba részlete megnyílt.`);
+        if (firstError) {
+          setMessage(`${Number(result?.committed || 0)} sor készletre véve; ${failedRows.length || 1} sor hibás.`);
+        } else {
+          const reasons = [...new Set(failedRows.map((row: any) => String(row.error || '').trim()).filter(Boolean))];
+          showError([`${Number(result?.committed || 0)} sor készletre véve; ${failedRows.length} sor hibás.`, ...reasons].join('\n'));
+        }
       } else {
-        setMessage(`${Number(result?.committed || 0)} terméksor készletre véve. Az árak a választásod szerint kerültek rögzítésre.`);
+        setMessage(`${Number(result?.committed || 0)} terméksor készletre véve.`);
       }
     } catch (error: any) {
       const errorText = error?.message || 'A kijelölt terméksorok készletre vétele nem sikerült.';
-      setPriceReviewError(errorText);
-      setMessage(errorText);
+      setPriceReviewError('');
+      showError(errorText);
     } finally {
       setCommittingRows(false);
     }
@@ -2827,10 +2851,10 @@ export default function AllInReceptions(_props: Props) {
     if (!detail || committingRows) return;
     const receptionId = String(detail.item.id);
     const ids = Array.from(selectedRows).filter((id) =>
-      (detail.rows || []).some((row: any) => String(row.id) === id && rowCanWork(row))
+      visibleRows.some((row: any) => String(row.id) === id && rowCanWork(row) && !receptionRowHasActiveError(row))
     );
     if (!ids.length) {
-      setMessage('Nincs kijelölt készletre vehető terméksor.');
+      showError('Nincs kijelölt készletre vehető terméksor.');
       return;
     }
     setCommittingRows(true);
@@ -2852,7 +2876,7 @@ export default function AllInReceptions(_props: Props) {
         await commitReceptionWithPrices(receptionId, ids);
       }
     } catch (error: any) {
-      setMessage(error?.message || 'Az ár-egyeztetés nem sikerült. Nem történt készletre vétel.');
+      showError(error?.message || 'Az ár-egyeztetés nem sikerült. Nem történt készletre vétel.');
     } finally {
       setCommittingRows(false);
     }
@@ -2861,7 +2885,7 @@ export default function AllInReceptions(_props: Props) {
   async function applyReviewedPrices() {
     if (!priceReview || committingRows) return;
     if (priceReview.items.some((item) => !priceReviewChoices[item.variantId])) {
-      setPriceReviewError('Minden árváltozásnál válassz a régi és az új ár között.');
+      showError('Minden árváltozásnál válassz a régi és az új ár között.');
       return;
     }
     const choices: Record<string,AifIncomingPriceChoice> = {};
@@ -2893,7 +2917,7 @@ export default function AllInReceptions(_props: Props) {
         setPriceReviewChoices({});
       }
     } catch(error: any) {
-      setPriceReviewError(error?.message || 'Az ár-egyeztetés frissítése nem sikerült.');
+      showError(error?.message || 'Az ár-egyeztetés frissítése nem sikerült.');
     } finally {
       setCommittingRows(false);
     }
@@ -2909,7 +2933,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("Terméksor kihagyva.");
     } catch (e: any) {
-      setMessage(e?.message || "A terméksor kihagyása nem sikerült.");
+      showError(e?.message || "A terméksor kihagyása nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -3212,7 +3236,7 @@ export default function AllInReceptions(_props: Props) {
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {String(detail.item.status || "").toLowerCase() === "committed" ? (
-                    <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" type="button" disabled={busy} onClick={() => void (async () => { try { await reloadDetail(detail.item.id); await load(); } catch (error: any) { setMessage(error?.message || "Az aktuális árak frissítése nem sikerült."); } })()} title="A Raktárban jóváhagyott eladási árak újraolvasása"><RefreshCw size={15} /> Árak frissítése</button>
+                    <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" type="button" disabled={busy} onClick={() => void (async () => { try { await reloadDetail(detail.item.id); await load(); } catch (error: any) { showError(error?.message || "Az aktuális árak frissítése nem sikerült."); } })()} title="A Raktárban jóváhagyott eladási árak újraolvasása"><RefreshCw size={15} /> Árak frissítése</button>
                   ) : null}
                   <button
                     className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] transition hover:bg-[#319c99]"
@@ -3367,21 +3391,26 @@ export default function AllInReceptions(_props: Props) {
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-[11px] uppercase tracking-[0.13em] text-[#d9fffd]/78">Terméksorok</p>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
-                      {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
+                      {selectedVisibleCount ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedVisibleCount} kijelölve</span> : null}
                     </div>
-                    <p className="mt-1 text-[14px] text-white/90">Termékek és árak egyetlen sorban. Készletre vett tételeknél a jelenlegi raktári ár látszik, a régi receptiós ár és a PDF változatlan marad.</p>
+                    
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" aria-pressed={rowStatusFilter === 'error'}
+                      className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs ${rowStatusFilter === 'error' ? 'border-rose-200/60 bg-rose-500/20 text-rose-50' : 'border-white/25 bg-white/5 text-white/90'}`}
+                      onClick={() => setRowStatusFilter(rowStatusFilter === 'error' ? 'all' : 'error')}>
+                      <AlertTriangle size={14} /> Csak hibás sorok ({errorRowCount})
+                    </button>
                     <select className={`${lightSelect} h-9 min-w-[178px]`} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
                       <option value="active">Még dolgozandó sorok</option>
                       <option value="all">Minden sor</option>
                       <option value="committed">Készletre vett</option>
-                      <option value="error">Hibás</option>
+                      <option value="error">Hibás ({errorRowCount})</option>
                       <option value="ignored">Kihagyott</option>
                     </select>
                     <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-[11px] text-white/78 hover:bg-white/[0.08]" onClick={selectReadyRows} disabled={busy || savingRows || committingRows} type="button">Kész sorok kijelölése</button>
-                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-[11px] text-white/78 hover:bg-white/[0.08]" onClick={saveRowEdits} disabled={busy || savingRows || committingRows} type="button"><Save size={13} /> Sorok mentése</button>
-                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:bg-[#319c99] disabled:opacity-40" onClick={commitSelectedRows} disabled={busy || savingRows || committingRows || !selectedRows.size} type="button"><CheckCircle size={14} /> Kijelöltek készletre</button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-[11px] text-white/78 hover:bg-white/[0.08]" onClick={saveRowEdits} disabled={busy || savingRows || committingRows || !visibleRows.length} type="button"><Save size={13} /> Sorok mentése</button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:bg-[#319c99] disabled:opacity-40" onClick={commitSelectedRows} disabled={busy || savingRows || committingRows || !selectedVisibleCount} type="button"><CheckCircle size={14} /> Kijelöltek készletre</button>
                   </div>
                 </div>
 
@@ -3412,8 +3441,9 @@ export default function AllInReceptions(_props: Props) {
                     </div>
 
                     <div className="overflow-hidden rounded-b-[14px] border-x border-b border-white/[0.12] bg-[#30465a]">
-                      {visibleRows.map((r, rowIndex) => {
-                        const displayRowNo = rowNumberDescending ? visibleRows.length - rowIndex : rowIndex + 1;
+                      {visibleRows.map((r) => {
+                        const originalIndex = (detail.rows || []).indexOf(r);
+                        const displayRowNo = rowNumberDescending ? detail.rows.length - originalIndex : originalIndex + 1;
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
                         const editable = rowCanEdit(r);
                         const canCommitOrMove = rowCanWork(r);
@@ -3428,7 +3458,7 @@ export default function AllInReceptions(_props: Props) {
                         const sellUnitPriceRon = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                         const sellLineTotalRon = rowQty * sellUnitPriceRon;
                         const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
-                        const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
+                        const hasRowError = receptionRowHasActiveError(r);
                         const resolvedColorName = receptionResolvedColorName(r, draft, meta);
                         const resolvedColorCode = receptionRowColorCode(r, draft);
                         const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
@@ -3482,6 +3512,10 @@ export default function AllInReceptions(_props: Props) {
                             </div>
 
                             <div className="min-w-0 pr-1">
+                              {hasRowError && <button type="button" onClick={() => setRowErrorTarget(r)}
+                                className="mb-1 block w-full text-left text-xs leading-5 text-rose-100 hover:underline">
+                                {humanReceptionRowError(receptionRowErrorMessages(r)[0] || 'A sor ellenőrzést igényel.', r)}
+                              </button>}
                               <div className="flex min-w-0 items-center gap-2">
                                 <input
                                   className="h-8 min-w-0 flex-1 border-0 bg-transparent px-0 text-[15px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
@@ -3643,14 +3677,15 @@ export default function AllInReceptions(_props: Props) {
                           </article>
                         );
                       })}
-                      {!visibleRows.length ? <div className="px-4 py-10 text-center text-sm text-white/[0.42]">Nincs sor ebben a nézetben.</div> : null}
+                      {!visibleRows.length ? <div className="px-4 py-10 text-center text-sm text-white/[0.42]">{rowStatusFilter === 'error' ? 'Nincs hibás sor.' : 'Nincs sor ebben a nézetben.'}</div> : null}
                     </div>
                   </div>
                 </div>
 
                 <div className="grid gap-2 bg-[#344b60] p-2.5 xl:hidden">
-                  {visibleRows.map((r, rowIndex) => {
-                    const displayRowNo = rowNumberDescending ? visibleRows.length - rowIndex : rowIndex + 1;
+                  {visibleRows.map((r) => {
+                    const originalIndex = (detail.rows || []).indexOf(r);
+                        const displayRowNo = rowNumberDescending ? detail.rows.length - originalIndex : originalIndex + 1;
                     const draft: any = rowDrafts[r.id] || r.normalized || {};
                     const editable = rowCanEdit(r);
                     const canCommitOrMove = rowCanWork(r);
@@ -3664,7 +3699,7 @@ export default function AllInReceptions(_props: Props) {
                     const buyLineTotalRon = buyLineTotal * exchangeRate;
                     const sellLineTotalRon = rowQty * rowSellGrossPriceRon(r, draft, salesTvaSettings);
                     const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
-                    const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
+                    const hasRowError = receptionRowHasActiveError(r);
                     const resolvedColorName = receptionResolvedColorName(r, draft, meta);
                     const resolvedColorCode = receptionRowColorCode(r, draft);
                     const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
@@ -3730,7 +3765,7 @@ export default function AllInReceptions(_props: Props) {
                       </article>
                     );
                   })}
-                  {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-white/42">Nincs sor ebben a nézetben.</div> : null}
+                  {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-white/42">{rowStatusFilter === 'error' ? 'Nincs hibás sor.' : 'Nincs sor ebben a nézetben.'}</div> : null}
                 </div>
               </section>
             </div>
@@ -4310,6 +4345,7 @@ export default function AllInReceptions(_props: Props) {
           </div>
         </div>
       )}
+      <AifOperationErrorDialog message={operationError} onClose={closeOperationError} />
     </div>
   );
 }
