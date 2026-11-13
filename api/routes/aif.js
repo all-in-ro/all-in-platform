@@ -1,3 +1,4 @@
+import { receptionDateKey, validateReceptionChronology } from "../lib/aifReceptionChronology.js";
 import { requireAifImagePermission } from "../lib/aifImagePermissions.js";
 import express from "express";
 import createAifSmsModule from "./aif/sms/index.js";
@@ -2064,6 +2065,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   async function allocateAifReceptionAvizNumber(client, receptionId, actor = "system") {
     await ensureAifReceptionDocumentSchema(client);
+    const locked = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
+    const settings = locked.rows[0] || {};
 
     const reception = await client.query(
       `SELECT id,aviz_number,aviz_series,aviz_sequence_number,aviz_sequence_year,reception_date
@@ -2091,16 +2094,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const currentYearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
     const currentYear = Number(currentYearResult.rows[0]?.year || new Date().getFullYear());
-    const receptionYear = Number(String(existing.reception_date || "").slice(0, 4)) || currentYear;
-    const locked = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
-    const settings = locked.rows[0] || {};
+    const receptionYear = Number(receptionDateKey(existing.reception_date).slice(0, 4)) || currentYear;
 
     let nextNumber = Math.max(1, Number(settings.next_number || 1));
     let sequenceYear = Number(settings.sequence_year || receptionYear);
-    if (settings.yearly_reset !== false && sequenceYear !== receptionYear) {
+    if (settings.yearly_reset !== false && receptionYear < sequenceYear) {
+      throw Object.assign(new Error(`A számozás már ${sequenceYear}. évnél tart; korábbi évre nem indítható új sorszám.`), {statusCode:409});
+    }
+    if (settings.yearly_reset !== false && receptionYear > sequenceYear) {
       nextNumber = 1;
       sequenceYear = receptionYear;
     }
+
+    // A lowered counter must never reuse an earlier numeric position.
+    const used = await client.query(`SELECT COALESCE(MAX(aviz_sequence_number),0) AS maximum
+      FROM aif_receptions WHERE aviz_series=$1
+        AND ($2::boolean=false OR COALESCE(aviz_sequence_year,EXTRACT(YEAR FROM reception_date)::integer)=$3)`,
+      [cleanAifReceptionAvizSeries(settings.series || AIF_RECEPTION_AVIZ_DEFAULTS.series), settings.yearly_reset !== false, sequenceYear]);
+    nextNumber = Math.max(nextNumber, Number(used.rows[0]?.maximum || 0) + 1);
 
     let avizNumber = "";
     let guard = 0;
@@ -2125,6 +2136,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        WHERE id=$1`,
       [existing.id, avizNumber, series, nextNumber, sequenceYear]
     );
+    await validateReceptionChronology(client, existing.id, settings);
     await client.query(
       `UPDATE aif_reception_document_settings
        SET next_number=$1,sequence_year=$2,updated_at=now(),updated_by=$3
@@ -6511,6 +6523,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let receptionId = null;
     try {
       await client.query("BEGIN");
+      await ensureAifReceptionDocumentSchema(client);
+      await client.query(`SELECT id FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
       const rec = await client.query(`SELECT id, currency_code, aviz_number, aviz_series, aviz_sequence_number, aviz_sequence_year, reception_date FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
       if (!rec.rowCount) {
         await client.query("ROLLBACK");
@@ -6548,7 +6562,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         add("aviz_number", parsedAviz.number);
         add("aviz_series", parsedAviz.series);
         add("aviz_sequence_number", parsedAviz.sequenceNumber);
-        add("aviz_sequence_year", parsedAviz.sequenceYear);
+        add("aviz_sequence_year", parsedAviz.sequenceYear ?? rec.rows[0].aviz_sequence_year);
       }
       let nextCurrencyCode = rec.rows[0].currency_code;
       if (src.currencyCode !== undefined || src.currency_code !== undefined) {
@@ -6602,13 +6616,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(`UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`, args);
       }
 
+      const dateRequested = src.receptionDate !== undefined || src.reception_date !== undefined;
+      const numberRequested = src.avizNumber !== undefined || src.aviz_number !== undefined;
+      const dateChanged = dateRequested && receptionDateKey(src.receptionDate ?? src.reception_date) !== receptionDateKey(rec.rows[0].reception_date);
+      const numberChanged = numberRequested && text(src.avizNumber ?? src.aviz_number) !== text(rec.rows[0].aviz_number);
+      if (dateChanged || numberChanged) {
+        if (rec.rows[0].aviz_number && !text(src.avizNumber ?? src.aviz_number) && numberRequested) {
+          throw Object.assign(new Error("A már kiosztott Aviz szám nem törölhető."), {statusCode:409});
+        }
+        const chronologySettings = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1`);
+        await validateReceptionChronology(client, receptionId, chronologySettings.rows[0] || {});
+      }
+
       if (src.avizNumber !== undefined || src.aviz_number !== undefined) {
         const parsedAviz = parseAifReceptionAvizNumber(src.avizNumber ?? src.aviz_number);
         if (parsedAviz.number && parsedAviz.series && parsedAviz.sequenceNumber) {
           const settingsRow = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
           const settings = settingsRow.rows[0] || {};
           const sameSeries = cleanAifReceptionAvizSeries(settings.series) === parsedAviz.series;
-          const effectiveYear = parsedAviz.sequenceYear || Number(String(src.receptionDate ?? src.reception_date ?? rec.rows[0].reception_date ?? "").slice(0, 4)) || Number(settings.sequence_year || new Date().getFullYear());
+          const effectiveYear = parsedAviz.sequenceYear || Number(receptionDateKey(src.receptionDate ?? src.reception_date ?? rec.rows[0].reception_date).slice(0, 4)) || Number(settings.sequence_year || new Date().getFullYear());
           if (sameSeries && (!settings.yearly_reset || Number(settings.sequence_year || effectiveYear) === effectiveYear)) {
             const wantedNext = Math.max(Number(settings.next_number || 1), Number(parsedAviz.sequenceNumber) + 1);
             await client.query(
@@ -6735,7 +6761,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update reception failed", e);
-      res.status(500).json({ error: e?.message || "A receptió mentése nem sikerült.", code: e?.code || null });
+      res.status(e?.statusCode || 500).json({ error: e?.message || "A receptió mentése nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
     }
@@ -9045,6 +9071,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!curr.rowCount) return res.status(400).json({ error: "currency is inactive or unknown" });
 
       await client.query("BEGIN");
+      await ensureAifReceptionDocumentSchema(client);
+      await client.query(`SELECT id FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
 
       const receptionRes = await client.query(
         `INSERT INTO aif_receptions (
@@ -9112,7 +9140,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF create import batch failed", e);
-      res.status(500).json({ error: "failed to create import batch" });
+      res.status(e?.statusCode || 500).json({ error: e?.message || "A receptió létrehozása nem sikerült." });
     } finally {
       client.release();
     }
@@ -9208,6 +9236,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       assertNoConflictingImportBarcodes(normalizedRows);
 
       await client.query("BEGIN");
+      await ensureAifReceptionDocumentSchema(client);
+      await client.query(`SELECT id FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
       await ensureSnCodSchema(client);
 
       const existingReceptionId = emptyToNull(body.receptionId || body.reception_id);
@@ -9308,6 +9338,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       await allocateAifReceptionAvizNumber(client, receptionId, actorFrom(req));
+      const chronologySettings = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1`);
+      await validateReceptionChronology(client, receptionId, chronologySettings.rows[0] || {});
 
       const batchRes = await client.query(
         `INSERT INTO aif_import_batches (
