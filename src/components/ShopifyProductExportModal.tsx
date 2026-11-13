@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -77,6 +77,7 @@ type CreateResult = {
   summary: Preview["summary"];
   location: Preview["location"];
   productRows: number;
+  exportedVariantIds?: string[];
   inventoryRows?: number;
   stockMode?: string;
 };
@@ -167,12 +168,12 @@ export default function ShopifyProductExportModal({
   open: boolean;
   items: ExportItem[];
   onClose: () => void;
-  onChanged?: () => void | Promise<void>;
+  onChanged?: (exportedVariantIds: string[]) => void | Promise<void>;
 }) {
-  const [selectionMode, setSelectionMode] = useState<"selected_variants" | "all_model_variants">("all_model_variants");
+  const [selectionMode, setSelectionMode] = useState<"selected_variants" | "all_model_variants">("selected_variants");
   const [productStatus, setProductStatus] = useState<"draft" | "active">("active");
   const [groupingMode, setGroupingMode] = useState<GroupingMode>("model_colors");
-  const [includeMapped, setIncludeMapped] = useState(true);
+  const [includeMapped, setIncludeMapped] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
@@ -184,6 +185,56 @@ export default function ShopifyProductExportModal({
   const [exports, setExports] = useState<ExportHistoryItem[]>([]);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [reconcilingExportId, setReconcilingExportId] = useState("");
+
+  const previewRequest = useRef(0);
+  const cleanedExports = useRef(new Set<string>());
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState("");
+
+  async function downloadCsv(url: string, fileName: string) {
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || `A CSV letöltése nem sikerült (HTTP ${response.status}).`);
+    }
+    const blob = await response.blob();
+    if (!blob.size || /(?:application\/json|text\/html)/i.test(blob.type)) {
+      throw new Error("A szerver nem CSV-fájlt küldött vissza.");
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+  }
+
+  async function finishDownload(result: CreateResult) {
+    await downloadCsv(result.downloadUrl, result.fileName);
+    if (!cleanedExports.current.has(result.exportId) && result.exportedVariantIds?.length) {
+      try {
+        await onChanged?.(result.exportedVariantIds);
+        cleanedExports.current.add(result.exportId);
+      } catch {
+        setRefreshNotice("A CSV letöltése elindult. A munkalista frissítése nem sikerült; frissítsd az oldalt.");
+      }
+    }
+    await loadHistory();
+  }
+
+  async function retryDownload(url: string, fileName: string, result?: CreateResult) {
+    if (downloadBusy) return;
+    setDownloadBusy(true);
+    setError("");
+    try {
+      if (result) await finishDownload(result);
+      else await downloadCsv(url, fileName);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "A CSV letöltése nem sikerült.");
+    } finally { setDownloadBusy(false); }
+  }
 
   const variantIds = useMemo(
     () => Array.from(new Set((items || []).map((item) => String(item.variant_id || "").trim()).filter(Boolean))),
@@ -204,6 +255,7 @@ export default function ShopifyProductExportModal({
   }
 
   async function loadPreview() {
+    const requestId = ++previewRequest.current;
     if (!variantIds.length) {
       setPreview(null);
       setError("Nincs Shopify exporthoz kijelölt termék.");
@@ -218,12 +270,14 @@ export default function ShopifyProductExportModal({
         method: "POST",
         body: JSON.stringify({ variantIds, selectionMode, productStatus, groupingMode, includeMapped }),
       });
+      if (requestId !== previewRequest.current) return;
       setPreview(result);
     } catch (requestError) {
+      if (requestId !== previewRequest.current) return;
       setPreview(null);
       setError(requestError instanceof Error ? requestError.message : "Az export ellenőrzése nem sikerült.");
     } finally {
-      setPreviewBusy(false);
+      if (requestId === previewRequest.current) setPreviewBusy(false);
     }
   }
 
@@ -233,8 +287,10 @@ export default function ShopifyProductExportModal({
     setReconcileMessage("");
     setMetadataWarnings([]);
     void loadHistory();
+    setPreview(null);
+    setPreviewBusy(true);
     const timer = window.setTimeout(() => void loadPreview(), 80);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); previewRequest.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, variantKey, selectionMode, productStatus, groupingMode, includeMapped]);
 
@@ -262,14 +318,7 @@ export default function ShopifyProductExportModal({
         body: JSON.stringify({ variantIds, selectionMode, productStatus, groupingMode, includeMapped }),
       });
       setCreated(result);
-      await loadHistory();
-      await onChanged?.();
-      const link = document.createElement("a");
-      link.href = result.downloadUrl;
-      link.download = result.fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      await finishDownload(result);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "A Shopify export létrehozása nem sikerült.");
     } finally {
@@ -336,8 +385,7 @@ export default function ShopifyProductExportModal({
           : `Párosítás kész: ${result.mapped} variáns.${productSummary ? ` Metaadat kitöltve: ${productSummary}.` : ""}${skippedCount ? ` ${skippedCount} metaadat nem volt automatikusan párosítható.` : ""} A Miercurea Ciuc induló készlet szinkronja sorba állt.`
       );
       await loadHistory();
-      await onChanged?.();
-      await loadPreview();
+
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Az import utáni párosítás nem sikerült.");
     } finally {
@@ -420,6 +468,7 @@ export default function ShopifyProductExportModal({
             A már Shopifyhoz kapcsolt színeket modell-csoportosításnál érdemes bent hagyni, különben fél terméket építenénk újra, ami még a CSV-nek is méltatlan. Aktív exportnál a párosítás aktiválja és közzéteszi a terméket, majd sorba állítja a készletszinkront.
           </div>
 
+          {refreshNotice ? <p role="status" className="mt-3 text-xs text-white/65">{refreshNotice}</p> : null}
           {error ? (
             <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-300/30 bg-rose-500/14 px-3 py-3 text-sm text-rose-50">
               <AlertTriangle className="mt-0.5 shrink-0" size={17} /> {error}
@@ -432,8 +481,8 @@ export default function ShopifyProductExportModal({
           ) : null}
 
           {metadataWarnings.length ? (
-            <div className="mt-3 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-3 text-xs text-amber-50">
-              <div className="flex items-center gap-2 text-sm"><AlertTriangle size={16} /> Nem párosított Shopify metaadatok</div>
+            <details className="mt-3 rounded-2xl border border-white/15 px-3 py-3 text-xs text-white/65">
+              <summary className="cursor-pointer text-sm">Opcionális Shopify metaadatok ({metadataWarnings.length})</summary>
               <div className="mt-2 grid gap-1.5 md:grid-cols-2">
                 {metadataWarnings.slice(0, 10).map((warning, index) => (
                   <div key={`${warning.productId || "product"}-${warning.scope || "meta"}-${index}`} className="rounded-xl border border-amber-200/15 bg-black/10 px-2.5 py-2">
@@ -444,7 +493,7 @@ export default function ShopifyProductExportModal({
                 ))}
               </div>
               {metadataWarnings.length > 10 ? <p className="mt-2 text-[10px] text-white/45">+ {metadataWarnings.length - 10} további jelzés</p> : null}
-            </div>
+            </details>
           ) : null}
 
           {previewBusy ? (
@@ -499,7 +548,7 @@ export default function ShopifyProductExportModal({
                         </div>
                         <p className="mt-0.5 truncate text-xs text-white/48">{item.brand || "-"} • {item.color || "-"} • {item.size || "-"} • SKU: {item.sku || "-"}</p>
                         {item.errors.length ? <p className="mt-1 text-xs text-rose-100">{item.errors.join(" • ")}</p> : null}
-                        {item.warnings.length ? <p className="mt-1 text-[11px] text-amber-100/85">{item.warnings.join(" • ")}</p> : null}
+                        {item.warnings.length ? <details className="mt-1 text-[11px] text-white/55"><summary className="cursor-pointer">Tájékoztatás ({item.warnings.length}) • nem akadályozza az exportot</summary><p className="mt-1">{item.warnings.join(" • ")}</p></details> : null}
                       </div>
                       <div className="text-right text-sm text-white/75">{n(item.availableQty)} db</div>
                       <div className="text-right">
@@ -542,9 +591,9 @@ export default function ShopifyProductExportModal({
                       <div className="text-xs text-white/55">{row.shopify_location_name || "Miercurea Ciuc"}</div>
                       <div className="text-xs text-white/55">Hibás: {n(row.invalid_variant_count)} • Jelzés: {n(row.warning_count)}</div>
                       <div className="flex flex-wrap justify-end gap-1.5">
-                        <a className={softButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`} download>
+                        <button type="button" className={softButton} disabled={downloadBusy || createBusy} onClick={() => void retryDownload(`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`, `allinfashion_shopify_${row.id.slice(0,8)}.csv`)}>
                           <Download size={14} /> CSV
-                        </a>
+                        </button>
                         <button type="button" className={primaryButton} onClick={() => void reconcile(row.id)} disabled={reconcileBusy}>
                           <UploadCloud size={14} className={reconcilingExportId === row.id ? "animate-pulse" : ""} />
                           {reconcilingExportId === row.id ? "Ellenőrzés..." : mapped ? "Metaadatok frissítése" : "Párosítás"}
@@ -567,7 +616,7 @@ export default function ShopifyProductExportModal({
                   <p className="mt-1 text-xs text-[#d7fffd]/72">{created.fileName}</p>
                   <p className="mt-1 text-xs text-[#d7fffd]/72">{created.productRows} Shopify-terméksor. A készlet a párosítás után automatikusan kerül Miercurea Ciucra.</p>
                 </div>
-                <a className={softButton} href={created.downloadUrl} download={created.fileName}><Download size={15} /> CSV újbóli letöltése</a>
+                <button type="button" className={softButton} disabled={downloadBusy || createBusy} onClick={() => void retryDownload(created.downloadUrl, created.fileName, created)}><Download size={15} /> CSV újbóli letöltése</button>
               </div>
               <ol className="mt-3 grid gap-2 text-xs leading-relaxed text-[#d7fffd]/86 md:grid-cols-3">
                 <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>1.</strong> Shopify Admin → Products → Import, majd töltsd fel ezt az egy CSV-t.</li>
@@ -589,7 +638,7 @@ export default function ShopifyProductExportModal({
           <div className="flex flex-wrap gap-2">
             <button type="button" className={softButton} onClick={() => void loadPreview()} disabled={previewBusy}><RefreshCw size={15} /> Újraellenőrzés</button>
             <button type="button" className={softButton} onClick={onClose}><X size={15} /> Bezárás</button>
-            <button type="button" className={primaryButton} onClick={() => void createExport()} disabled={createBusy || previewBusy || !preview?.summary.validVariantCount}>
+            <button type="button" className={primaryButton} onClick={() => void createExport()} disabled={createBusy || downloadBusy || previewBusy || !preview?.summary.validVariantCount}>
               <PackageCheck size={15} /> {createBusy ? "CSV készítése..." : "Shopify CSV elkészítése"}
             </button>
           </div>
