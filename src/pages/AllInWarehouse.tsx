@@ -53,6 +53,50 @@ import {
   type AifPriceChangeDocumentDetail,
 } from "../lib/aif/api";
 
+
+const WAREHOUSE_WORKSPACE_CSS = `
+.aif-warehouse-workspace{background:radial-gradient(ellipse at 10% 0%,#25485255,transparent 42%),#202b3b;color:#ecf2f7;}
+.aif-warehouse-workspace .aifWarehouseScreenContent{max-width:1440px;}
+.aif-workspace-header{background:linear-gradient(115deg,#263b4c,#263344 65%,#2b3c4c)!important;border:1px solid #91b9cf18!important;box-shadow:0 12px 32px #0b14212e!important;padding:22px 24px!important;}
+.aif-workspace-header h1{font-size:28px;letter-spacing:-.7px;font-weight:400;}
+.aif-workspace-header button{min-height:35px;border-color:#b1cfdf20;border-radius:10px;transition:background .15s,box-shadow .15s;}
+.aif-workspace-header button:hover{box-shadow:0 3px 12px #08111d30;}
+.aif-health-strip>section{border-radius:12px!important;box-shadow:none!important;}
+.aif-filter-panel,.aif-summary-panel,.aif-product-panel{border:1px solid #91b9cf20!important;background:#293647!important;box-shadow:0 8px 24px #0c152124!important;}
+.aif-filter-panel>div:first-child,.aif-summary-panel>div:first-child,.aif-product-panel>div:first-child{background:#263243!important;border-color:#9bb8ce18!important;}
+.aif-filter-panel>div:first-child{padding:14px 20px;}
+.aif-filter-panel>div:first-child>div>svg,.aif-summary-panel>div:first-child svg{color:#78d0c7;}
+.aif-filter-body{padding:0 20px 20px;}
+.aif-search-row{display:grid;grid-template-columns:minmax(260px,1fr) 180px auto;gap:14px;align-items:end;padding:20px 0;}
+.aif-search-row>label{font-size:11px;color:#afc0d0;}
+.aif-search-row input{height:44px;background:#1c2939;border:1px solid #88adbd30;border-radius:10px;}
+.aif-search-row input:focus{border-color:#5bbeb6;box-shadow:0 0 0 3px #42b5aa18;}
+.aif-search-field>div>svg{top:13px;}
+.aif-search-field>div>button{top:8px;}
+.aif-search-actions button{height:44px;border-radius:10px;white-space:nowrap;}
+.aif-search-submit{background:#208c87!important;border-color:#64c7bd50!important;padding:0 22px!important;box-shadow:0 4px 14px #12877e25;}
+.aif-search-submit:hover{background:#269d96!important;}
+.aif-filter-group+.aif-filter-group{margin-top:20px;}
+.aif-group-title{display:flex;align-items:center;gap:12px;margin:0 0 12px;color:#91acae;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;}
+.aif-group-title:after{content:'';height:1px;flex:1;background:#a3bdcf15;}
+.aif-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 16px;}
+.aif-filter-grid>div,.aif-filter-grid>label{min-width:0;}
+.aif-filter-grid>div>button,.aif-filter-grid>label>button{background:#334254;border-color:#9dbccc20;border-radius:9px;box-shadow:inset 0 1px #ffffff03;}
+.aif-filter-grid>div>button:hover,.aif-filter-grid>label>button:hover{background:#3b4e61;border-color:#7abfb750;}
+.aif-filter-grid button:focus-visible,.aif-workspace-header button:focus-visible,.aif-search-actions button:focus-visible,.aif-clear-filters:focus-visible{outline:2px solid #6cd4c9;outline-offset:3px;}
+.aif-active-filters{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:12px 20px;background:#21313f;border-top:1px solid #9bb8ce18;border-radius:0 0 16px 16px;}
+.aif-filter-count{font-size:11px;color:#9db1bd;margin-right:5px;}
+.aif-active-chip{font-size:11px;line-height:1.5;color:#c9efea;background:#318a8026;border:1px solid #58b6aa30;border-radius:7px;padding:4px 8px;overflow-wrap:anywhere;}
+.aif-clear-filters{font-size:11px;color:#bed3de;margin-left:auto;padding:5px 8px;border-radius:6px;}
+.aif-clear-filters:hover{background:#ffffff0d;}
+.aif-summary-chart{background:#223141;border:1px solid #91b9cf18;}
+.aif-product-panel>div:first-child{padding:16px 20px;}
+@media(min-width:1500px){.aif-warehouse-workspace{padding:24px 32px;}}
+@media(max-width:1000px){.aif-search-row{grid-template-columns:1fr 150px;}.aif-search-actions{grid-column:1/-1;justify-content:flex-end;}.aif-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
+@media(max-width:640px){.aif-workspace-header{padding:16px!important;}.aif-filter-body{padding:0 14px 16px;}.aif-search-row{grid-template-columns:1fr;}.aif-search-actions{grid-column:auto;justify-content:stretch;}.aif-search-actions button{flex:1;}.aif-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.aif-active-filters{padding:12px 14px;}}
+@media(prefers-reduced-motion:reduce){.aif-workspace-header button{transition:none;}}
+`;
+
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
 const panel = "overflow-hidden rounded-2xl border border-white/[0.12] bg-white/[0.07] shadow-sm";
@@ -16398,10 +16442,11 @@ export default function AllInWarehouse() {
   const showShopifyConnectionContext = shopifyFilter === "recent_mapped" || sortMode === "shopify_connected_desc";
 
   return (
-    <main className={page}>
+    <main className={`${page} aif-warehouse-workspace`}>
+      <style>{WAREHOUSE_WORKSPACE_CSS}</style>
       <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
       <div className={`${shell} aifWarehouseScreenContent`}>
-        <header className="relative z-20 rounded-2xl border border-white/[0.14] bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
+        <header className="aif-workspace-header relative z-20 rounded-2xl border border-white/[0.14] bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
               <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
@@ -16441,7 +16486,7 @@ export default function AllInWarehouse() {
           </div>
         </header>
 
-        <WarehouseShopifyHealthBanner onOpenCenter={() => setShopifySyncCenterOpen(true)} />
+        <div className="aif-health-strip"><WarehouseShopifyHealthBanner onOpenCenter={() => setShopifySyncCenterOpen(true)} /></div>
 
         {message && <div className="rounded-xl border border-white/[0.14] bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
         {barcodeReturnNotice && (
@@ -16669,14 +16714,15 @@ export default function AllInWarehouse() {
           {colorTypes.map((c) => <option key={c.id} value={c.name_ro}>{c.name_hu || c.code}</option>)}
         </datalist>
 
-        <section className={panel.replace("overflow-hidden", "overflow-visible")}>
+        <section className={`${panel.replace("overflow-hidden", "overflow-visible")} aif-filter-panel`}>
           <div className={`${panelHead} ${filtersOpen ? "rounded-t-[15px] border-b border-white/[0.10]" : "rounded-[15px]"}`}>
             <div className="flex items-center gap-2"><Filter size={17} /><span>Szűrés és keresés</span></div>
             <button className={btnSoft} onClick={() => setFiltersOpen((x) => !x)}>{filtersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {filtersOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
           {filtersOpen && (
-            <div className="grid gap-3 p-4 md:grid-cols-5">
-              <label className={`${label} md:col-span-2`}>
+            <div className="aif-filter-body">
+<div className="aif-search-row">
+              <label className={`${label} aif-search-field`}>
                 Keresés
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 text-white/40" size={18} />
@@ -16695,6 +16741,12 @@ export default function AllInWarehouse() {
               <label className={label}>S/N/COD
                 <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runWarehouseCatalogSearch(); } }} placeholder="pl. S0626" />
               </label>
+              <div className="aif-search-actions flex items-end gap-2">
+                <button className={`${btn} aif-search-submit`} onClick={() => void runWarehouseCatalogSearch()} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
+                <button className={btnSoft} onClick={() => resetWarehouseFilters(false)} type="button">Alaphelyzet</button>
+              </div>
+</div>
+<div className="aif-filter-group"><div className="aif-group-title"><span>Termékadatok</span></div><div className="aif-filter-grid">
               <WarehouseSingleSelect
                 labelText="Beszállító"
                 value={supplier}
@@ -16877,6 +16929,8 @@ export default function AllInWarehouse() {
                   </div>
                 )}
               </div>
+</div></div>
+<div className="aif-filter-group"><div className="aif-group-title"><span>Készlet és export</span></div><div className="aif-filter-grid">
               <WarehouseSingleSelect
                 labelText="Cél hely"
                 value={location}
@@ -16981,15 +17035,19 @@ export default function AllInWarehouse() {
                 ]}
                 onChange={(next) => setSortMode(next as SortMode)}
               />
-              <div className="flex items-end gap-2">
-                <button className={btn} onClick={() => void runWarehouseCatalogSearch()} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
-                <button className={btnSoft} onClick={() => resetWarehouseFilters(false)} type="button">Alaphelyzet</button>
-              </div>
+</div></div>
+            </div>
+          )}
+          {hasActiveWarehouseFilters && (
+            <div className="aif-active-filters" aria-label="Aktív szűrők">
+              <span className="aif-filter-count">{activeWarehouseFilterLabels.length} aktív szűrő</span>
+              {activeWarehouseFilterLabels.map((text, index) => <span key={`${index}-${text}`} className="aif-active-chip">{text}</span>)}
+              <button type="button" onClick={() => resetWarehouseFilters(false)} className="aif-clear-filters">Szűrők törlése</button>
             </div>
           )}
         </section>
 
-        <section className={panel}>
+        <section className={`${panel} aif-summary-panel`}>
           <div className={`${panelHead} ${summaryOpen ? "border-b border-white/[0.10]" : ""}`}>
             <div className="flex items-center gap-2"><Boxes size={17} /><span>Áttekintés</span></div>
             <button className={btnSoft} onClick={() => setSummaryOpen((x) => !x)}>{summaryOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {summaryOpen ? "Bezárás" : "Megnyitás"}</button>
@@ -17005,28 +17063,28 @@ export default function AllInWarehouse() {
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Aktiválandó</p><p className="mt-1 text-xl">{activationTodoCount}</p></div>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-white/[0.40] bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
-                  <p className="mb-3 text-sm text-slate-700">Márkák készletérték szerint</p>
+                <div className="aif-summary-chart rounded-xl p-4">
+                  <p className="mb-3 text-sm text-white/80">Márkák készletérték szerint</p>
                   <div className="space-y-2">
                     {brandChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
-                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{buyPricesVisible ? money(x.value) : "••••"}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: chartFillWidth(x.value, maxBrandValue) }} /></div>
+                        <div className="flex justify-between gap-3 text-xs text-white/65"><span>{x.name}</span><span>{buyPricesVisible ? money(x.value) : "••••"}</span></div>
+                        <div className="h-2 rounded-full bg-white/10"><div className="h-2 rounded-full bg-[#36b5ad]" style={{ width: chartFillWidth(x.value, maxBrandValue) }} /></div>
                       </div>
                     ))}
-                    {!brandChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
+                    {!brandChart.length && <p className="text-sm text-white/50">Nincs megjeleníthető adat.</p>}
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/[0.40] bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
-                  <p className="mb-3 text-sm text-slate-700">Készlet célhelyenként</p>
+                <div className="aif-summary-chart rounded-xl p-4">
+                  <p className="mb-3 text-sm text-white/80">Készlet célhelyenként</p>
                   <div className="space-y-2">
                     {locationChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
-                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{x.qty}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: chartFillWidth(x.qty, maxLocationQty) }} /></div>
+                        <div className="flex justify-between gap-3 text-xs text-white/65"><span>{x.name}</span><span>{x.qty}</span></div>
+                        <div className="h-2 rounded-full bg-white/10"><div className="h-2 rounded-full bg-[#36b5ad]" style={{ width: chartFillWidth(x.qty, maxLocationQty) }} /></div>
                       </div>
                     ))}
-                    {!locationChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
+                    {!locationChart.length && <p className="text-sm text-white/50">Nincs megjeleníthető adat.</p>}
                   </div>
                 </div>
               </div>
@@ -17034,7 +17092,7 @@ export default function AllInWarehouse() {
           )}
         </section>
 
-        <section ref={productListRef} className="overflow-hidden rounded-2xl border border-white/[0.14] bg-[#515d6e] shadow-xl">
+        <section ref={productListRef} className="aif-product-panel overflow-hidden rounded-2xl border border-white/[0.14] bg-[#515d6e] shadow-xl">
           <div className={`bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/[0.12]" : ""}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-white/95">
