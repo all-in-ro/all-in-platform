@@ -1183,7 +1183,7 @@ function validationForRow(row) {
   }
   if (sellPrice === null || sellPrice <= 0) errors.push("Hiányzik vagy hibás az eladási ár.");
   if (!image) errors.push("Hiányzik a nyilvános kép URL.");
-  if (!/^https:\/\//i.test(image)) errors.push("A kép URL-nek nyilvános HTTPS címnek kell lennie.");
+  if (image && !/^https:\/\//i.test(image)) errors.push("A kép URL-nek nyilvános HTTPS címnek kell lennie.");
   if (normalizeKey(row.variant_status || "active") !== "active") errors.push("A variáns nem aktív.");
   if (normalizeKey(row.model_status || "active") !== "active") errors.push("A modell nem aktív.");
 
@@ -1432,7 +1432,7 @@ function handlesForRows(rows, groupingMode = "product_code") {
 
 async function prepareExport(client, options = {}) {
   await ensureAifShopifyExportSchema(client);
-  const selectionMode = options.selectionMode === "selected_variants" ? "selected_variants" : "all_model_variants";
+  const selectionMode = options.selectionMode === "all_model_variants" ? "all_model_variants" : "selected_variants";
   const productStatus = options.productStatus === "active" ? "active" : "draft";
   const groupingMode = cleanGroupingMode(options.groupingMode || options.grouping_mode);
   const includeMapped = bool(options.includeMapped, false);
@@ -2048,6 +2048,7 @@ export async function createAifShopifyProductExport(client, options = {}) {
     summary: prepared.summary,
     location: prepared.location,
     productRows: productRows.length,
+    exportedVariantIds: unique(prepared.validItems.map((item) => text(item.variant_id))),
     inventoryRows: 0,
     stockMode: "pair_then_sync",
   };
