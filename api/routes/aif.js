@@ -23117,6 +23117,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         variantIds: Array.isArray(req.body?.variantIds) ? req.body.variantIds : Array.isArray(req.body?.variant_ids) ? req.body.variant_ids : [],
         selectionMode: req.body?.selectionMode || req.body?.selection_mode,
         productStatus: req.body?.productStatus || req.body?.product_status,
+        groupingMode: req.body?.groupingMode || req.body?.grouping_mode,
         includeMapped: req.body?.includeMapped ?? req.body?.include_mapped,
       });
       res.json(preview);
@@ -23135,6 +23136,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         variantIds: Array.isArray(req.body?.variantIds) ? req.body.variantIds : Array.isArray(req.body?.variant_ids) ? req.body.variant_ids : [],
         selectionMode: req.body?.selectionMode || req.body?.selection_mode,
         productStatus: req.body?.productStatus || req.body?.product_status,
+        groupingMode: req.body?.groupingMode || req.body?.grouping_mode,
         includeMapped: req.body?.includeMapped ?? req.body?.include_mapped,
         actor: actorFrom(req),
       });
