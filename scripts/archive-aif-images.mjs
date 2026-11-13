@@ -7,6 +7,8 @@ const limitArg=process.argv.find(x=>x.startsWith('--limit='));
 const limit=all?Infinity:Math.max(1,Math.min(10000,Number(limitArg?.split('=')[1])||50));
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});
 const cache=new Map();
+const isVideo=url=>{try{return /\.(mp4|webm|mov|m4v|avi)$/i.test(new URL(url).pathname);}catch{return false;}};
+let externalVideos=0;
 let cursor='',scanned=0,candidates=0,saved=0,failed=0,changed=0;
 console.log(apply?'SAJÁT KÉPMÁSOLATOK MENTÉSE':'FELMÉRÉS – nincs feltöltés és nincs adatbázis-módosítás');
 try {
@@ -18,7 +20,8 @@ try {
     for(const row of rows) {
       cursor=row.id;scanned++;
       const photos=aifImageGallery(row.images,row.image_url);
-      const external=photos.filter(url=>!isOwnImageUrl(url));
+      externalVideos+=photos.filter(url=>isVideo(url)&&!isOwnImageUrl(url)).length;
+      const external=photos.filter(url=>!isVideo(url)&&!isOwnImageUrl(url));
       if(!external.length)continue;
       candidates++;
       if(!apply) {
@@ -27,7 +30,7 @@ try {
         try {
           const archived=[];
           for(const photo of photos) {
-            if(isOwnImageUrl(photo)){archived.push(photo);continue;}
+            if(isVideo(photo)||isOwnImageUrl(photo)){archived.push(photo);continue;}
             let result=cache.get(photo);
             if(!result){result=await archiveRemoteImage(photo);cache.set(photo,result);}
             archived.push(result.url);
@@ -37,7 +40,7 @@ try {
             SET images=$2::jsonb,image_url=$3,updated_at=now()
             WHERE id::text=$1 AND images IS NOT DISTINCT FROM $4::jsonb
               AND image_url IS NOT DISTINCT FROM $5`,[
-              row.id,JSON.stringify(unique),unique[0]||null,
+              row.id,JSON.stringify(unique),cache.get(row.image_url)?.url || row.image_url || unique.find(url=>!isVideo(url)) || null,
               row.images==null?null:JSON.stringify(row.images),row.image_url
             ]);
           if(result.rowCount){saved++;console.log(`${row.id}: ${external.length} kép átvéve`);}
@@ -47,6 +50,6 @@ try {
       if(candidates>=limit)break;
     }
   }
-  console.log(JSON.stringify({mode:apply?'apply':'dry-run',scanned,candidates,saved,failed,concurrentlyChanged:changed,limit:all?'all':limit},null,2));
+  console.log(JSON.stringify({mode:apply?'apply':'dry-run',scanned,candidates,saved,failed,concurrentlyChanged:changed,externalVideoLinksPreserved:externalVideos,limit:all?'all':limit},null,2));
   if(failed)process.exitCode=1;
 }catch(e){console.error(e.message);process.exitCode=1;}finally{await pool.end();}
