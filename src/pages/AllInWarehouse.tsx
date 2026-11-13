@@ -7394,7 +7394,7 @@ function WarehouseGalleryEditor({
   images,
   onChange,
   onUpload,
-  uploading,
+  uploading: fileUploading,
   statusText = "",
   title,
 }: {
