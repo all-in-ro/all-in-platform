@@ -12902,8 +12902,9 @@ export default function AllInWarehouse() {
     setShopifyExportModalOpen(true);
   }
 
-  async function handleShopifyExportChanged() {
-    const completedIds = new Set(shopifyExportItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean));
+  async function handleShopifyExportChanged(exportedVariantIds: string[]) {
+    const completedIds = new Set(exportedVariantIds.map(String).filter(Boolean));
+    if (!completedIds.size) return;
     await load();
     const cleanup = await removeCompletedSelectedItems(completedIds);
     if (cleanup.removed > 0) {
