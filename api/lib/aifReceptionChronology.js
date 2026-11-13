@@ -29,18 +29,23 @@ export async function validateReceptionChronology(client, id, settings) {
   if (!row.aviz_series || !row.aviz_sequence_number) throw Object.assign(new Error('A dátum ellenőrzéséhez értelmezhető Aviz sorozat és sorszám szükséges.'), {statusCode:409});
   const annual = settings.yearly_reset !== false;
   const year = Number(row.aviz_sequence_year || date.slice(0,4));
-  const {rows: others} = await client.query(`SELECT aviz_number AS number, reception_date::text AS date,
-    aviz_sequence_number AS sequence, COALESCE(aviz_sequence_year,EXTRACT(YEAR FROM reception_date)::integer) AS year
-    FROM aif_receptions WHERE id::text<>$1 AND aviz_series=$2
-      AND aviz_number IS NOT NULL AND aviz_sequence_number IS NOT NULL AND reception_date IS NOT NULL`,
-    [String(id),row.aviz_series]);
+  // Counter restarts/manual historical numbers do not determine chronology.
+  // Compare reception creation order in SQL, preserving microsecond precision.
+  const {rows: others} = await client.query(`SELECT r.aviz_number AS number,
+    r.reception_date::text AS date,
+    CASE WHEN (r.created_at,r.id) < (current.created_at,current.id) THEN -1 ELSE 1 END AS direction,
+    (r.aviz_sequence_number=current.aviz_sequence_number
+      AND ($2::boolean=false OR r.aviz_sequence_year IS NOT DISTINCT FROM current.aviz_sequence_year)) AS duplicate
+    FROM aif_receptions current
+    JOIN aif_receptions r ON r.aviz_series=current.aviz_series AND r.id<>current.id
+    WHERE current.id::text=$1 AND r.aviz_number IS NOT NULL`,
+    [String(id),settings.include_year !== false]);
   let previous, next;
   for (const other of others) {
-    const direction = annual && Number(other.year) !== year
-      ? Number(other.year) - year : Number(other.sequence) - Number(row.aviz_sequence_number);
-    if (direction === 0) throw Object.assign(new Error(`Ez a sorszám már használatban van: ${other.number}.`), {statusCode:409});
-    if (direction < 0 && (!previous || other.date > previous.date)) previous = other;
-    if (direction > 0 && (!next || other.date < next.date)) next = other;
+    if (other.duplicate) throw Object.assign(new Error(`Ez a sorszám már használatban van: ${other.number}.`), {statusCode:409});
+    if (!other.date) continue;
+    if (Number(other.direction) < 0 && (!previous || other.date > previous.date)) previous = other;
+    if (Number(other.direction) > 0 && (!next || other.date < next.date)) next = other;
   }
   assertReceptionDateWindow(date, {year:annual ? year : null,previous,next});
 }
