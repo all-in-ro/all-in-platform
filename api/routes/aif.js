@@ -2106,20 +2106,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sequenceYear = receptionYear;
     }
 
-    // A lowered counter must never reuse an earlier numeric position.
-    const used = await client.query(`SELECT COALESCE(MAX(aviz_sequence_number),0) AS maximum
-      FROM aif_receptions WHERE aviz_series=$1
-        AND ($2::boolean=false OR COALESCE(aviz_sequence_year,EXTRACT(YEAR FROM reception_date)::integer)=$3)`,
-      [cleanAifReceptionAvizSeries(settings.series || AIF_RECEPTION_AVIZ_DEFAULTS.series), settings.yearly_reset !== false, sequenceYear]);
-    nextNumber = Math.max(nextNumber, Number(used.rows[0]?.maximum || 0) + 1);
-
+    // The configured next number is authoritative, including intentional restarts.
     let avizNumber = "";
     let guard = 0;
     while (!avizNumber && guard < 100000) {
       const candidate = aifReceptionAvizNumber(settings, nextNumber, sequenceYear);
       const conflict = await client.query(
-        `SELECT 1 FROM aif_receptions WHERE aviz_number=$1 AND id::text<>$2 LIMIT 1`,
-        [candidate, String(existing.id)]
+        `SELECT 1 FROM aif_receptions WHERE id::text<>$2
+          AND (aviz_number=$1 OR (aviz_series=$3 AND aviz_sequence_number=$4
+            AND ($5::boolean=false OR aviz_sequence_year=$6))) LIMIT 1`,
+        [candidate, String(existing.id), cleanAifReceptionAvizSeries(settings.series || AIF_RECEPTION_AVIZ_DEFAULTS.series), nextNumber, settings.include_year !== false, sequenceYear]
       );
       if (!conflict.rowCount) avizNumber = candidate;
       else nextNumber += 1;
@@ -6630,7 +6626,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       if (src.avizNumber !== undefined || src.aviz_number !== undefined) {
         const parsedAviz = parseAifReceptionAvizNumber(src.avizNumber ?? src.aviz_number);
-        if (parsedAviz.number && parsedAviz.series && parsedAviz.sequenceNumber) {
+        const newerReception = numberChanged ? await client.query(`SELECT 1
+          FROM aif_receptions r JOIN aif_receptions current ON current.id=$1
+          WHERE r.aviz_series=current.aviz_series AND r.aviz_number IS NOT NULL
+            AND (r.created_at,r.id)>(current.created_at,current.id) LIMIT 1`, [receptionId]) : {rowCount:1};
+        if (numberChanged && !newerReception.rowCount && parsedAviz.number && parsedAviz.series && parsedAviz.sequenceNumber) {
           const settingsRow = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 FOR UPDATE`);
           const settings = settingsRow.rows[0] || {};
           const sameSeries = cleanAifReceptionAvizSeries(settings.series) === parsedAviz.series;
