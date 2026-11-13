@@ -1,3 +1,4 @@
+import { archiveRemoteImage } from "../lib/aifRemoteImageArchive.js";
 import express from "express";
 import multer from "multer";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -55,6 +56,21 @@ router.post("/uploads/r2", upload.single("file"), async (req, res) => {
   } catch (e) {
     console.error("R2 upload failed:", e);
     res.status(500).json({ error: "Upload failed" });
+  }
+});
+
+router.post("/uploads/r2/import-url", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    if (typeof req.body?.url !== "string" || !req.body.url.trim()) {
+      return res.status(400).json({ error: "Hiányzik a kép URL." });
+    }
+    return res.json(await archiveRemoteImage(req.body.url));
+  } catch (error) {
+    const status = Number(error?.statusCode || 502);
+    return res.status(status >= 400 && status < 600 ? status : 502).json({
+      error: error?.statusCode ? error.message : "A kép átvétele nem sikerült. Ellenőrizd a forrás elérhetőségét és a képtár kapcsolatát.",
+    });
   }
 });
 
