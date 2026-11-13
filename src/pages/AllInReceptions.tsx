@@ -43,6 +43,12 @@ import {
   apiAifUpdateImportRow,
 } from "../lib/aif/api";
 
+function receptionQuickDate(offset: number) {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const get = (type: string) => Number(parts.find(p => p.type === type)?.value);
+  return new Date(Date.UTC(get('year'), get('month') - 1, get('day') + offset, 12)).toISOString().slice(0, 10);
+}
+
 type Props = { onLogout?: () => void };
 
 type SalesTvaSettings = {
@@ -2783,6 +2789,10 @@ export default function AllInReceptions(_props: Props) {
     setPriceReviewError('');
     setMessage('');
     try {
+      const chosenDate = String(receptionDraft.receptionDate || "").trim();
+      if (!chosenDate) throw new Error('Válaszd ki a bevételezés dátumát.');
+      if (String(detail?.item.id) !== receptionId) throw new Error('A megnyitott receptió megváltozott. Nyisd meg újra a véglegesítést.');
+      await apiAifUpdateReception(receptionId, { receptionDate: chosenDate } as any);
       const result: any = await apiAifCommitReceptionRows(receptionId, rowIds, {
         priceChoices,
         requirePriceChoice: true,
@@ -3338,7 +3348,7 @@ export default function AllInReceptions(_props: Props) {
                     </label>
                     <label className={lightLabel}>UIT kód<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
                     <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
-                    <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
+                    <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /><span className="mt-1 flex gap-2"><button type="button" className={neutralBtn} disabled={savingHeader || committingRows} onClick={() => updateReceptionDraft("receptionDate", receptionQuickDate(-1))}>Tegnap</button><button type="button" className={neutralBtn} disabled={savingHeader || committingRows} onClick={() => updateReceptionDraft("receptionDate", receptionQuickDate(0))}>Ma</button></span></label>
                     <label className={lightLabel}>Pénznem<select className={lightSelect} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
                     <label className={lightLabel}>Árfolyam RON<input className={lightInput} value={receptionDraft.exchangeRateToRon || ""} onChange={(e) => updateReceptionDraft("exchangeRateToRon", e.target.value)} /></label>
                     <label className={lightLabel}>Beszerzési TVA<select className={lightSelect} value={receptionDraft.tvaMode || "no_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="no_tva">Nincs beszerzési TVA</option><option value="without_tva">Nettó vételár + TVA</option><option value="with_tva">Bruttó vételár, TVA benne van</option></select></label>
@@ -3764,11 +3774,11 @@ export default function AllInReceptions(_props: Props) {
                 </label>
                 <label className={lightLabel}>
                   Receptió dátuma
-                  <input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} />
+                  <input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /><span className="mt-1 flex gap-2"><button type="button" className={neutralBtn} disabled={savingHeader || committingRows} onClick={() => updateReceptionDraft("receptionDate", receptionQuickDate(-1))}>Tegnap</button><button type="button" className={neutralBtn} disabled={savingHeader || committingRows} onClick={() => updateReceptionDraft("receptionDate", receptionQuickDate(0))}>Ma</button></span>
                 </label>
               </div>
               <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-4 py-3 text-xs leading-5 text-white/72">
-                Ez a dátum kerül a PDF-ekre <strong className="text-white">Data recepției</strong> néven. Nem írja át a számla keltezését.
+                Ez a dátum kerül a PDF-ekre <strong className="text-white">Data recepției</strong> néven. Korábbi nap is választható, ha belefér a sorszámok dátumsorrendjébe. A számla keltezése változatlan marad.
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-white/10 bg-[#293548] px-5 py-4">
