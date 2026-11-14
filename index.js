@@ -20,6 +20,46 @@ const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Forward rejected async handlers to Express (also works with Express 4).
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next);
+}
+
+function isTransientDatabaseError(error) {
+  const code = String(error?.code || '');
+  if (['57P01', '57P02', '57P03', '53300', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN'].includes(code) || code.startsWith('08')) return true;
+  return /connection terminated|connection timeout|timeout exceeded when trying to connect|database system is (?:in recovery|starting up|shutting down)/i.test(String(error?.message || ''));
+}
+
+async function initializeSessionStoreWithRetry(initialize, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  let attempt = 0;
+  for (;;) {
+    try { await initialize(); return; }
+    catch (error) {
+      if (!isTransientDatabaseError(error)) throw error;
+      const delay = Math.min(30000, 2000 * (2 ** Math.min(attempt++, 4)));
+      console.error('Session store: átmeneti adatbázishiba, újrapróbálás', {
+        code: error?.code || null, attempt, retryInMs: delay,
+      });
+      await pause(delay);
+    }
+  }
+}
+
+function apiErrorHandler(error, req, res, next) {
+  if (res.headersSent) return next(error);
+  console.error('HTTP request failed', { method: req.method, path: req.path,
+    code: error?.code || null, message: String(error?.message || error) });
+  if (isTransientDatabaseError(error)) {
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({code:'database_temporarily_unavailable',
+      error:'Az adatbázis átmenetileg nem érhető el. A művelet eredményét ellenőrizd frissítés után.'});
+  }
+  const status = Number(error?.status || error?.statusCode);
+  return res.status(status >= 400 && status < 600 ? status : 500).json({
+    code:'request_failed', error:'A kérés feldolgozása nem sikerült.'});
+}
+
 // --- config ---
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "allinboss-123"; // ideiglenes default
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-secret-change-me";
@@ -523,7 +563,7 @@ async function ensureAifLocationForShop(client, { shopId, name, locationCode, lo
 }
 
 // --- auth ---
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", asyncRoute(async (req, res) => {
   const body = req.body || {};
 
   if (body.kind === "admin") {
@@ -608,9 +648,9 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   return res.status(400).send("Bad request");
-});
+}));
 
-app.get("/api/auth/me", async (req, res) => {
+app.get("/api/auth/me", asyncRoute(async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const sid = getSid(req);
@@ -625,12 +665,12 @@ app.get("/api/auth/me", async (req, res) => {
     res.setHeader("Retry-After", "3");
     return res.status(503).json({ error: "A munkamenet ellenőrzése átmenetileg nem érhető el.", code: "auth_session_unavailable" });
   }
-});
+}));
 
 // Valódi kliensoldali aktivitás heartbeatje.
 // A frontend ezt csak tényleges shop-felhasználói esemény után hívja,
 // ezért háttérpolling nem tudja mesterségesen életben tartani az inaktív belépést.
-app.post("/api/auth/activity", async (req, res) => {
+app.post("/api/auth/activity", asyncRoute(async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const sid = getSid(req);
@@ -646,9 +686,9 @@ app.post("/api/auth/activity", async (req, res) => {
     console.error("Auth activity heartbeat failed", error);
     return res.status(500).json({ error: "A munkamenet aktivitása nem frissíthető." });
   }
-});
+}));
 
-app.post("/api/auth/logout", async (req, res) => {
+app.post("/api/auth/logout", asyncRoute(async (req, res) => {
   try {
     const sid = getSid(req);
     if (sid) await deleteSession(sid);
@@ -659,10 +699,10 @@ app.post("/api/auth/logout", async (req, res) => {
     clearCookie(res);
     return res.status(500).json({ error: "A kijelentkezés szerveroldali lezárása nem sikerült." });
   }
-});
+}));
 
 // A belépőképernyőnek hitelesítés előtt is tudnia kell, milyen üzletek léteznek.
-app.get("/api/auth/shops", async (_req, res) => {
+app.get("/api/auth/shops", asyncRoute(async (_req, res) => {
   try {
     await ensureShops();
     const r = await pool.query(
@@ -686,12 +726,12 @@ app.get("/api/auth/shops", async (_req, res) => {
     console.error('Login shop list failed', error);
     return res.status(500).json({ error: 'A belépési helységek nem tölthetők be.' });
   }
-});
+}));
 
 // --- admin: shops ---
 
 // --- shops (places): list for any logged in user (admin or shop) ---
-app.get("/api/shops", requireAuthed, async (_req, res) => {
+app.get("/api/shops", requireAuthed, asyncRoute(async (_req, res) => {
   await ensureShops();
   const r = await pool.query(
     `SELECT id, name, COALESCE(login_enabled,true) AS login_enabled,
@@ -699,9 +739,9 @@ app.get("/api/shops", requireAuthed, async (_req, res) => {
      FROM shops ORDER BY name ASC`
   );
   res.json({ items: r.rows });
-});
+}));
 
-app.get("/api/admin/shops", requireAdmin, async (_req, res) => {
+app.get("/api/admin/shops", requireAdmin, asyncRoute(async (_req, res) => {
   await ensureShops();
   const r = await pool.query(
     `SELECT id, name, COALESCE(login_enabled,true) AS login_enabled,
@@ -709,9 +749,9 @@ app.get("/api/admin/shops", requireAdmin, async (_req, res) => {
      FROM shops ORDER BY name ASC`
   );
   res.json({ items: r.rows });
-});
+}));
 
-app.post("/api/admin/shops", requireAdmin, async (req, res) => {
+app.post("/api/admin/shops", requireAdmin, asyncRoute(async (req, res) => {
   await ensureShops();
   const body = req.body || {};
   const requestedId = String(body.id || "").trim();
@@ -756,11 +796,11 @@ app.post("/api/admin/shops", requireAdmin, async (req, res) => {
   } finally {
     client.release();
   }
-});
+}));
 
 
 // --- admin: delete shop (place) ---
-app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
+app.delete("/api/admin/shops/:id", requireAdmin, asyncRoute(async (req, res) => {
   const id = String(req.params.id || "");
   if (!id) return res.status(400).json({ error: "id required" });
 
@@ -769,19 +809,19 @@ app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
 
   await pool.query("DELETE FROM shops WHERE id = $1", [id]);
   res.json({ ok: true });
-});
+}));
 
 
 
 // --- Legacy product/incoming endpoints removed. New product system lives in api/routes/aif.js. ---
 
 // --- admin: R2 presign + set login logo ---
-app.get("/api/admin/r2/presign", requireAdminOrSecret, async (req, res) => {
+app.get("/api/admin/r2/presign", requireAdminOrSecret, asyncRoute(async (req, res) => {
   // This deployment uses Cloudflare API-token uploads (no S3 access keys), so presign is disabled.
   return res.status(400).json({ error: "Presign disabled. Use POST /api/uploads/r2 (multipart)" });
-});
+}));
 
-app.post("/api/admin/branding/logo", requireAdminOrSecret, async (req, res) => {
+app.post("/api/admin/branding/logo", requireAdminOrSecret, asyncRoute(async (req, res) => {
   if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
   const body = req.body || {};
   const key = String(body.key || "").trim();
@@ -790,10 +830,10 @@ app.post("/api/admin/branding/logo", requireAdminOrSecret, async (req, res) => {
 
   await setSetting("login_logo_key", key);
   return res.json({ ok: true, url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
-});
+}));
 
 // --- admin: create shop codes (DB-backed) ---
-app.post("/api/admin/codes", requireAdmin, async (req, res) => {
+app.post("/api/admin/codes", requireAdmin, asyncRoute(async (req, res) => {
   await ensureShops();
   const { shopId, name } = req.body || {};
   if (!shopId) return res.status(400).send("shopId required");
@@ -820,10 +860,10 @@ app.post("/api/admin/codes", requireAdmin, async (req, res) => {
   ]);
 
   res.send(`Kód: ${rawCode}\nÜzlet: ${shopId}\nNév: ${name || "-"}\n`);
-});
+}));
 
 // --- admin: list codes (for resend) ---
-app.get("/api/admin/codes", requireAdmin, async (req, res) => {
+app.get("/api/admin/codes", requireAdmin, asyncRoute(async (req, res) => {
   await ensureShops();
   const shopId = req.query.shopId ? String(req.query.shopId) : null;
   const status = req.query.status ? String(req.query.status) : "active"; // active | inactive | all
@@ -867,10 +907,10 @@ app.get("/api/admin/codes", requireAdmin, async (req, res) => {
   }));
 
   res.json({ items: rows });
-});
+}));
 
 // --- admin: activate / inactivate code (toggle revoked_at) ---
-app.patch("/api/admin/codes/:id/status", requireAdmin, async (req, res) => {
+app.patch("/api/admin/codes/:id/status", requireAdmin, asyncRoute(async (req, res) => {
   const id = String(req.params.id || "");
   const body = req.body || {};
   const active = Boolean(body.active);
@@ -895,10 +935,10 @@ app.patch("/api/admin/codes/:id/status", requireAdmin, async (req, res) => {
   ]);
 
   return res.json({ ok: true, active: false });
-});
+}));
 
 // --- admin: delete code permanently ---
-app.delete("/api/admin/codes/:id", requireAdmin, async (req, res) => {
+app.delete("/api/admin/codes/:id", requireAdmin, asyncRoute(async (req, res) => {
   const id = String(req.params.id || "");
   if (!id) return res.status(400).send("id required");
 
@@ -906,10 +946,10 @@ app.delete("/api/admin/codes/:id", requireAdmin, async (req, res) => {
   if (r.rowCount === 0) return res.status(404).send("Not found");
 
   res.json({ ok: true });
-});
+}));
 
 // --- public: branding (login logo) ---
-app.get("/api/branding/logo", async (req, res) => {
+app.get("/api/branding/logo", asyncRoute(async (req, res) => {
   try {
     await ensureSettings();
     const key = await getSetting("login_logo_key");
@@ -919,7 +959,7 @@ app.get("/api/branding/logo", async (req, res) => {
   } catch {
     return res.json({ url: null });
   }
-});
+}));
 
 
 
@@ -933,7 +973,7 @@ app.get("/api/branding/logo", async (req, res) => {
 // - file: the binary
 // - folder (optional): e.g. products/123
 // - name (optional): e.g. main.jpg
-app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
+app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), asyncRoute(async (req, res) => {
   try {
     if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
 
@@ -1003,7 +1043,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     console.error("R2 upload failed:", e);
     return res.status(500).json({ error: "Upload failed" });
   }
-});
+}));
 
 // Bolti kepfeltoltes: kulon R2 vegpont, NEM az altalanos admin feltolto
 // megnyitasa. A shop cookie sajat locationCode-ja es a valos keszlet miatt
@@ -1081,7 +1121,7 @@ app.post("/api/uploads/r2/shop-gallery", requireAuthed, requireAifImagePermissio
 });
 
 // --- health ---
-app.get("/api/health", async (_req, res) => {
+app.get("/api/health", asyncRoute(async (_req, res) => {
   try {
     const result = await pool.query("SELECT 1");
     return res.json({ ok: true, db: result.rowCount === 1 });
@@ -1093,7 +1133,7 @@ app.get("/api/health", async (_req, res) => {
     });
     return res.status(503).json({ ok: false, db: false });
   }
-});
+}));
 
 
 // --- Legacy transfer endpoints removed. New inventory movement logic lives in api/routes/aif.js. ---
@@ -1109,7 +1149,9 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-ensureSessionStore()
+app.use(apiErrorHandler);
+
+initializeSessionStoreWithRetry(ensureSessionStore)
   .then(() => {
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
