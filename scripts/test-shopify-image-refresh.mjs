@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+const source = await fs.readFile(new URL('../api/lib/aifShopifyImageRefresh.js', import.meta.url),'utf8');
+// Isolated tests: no production DB connection and no Shopify request.
+const isolated = source.replace(/^import .*;\n/gm,'');
+const api = await import('data:text/javascript;base64,'+Buffer.from(`const shopifyGraphql=()=>{throw Error('Unexpected network access')};\n`+isolated).toString('base64'));
+const sku='198632608616';
+const remote={id:'gid://shopify/ProductVariant/1',sku,inventoryItem:{id:'gid://shopify/InventoryItem/1'},product:{id:'gid://shopify/Product/1'}};
+const result=nodes=>async()=>({data:{productVariants:{nodes,pageInfo:{hasNextPage:false}}}});
+assert.equal((await api.findImageRefreshVariant(sku,result([remote]))).id,remote.id);
+await assert.rejects(api.findImageRefreshVariant(sku,result([])),/Nincs Shopify/);
+await assert.rejects(api.findImageRefreshVariant(sku,result([remote,remote])),/Több Shopify/);
+await assert.rejects(api.findImageRefreshVariant(sku,result([{...remote,sku:sku+'0'}])),/Nincs Shopify/);
+await assert.rejects(api.findImageRefreshVariant('',result([])),/Hiányzik/);
+await assert.rejects(api.findImageRefreshVariant(sku,async()=>({errors:[{message:'denied'}]})),/nem ellenőrizhetők/);
+await assert.rejects(api.findImageRefreshVariant(sku,async()=>({data:{productVariants:{nodes:[remote],pageInfo:{hasNextPage:true}}}})),/nem ellenőrizhetők/);
+await assert.rejects(api.findImageRefreshVariant(sku,result([{...remote,inventoryItem:null}])),/Hiányos/);
+await assert.rejects(api.getImageRefreshStatus({},'bad-id'),/Érvénytelen/);
+const routes=[];const auth=()=>{};
+api.registerImageRefreshRoutes({get:(...args)=>routes.push(args),post:(...args)=>routes.push(args)}, {}, auth);
+assert.equal(routes.length,2);assert.ok(routes.every(route=>route[1]===auth));
+assert.ok(!/processAifShopifyOutboxBatch|enqueueAifShopifyVariant|productCreate|inventorySet|price:/.test(source));
+console.log('OK: pontos SKU, hiányzó és többszörös találat, hiányos/API-hibás válasz, jogosultság. Nincs élő adat- vagy Shopify-módosítás.');
