@@ -4,8 +4,11 @@ import { hourlyRange, bucharestDate, loadHourlySales, registerAifHourlySales } f
 const now = new Date('2026-11-14T10:00:00Z');
 assert.equal(hourlyRange({}, now).to, '2026-11-13');
 assert.equal(hourlyRange({}, now).calendarDays, 28);
+assert.equal(hourlyRange({from:'2026-11-14',to:'2026-11-14'},now).calendarDays,1);
+assert.equal(hourlyRange({from:'2026-11-14',to:'2026-11-14'},now).lastDate,'2026-11-14');
+assert.equal(hourlyRange({from:'2026-11-15',to:'2026-11-15'},new Date('2026-11-14T22:01:00Z')).to,'2026-11-15');
 assert.equal(bucharestDate(new Date('2026-11-13T23:01:00Z')), '2026-11-14');
-for (const q of [{ to:'hibás' }, { from:'2026-02-30',to:'2026-03-01' }, { from:'2026-11-03',to:'2026-11-02' }, { to:'2026-11-14' }, { from:'2025-01-01',to:'2026-11-03' }, { from:['2026-11-01'],to:'2026-11-03' }]) {
+for (const q of [{ to:'hibás' }, { from:'2026-02-30',to:'2026-03-01' }, { from:'2026-11-03',to:'2026-11-02' }, { to:'2026-11-15' }, { from:'2025-01-01',to:'2026-11-03' }, { from:['2026-11-01'],to:'2026-11-03' }]) {
   assert.throws(() => hourlyRange(q, now), e => e.statusCode === 400);
 }
 const resultRows = [
