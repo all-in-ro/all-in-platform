@@ -1,3 +1,4 @@
+import { registerImageRefreshRoutes } from "../lib/aifShopifyImageRefresh.js";
 import { registerAifHourlySales } from "../lib/aifHourlySales.js";
 import { receptionDateKey, validateReceptionChronology } from "../lib/aifReceptionChronology.js";
 import { requireAifImagePermission } from "../lib/aifImagePermissions.js";
@@ -23070,6 +23071,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  registerImageRefreshRoutes(router, pool, requireAdminOrSecret);
 
   router.post("/shopify/mappings/refresh", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
