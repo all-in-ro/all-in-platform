@@ -1508,12 +1508,18 @@ function RankingBars({
   items,
   valueMode = "money",
   icon: Icon,
+  selectedName = "",
+  onSelect,
+  onClear,
 }: {
   title: string;
   subtitle: string;
   items: AifAdminShopRankingItem[];
   valueMode?: "money" | "qty";
-  icon: ComponentType<{ size?: number; className?: string }>;
+  selectedName?: string;
+  onSelect?: (item: AifAdminShopRankingItem) => void;
+  onClear?: () => void;
+  icon: ComponentType<{ size?: number | string; className?: string }>;
 }) {
   const max = Math.max(1, ...items.map((item) => valueMode === "money" ? numberValue(item.revenue) : numberValue(item.qty)));
   return (
@@ -1527,11 +1533,20 @@ function RankingBars({
           <Icon size={17} />
         </span>
       </div>
+      {selectedName && onClear ? (
+        <div className="mt-3 flex items-center justify-between gap-2 rounded-lg bg-[#2a8d8b]/20 px-2.5 py-2 text-xs text-[#bff8f5]">
+          <span className="truncate" title={selectedName}>{selectedName}</span>
+          <button type="button" onClick={onClear} aria-label="Márkaszűrő törlése"
+            className="shrink-0 rounded-md p-1 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#63d8d3]">
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
       <div className="mt-4 space-y-3">
         {items.slice(0, 7).map((item, index) => {
           const value = valueMode === "money" ? numberValue(item.revenue) : numberValue(item.qty);
-          return (
-            <div key={`${item.name}-${index}`}>
+          const content = (
+            <>
               <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
                 <span className="truncate text-white/78">{index + 1}. {item.name}</span>
                 <span className="shrink-0 text-white">{valueMode === "money" ? money(value) : `${integer(value)} db`}</span>
@@ -1542,8 +1557,16 @@ function RankingBars({
                   style={{ width: `${Math.max(4, value / max * 100)}%` }}
                 />
               </div>
-            </div>
+            </>
           );
+          return onSelect ? (
+            <button key={`${item.name}-${index}`} type="button"
+              onClick={() => onSelect(item)} aria-pressed={selectedName === item.name}
+              aria-label={`${item.name}: ${selectedName === item.name ? "márkaszűrő törlése" : "szűrés erre a márkára"}`}
+              className={`block w-full rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#63d8d3] ${selectedName === item.name ? "bg-[#2a8d8b]/20 ring-1 ring-[#63d8d3]/60" : ""}`}>
+              {content}
+            </button>
+          ) : <div key={`${item.name}-${index}`}>{content}</div>;
         })}
         {!items.length ? (
           <div className="rounded-2xl border border-dashed border-white/14 bg-white/[0.03] px-4 py-8 text-center text-xs text-white/42">
@@ -2801,7 +2824,11 @@ export default function AllInAdminMagazinDashboard({
           <p className="col-span-full text-xs text-white/60">
             A hitelbefizetés összege a befizetés napján jelenik meg. A hiteles termék darabszáma a terméksor teljes rendezésekor, egyszer számít bele. A napi új eladások száma ettől külön érték.
           </p>
-          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.brands || []} icon={Tags} />
+          <RankingBars title="Márkák teljesítménye" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.brands || []} icon={Tags}
+            selectedName={applied.brand}
+            onSelect={(item) => applyInstantFilter({ brand: applied.brand === item.name ? "" : item.name })}
+            onClear={() => applyInstantFilter({ brand: "" })}
+          />
           <RankingBars title="Alkategóriák" subtitle="Darab • rendezett hiteles termékekkel együtt" items={data?.categories || []} valueMode="qty" icon={Layers3} />
           <RankingBars title="Top termékek" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.products || []} icon={ShoppingBag} />
         </section>
