@@ -539,6 +539,48 @@ function WarehouseShopifyStatusIcon({
   const visible = mapped || pending || hasConnectionError || hasExportError || oldImageErrorResolved;
   const open = visible && (hovered || pinned);
 
+  const [imageSync, setImageSync] = useState<{status:string; last_error?:string} | null>(null);
+  const [imageRequest, setImageRequest] = useState(false);
+  const [imageRequestError, setImageRequestError] = useState("");
+  const imageEndpoint = `/api/aif/shopify/images/${encodeURIComponent(item.variant_id)}`;
+  const imageBusy = imageRequest || ["pending", "processing", "waiting"].includes(imageSync?.status || "");
+  useEffect(() => {
+    if (!open) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController();
+    const check = async () => {
+      try {
+        const status = await fetchJSON<{status:string; last_error?:string}>(`${imageEndpoint}/status`, {signal:controller.signal});
+        if (stopped) return;
+        setImageSync(status);
+        if (["pending", "processing", "waiting"].includes(status.status)) timer = setTimeout(check, 4000);
+      } catch (error) {
+        if (!stopped) setImageRequestError(error instanceof Error ? error.message : "A képszinkron állapota nem kérdezhető le.");
+      }
+    };
+    void check();
+    return () => { stopped = true; controller.abort(); clearTimeout(timer); };
+  }, [open, imageEndpoint, imageRequest]);
+  const refreshImages = async () => {
+    if (imageRequest) return;
+    setPinned(true);
+    setImageRequest(true);
+    setImageRequestError("");
+    try {
+      const result = await fetchJSON<{status:string; last_error?:string}>(`${imageEndpoint}/refresh`, {method:"POST"});
+      setImageSync(result);
+    } catch (error) {
+      setImageRequestError(error instanceof Error ? error.message : "A képfrissítés nem sikerült.");
+    } finally { setImageRequest(false); }
+  };
+  const imageMessage = imageRequest ? "Shopify-termék ellenőrzése…"
+    : imageSync?.status === "done" ? "A képszinkron elkészült."
+    : imageSync?.status === "pending" ? "Képek frissítése sorba állítva."
+    : imageSync?.status === "processing" || imageSync?.status === "waiting" ? "A Shopify feldolgozza a képeket…"
+    : imageSync?.status === "error" ? imageSync.last_error || "A képfrissítés sikertelen."
+    : "";
+
   const connectionErrors = Array.from(new Set([
     ...warehouseShopifyMessageList(item.shopify_last_error),
     ...warehouseShopifyMessageList(item.shopify_outbox_error),
@@ -725,6 +767,19 @@ function WarehouseShopifyStatusIcon({
                   <CheckCircle2 size={14} className="mr-1.5 inline" /> A jelenlegi Shopify kapcsolat rendben.
                 </div>
               ) : null}
+
+              <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
+                <button type="button" disabled={imageBusy && !imageRequestError}
+                  onClick={() => void refreshImages()}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-3 py-2.5 text-xs text-white hover:bg-teal-800 disabled:opacity-60">
+                  <RefreshCw size={15} className={imageBusy ? "animate-spin" : ""} />
+                  Shopify-képek frissítése
+                </button>
+                {(imageRequestError || imageMessage) && <div role="status" aria-live="polite"
+                  className={`mt-2 break-words text-xs ${imageRequestError || imageSync?.status === "error" ? "text-rose-700" : "text-teal-900"}`}>
+                  {imageRequestError || imageMessage}
+                </div>}
+              </div>
 
               <div className="space-y-1.5">
                 {statusRows.map((row) => (
