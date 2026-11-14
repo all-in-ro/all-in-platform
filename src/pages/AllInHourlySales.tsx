@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, BarChart3, CalendarDays, ChevronDown, Clock3, Info, RefreshCw, Store, X } from 'lucide-react';
 import { apiAifHourlySales, type AifHourlyReport } from '../lib/aif/api';
 import { WEEKDAYS, SHOP_COLORS, dateList, hourLabel, localToday, metricValue, moveDate, sampleShops, sumHour, type HourlyAggregate, type HourlyMetric } from '../lib/aif/hourlySalesModel';
-import { readHourlyPreferences, saveHourlyPreferences } from '../lib/aif/hourlySalesPreferences';
+import { readHourlyPreferences, saveHourlyPreferences, HOURLY_PERIODS, hourlyPresetRange, type HourlyPeriod } from '../lib/aif/hourlySalesPreferences';
 import { HourlyDatePicker, HourlyTimePicker } from './AllInHourlySalesControls';
 import './AllInHourlySales.css';
 
@@ -12,12 +12,13 @@ const unit = (m: HourlyMetric) => m === 'value' ? 'RON' : m === 'units' ? 'db' :
 const zero = { purchases: 0, credit: 0, refunded: 0, units: 0, value: 0 };
 
 export default function AllInHourlySales({ onBack }: { onBack: () => void }) {
-  const yesterday = moveDate(localToday(), -1);
+  const today = localToday();
+  const yesterday = moveDate(today, -1);
   const [saved] = useState(() => readHourlyPreferences(yesterday));
   const [from, setFrom] = useState(saved.from);
   const [to, setTo] = useState(saved.to);
   const [range, setRange] = useState({ from:saved.from, to:saved.to, version:0 });
-  const [periodDays, setPeriodDays] = useState<number|null>(saved.periodDays);
+  const [periodPreset, setPeriodPreset] = useState<HourlyPeriod|null>(saved.periodPreset);
   const [preferencesSaved, setPreferencesSaved] = useState(true);
   const [data, setData] = useState<AifHourlyReport | null>(null);
   const [busy, setBusy] = useState(true);
@@ -44,8 +45,8 @@ export default function AllInHourlySales({ onBack }: { onBack: () => void }) {
     if(selectedHour!==null && (selectedHour<startHour || selectedHour>=endHour)){setSelectedHour(null);setSelectedWeekday(null);}
   }, [startHour,endHour,selectedHour]);
   useEffect(() => {
-    setPreferencesSaved(saveHourlyPreferences({startHour,endHour,scope,weekdays,metric,aggregate,common,from:range.from,to:range.to,periodDays}));
-  }, [startHour,endHour,scope,weekdays,metric,aggregate,common,range.from,range.to,periodDays]);
+    setPreferencesSaved(saveHourlyPreferences({startHour,endHour,scope,weekdays,metric,aggregate,common,from:range.from,to:range.to,periodPreset}));
+  }, [startHour,endHour,scope,weekdays,metric,aggregate,common,range.from,range.to,periodPreset]);
   useEffect(() => {
     if (!error) return;
     errorTrigger.current = document.activeElement as HTMLElement;
@@ -96,30 +97,31 @@ export default function AllInHourlySales({ onBack }: { onBack: () => void }) {
   const barMaximum=Math.max(1,...shopPeaks.flatMap(s=>s.buckets.map(b=>s.days.length?b.count/s.days.length:0)));
   const timeWindow=`${String(startHour).padStart(2,'0')}:00–${String(endHour).padStart(2,'0')}:00`;
   const selectedDays = shops.map(s=>({...s, days:s.days.filter(d=>selectedWeekday===null||d.weekday===selectedWeekday)}));
-  const chartHeight=245, chartWidth=980, left=52, right=16, top=20, bottom=32;
-  const px=(i:number)=>left+(hours.length===1?(chartWidth-left-right)/2:i/(hours.length-1)*(chartWidth-left-right));
+  const chartHeight=245, chartWidth=980, left=52, right=16, top=20, bottom=8;
+  const px=(i:number)=>left+(i+.5)/hours.length*(chartWidth-left-right);
   const py=(v:number)=>top+(1-v/max)*(chartHeight-top-bottom);
   const dates = data ? dateList(data.from,data.to).filter(d=>weekdays.includes((new Date(`${d}T12:00:00Z`).getUTCDay()+6)%7)).reverse() : [];
   const dirty=from!==range.from||to!==range.to;
   const color=(code:string)=>SHOP_COLORS[code==='main_warehouse'?0:1];
-  function apply(nextFrom=from,nextTo=to,nextPeriod:number|null=(nextFrom===range.from&&nextTo===range.to?periodDays:null)) {
-    if(!nextFrom||!nextTo||nextFrom>nextTo||nextTo>yesterday||Date.parse(nextTo)-Date.parse(nextFrom)>365*86400000){setError('Válassz legfeljebb 366 napos időszakot, legkésőbb tegnapig.');return;}
-    setPeriodDays(nextPeriod);
+  function apply(nextFrom=from,nextTo=to,nextPeriod:HourlyPeriod|null=(nextFrom===range.from&&nextTo===range.to?periodPreset:null)) {
+    if(!nextFrom||!nextTo||nextFrom>nextTo||nextTo>today||Date.parse(nextTo)-Date.parse(nextFrom)>365*86400000){setError('Válassz legfeljebb 366 napos időszakot, legkésőbb máig.');return;}
+    setPeriodPreset(nextPeriod);
     setRange(r=>({from:nextFrom,to:nextTo,version:r.version+1}));
   }
-  function preset(days:number){const f=moveDate(yesterday,1-days);setFrom(f);setTo(yesterday);apply(f,yesterday,days);}
+  function preset(period:HourlyPeriod){const r=hourlyPresetRange(period);setFrom(r.from);setTo(r.to);apply(r.from,r.to,period);}
   function chooseHour(hour:number,weekday:number|null=null,source:'chart'|'overview'='chart'){setSelectedHour(hour);setSelectedWeekday(weekday);setSelectionSource(source);}
   return <main className="aif-hours">
     <div className="ah-shell">
       <header className="ah-header">
         <div><div className="ah-eyebrow"><span className="ah-brand-dot"/> ALLINFASHION <span>/</span> ÜZLETI ELEMZÉS</div><h1 ref={headingRef} tabIndex={-1}>Óránkénti eladások</h1><p>Vásárlási ritmus · üzletek összehasonlítása</p></div>
-        <div className="ah-header-actions"><button onClick={()=>apply(range.from,range.to,periodDays)} disabled={busy} aria-label="Kimutatás frissítése"><RefreshCw size={16} className={busy?'ah-spin':''}/></button><button onClick={()=>{window.scrollTo(0,0);onBack();}}><ArrowLeft size={16}/> Kezdőlap</button></div>
+        <div className="ah-header-actions"><button onClick={()=>apply(range.from,range.to,periodPreset)} disabled={busy} aria-label="Kimutatás frissítése"><RefreshCw size={16} className={busy?'ah-spin':''}/></button><button onClick={()=>{window.scrollTo(0,0);onBack();}}><ArrowLeft size={16}/> Kezdőlap</button></div>
       </header>
       <section className="ah-controls" aria-label="Kimutatás szűrői">
         <div className="ah-control-row"><div className="ah-segment ah-shop-select" aria-label="Üzlet">
           {[["both","Összehasonlítás"],["main_warehouse","Csíkszereda"],["magazin_targu_secuiesc","Kézdivásárhely"]].map(([v,n])=><button key={v} aria-pressed={scope===v} onClick={()=>setScope(v)}>{v==='both'?<BarChart3 size={15}/>:<Store size={15}/>} {n}</button>)}
-        </div><div className="ah-presets">{[7,28,90].map(n=><button key={n} aria-pressed={range.from===moveDate(yesterday,1-n)&&range.to===yesterday&&!dirty} onClick={()=>preset(n)}>{n} nap</button>)}</div>
-        <div className="ah-date"><span>Kezdete</span><HourlyDatePicker label="Időszak kezdete" value={from} max={to||yesterday} onChange={setFrom}/></div><div className="ah-date"><span>Vége</span><HourlyDatePicker label="Időszak vége" value={to} min={from} max={yesterday} onChange={setTo}/></div><button className="ah-primary" onClick={()=>apply()} disabled={busy}>{dirty?'Alkalmazás':'Lekérés'}<ArrowUpRight size={15}/></button></div>
+        </div>
+        <div className="ah-date"><span>Kezdete</span><HourlyDatePicker label="Időszak kezdete" value={from} max={to||today} onChange={setFrom}/></div><div className="ah-date"><span>Vége</span><HourlyDatePicker label="Időszak vége" value={to} min={from} max={today} onChange={setTo}/></div><button className="ah-primary" onClick={()=>apply()} disabled={busy}>{dirty?'Alkalmazás':'Lekérés'}<ArrowUpRight size={15}/></button></div>
+        <div className="ah-presets ah-period-presets" aria-label="Időszak gyorsválasztás">{HOURLY_PERIODS.map(p=><button key={p.key} aria-pressed={periodPreset===p.key&&!dirty} onClick={()=>preset(p.key)}>{p.label}</button>)}</div>
         <div className="ah-control-row ah-secondary-controls"><div className="ah-weekdays" aria-label="Hét napjai"><button aria-pressed={weekdays.length===7} onClick={()=>setWeekdays([0,1,2,3,4,5,6])}>Minden nap</button>{WEEKDAYS.map((d,i)=><button key={d} aria-pressed={weekdays.includes(i)} onClick={()=>setWeekdays(current=>current.includes(i)?current.length===1?current:current.filter(x=>x!==i):[...current,i].sort())}>{d.slice(0,i===1||i===3||i===5?2:1)}</button>)}</div>
         <HourlyTimePicker start={startHour} end={endHour} onChange={(start,end)=>{setStartHour(start);setEndHour(end);}}/>
         <span className={`ah-saved-preferences ${preferencesSaved?"":"ah-save-failed"}`} role={preferencesSaved?undefined:"status"}>{preferencesSaved?"Beállítások megjegyezve":"A böngésző nem engedi a beállítások mentését"}</span>
@@ -127,8 +129,9 @@ export default function AllInHourlySales({ onBack }: { onBack: () => void }) {
         <button className="ah-method-toggle" aria-expanded={methodOpen} onClick={()=>setMethodOpen(x=>!x)}><Info size={15}/> Számítás alapja</button></div>
         {methodOpen&&<div className="ah-method"><p><strong>Vásárlás:</strong> egy eladási bizonylat, az eladás helyi órájában, a hiteles elvitelekkel együtt. A későbbi befizetés nem új vásárlás. Foglalás, csere és külön visszáru nem ad új vásárlást; a később visszafizetett eredeti eladás benne marad.</p><p><strong>Adatos nap:</strong> van eladás vagy napzárás. Az átlag ezekkel a napokkal oszt; napzárással igazolt, eladás nélküli nap is beleszámít. Adat nélküli nap nem nulla. A 0 vásárlás nem igazolja a nyitvatartást.</p><p><strong>Érték:</strong> a bizonylatok jelenlegi, kedvezmény utáni bruttó összege, nem az aznapi pénzbevétel. Utólagos módosítás változtathatja. Időzóna: Europe/Bucharest. Napi összesítésű régi importok nem kerülnek találomra órákhoz.</p></div>}
       </section>
-      <div className="ah-context"><span><CalendarDays size={14}/>{range.from.replaceAll('-','.')} – {range.to.replaceAll('-','.')}<span className="ah-muted"> · teljes naptári napok</span></span>{dirty&&<span className="ah-pending">A módosított dátumot még alkalmazni kell</span>}<span className="ah-context-right">{weekdays.length===7?'Hétfő–vasárnap':weekdays.map(i=>WEEKDAYS[i]).join(', ')}</span></div>
-      {busy?<div className="ah-loading" role="status"><RefreshCw className="ah-spin" size={23}/> Kimutatás betöltése…</div>:!data?<div className="ah-empty"><BarChart3 size={32}/><h2>Nincs betöltött kimutatás</h2><button onClick={()=>apply(range.from,range.to,periodDays)}>Újrapróbálás</button></div>:<>
+      <div className="ah-context"><span><CalendarDays size={14}/>{range.from.replaceAll('-','.')} – {range.to.replaceAll('-','.')}<span className={range.to===today?"ah-live-period":"ah-muted"}>{range.to===today?" · mai nap folyamatban":" · teljes naptári napok"}</span></span>{dirty&&<span className="ah-pending">A módosított dátumot még alkalmazni kell</span>}<span className="ah-context-right">{weekdays.length===7?'Hétfő–vasárnap':weekdays.map(i=>WEEKDAYS[i]).join(', ')}</span></div>
+      {busy?<div className="ah-loading" role="status"><RefreshCw className="ah-spin" size={23}/> Kimutatás betöltése…</div>:!data?<div className="ah-empty"><BarChart3 size={32}/><h2>Nincs betöltött kimutatás</h2><button onClick={()=>apply(range.from,range.to,periodPreset)}>Újrapróbálás</button></div>:<>
+        {range.to===today&&<div className="ah-live-note"><Clock3 size={14}/>A mai nap eddigi eladásai is szerepelnek. Az átlagok és csúcsórák még változnak.</div>}
         <section className={`ah-overview ${shops.length===1?'ah-overview-single':''}`} aria-label="Időszak összesítése">
           <article className="ah-summary-card">
             <div className="ah-summary-top"><span className="ah-eyebrow">VÁSÁRLÁSI AKTIVITÁS</span><span className="ah-window-badge"><Clock3 size={12}/>{timeWindow}</span></div>
@@ -159,7 +162,6 @@ export default function AllInHourlySales({ onBack }: { onBack: () => void }) {
               {[0,.25,.5,.75,1].map(t=><g key={t}><line x1={left} y1={py(t*max)} x2={chartWidth-right} y2={py(t*max)} stroke="#a9bfd4" strokeOpacity=".10"/><text x={left-12} y={py(t*max)+4} textAnchor="end">{fmt(t*max,metric==='value'?0:1)}</text></g>)}
               {selectedHour!==null&&hours.includes(selectedHour)&&<rect x={px(hours.indexOf(selectedHour))-12} y={top} width="24" height={chartHeight-top-bottom} fill="#ffffff" fillOpacity=".045" rx="6"/>}
               {shops.map((s,si)=>{if(!s.days.length)return null;const points=hourly[si].map((v,i)=>`${px(i)},${py(v||0)}`);return <g key={s.code}><path d={`M ${px(0)},${py(0)} L ${points.join(' L ')} L ${px(hours.length-1)},${py(0)} Z`} fill={`url(#ah-fill-${s.code})`}/><polyline points={points.join(' ')} fill="none" stroke={color(s.code)} strokeWidth="2.7" strokeLinejoin="round"/>{hourly[si].map((v,i)=><circle key={i} cx={px(i)} cy={py(v||0)} r={hours[i]===selectedHour?5:3} fill="#253446" stroke={color(s.code)} strokeWidth="2"/>)}</g>;})}
-              {hours.map((h,i)=><text key={h} x={px(i)} y={chartHeight-8} textAnchor="middle">{String(h).padStart(2,'0')}</text>)}
               {hours.map((h,i)=>{const x=i===0?left:(px(i-1)+px(i))/2;const end=i===hours.length-1?chartWidth-right:(px(i)+px(i+1))/2;return <rect className="ah-chart-hit" key={h} x={x} y={top} width={end-x} height={chartHeight-top-bottom} fill="transparent" role="button" tabIndex={0} aria-label={`Grafikon: ${hourLabel(h)} részletei`} onClick={()=>chooseHour(h)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseHour(h);}}}><title>{hourLabel(h)} – részletek</title></rect>;})}
             </svg><div className="ah-hour-buttons" style={{gridTemplateColumns:`repeat(${hours.length},minmax(30px,1fr))`}}>{hours.map(h=><button key={h} aria-label={`${hourLabel(h)} részletei`} aria-pressed={selectedHour===h&&selectedWeekday===null} onClick={()=>chooseHour(h)}>{String(h).padStart(2,'0')}</button>)}</div></div>
             <div className="ah-chart-footer"><span>Óra kiválasztásával részletezhető</span>{outside>0&&<button onClick={()=>{setStartHour(0);setEndHour(24);}}>{outside} vásárlás ezen az idősávon kívül <ArrowUpRight size={13}/></button>}</div>

@@ -30,6 +30,20 @@ const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
 const ShopifyMenuIcon = ({className}:{className?:string}) => <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png" alt="" className={`${className||""} object-contain`} />;
 
+// Stored on this browser history entry, so a reload restores this subpage.
+const HOURLY_HOME_VIEW_KEY = "allinfashion:home:view";
+function isHourlyHomeEntry() {
+  return (window.location.hash === "#home" || window.location.hash === "") &&
+    window.history.state?.[HOURLY_HOME_VIEW_KEY] === "hourly-sales";
+}
+function writeHourlyHomeEntry(open: boolean) {
+  const state = { ...(window.history.state || {}) };
+  if (open) state[HOURLY_HOME_VIEW_KEY] = "hourly-sales";
+  else delete state[HOURLY_HOME_VIEW_KEY];
+  if (open && !isHourlyHomeEntry()) window.history.pushState(state, "");
+  else window.history.replaceState(state, "");
+}
+
 const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
 
@@ -334,7 +348,20 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [foritExportOpen, setForitExportOpen] = useState(false);
-  const [hourlySalesOpen, setHourlySalesOpen] = useState(false);
+  const [hourlySalesOpen, setHourlySalesOpen] = useState(isHourlyHomeEntry);
+  useEffect(() => {
+    const restore = () => setHourlySalesOpen(isHourlyHomeEntry());
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
+  const openHourlySales = () => {
+    writeHourlyHomeEntry(true);
+    setHourlySalesOpen(true);
+  };
+  const closeHourlySales = () => {
+    writeHourlyHomeEntry(false);
+    setHourlySalesOpen(false);
+  };
   const [reservationAlert, setReservationAlert] = useState({ overdue: 0, today: 0, tomorrow: 0 });
 
   useEffect(() => {
@@ -447,6 +474,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   };
 
   const logout = async () => {
+    writeHourlyHomeEntry(false);
     try {
       await props.onLogout?.();
     } finally {
@@ -476,7 +504,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   } satisfies Record<string, { tone?: "normal" | "warning" | "danger" | "accent"; badge?: string }>;
 
   const handleShopItem = (item: MenuItem) => {
-    if (item.key === "hourly_sales") { setHourlySalesOpen(true); return; }
+    if (item.key === "hourly_sales") { openHourlySales(); return; }
     if (item.adminModule) {
       setShopAdminModule(item.adminModule);
       return;
@@ -498,7 +526,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
     if (item.hash) navigate(item.hash);
   };
 
-  if (hourlySalesOpen) return <AllInHourlySales onBack={() => setHourlySalesOpen(false)} />;
+  if (hourlySalesOpen) return <AllInHourlySales onBack={closeHourlySales} />;
 
   return (
     <main className="min-h-screen bg-[#474c59] px-3 py-4 font-normal text-white sm:grid sm:place-items-center sm:py-6">
