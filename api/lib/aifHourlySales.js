@@ -16,13 +16,13 @@ function validDate(value) {
     Number.isFinite(Date.parse(`${value}T12:00:00Z`)) && new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value;
 }
 export function hourlyRange(query = {}, now = new Date()) {
-  const lastDate = shiftDate(bucharestDate(now), -1);
-  const to = query.to === undefined ? lastDate : query.to;
+  const lastDate = bucharestDate(now);
+  const to = query.to === undefined ? shiftDate(lastDate, -1) : query.to;
   const from = query.from === undefined ? (validDate(to) ? shiftDate(to, -27) : '') : query.from;
   const bad = message => { throw Object.assign(new Error(message), { statusCode: 400 }); };
   if (!validDate(from) || !validDate(to)) bad('Érvényes kezdő és záró dátum szükséges.');
   if (from > to) bad('A kezdő dátum nem lehet későbbi a záró dátumnál.');
-  if (to > lastDate) bad('Legfeljebb tegnapig kérhető kimutatás; a mai nap még nem teljes.');
+  if (to > lastDate) bad('Jövőbeli napra nem kérhető kimutatás.');
   const calendarDays = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
   if (calendarDays > 366) bad('Egyszerre legfeljebb 366 nap kérhető le.');
   return { from, to, calendarDays, lastDate };
