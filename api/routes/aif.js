@@ -1,3 +1,4 @@
+import { registerAifHourlySales } from "../lib/aifHourlySales.js";
 import { receptionDateKey, validateReceptionChronology } from "../lib/aifReceptionChronology.js";
 import { requireAifImagePermission } from "../lib/aifImagePermissions.js";
 import express from "express";
@@ -35616,6 +35617,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
+  registerAifHourlySales(router, { pool, requireAuthed, requireAdminOrSecret });
 
   router.use("/shop-reservations", createAifShopReservationsRouter({
     pool,
