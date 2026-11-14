@@ -502,8 +502,18 @@ function warehouseShopifyOldImageErrorResolved(item: Partial<InventoryItem> | Re
     /hi[aá]nyzik a nyilv[aá]nos k[eé]p URL|a k[eé]p URL-nek nyilv[aá]nos HTTPS/i.test(error));
 }
 
+// A duplication-prevention result is export history, not a live mapping failure.
+function warehouseShopifyReexportWasBlocked(item: Partial<InventoryItem> | Record<string, any>) {
+  if (warehouseShopifyStateKey((item as any).shopify_export_item_status) !== "invalid") return false;
+  if (!String((item as any).shopify_variant_id || "").trim() ||
+      !String((item as any).shopify_product_id || "").trim()) return false;
+  const errors = warehouseShopifyMessageList((item as any).shopify_export_errors);
+  const duplicateProtection = "Már Shopifyhoz párosított SKU. Új CSV-import tiltva; a meglévő Shopify-variánst kell frissíteni a változatlan variánsazonosítóval.";
+  return errors.length > 0 && errors.every(error => error === duplicateProtection);
+}
+
 function warehouseShopifyExportHasError(item: Partial<InventoryItem> | Record<string, any>) {
-  if (warehouseShopifyOldImageErrorResolved(item)) return false;
+  if (warehouseShopifyOldImageErrorResolved(item) || warehouseShopifyReexportWasBlocked(item)) return false;
   const itemState = warehouseShopifyStateKey((item as any).shopify_export_item_status);
   const exportErrors = warehouseShopifyMessageList((item as any).shopify_export_errors);
   return WAREHOUSE_SHOPIFY_ERROR_STATES.has(itemState) || (exportErrors.length > 0 && itemState !== "mapped");
@@ -535,6 +545,7 @@ function WarehouseShopifyStatusIcon({
   const pending = isShopifyExportPending(item);
   const hasConnectionError = warehouseShopifyConnectionHasError(item);
   const oldImageErrorResolved = warehouseShopifyOldImageErrorResolved(item);
+  const reexportWasBlocked = warehouseShopifyReexportWasBlocked(item);
   const hasExportError = warehouseShopifyExportHasError(item);
   const visible = mapped || pending || hasConnectionError || hasExportError || oldImageErrorResolved;
   const open = visible && (hovered || pinned);
@@ -596,7 +607,7 @@ function WarehouseShopifyStatusIcon({
     { label: "Termékállapot", value: warehouseShopifyStatusLabel(item.shopify_product_status) },
     { label: "Szinkron", value: warehouseShopifyStatusLabel(item.shopify_sync_status) },
     { label: "Feldolgozás", value: warehouseShopifyStatusLabel(item.shopify_outbox_status) },
-    { label: "Export", value: oldImageErrorResolved ? "Régi export: képhiány pótolva" : warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
+    { label: reexportWasBlocked ? "Korábbi export" : "Export", value: reexportWasBlocked ? "Újraexport tiltva – már párosított" : oldImageErrorResolved ? "Régi export: képhiány pótolva" : warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
     { label: "Exportálva", value: warehouseShopifyDateTime(item.shopify_exported_at) },
     { label: "Export ellenőrizve", value: warehouseShopifyDateTime(item.shopify_export_reconciled_at) },
     { label: "Kapcsolva", value: mapped ? warehouseShopifyDateTime(item.shopify_mapped_at || item.shopify_connected_at) : "-" },
@@ -768,6 +779,12 @@ function WarehouseShopifyStatusIcon({
                 </div>
               ) : null}
 
+              {reexportWasBlocked ? (
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  A korábbi CSV-újraexportot a rendszer letiltotta, mert a variáns már párosítva volt. Ez nem kapcsolati hiba.
+                </div>
+              ) : null}
+
               <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
                 <button type="button" disabled={imageBusy && !imageRequestError}
                   onClick={() => void refreshImages()}
@@ -799,7 +816,7 @@ function WarehouseShopifyStatusIcon({
                 </div>
               ) : null}
 
-              {exportErrors.length > 1 && !oldImageErrorResolved ? (
+              {exportErrors.length > 1 && !oldImageErrorResolved && !reexportWasBlocked ? (
                 <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
                   <div className="mb-1.5 flex items-center gap-1.5 text-amber-800"><AlertTriangle size={14} /> További exporthibák</div>
                   <div className="space-y-1.5">
