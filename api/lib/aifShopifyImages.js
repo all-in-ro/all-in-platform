@@ -183,6 +183,7 @@ function tagAlt(title,url,color='') {
   return `${[text(title),text(color)].filter(Boolean).join(' · ').slice(0,155)} | ${marker(url)}`;
 }
 function checkShopifyErrors(payload, action) {
+  if (!payload) throw new Error(`${action}: hiányos Shopify-válasz.`);
   const errors = [...(payload?.userErrors || []), ...(payload?.mediaUserErrors || [])];
   if (errors.length) throw Object.assign(new Error(`${action}: ${errors.map((e)=>text(e?.message)).join(' | ')}`), { code:'shopify_image_mutation_failed' });
 }
@@ -482,6 +483,13 @@ async function syncProductImages(client, row) {
   links=await readLinks(client,productId);
   const desiredIds=desired.urls.map((url)=>text(links.get(url)?.media_id)).filter((id)=>remoteIds.has(id));
   if(desiredIds.length!==desired.urls.length) throw new Error('Nem található a Shopify-ban minden galériakép.');
+  const desiredMedia = remote.nodes.filter(node => desiredIds.includes(text(node.id)));
+  if (desiredMedia.some(node => node.status === 'FAILED')) {
+    throw new Error('A Shopify nem tudta feldolgozni valamelyik képet. Ellenőrizd a kép elérhetőségét.');
+  }
+  if (desiredMedia.some(node => node.status !== 'READY')) {
+    throw new Error('A Shopify még feldolgozza a képeket. A rendszer automatikusan újrapróbálja.');
+  }
   // A kívánt sorrend mindig elöl, minden kézzel feltöltött extra kép érintetlen marad.
   const currentOrder=remote.nodes.map((m)=>text(m.id));
   const alreadyOrdered=desiredIds.every((id,index)=>currentOrder[index]===id);
