@@ -1,3 +1,4 @@
+import AllInHourlySales from "./AllInHourlySales";
 import React, { useEffect, useState } from "react";
 import {
   Activity,
@@ -69,6 +70,7 @@ const shopItems: MenuItem[] = [
   { key: "reservations", label: "Félretett termékek", adminModule: "reservations", icon: Bookmark },
   { key: "returns", label: "Visszáru", adminModule: "returns", icon: RotateCcw },
   { key: "shifts", label: "Műszakátadások", adminModule: "shifts", icon: WalletCards },
+  { key: "hourly_sales", label: "Óránkénti eladások", icon: Activity },
 ];
 
 const warehouseItems: MenuItem[] = [
@@ -332,6 +334,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [foritExportOpen, setForitExportOpen] = useState(false);
+  const [hourlySalesOpen, setHourlySalesOpen] = useState(false);
   const [reservationAlert, setReservationAlert] = useState({ overdue: 0, today: 0, tomorrow: 0 });
 
   useEffect(() => {
@@ -473,6 +476,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   } satisfies Record<string, { tone?: "normal" | "warning" | "danger" | "accent"; badge?: string }>;
 
   const handleShopItem = (item: MenuItem) => {
+    if (item.key === "hourly_sales") { setHourlySalesOpen(true); return; }
     if (item.adminModule) {
       setShopAdminModule(item.adminModule);
       return;
@@ -493,6 +497,8 @@ export default function AllInHome(props: { onLogout?: () => void }) {
     }
     if (item.hash) navigate(item.hash);
   };
+
+  if (hourlySalesOpen) return <AllInHourlySales onBack={() => setHourlySalesOpen(false)} />;
 
   return (
     <main className="min-h-screen bg-[#474c59] px-3 py-4 font-normal text-white sm:grid sm:place-items-center sm:py-6">
