@@ -6,25 +6,50 @@ const txt = v => String(v ?? '').trim();
 const fail = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode });
 const validId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-export async function findImageRefreshVariant(sku, graphql = shopifyGraphql) {
-  if (!sku) throw fail('Hiányzik a vonalkód; a Shopify-termék nem azonosítható.');
-  const response = await graphql(`query AifImageRefreshMatch($query:String!) {
-    productVariants(first:100,query:$query) {
-      nodes { id sku title inventoryItem { id } product { id title status } }
-      pageInfo { hasNextPage }
+export async function findImageRefreshVariant(identity, graphql = shopifyGraphql) {
+  const local = typeof identity === 'string' ? {barcode:identity} : identity;
+  const barcode = txt(local.barcode);
+  const skus = [...new Set([barcode,txt(local.internal_sku),txt(local.mapped_sku)].filter(Boolean))];
+  const fields = `id sku barcode title inventoryItem { id } product { id title status }`;
+  const complete = remote => {
+    if (!remote?.id || !remote.product?.id || !remote.inventoryItem?.id) throw fail('Hiányos Shopify-termékadat.',502);
+    if (barcode && txt(remote.barcode) && txt(remote.barcode)!==barcode) {
+      throw fail('A Shopify-variáns vonalkódja eltér a belső termékétől. Ellenőrizd a párosítást.');
     }
-  }`, { query: `sku:${JSON.stringify(sku)}` });
-  const result = response.data?.productVariants;
-  if (response.errors?.length || !result || result.pageInfo?.hasNextPage) {
-    throw fail('A Shopify-találatok nem ellenőrizhetők teljesen. Próbáld újra később.', 502);
+    return remote;
+  };
+  if (txt(local.shopify_variant_id)) {
+    const response = await graphql(`query AifImageRefreshStored($id:ID!) { productVariant(id:$id) { ${fields} } }`, {id:local.shopify_variant_id});
+    if (response.errors?.length || !response.data || !('productVariant' in response.data)) throw fail('A tárolt Shopify-kapcsolat nem ellenőrizhető.',502);
+    if (response.data.productVariant) return complete(response.data.productVariant);
+    throw fail('A párosított Shopify-variáns már nem található. Ellenőrizd a párosítást.');
   }
-  const matches = result.nodes.filter(v => txt(v.sku) === sku);
-  if (matches.length !== 1) throw fail(matches.length
-    ? `Több Shopify-variáns használja ezt az SKU-t: ${sku}. A párosítást javítani kell.`
-    : `Nincs Shopify-variáns ezzel az SKU-val: ${sku}. Előbb importáld vagy párosítsd a terméket.`);
-  const remote = matches[0];
-  if (!remote.id || !remote.product?.id || !remote.inventoryItem?.id) throw fail('Hiányos Shopify-termékadat.', 502);
-  return remote;
+  if (!skus.length) throw fail('Hiányzik a vonalkód és az SKU; a Shopify-termék nem azonosítható.');
+  const query = [...skus.map(sku=>`sku:${JSON.stringify(sku)}`), ...(barcode?[`barcode:${JSON.stringify(barcode)}`]:[])].join(' OR ');
+  const matches = new Map();
+  let after=null;
+  for (let page=0;page<10;page++) {
+    const response = await graphql(`query AifImageRefreshMatch($query:String!,$after:String) {
+      productVariants(first:100,query:$query,after:$after) {
+        nodes { ${fields} }
+        pageInfo { hasNextPage endCursor }
+      }
+    }`, {query,after});
+    const result = response.data?.productVariants;
+    if (response.errors?.length || !Array.isArray(result?.nodes)) throw fail('A Shopify-találatok nem ellenőrizhetők teljesen. Próbáld újra később.',502);
+    for (const remote of result.nodes) {
+      if ((barcode && txt(remote.barcode)===barcode) || skus.includes(txt(remote.sku))) matches.set(remote.id,remote);
+    }
+    if (!result.pageInfo?.hasNextPage) {
+      if (matches.size!==1) throw fail(matches.size
+        ? 'Több Shopify-variáns egyezik az azonosítókkal. A párosítást javítani kell.'
+        : `Nem található élő Shopify-variáns. Ellenőrzött vonalkód/SKU: ${skus.join(', ')}. A régi exportbejegyzés önmagában nem igazolja a Shopify-importot.`);
+      return complete([...matches.values()][0]);
+    }
+    if (!result.pageInfo.endCursor || result.pageInfo.endCursor===after) break;
+    after=result.pageInfo.endCursor;
+  }
+  throw fail('A Shopify-találatok nem ellenőrizhetők teljesen. Próbáld újra később.',502);
 }
 
 export async function getImageRefreshStatus(pool, variantId) {
@@ -45,7 +70,7 @@ export async function requestImageRefresh(pool, variantId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const found = await client.query(`SELECT v.id,v.barcode,v.images,v.image_url
+    const found = await client.query(`SELECT v.id,v.barcode,v.internal_sku,v.images,v.image_url
       FROM aif_product_variants v JOIN aif_product_models p ON p.id=v.model_id
       WHERE v.id=$1::uuid AND COALESCE(v.status,'active')<>'archived'
         AND COALESCE(p.status,'active')<>'archived' FOR UPDATE OF v`, [variantId]);
@@ -56,7 +81,9 @@ export async function requestImageRefresh(pool, variantId) {
     if (gallery.some(url => { try { return new URL(url).protocol !== 'https:'; } catch { return true; } })) {
       throw fail('A képekhez nyilvános HTTPS-cím szükséges.');
     }
-    const remote = await findImageRefreshVariant(txt(local.barcode));
+    const existing = await client.query(`SELECT sku AS mapped_sku,shopify_variant_id
+      FROM aif_shopify_variant_map WHERE variant_id=$1::uuid`,[variantId]);
+    const remote = await findImageRefreshVariant({...local,...existing.rows[0]});
     // Serialize matching/queue requests for the same remote product. The worker
     // retains its existing SKIP LOCKED claim mechanism; active jobs are not reset.
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['image-refresh:' + remote.product.id]);
@@ -66,13 +93,13 @@ export async function requestImageRefresh(pool, variantId) {
       throw fail('A meglévő Shopify-párosítás eltér a találattól. Előbb ellenőrizd a párosítást.');
     }
     if (!maps.rows.length) {
-      const duplicates = await client.query(`SELECT id FROM aif_product_variants WHERE btrim(barcode)=$1 AND id<>$2::uuid`, [txt(local.barcode),variantId]);
-      if (duplicates.rows.length) throw fail('Ez a vonalkód több belső terméknél szerepel. A párosítás nem egyértelmű.');
+      const duplicates = await client.query(`SELECT id FROM aif_product_variants WHERE id<>$2::uuid AND ((NULLIF(btrim(barcode),'') IS NOT NULL AND btrim(barcode)=$1) OR (NULLIF(btrim(internal_sku),'') IS NOT NULL AND btrim(internal_sku)=$3))`, [txt(local.barcode),variantId,txt(local.internal_sku)]);
+      if (duplicates.rows.length) throw fail('Ez az azonosító több belső terméknél szerepel. A párosítás nem egyértelmű.');
       await client.query(`INSERT INTO aif_shopify_variant_map
         (variant_id,sku,shopify_product_id,shopify_variant_id,shopify_inventory_item_id,
          shopify_product_title,shopify_variant_title,shopify_product_status,sync_status,raw,updated_at)
         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,'mapped','{"source":"image_refresh"}'::jsonb,now())`,
-        [variantId,txt(local.barcode),remote.product.id,remote.id,remote.inventoryItem.id,remote.product.title,remote.title,remote.product.status]);
+        [variantId,txt(remote.sku) || txt(local.barcode),remote.product.id,remote.id,remote.inventoryItem.id,remote.product.title,remote.title,remote.product.status]);
     }
     await client.query(`INSERT INTO aif_shopify_image_outbox (shopify_product_id)
       VALUES ($1) ON CONFLICT (shopify_product_id) DO NOTHING`, [remote.product.id]);
