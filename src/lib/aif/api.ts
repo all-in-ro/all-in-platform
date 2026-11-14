@@ -6041,3 +6041,13 @@ export function apiAifSaveManualPrices(items: Array<{ variantId: string; expecte
     method: "POST", body: JSON.stringify({ items }),
   });
 }
+
+
+// Óránkénti vásárlási aktivitás: eladás időpontja, hiteles elvitelekkel.
+export type AifHourlyHour = { hour: number; purchases: number; credit: number; refunded: number; units: number; value: number };
+export type AifHourlyDay = { date: string; weekday: number; closed: boolean; hours: AifHourlyHour[] };
+export type AifHourlyShop = { code: string; name: string; available: boolean; days: AifHourlyDay[] };
+export type AifHourlyReport = { ok: true; from: string; to: string; calendarDays: number; lastDate: string; timezone: string; generatedAt: string; shops: AifHourlyShop[] };
+export function apiAifHourlySales(from: string, to: string, signal?: AbortSignal) {
+  return fetchAifJSON<AifHourlyReport>(`/admin/shop-hourly-sales?${new URLSearchParams({ from, to })}`, { signal });
+}
