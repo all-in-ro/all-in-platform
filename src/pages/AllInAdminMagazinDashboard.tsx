@@ -314,14 +314,17 @@ function SalePriceBreakdown({
   sale: AifAdminShopRecentSale;
   compact?: boolean;
 }) {
+  const settlement = isPaymentSettlement(sale);
+  const settlementMeta = settlementInfo(sale);
   const quantity = Math.max(0, numberValue(sale.quantity));
   const discount = Math.max(0, numberValue(sale.lineDiscountAmount));
   const finalTotal = numberValue(sale.lineTotal);
   const listPriceTotal = numberValue(sale.listPrice) * quantity;
-  const regularTotal = listPriceTotal > 0.005 ? listPriceTotal : finalTotal + discount;
+  // Settlement quantity may cover only part of the line; the returned price/discount totals describe the sale line.
+  const regularTotal = settlement ? finalTotal + discount : listPriceTotal > 0.005 ? listPriceTotal : finalTotal + discount;
   const discountPercent = Math.max(0, numberValue(sale.lineDiscountPercent));
   const fullyPaid = String(sale.paymentStatus || "").toLowerCase() === "paid" && numberValue(sale.balanceDue) <= 0.005;
-  const finalLabel = fullyPaid ? "Fizetett" : "Végső ár";
+  const finalLabel = !settlement && fullyPaid ? "Fizetett" : "Végső ár";
   const discountText = discount > 0.005
     ? `${discountPercent > 0.005 ? `−${discountPercent.toFixed(1)}% • ` : ""}−${money(discount)}`
     : "Nincs";
@@ -340,6 +343,10 @@ function SalePriceBreakdown({
         <span className="uppercase tracking-[0.08em] text-[#bff8f5]/62">{finalLabel}</span>
         <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d7fffd]">{money(finalTotal)}</span>
       </div>
+      {settlement && <div className="flex items-center justify-between gap-3 border-t border-[#9bc8ff]/22 bg-[#31506a]/24 px-2.5 py-2">
+        <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55" title={settlementMeta.settlementApproximate ? "Régi befizetés: terméksori allokáció hiányában arányosan felosztva" : "Az adott befizetés termékszinten rögzített összege"}>{settlementMeta.settlementApproximate ? "Arányos rész" : "Befizetés"}</span>
+        <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</span>
+      </div>}
     </div>
   );
 }
@@ -3001,16 +3008,7 @@ export default function AllInAdminMagazinDashboard({
                       </td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="min-w-[205px] px-3 py-2.5 text-right">
-                        {settlement ? (
-                          <div className="ml-auto w-[184px] overflow-hidden rounded-xl border border-[#9bc8ff]/22 bg-[#31506a]/24">
-                            <div className="flex items-center justify-between gap-3 px-2.5 py-2">
-                              <span className="text-[9px] uppercase tracking-[0.08em] text-[#cfe5ff]/55" title={settlementMeta.settlementApproximate ? "Régi befizetés: terméksori allokáció hiányában arányosan felosztva" : "Termékszinten rögzített befizetés"}>{settlementMeta.settlementApproximate ? "Arányos rész" : "Befizetés"}</span>
-                              <span className="whitespace-nowrap text-[12px] tabular-nums text-[#d9ecff]">{money(settlementMeta.settlementAmount)}</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <SalePriceBreakdown sale={sale} compact />
-                        )}
+                        <SalePriceBreakdown sale={sale} compact />
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">
                         {sale.historyComplete === false ? "Ellenőrzendő" : money(sale.balanceDue)}
