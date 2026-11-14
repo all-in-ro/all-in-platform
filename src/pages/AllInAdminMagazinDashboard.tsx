@@ -1509,6 +1509,8 @@ function RankingBars({
   valueMode = "money",
   icon: Icon,
   selectedName = "",
+  filterLabel = "Márkaszűrő",
+  selectLabel = "szűrés erre a márkára",
   onSelect,
   onClear,
 }: {
@@ -1517,6 +1519,8 @@ function RankingBars({
   items: AifAdminShopRankingItem[];
   valueMode?: "money" | "qty";
   selectedName?: string;
+  filterLabel?: string;
+  selectLabel?: string;
   onSelect?: (item: AifAdminShopRankingItem) => void;
   onClear?: () => void;
   icon: ComponentType<{ size?: number | string; className?: string }>;
@@ -1536,7 +1540,7 @@ function RankingBars({
       {selectedName && onClear ? (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-lg bg-[#2a8d8b]/20 px-2.5 py-2 text-xs text-[#bff8f5]">
           <span className="truncate" title={selectedName}>{selectedName}</span>
-          <button type="button" onClick={onClear} aria-label="Márkaszűrő törlése"
+          <button type="button" onClick={onClear} aria-label={`${filterLabel} törlése`}
             className="shrink-0 rounded-md p-1 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#63d8d3]">
             <X size={14} />
           </button>
@@ -1562,7 +1566,7 @@ function RankingBars({
           return onSelect ? (
             <button key={`${item.name}-${index}`} type="button"
               onClick={() => onSelect(item)} aria-pressed={selectedName === item.name}
-              aria-label={`${item.name}: ${selectedName === item.name ? "márkaszűrő törlése" : "szűrés erre a márkára"}`}
+              aria-label={`${item.name}: ${selectedName === item.name ? `${filterLabel.toLocaleLowerCase("hu-HU")} törlése` : selectLabel}`}
               className={`block w-full rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#63d8d3] ${selectedName === item.name ? "bg-[#2a8d8b]/20 ring-1 ring-[#63d8d3]/60" : ""}`}>
               {content}
             </button>
@@ -2829,8 +2833,18 @@ export default function AllInAdminMagazinDashboard({
             onSelect={(item) => applyInstantFilter({ brand: applied.brand === item.name ? "" : item.name })}
             onClear={() => applyInstantFilter({ brand: "" })}
           />
-          <RankingBars title="Alkategóriák" subtitle="Darab • rendezett hiteles termékekkel együtt" items={data?.categories || []} valueMode="qty" icon={Layers3} />
-          <RankingBars title="Top termékek" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.products || []} icon={ShoppingBag} />
+          <RankingBars title="Alkategóriák" subtitle="Darab • rendezett hiteles termékekkel együtt" items={data?.categories || []} valueMode="qty" icon={Layers3}
+            filterLabel="Alkategória-szűrő" selectLabel="szűrés erre az alkategóriára"
+            selectedName={applied.category}
+            onSelect={(item) => applyInstantFilter({ category: applied.category === item.name ? "" : item.name })}
+            onClear={() => applyInstantFilter({ category: "" })}
+          />
+          <RankingBars title="Top termékek" subtitle="Forgalom • hitelbefizetésekkel együtt" items={data?.products || []} icon={ShoppingBag}
+            filterLabel="Termékkeresés" selectLabel="szűrés erre a termékre"
+            selectedName={applied.search}
+            onSelect={(item) => applyInstantFilter({ search: applied.search === item.name ? "" : item.name })}
+            onClear={() => applyInstantFilter({ search: "" })}
+          />
         </section>
 
         <section className="grid gap-3">
