@@ -2073,7 +2073,7 @@ function throwIfRemoteExportConflicts(items, remoteVariants, context = "create")
  * and reports exact Shopify Product IDs. It never merges or deletes products.
  */
 export async function auditAifShopifyProductFamilies(client, options = {}) {
-  const limit = Math.min(200, Math.max(1, integer(options.limit, 100)));
+  const limit = Math.min(5000, Math.max(1, integer(options.limit, 100)));
   const allIn = await client.query(`
     SELECT v.id::text AS variant_id, trim(v.barcode) AS sku,
            v.size, v.color_code, v.color_name,
