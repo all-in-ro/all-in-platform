@@ -35,14 +35,17 @@ const issue = (type, severity, payload = {}) => ({type, severity, ...payload});
 const keys = (arr) => [...new Set(arr.filter(Boolean))];
 
 function parseArgs(argv) {
-  const a = { storefront: false, out: './reports/aif-shopify-catalog', help: false };
+  const a = { storefront: false, out: './reports/aif-shopify-catalog', storefrontDelayMs: 1500, help: false };
   for (let i=0; i<argv.length; i++) {
     if (argv[i] === '--storefront') a.storefront = true;
     else if (argv[i] === '--out') a.out = argv[++i];
+    else if (argv[i] === '--storefront-delay-ms') a.storefrontDelayMs = Number(argv[++i]);
     else if (argv[i] === '--help') a.help = true;
     else throw new Error(`Ismeretlen kapcsoló: ${argv[i]}`);
   }
   if (!str(a.out)) throw new Error('Hiányzik a kimeneti könyvtár.');
+  if (!Number.isInteger(a.storefrontDelayMs) || a.storefrontDelayMs < 500 || a.storefrontDelayMs > 20000)
+    throw new Error('--storefront-delay-ms: egész szám, 500 és 20000 között.');
   return a;
 }
 
@@ -138,46 +141,70 @@ async function loadAllIn(db) {
   return r.rows;
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+
+function retryAfterMs(headers) {
+  const raw = str(headers?.get?.('retry-after'));
+  if (!raw) return 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const deadline = Date.parse(raw);
+  return Number.isFinite(deadline) ? Math.max(0, deadline - Date.now()) : 0;
+}
+
 async function readStorefront(handle) {
   const safeHandle = str(handle);
   if (!/^[a-z0-9][a-z0-9-]{0,240}$/i.test(safeHandle)) return {error:'invalid_handle',status:null};
-  // Shopify's product.js reports customer-facing variant.available, unlike
-  // the Admin inventoryQuantity count. Locale/market of Render may differ
-  // from the actual customer; failures here are leads, not mutation authority.
+  // Only serial, gently paced public reads. This is NOT an inventory write.
+  // 429 means throttling, NOT "out of stock" or a missing product.
+  // Render IP/market may differ from an actual Romanian buyer.
   const url = `https://allinfashion.ro/products/${encodeURIComponent(safeHandle)}.js`;
-  let lastError = null;
-  for (let retry=0; retry<3; retry++) {
+  let lastError = '';
+  let lastStatus = null;
+  const maxAttempts = 5;
+  for (let attempt=0; attempt<maxAttempts; attempt++) {
     try {
       const r = await fetch(url, {
         signal: AbortSignal.timeout(14000),
-        headers: {Accept:'application/json', 'Accept-Language':'ro-RO,ro;q=0.9', 'Cache-Control':'no-cache'}
+        headers: {Accept:'application/json','Accept-Language':'ro-RO,ro;q=0.9'},
       });
-      if (r.status === 429 || r.status >= 500) {lastError = `HTTP ${r.status}`; await new Promise(ok=>setTimeout(ok, 750*(retry+1)));continue;}
+      lastStatus = r.status;
+      if (r.status === 429 || r.status >= 500) {
+        lastError = `HTTP ${r.status}`;
+        if (attempt + 1 >= maxAttempts) break;
+        const exponential = (r.status === 429 ? 4000 : 1200) * (2 ** attempt);
+        const delay = Math.min(90000, Math.max(retryAfterMs(r.headers), exponential));
+        if (r.status === 429) console.log(`Shopify HTTP 429 (${safeHandle}): újrapróbálás ${Math.ceil(delay/1000)} mp múlva`);
+        await sleep(delay);
+        continue;
+      }
       if (!r.ok) return {status:r.status,error:`http_${r.status}`};
       const product = await r.json();
       if (!Array.isArray(product?.variants)) return {status:r.status,error:'not_a_product_json'};
       return { status:r.status, available:product.available, variants:product.variants.map(v=>({
         id:String(v.id || ''), sku:str(v.sku),title:str(v.title),available:v.available===true,
       })) };
-    } catch (e) {lastError=e.message;await new Promise(ok=>setTimeout(ok, 500*(retry+1)));}
-  }
-  return {status:null,error:lastError || 'storefront_unavailable'};
-}
-
-async function storefrontProductStates(products) {
-  const entries = [...products.values()].filter(p=>p.status==='ACTIVE' && p.needsStorefront);
-  const output = new Map();
-  let cursor = 0;
-  async function worker() {
-    while (cursor < entries.length) {
-      const i = cursor++;
-      const p = entries[i];
-      output.set(p.id,await readStorefront(p.handle));
-      if ((i+1)%50===0) console.log(`Webshop elérhetőség: ${i+1}/${entries.length}`);
-      await new Promise(done=>setTimeout(done,120));
+    } catch (e) {
+      lastError = e?.message || String(e);
+      if (attempt + 1 >= maxAttempts) break;
+      await sleep(Math.min(30000, 1200 * (2 ** attempt)));
     }
   }
-  await Promise.all(Array.from({length:Math.min(4,entries.length)},worker));
+  return {status:lastStatus,error:lastError || 'storefront_unavailable'};
+}
+
+async function storefrontProductStates(products, delayMs = 1500) {
+  const entries = [...products.values()].filter(p=>p.status==='ACTIVE' && p.needsStorefront);
+  const output = new Map();
+  // One worker, one request at a time. The old 4 workers + 120ms delay
+  // caused 69 storefront HTTP 429 errors in the 2026-11-15 audit.
+  for (let i=0; i<entries.length; i++) {
+    const p=entries[i];
+    output.set(p.id, await readStorefront(p.handle));
+    if ((i+1)%25===0 || i+1===entries.length)
+      console.log(`Webshop elérhetőség: ${i+1}/${entries.length}`);
+    if (i+1<entries.length) await sleep(delayMs);
+  }
   return output;
 }
 
@@ -224,7 +251,8 @@ function summarize(allIn, remote, publication, storefront = new Map(), storefron
     if(allBySku.get(norm(row.barcode))?.length>1) add('ALLIN_DUPLICATE_BARCODE','critical',row,{allInAvailable:count});
     if(!row.shopify_variant_id) {
       if(count>0) add(skuMatches.length ? 'MAPPING_MISSING_BUT_SKU_IN_SHOPIFY':'STOCKED_PRODUCT_NOT_IN_SHOPIFY',
-        'critical',row,{allInAvailable:count,shopifyProductIds:keys(skuMatches.map(v=>v.product?.id))});
+        skuMatches.length ? 'critical' : 'coverage',row,
+        {allInAvailable:count,shopifyProductIds:keys(skuMatches.map(v=>v.product?.id))});
       continue;
     }
     if(!match) {
@@ -368,17 +396,24 @@ function summarize(allIn, remote, publication, storefront = new Map(), storefron
     }
   }
   const severityCount = issues.reduce((a,x)=>(a[x.severity]=(a[x.severity]||0)+1,a),{});
+  const storefrontErrors = [...storefront.values()].filter(x => !x || x.error);
+  const storefrontRateLimits = storefrontErrors.filter(x => x?.status === 429);
   return {
     summary:{ generatedAt:new Date().toISOString(),readOnly:true,
       allInVariants:allIn.length, shopifyVariants:remote.length, shopifyProducts:byProduct.size,
       mappedAllInVariants:allIn.filter(x=>x.shopify_variant_id).length,
       activeShopifyProducts:[...byProduct.values()].filter(x=>x.status==='ACTIVE').length,
       auditedStorefrontProducts:storefront.size,
+      storefrontVerifiedProducts:storefront.size - storefrontErrors.length,
+      storefrontFailedProducts:storefrontErrors.length,
+      storefrontRateLimitedProducts:storefrontRateLimits.length,
+      storefrontAuditComplete: !storefrontIncluded || storefrontErrors.length === 0,
       storefrontMode:storefrontIncluded, publication,
       duplicateColorFamilyCount:duplicateColorFamilies.length,
       splitColorModelCount:modelColorSplits.length,
       repeatedTitleCount:repeatedTitles.length,
       criticalCount:severityCount.critical||0, reviewCount:severityCount.review||0,
+      coverageCount:severityCount.coverage||0,
     },
     issues, duplicateColorFamilies, modelColorSplits, repeatedTitles,
   };
@@ -386,7 +421,7 @@ function summarize(allIn, remote, publication, storefront = new Map(), storefron
 
 async function main() {
   const args=parseArgs(process.argv.slice(2));
-  if(args.help){console.log('node scripts/aifShopifyCatalogAudit.mjs [--storefront] [--out ./reports/aif-shopify-catalog]');return;}
+  if(args.help){console.log('node scripts/aifShopifyCatalogAudit.mjs [--storefront] [--storefront-delay-ms 1500] [--out ./reports/aif-shopify-catalog]');return;}
   const db = new pg.Pool({connectionString:process.env.DATABASE_URL});
   try {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL hiányzik.');
@@ -404,7 +439,7 @@ async function main() {
         .map(x=>x.shopify_product_id));
       for(const v of shopify)if(v.product?.id && !byProduct.has(v.product.id))
         byProduct.set(v.product.id,{...v.product,needsStorefront:activeMappedPositive.has(v.product.id)});
-      const statuses=await storefrontProductStates(byProduct);
+      const statuses=await storefrontProductStates(byProduct,args.storefrontDelayMs);
       output=summarize(rows,shopify,publication,statuses,true);
     }
     const dir=path.resolve(args.out);
@@ -412,7 +447,7 @@ async function main() {
     await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify(output.summary,null,2)+'\n');
     await fs.writeFile(path.join(dir,'issues.json'),JSON.stringify(output.issues,null,2)+'\n');
     await fs.writeFile(path.join(dir,'issues.csv'),csv(output.issues,['type','severity','brand','model','color','size','sku','allInVariantId',
-      'productId','handle','allInAvailable','adminInventory','sellableOnlineQuantity','error','familyKey','productCount','handles']));
+      'productId','handle','allInAvailable','adminInventory','sellableOnlineQuantity','httpStatus','error','familyKey','productCount','handles']));
     await fs.writeFile(path.join(dir,'duplicate-families.json'),JSON.stringify(output.duplicateColorFamilies,null,2)+'\n');
     await fs.writeFile(path.join(dir,'model-colors-review.json'),JSON.stringify(output.modelColorSplits,null,2)+'\n');
     await fs.writeFile(path.join(dir,'repeated-titles.json'),JSON.stringify(output.repeatedTitles,null,2)+'\n');
@@ -426,6 +461,10 @@ async function main() {
     console.table(output.issues.filter(x=>x.severity==='critical').slice(0,30).map(x=>({
       hiba:x.type,sku:x.sku||'',modell:x.model||'',keszlet:x.allInAvailable??'',handle:x.handle||'',
     })));
+    if(args.storefront && !output.summary.storefrontAuditComplete) {
+      console.log(`WEBÁRUHÁZ ELLENŐRZÉS NEM TELJES: ${output.summary.storefrontFailedProducts} sikertelen (${output.summary.storefrontRateLimitedProducts} HTTP 429).`);
+      console.log('A sikertelen lekérdezések nem számítanak elfogyott terméknek. Újrafuttatáskor növelhető: --storefront-delay-ms 3000');
+    }
     console.log(`\nJELENTÉSEK: ${dir}`);
     console.log('Ez a program semmilyen Shopify/AllIn adatot nem módosított.');
   } catch (error) {

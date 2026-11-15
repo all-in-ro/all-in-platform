@@ -732,7 +732,16 @@ async function runAutomaticBatch(pool,locations,args) {
   console.table(batch.review.slice(0,35));
   console.log('TERV UJJLENYOMAT:',batch.fingerprint);
   if(!args.applyAuto) {
-    console.log(`Csak a biztos jeloltek futtatasahoz: node scripts/aifShopifyFamilyMerge.mjs --apply-auto --max-auto ${args.maxAuto} --confirm ${batch.fingerprint}`);
+    if(batch.selected.length) {
+      console.log(`Csak a biztos jeloltek futtatasahoz: node scripts/aifShopifyFamilyMerge.mjs --apply-auto --max-auto ${args.maxAuto} --confirm ${batch.fingerprint}`);
+    } else {
+      console.log('NINCS automatikusan biztonságosan egyesíthető család. Az üres terv hash-e NEM végrehajtási engedély.');
+    }
+    for(const row of batch.review) {
+      if(FAMILIES[row.familyKey]) {
+        console.log(`Külön, felügyelt tervellenőrzés: node scripts/aifShopifyFamilyMerge.mjs --plan --family '${row.familyKey}'`);
+      }
+    }
     return;
   }
   assert(batch.selected.length,'NO_SAFE_CANDIDATES','Nincs automatikusan biztonsagos csalad.');
