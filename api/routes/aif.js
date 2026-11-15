@@ -52,6 +52,7 @@ import {
 } from "../lib/aifShopifyOrders.js";
 import {
   auditAifShopifySkus,
+  diagnoseAifShopifyStock,
   enqueueAllMappedAifShopifyVariants,
   ensureAifShopifyTables,
   getAifShopifyStatus,
@@ -60,6 +61,7 @@ import {
   processAifShopifyOutboxBatch,
 } from "../lib/aifShopify.js";
 import {
+  auditAifShopifyProductFamilies,
   cleanupAifShopifyMappings,
   createAifShopifyProductExport,
   decorateAifShopifyMappings,
@@ -22931,6 +22933,38 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       console.error("AIF Shopify SKU audit failed", e);
       res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify SKU-audit nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  // Read-only exact stock investigation: e.g. /shopify/stock-diagnose?code=1290261
+  // No database stock, Shopify inventory or mapping changes are made here.
+  router.get("/shopify/stock-diagnose", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await diagnoseAifShopifyStock(client, String(req.query.code || req.query.sku || req.query.query || ""), {
+        limit: Number(req.query.limit || 30),
+      });
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify stock diagnosis failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify készletvizsgálat nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  // Existing catalog fragmentation: brand + model + color split across Shopify Products.
+  // A report only; merges/deletions require separate audited repair.
+  router.get("/shopify/catalog-duplicates", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await auditAifShopifyProductFamilies(client, { limit: Number(req.query.limit || 100) });
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify product family audit failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify termékcsoport-audit nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
     }
