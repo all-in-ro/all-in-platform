@@ -97,6 +97,13 @@ function quantity(v,location,name='available') {
   return q;
 }
 
+function displayQuantity(v,location) {
+  // A complete levels response may legitimately omit an inactive location.
+  // The existing stock worker activates it before writing. Never call it zero.
+  const exists=v.inventoryItem.inventoryLevels.nodes.some(l=>l.location.id===location);
+  return exists ? quantity(v,location) : 'Nincs aktiválva';
+}
+
 export function verify(state, products, config) {
   for (const x of ITEMS) {
     const m = state.maps.find(m=>m.variant_id===x.id);
@@ -140,7 +147,7 @@ export async function runRepair(db,api,mode,backup) {
       const v=products[0].variants.nodes.find(v=>v.sku===x.sku);
       const s=state.stock.find(s=>s.variant_id===x.id)||{ciuc:0,kezdi:0};
       return {meret:x.size,sku:x.sku,belso_Ciuc:s.ciuc,belso_Kezdi:s.kezdi,
-        Shopify_Ciuc:quantity(v,config.shopifyLocations.csikszereda),Shopify_Kezdi:quantity(v,config.shopifyLocations.kezdi),
+        Shopify_Ciuc:displayQuantity(v,config.shopifyLocations.csikszereda),Shopify_Kezdi:displayQuantity(v,config.shopifyLocations.kezdi),
         parositas:state.maps.find(m=>m.variant_id===x.id).shopify_product_id===KEEP?'céltermék':'külön M termék'};
     }));
     if(mode==='check') { await db.query('ROLLBACK'); console.log('ELLENŐRZÉS KÉSZ. Nem történt módosítás.'); return; }

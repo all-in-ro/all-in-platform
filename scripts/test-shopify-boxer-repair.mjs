@@ -58,6 +58,21 @@ const log=console.log, table=console.table, error=console.error;
 console.log=console.table=console.error=()=>{};
 try {
   let f=fixture();
+  // Missing inactive location is allowed for check/apply, never for verification.
+  f.products[0].variants.nodes.find(v=>v.sku===ITEMS[1].sku).inventoryItem.inventoryLevels.nodes.pop();
+  await runRepair(f.db,f.api,'check',f.backup);
+  assert.equal(f.calls.length,0);
+  await runRepair(f.db,f.api,'apply',f.backup);
+  assert.equal(f.calls.filter(c=>c.enqueue).length,4);
+  finish(f);
+  await assert.rejects(runRepair(f.db,f.api,'verify',f.backup),/Hiányzó Shopify-helyszín/);
+  await assert.rejects(runRepair(f.db,f.api,'archive',f.backup),/Hiányzó Shopify-helyszín/);
+  assert(!f.calls.some(c=>c.archive));
+  f=fixture();
+  f.products[0].variants.nodes[0].inventoryItem.inventoryLevels.nodes[0].quantities=[];
+  await assert.rejects(runRepair(f.db,f.api,'apply',f.backup),/Hiányzó available/);
+  assert.equal(f.calls.length,0);
+  f=fixture();
   await runRepair(f.db,f.api,'check',f.backup);
   assert.equal(f.calls.length,0);assert(f.sql.at(-1)==='ROLLBACK');
   await runRepair(f.db,f.api,'apply',f.backup);
