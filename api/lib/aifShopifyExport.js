@@ -1418,7 +1418,15 @@ function handlesForRows(rows, groupingMode = "product_code") {
     const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
     if (handleByGroup.has(groupKey)) continue;
     const groupCode = text(row.product_group_code) || productGroupCode(row, groupingMode);
-    let handle = slug([row.brand_name, groupCode || row.shopify_title || row.title_ro].filter(Boolean).join("-"));
+    // Keep handles stable even when the supplier already prefixed the code with
+    // the brand. E.g. Under Armour + under-armour-1389889-410 must not produce
+    // under-armour-under-armour-1389889-410.
+    const brandSlug = slug(row.brand_name);
+    let codeSlug = slug(groupCode || row.shopify_title || row.title_ro);
+    if (brandSlug) {
+      while (codeSlug.startsWith(`${brandSlug}-`)) codeSlug = codeSlug.slice(brandSlug.length + 1);
+    }
+    let handle = slug([brandSlug, codeSlug].filter(Boolean).join("-"));
     if (!handle) handle = `allin-${text(row.model_id).slice(0, 8)}`;
     if (used.has(handle)) {
       const modelSuffix = text(row.model_id).replace(/-/g, "").slice(0, 8) || "product";
@@ -1436,7 +1444,11 @@ async function prepareExport(client, options = {}) {
   const productStatus = options.productStatus === "active" ? "active" : "draft";
   const groupingMode = cleanGroupingMode(options.groupingMode || options.grouping_mode);
   const includeMapped = bool(options.includeMapped, false);
-  const rows = await loadExportCandidates(client, options.variantIds, selectionMode);
+  // AIF_EXPORT_COMPLETE_FAMILY_V1: even a single selected size must export all
+  // ACTIVE sizes of its actual Shopify product group. The old selected_variants
+  // mode created independent products for S/M, M/L and L/XL over successive runs.
+  // Read all active siblings first; only then select the requested group(s).
+  const rows = await loadExportCandidates(client, options.variantIds, "all_model_variants");
   // A Shopify felé csak ember által olvasható színnév mehet.
   // A normalizáló a live színnév, supplier színnév és brand-color mapping alapján
   // dolgozik; teljesen szín nélküli product-code csoportnál csak Méret opciót használ.
@@ -1448,7 +1460,16 @@ async function prepareExport(client, options = {}) {
       shopify_title_fallback_used: selected.usedRomanianFallback,
     };
   });
-  const normalizedRows = normalizeExportRowsForOptions(safeTitleRows, groupingMode);
+  const normalizedAllRows = normalizeExportRowsForOptions(safeTitleRows, groupingMode);
+  const selectedIds = new Set((options.variantIds || []).map(text));
+  const selectedGroupKeys = selectionMode === "selected_variants"
+    ? new Set(normalizedAllRows
+        .filter((row) => selectedIds.has(text(row.variant_id)))
+        .map((row) => text(row.product_group_key)))
+    : null;
+  const normalizedRows = selectedGroupKeys
+    ? normalizedAllRows.filter((row) => selectedGroupKeys.has(text(row.product_group_key)))
+    : normalizedAllRows;
   const status = await getAifShopifyStatus(client);
   const location = status?.locations?.csikszereda || null;
   const locationName = text(location?.name);
@@ -1480,13 +1501,37 @@ async function prepareExport(client, options = {}) {
   const skuCounts = new Map();
   const optionCombinationCounts = new Map();
   const groupMappingState = new Map();
+  // Same AllIn model + proved color may not silently split into two Shopify
+  // products due to inconsistent per-size supplier codes. Across models, an
+  // identical brand + full product code is also a strong collision signal.
+  const modelColorGroups = new Map();
+  const brandProductCodeGroups = new Map();
+  // Check ALL active siblings from the selected model, including groups that
+  // were not explicitly selected. Otherwise one size could evade the guard by
+  // receiving a different supplier product code than its siblings.
+  for (const row of normalizedAllRows) {
+    const modelColor = exportColorIdentityCode(row) || resolvedRowColorName(row);
+    if (text(row.model_id) && text(modelColor)) {
+      const key = `${text(row.model_id)}::${normalizeKey(modelColor)}`;
+      const groups = modelColorGroups.get(key) || new Set();
+      groups.add(row.product_group_key);
+      modelColorGroups.set(key, groups);
+    }
+    const brandKey = slug(row.brand_name);
+    const codeKey = slug(row.product_group_code);
+    if (brandKey && codeKey) {
+      const key = `${brandKey}::${codeKey}`;
+      const groups = brandProductCodeGroups.get(key) || new Set();
+      groups.add(row.product_group_key);
+      brandProductCodeGroups.set(key, groups);
+    }
+  }
+
   for (const row of exportRows) {
     const sku = normalizeKey(variantSku(row));
     if (sku) skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
-
     const optionKey = `${row.product_group_key}::${variantOptionCombinationKey(row)}`;
     optionCombinationCounts.set(optionKey, (optionCombinationCounts.get(optionKey) || 0) + 1);
-
     const mappingState = groupMappingState.get(row.product_group_key) || { mapped: 0, unmapped: 0 };
     if (row.shopify_mapped) mappingState.mapped += 1;
     else mappingState.unmapped += 1;
@@ -1510,6 +1555,15 @@ async function prepareExport(client, options = {}) {
     if ((optionCombinationCounts.get(optionKey) || 0) > 1) {
       validation.errors.push("Ebben a Shopify-termékben ugyanaz a szín + méret kombináció többször szerepel.");
     }
+    const modelColor = exportColorIdentityCode(row) || resolvedRowColorName(row);
+    const modelColorKey = `${text(row.model_id)}::${normalizeKey(modelColor)}`;
+    if (modelColor && (modelColorGroups.get(modelColorKey)?.size || 0) > 1) {
+      validation.errors.push("Ugyanazon AllIn modell és szín méretei több termékkód alá kerültek. Ellenőrizd a beszállítói kódokat; külön Shopify-termék nem készülhet.");
+    }
+    const brandCodeKey = `${slug(row.brand_name)}::${slug(row.product_group_code)}`;
+    if ((brandProductCodeGroups.get(brandCodeKey)?.size || 0) > 1) {
+      validation.errors.push("Azonos márka és termékkód több AllIn termékcsoporthoz tartozik. A duplikáció tisztázásáig az export tiltva.");
+    }
 
     const mappingState = groupMappingState.get(row.product_group_key) || { mapped: 0, unmapped: 0 };
     if (!row.shopify_mapped && mappingState.mapped > 0 && mappingState.unmapped > 0) {
@@ -1528,7 +1582,9 @@ async function prepareExport(client, options = {}) {
     };
   });
 
-  if (groupingMode === "model_colors") {
+  // Never create an incomplete Shopify product with only the valid sizes.
+  // This applies to product_code too, not just model_colors.
+  {
     const invalidGroups = new Set(
       items
         .filter((item) => item.export_state === "invalid")
@@ -1901,6 +1957,247 @@ export async function previewAifShopifyProductExport(client, options = {}) {
   };
 }
 
+/*
+ * AIF_SHOPIFY_EXPORT_REMOTE_FAMILY_GUARD_V1
+ * Title equality is not a product identity. We only compare recognized supplier
+ * codes and brand-prefixed handles, so black (-001) and black/grey (-002) remain
+ * distinct while legacy brand-brand-1389889-410 and brand-1389889-410 collide.
+ * A truncated older handle such as brand-1389889 is conservatively held for
+ * review when exporting brand-1389889-410. Nothing is merged or deleted.
+ */
+function exportRemoteProductGroups(variants) {
+  const products = new Map();
+  for (const variant of variants || []) {
+    const product = variant?.product;
+    const id = text(product?.id);
+    if (!id) continue;
+    const existing = products.get(id);
+    if (!existing) products.set(id, {
+      id, handle: text(product.handle), title: text(product.title), skuCount: 0,
+    });
+    if (text(variant.sku)) products.get(id).skuCount += 1;
+  }
+  return [...products.values()];
+}
+
+function exportRemoteCanonicalCode(handle, brandSlug) {
+  const remote = slug(handle);
+  if (!brandSlug || !remote.startsWith(`${brandSlug}-`)) return "";
+  let code = remote;
+  while (code.startsWith(`${brandSlug}-`)) code = code.slice(brandSlug.length + 1);
+  return code;
+}
+
+function exportRemoteFamilyConflicts(items, variants) {
+  const products = exportRemoteProductGroups(variants);
+  const prospective = new Map();
+  for (const item of items || []) {
+    const key = text(item.product_group_key || item.handle);
+    if (prospective.has(key)) continue;
+    prospective.set(key, {
+      groupKey: key,
+      handle: text(item.handle),
+      brand: text(item.brand_name || item.brand || item.snapshot?.brand),
+      code: text(item.product_group_code || item.productCode || item.snapshot?.productCode),
+    });
+  }
+  const conflicts = [];
+  const emitted = new Set();
+  for (const group of prospective.values()) {
+    const brand = slug(group.brand);
+    let expectedCode = slug(group.code);
+    if (brand) {
+      while (expectedCode.startsWith(`${brand}-`)) expectedCode = expectedCode.slice(brand.length + 1);
+    }
+    const expectedHandle = slug(group.handle);
+    for (const product of products) {
+      const candidateHandle = slug(product.handle);
+      const candidateCode = exportRemoteCanonicalCode(product.handle, brand);
+      const exactHandle = Boolean(expectedHandle && expectedHandle === candidateHandle);
+      // No fuzzy comparison on titles or vague category words.
+      const codeMatch = Boolean(brand && expectedCode && /[0-9]/.test(expectedCode)
+        && candidateCode && (
+          candidateCode === expectedCode ||
+          candidateCode.startsWith(`${expectedCode}-`) ||
+          expectedCode.startsWith(`${candidateCode}-`)
+        ));
+      if (!exactHandle && !codeMatch) continue;
+      const identity = `${group.groupKey}::${product.id}`;
+      if (emitted.has(identity)) continue;
+      emitted.add(identity);
+      conflicts.push({
+        groupKey: group.groupKey,
+        expectedHandle: group.handle,
+        expectedCode: group.code,
+        productId: product.id,
+        existingHandle: product.handle,
+        existingTitle: product.title,
+        reason: exactHandle ? "same_handle" : "same_brand_model_family",
+      });
+    }
+  }
+  return conflicts;
+}
+
+function throwIfRemoteExportConflicts(items, remoteVariants, context = "create") {
+  const remoteSkuIndex = indexShopifyVariantsBySku(remoteVariants);
+  const existingRemoteSkus = [...new Set((items || []).map((item) => text(item.sku)).filter(Boolean))]
+    .map((sku) => ({ sku, variants: remoteSkuIndex.get(normalizeKey(sku)) || [] }))
+    .filter((entry) => entry.variants.length)
+    .map((entry) => ({
+      sku: entry.sku,
+      matches: entry.variants.map((variant) => ({
+        variantId: text(variant.id),
+        productId: text(variant.product?.id),
+        handle: text(variant.product?.handle),
+      })),
+    }));
+  if (existingRemoteSkus.length) {
+    throw Object.assign(new Error(`A Shopifyban ${existingRemoteSkus.length} SKU már létezik. Új import helyett a meglévő variánsok párosítását kell ellenőrizni.`), {
+      code: "shopify_export_existing_remote_skus",
+      context, duplicates: existingRemoteSkus.slice(0, 100),
+    });
+  }
+
+  const conflicts = exportRemoteFamilyConflicts(items, remoteVariants);
+  if (conflicts.length) {
+    throw Object.assign(new Error(`A Shopifyban ${conflicts.length} egyező vagy gyanúsan egyező márka–modell termék található. Új CSV-vel nem készítünk újabb másolatot; előbb ellenőrizni kell a meglévő terméket.`), {
+      code: "shopify_export_remote_product_family_conflict",
+      context, conflicts: conflicts.slice(0, 100),
+    });
+  }
+}
+
+/* Read-only audit of existing Shopify product fragmentation.
+ * It works from the AllIn barcode + model + authoritative color code,
+ * and reports exact Shopify Product IDs. It never merges or deletes products.
+ */
+export async function auditAifShopifyProductFamilies(client, options = {}) {
+  const limit = Math.min(200, Math.max(1, integer(options.limit, 100)));
+  const allIn = await client.query(`
+    SELECT v.id::text AS variant_id, trim(v.barcode) AS sku,
+           v.size, v.color_code, v.color_name,
+           pm.id::text AS model_id, pm.model_code, pm.title_ro,
+           b.name AS brand_name,
+           sc.supplier_color_code,
+           sc.supplier_product_code
+    FROM aif_product_variants v
+    JOIN aif_product_models pm ON pm.id=v.model_id
+    LEFT JOIN aif_brands b ON b.id=pm.brand_id
+    LEFT JOIN LATERAL (
+      SELECT supplier_color_code,supplier_product_code FROM aif_variant_supplier_codes sc
+      WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+      ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST LIMIT 1
+    ) sc ON true
+    WHERE NULLIF(trim(v.barcode),'') IS NOT NULL
+      AND lower(COALESCE(v.status,'active'))='active'
+      AND lower(COALESCE(pm.status,'active'))='active'
+  `);
+  const internalBySku = new Map();
+  for (const row of allIn.rows) {
+    const key = normalizeKey(row.sku);
+    const bucket = internalBySku.get(key) || [];
+    bucket.push(row);
+    internalBySku.set(key, bucket);
+  }
+  const remote = await loadAllShopifyVariants();
+  const families = new Map();
+  const ambiguousSkus = [];
+  for (const variant of remote) {
+    const sku = normalizeKey(variant.sku);
+    if (!sku) continue;
+    const internal = internalBySku.get(sku) || [];
+    if (internal.length !== 1) {
+      if (internal.length > 1) ambiguousSkus.push(text(variant.sku));
+      continue;
+    }
+    const row = internal[0];
+    const brand = slug(row.brand_name);
+    const baseModel = slug(row.model_code || row.model_id);
+    const codeColor = slug(row.supplier_color_code || row.color_code || row.color_name);
+    // A reliable color key is mandatory: only identical model+color belongs
+    // in one storefront product. We do NOT collapse other UA color codes.
+    if (!baseModel || !codeColor) continue;
+    const familyKey = `${brand}::${baseModel}::${codeColor}`;
+    const family = families.get(familyKey) || {
+      familyKey, brand: row.brand_name, modelCode: row.model_code,
+      color: row.color_name || row.supplier_color_code || row.color_code,
+      products: new Map(),
+    };
+    const product = variant.product || {};
+    const productId = text(product.id);
+    if (!productId) continue;
+    const productRow = family.products.get(productId) || {
+      productId, handle: text(product.handle), title: text(product.title),
+      status: text(product.status), variants: [],
+    };
+    productRow.variants.push({
+      variantId: text(variant.id), sku: text(variant.sku),
+      size: text(row.size), color: text(row.color_name),
+      allInVariantId: text(row.variant_id),
+    });
+    family.products.set(productId, productRow);
+    families.set(familyKey, family);
+  }
+  // Additionally report legacy handles where the supplier color was not
+  // recorded consistently in AllIn (e.g. 410 versus "Bleumarin"). This is
+  // weaker evidence, so it is a separate REVIEW list, never an auto-merge.
+  const brandSlugs = [...new Set(allIn.rows.map((row) => slug(row.brand_name)).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+  const handleProducts = exportRemoteProductGroups(remote).map((product) => {
+    const handle = slug(product.handle);
+    const brand = brandSlugs.find((candidate) => handle.startsWith(`${candidate}-`)) || "";
+    return {
+      ...product,
+      brand,
+      code: brand ? exportRemoteCanonicalCode(handle, brand) : "",
+    };
+  }).filter((product) => product.code && /[0-9]/.test(product.code));
+  // The legacy-handle review is quadratic; keep it bounded on larger shops.
+  if (handleProducts.length > 5000) {
+    throw Object.assign(new Error("A teljes handle-duplikáció audit túl nagy ehhez a kézi lekérdezéshez."), {
+      code: "shopify_export_handle_audit_too_large",
+    });
+  }
+  const suspectedHandlePairs = [];
+  for (let a = 0; a < handleProducts.length; a += 1) {
+    for (let b = a + 1; b < handleProducts.length; b += 1) {
+      const x = handleProducts[a];
+      const y = handleProducts[b];
+      if (x.brand !== y.brand || x.id === y.id) continue;
+      const exact = x.code === y.code;
+      const prefix = x.code.startsWith(`${y.code}-`) || y.code.startsWith(`${x.code}-`);
+      if (!exact && !prefix) continue;
+      suspectedHandlePairs.push({
+        reason: exact ? "same_brand_product_code" : "ambiguous_legacy_base_handle",
+        brand: x.brand,
+        first: { productId: x.id, handle: x.handle, title: x.title },
+        second: { productId: y.id, handle: y.handle, title: y.title },
+      });
+    }
+  }
+  const duplicates = [...families.values()]
+    .filter((family) => family.products.size > 1)
+    .map((family) => ({
+      familyKey: family.familyKey, brand: family.brand,
+      modelCode: family.modelCode, color: family.color,
+      productCount: family.products.size,
+      products: [...family.products.values()],
+    }))
+    .sort((a, b) => b.productCount - a.productCount || a.familyKey.localeCompare(b.familyKey));
+  return {
+    ok: true, readOnly: true, generatedAt: new Date().toISOString(),
+    remoteVariantCount: remote.length,
+    auditedAllInVariantCount: allIn.rows.length,
+    duplicateFamilyCount: duplicates.length,
+    duplicates: duplicates.slice(0, limit),
+    suspectedLegacyHandlePairs: suspectedHandlePairs.slice(0, limit),
+    suspectedLegacyHandlePairCount: suspectedHandlePairs.length,
+    ambiguousSkuCount: new Set(ambiguousSkus).size,
+    note: "Azonos modell + szín több Shopify Product ID alatt. A handle-alapú gyanúk ellenőrzendők. Automatikus Shopify törlés/készletmozgatás NINCS.",
+  };
+}
+
 export async function createAifShopifyProductExport(client, options = {}) {
   const prepared = await prepareExport(client, options);
   if (!prepared.validItems.length) {
@@ -1914,39 +2211,7 @@ export async function createAifShopifyProductExport(client, options = {}) {
   // A CSV-import másik handle alatt ugyanazzal az SKU-val új Shopify-variánst
   // készíthet, akkor is, ha az AllIn DB-ben még nincs párosítása.
   const remoteVariants = await loadAllShopifyVariants();
-  const remoteBySku = indexShopifyVariantsBySku(remoteVariants);
-  const remoteByHandle = new Map();
-  for (const variant of remoteVariants) {
-    const handle = normalizeKey(variant?.product?.handle);
-    const productId = text(variant?.product?.id);
-    if (handle && productId) remoteByHandle.set(handle, productId);
-  }
-  const existingRemoteHandles = unique(prepared.validItems.map((item) => item.handle))
-    .map((handle) => ({ handle, productId: remoteByHandle.get(normalizeKey(handle)) || "" }))
-    .filter((row) => row.productId);
-  if (existingRemoteHandles.length) {
-    throw Object.assign(
-      new Error(`A tervezett CSV ${existingRemoteHandles.length} Shopify-handle-je már foglalt. Meglévő terméket nem írunk felül CSV-vel; válassz másik biztonságos csoportosítást vagy Shopify API-frissítést.`),
-      { code: "shopify_export_existing_remote_handles", conflicts: existingRemoteHandles },
-    );
-  }
-  const existingRemoteSkus = prepared.validItems
-    .map((item) => ({ sku: item.sku, variants: remoteBySku.get(normalizeKey(item.sku)) || [] }))
-    .filter((row) => row.variants.length)
-    .map((row) => ({
-      sku: row.sku,
-      matches: row.variants.map((variant) => ({
-        variantId: text(variant.id),
-        productId: text(variant.product?.id),
-        handle: text(variant.product?.handle),
-      })),
-    }));
-  if (existingRemoteSkus.length) {
-    throw Object.assign(
-      new Error(`A kijelölt export ${existingRemoteSkus.length} SKU-ja már létezik a Shopifyban. Új CSV-import helyett a meglévő termékpárosítást kell ellenőrizni.`),
-      { code: "shopify_export_existing_remote_skus", duplicates: existingRemoteSkus },
-    );
-  }
+  throwIfRemoteExportConflicts(prepared.validItems, remoteVariants, "create");
 
   const { productRows, byVariant: productByVariant } = productRowsForItems(prepared.validItems, prepared.productStatus);
   const reportRows = reportRowsForItems(prepared.items);
@@ -1955,6 +2220,25 @@ export async function createAifShopifyProductExport(client, options = {}) {
 
   await client.query("BEGIN");
   try {
+    // Cross-process lock + DB pending rows prevents two concurrent exports of
+    // the same sizes before either CSV reaches Shopify.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('aif_shopify_export'), hashtext('sku_pending_v1'))");
+    const candidateSkus = [...new Set(prepared.validItems.map((item) => normalizeKey(item.sku)).filter(Boolean))];
+    const pending = await client.query(
+      `SELECT e.export_id::text, e.sku, e.handle
+       FROM aif_shopify_product_export_items e
+       JOIN aif_shopify_product_exports x ON x.id=e.export_id
+       WHERE lower(trim(e.sku)) = ANY($1::text[])
+         AND e.item_status='exported_pending'
+         AND x.status IN ('prepared','downloaded','partially_mapped','error')
+       ORDER BY e.created_at DESC LIMIT 100`,
+      [candidateSkus]
+    );
+    if (pending.rowCount) {
+      throw Object.assign(new Error("Ezekhez a SKU-khoz már van folyamatban lévő CSV-export. Előbb egyeztesd vagy töröld a korábbi exportot, nehogy ugyanazt az árut új termékként importáld."), {
+        code: "shopify_export_existing_pending_export", conflicts: pending.rows,
+      });
+    }
     await client.query(
       `INSERT INTO aif_shopify_product_exports (
          id, status, selection_mode, product_status, shopify_location_id, shopify_location_name,
@@ -2089,6 +2373,68 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
       new Error("A mentett export már Shopifyhoz párosított termékeket tartalmaz. Újraimportálása duplikált SKU-t hozna létre. A meglévő variánsokat kell frissíteni, ne töltsd fel újra a régi CSV-t."),
       { code: "shopify_existing_mapped_csv_reimport_blocked" },
     );
+  }
+  // Old prepared CSVs were created before the complete-size-group safeguard.
+  // Never let an older partial S/M-only CSV bypass the new export logic.
+  if (exportableItems.length) {
+    const savedVariantIds = new Set(exportableItems.map((row) => text(row.variant_id)));
+    const liveSource = await loadExportCandidates(client, [...savedVariantIds], "all_model_variants");
+    const groupMode = cleanGroupingMode(exportRow.summary?.groupingMode || "product_code");
+    const live = normalizeExportRowsForOptions(liveSource, groupMode);
+    const liveById = new Map(live.map((row) => [text(row.variant_id), row]));
+    const savedGroupKeys = new Set();
+    for (const stored of exportableItems) {
+      const liveRow = liveById.get(text(stored.variant_id));
+      const historicKey = text(stored.snapshot?.productGroupKey);
+      if (!liveRow || (historicKey && historicKey !== text(liveRow.product_group_key))) {
+        throw Object.assign(new Error("A mentett CSV variánsainak élő modell/szín csoportja megváltozott. Készíts új exportot."), {
+          code: "shopify_saved_export_family_identity_changed",
+          variantId: text(stored.variant_id),
+        });
+      }
+      savedGroupKeys.add(text(liveRow.product_group_key));
+    }
+    const missingSiblings = live.filter((row) => savedGroupKeys.has(text(row.product_group_key))
+      && !savedVariantIds.has(text(row.variant_id)));
+    if (missingSiblings.length) {
+      throw Object.assign(new Error("Ez a korábbi CSV nem tartalmazza a termékcsoport minden aktív méretét. Nem tölthető le újra, mert újabb különálló Shopify-terméket hozhatna létre."), {
+        code: "shopify_saved_export_incomplete_family",
+        missingVariants: missingSiblings.slice(0, 100).map((row) => ({
+          variantId: text(row.variant_id), sku: variantSku(row), size: text(row.size),
+          color: text(row.color_name), productGroupKey: text(row.product_group_key),
+        })),
+      });
+    }
+    const allModelColors = new Map();
+    for (const row of live) {
+      const color = exportColorIdentityCode(row) || resolvedRowColorName(row);
+      if (!color) continue;
+      const key = `${text(row.model_id)}::${normalizeKey(color)}`;
+      const groups = allModelColors.get(key) || new Set();
+      groups.add(text(row.product_group_key));
+      allModelColors.set(key, groups);
+    }
+    const splitGroups = live.filter((row) => savedGroupKeys.has(text(row.product_group_key))
+      && (allModelColors.get(`${text(row.model_id)}::${normalizeKey(exportColorIdentityCode(row) || resolvedRowColorName(row))}`)?.size || 0) > 1);
+    if (splitGroups.length) {
+      throw Object.assign(new Error("A mentett export modell/szín adatai több termékkódra vannak szétszakadva. Új, ellenőrzött export szükséges."), {
+        code: "shopify_saved_export_split_color_family",
+      });
+    }
+  }
+  // A saved CSV may have been imported since its creation, without an AllIn
+  // reconciliation. Re-check the LIVE Shopify catalog every time we download.
+  // The guard includes distinct SKUs, handles and model/color families.
+  if (exportableItems.length) {
+    const liveVariants = await loadAllShopifyVariants();
+    const storedItems = exportableItems.map((row) => ({
+      sku: text(row.sku),
+      handle: text(row.handle || row.snapshot?.handle),
+      brand_name: text(row.snapshot?.brand),
+      product_group_code: text(row.snapshot?.productCode),
+      product_group_key: text(row.snapshot?.productGroupKey || row.handle),
+    }));
+    throwIfRemoteExportConflicts(storedItems, liveVariants, "download");
   }
   // Régen elmentett exportoknál a snapshotban is maradhatott hibás URL-cím.
   // A javított élő modellneveket egyszer, tömbösítve olvassuk.
@@ -2297,7 +2643,16 @@ async function loadAllShopifyVariants() {
     variants.push(...(connection?.nodes || []));
     if (!connection?.pageInfo?.hasNextPage) break;
     const nextCursor = text(connection?.pageInfo?.endCursor);
-    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      throw Object.assign(new Error("A Shopify terméklista lapozása elakadt. A duplikációellenőrzés nem teljes, ezért az export leáll."), {
+        code: "shopify_export_incomplete_remote_catalog",
+      });
+    }
+    if (page === 199) {
+      throw Object.assign(new Error("A Shopify terméklista meghaladja az ellenőrizhető 50 000 variánst; export blokkolva."), {
+        code: "shopify_export_remote_catalog_too_large",
+      });
+    }
     seenCursors.add(nextCursor);
     after = nextCursor;
   }

@@ -499,6 +499,7 @@ export async function mapAifShopifyVariants(client, options = {}) {
         continue;
       }
       try {
+        await client.query("SAVEPOINT shopify_mapping_row");
         await client.query(
           `INSERT INTO aif_shopify_variant_map (
              variant_id, sku, shopify_product_id, shopify_variant_id, shopify_inventory_item_id,
@@ -530,8 +531,17 @@ export async function mapAifShopifyVariants(client, options = {}) {
             JSON.stringify({ allIn, shopify }),
           ]
         );
+        // The old generic SKU pairing saved an ID but never queued stock.
+        // New mappings with last_synced_at=NULL could stay 'sold out' forever.
+        const queued = await enqueueAifShopifyVariant(client, allIn.variantId, "initial_mapping_stock", { schemaReady: true });
+        if (!queued.queued) {
+          console.warn("AIF Shopify initial stock not queued", { variantId: allIn.variantId, reason: queued.reason });
+        }
+        await client.query("RELEASE SAVEPOINT shopify_mapping_row");
         mapped += 1;
       } catch (error) {
+        await client.query("ROLLBACK TO SAVEPOINT shopify_mapping_row");
+        await client.query("RELEASE SAVEPOINT shopify_mapping_row");
         errors.push({ sku: allIn.sku, error: error?.message || String(error), code: error?.code || null });
       }
     }
@@ -693,6 +703,55 @@ function availableQuantity(level) {
   return signedInt(item?.quantity);
 }
 
+// Do not update an unrelated Shopify inventory item after an SKU rename,
+// product merge, or stale map. This read is required BEFORE every stock write.
+async function assertAifShopifyMappedInventoryIdentity(mapping) {
+  const response = await shopifyGraphql(`query AifShopifyMappedVariantIdentity($id: ID!) {
+    productVariant(id: $id) {
+      id sku barcode
+      inventoryItem { id tracked }
+      product { id status }
+    }
+  }`, { id: text(mapping.shopify_variant_id) });
+  const variant = response.data?.productVariant;
+  const problems = [];
+  if (!variant?.id) problems.push("A Shopify variánsazonosító már nem létezik.");
+  if (variant?.id && normalizeSku(variant.sku) !== normalizeSku(mapping.live_barcode || mapping.sku)) problems.push("Az SKU megváltozott vagy a Shopify térkép téves.");
+  if (variant?.id && text(variant.inventoryItem?.id) !== text(mapping.shopify_inventory_item_id)) problems.push("A Shopify inventoryItem ID már nem ehhez a variánshoz tartozik.");
+  if (variant?.id && text(variant.product?.id) !== text(mapping.shopify_product_id)) problems.push("A Shopify termékazonosító már nem egyezik.");
+  if (variant?.id && variant.inventoryItem?.tracked !== true) problems.push("A Shopify készletkövetés nincs bekapcsolva.");
+  if (problems.length) {
+    throw Object.assign(new Error(`Shopify készletírás megállítva: ${problems.join(" ")}`), {
+      code: "shopify_mapping_inventory_identity_mismatch",
+      problems,
+      mapping: { variantId: text(mapping.variant_id), sku: text(mapping.sku), shopifyVariantId: text(mapping.shopify_variant_id) },
+    });
+  }
+  return variant;
+}
+
+async function verifyAifShopifyWrittenStock(inventoryItemId, expectedByLocation) {
+  // Immediately after a mutation, Shopify can briefly return a stale level.
+  // A bounded retry verifies the actual remote values before marking DB 'synced'.
+  let last = [];
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt) await wait(300 * attempt);
+    last = await inventoryLevels(inventoryItemId);
+    const levels = new Map(last.map((level) => [text(level.location?.id), level]));
+    const mismatches = expectedByLocation.filter((expected) => {
+      const level = levels.get(text(expected.locationId));
+      return !level || availableQuantity(level) !== expected.quantity;
+    });
+    if (!mismatches.length) return { verified: true, attempts: attempt + 1 };
+  }
+  throw Object.assign(new Error("A Shopify készletírás után visszaolvasva eltérő elérhető mennyiséget kaptunk. A sor hibásként újraellenőrzésre kerül; nem jelöljük szinkronizáltnak."), {
+    code: "shopify_inventory_post_write_mismatch",
+    expected: expectedByLocation,
+    observed: last.map((level) => ({ locationId: text(level.location?.id), available: availableQuantity(level) })),
+  });
+}
+
 async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQty, idempotencyKey, referenceId }) {
   const config = envConfig();
   const locationIds = [config.shopifyCsikszeredaLocationId, config.shopifyKezdiLocationId];
@@ -729,13 +788,70 @@ async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQt
     idempotencyKey,
   });
   const payload = response.data?.inventorySetQuantities;
-  if (payload?.userErrors?.length) {
-    throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
+  if (!payload || payload.userErrors?.length) {
+    throw Object.assign(new Error(payload?.userErrors?.map((row) => row.message).join(" | ") || "A Shopify nem adott vissza sikeres készletválaszt."), {
       code: "shopify_inventory_set_failed",
       payload,
     });
   }
-  return { payload, quantities };
+  const verification = await verifyAifShopifyWrittenStock(
+    inventoryItemId,
+    quantities.map((quantity) => ({ locationId: quantity.locationId, quantity: quantity.quantity }))
+  );
+  return { payload, quantities, verification };
+}
+
+/* AIF_SHOPIFY_MISSING_STOCK_SELF_HEAL_V1
+ * A mapping without a completed stock sync must never remain indefinitely
+ * with Shopify 0 stock. Repair unsent or missed AIF changes, but ONLY when no
+ * other pending/error/blocked work exists. The outbox worker still owns writes.
+ */
+async function enqueueAifShopifyMissingStockWork(client, config, limit = 40) {
+  const maxRows = Math.min(100, Math.max(1, Number(limit) || 40));
+  const result = await client.query(`
+    WITH missing AS (
+      SELECT m.variant_id, qty.ciuc, qty.kezdi,
+             CASE WHEN m.last_synced_at IS NULL THEN 'never_synced' ELSE 'local_qty_changed' END AS reason
+      FROM aif_shopify_variant_map m
+      JOIN aif_product_variants v ON v.id=m.variant_id
+      JOIN aif_product_models pm ON pm.id=v.model_id
+      LEFT JOIN aif_shopify_sync_outbox o ON o.variant_id=m.variant_id
+      CROSS JOIN LATERAL (
+        SELECT
+          COALESCE(sum(CASE WHEN s.location_id::text=$1 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0)::int AS ciuc,
+          COALESCE(sum(CASE WHEN s.location_id::text=$2 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0)::int AS kezdi
+        FROM aif_stock s WHERE s.variant_id=m.variant_id
+      ) qty
+      WHERE lower(COALESCE(v.status,'active'))='active'
+        AND lower(COALESCE(pm.status,'active'))='active'
+        AND lower(COALESCE(m.sync_status,'mapped')) NOT IN ('blocked','error','failed')
+        AND (o.variant_id IS NULL OR o.status='done')
+        AND (
+          m.last_synced_at IS NULL
+          OR m.last_synced_csikszereda_qty IS DISTINCT FROM qty.ciuc
+          OR m.last_synced_kezdi_qty IS DISTINCT FROM qty.kezdi
+        )
+      ORDER BY m.updated_at ASC
+      LIMIT $3
+    )
+    INSERT INTO aif_shopify_sync_outbox (
+      variant_id, desired_csikszereda_qty, desired_kezdi_qty, reason,
+      status, attempts, idempotency_key, next_attempt_at, locked_at, last_error, created_at, updated_at
+    )
+    SELECT variant_id, ciuc, kezdi, 'auto_stock_' || reason,
+      'pending', 0, gen_random_uuid()::text, now(), NULL, NULL, now(), now()
+    FROM missing
+    ON CONFLICT (variant_id) DO UPDATE SET
+      desired_csikszereda_qty=EXCLUDED.desired_csikszereda_qty,
+      desired_kezdi_qty=EXCLUDED.desired_kezdi_qty,
+      reason=EXCLUDED.reason,
+      status='pending', attempts=0,
+      idempotency_key=EXCLUDED.idempotency_key,
+      next_attempt_at=now(), locked_at=NULL, last_error=NULL, updated_at=now()
+    WHERE aif_shopify_sync_outbox.status='done'
+    RETURNING variant_id::text
+  `, [config.aifCsikszeredaLocationId, config.aifKezdiLocationId, maxRows]);
+  return result.rowCount;
 }
 
 async function claimOutboxRows(pool, limit, excludedVariantIds = []) {
@@ -1951,6 +2067,9 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
   }
 
   try {
+    // This is still protected by the cross-instance Shopify advisory lock.
+    // The read/write is only to the durable queue, never to physical stock.
+    const seeded = await enqueueAifShopifyMissingStockWork(pool, config, options.seedLimit || 40);
     const safety = await getAifShopifySyncBlockers(pool);
     // Unknown upstream errors cannot be treated as an empty, safe order queue.
     const upstream=options.upstreamErrors||{};
@@ -1969,7 +2088,9 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
       const client = await pool.connect();
       try {
         const mapping = await client.query(
-          `SELECT * FROM aif_shopify_variant_map WHERE variant_id=$1 LIMIT 1`,
+          `SELECT m.*, v.barcode AS live_barcode FROM aif_shopify_variant_map m
+           JOIN aif_product_variants v ON v.id=m.variant_id
+           WHERE m.variant_id=$1 LIMIT 1`,
           [row.variant_id],
         );
         if (!mapping.rowCount) {
@@ -1995,6 +2116,7 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
          * A Shopify oldali készletírás idempotens kulccsal történik.
          * A külső hívást NEM ismételjük csak azért, mert utána a helyi DB lockolt.
          */
+        await assertAifShopifyMappedInventoryIdentity(map);
         const result = await setInventoryQuantities({
           inventoryItemId: map.shopify_inventory_item_id,
           csikszeredaQty: row.desired_csikszereda_qty,
@@ -2119,6 +2241,7 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
       errors: errors.length,
       superseded,
       lockSkipped: false,
+      autoStockSeeded: seeded,
       errorItems: errors,
     };
   } finally {
@@ -2174,6 +2297,149 @@ export async function getAifShopifyStatus(client) {
     database: db.rows[0] || {},
     health,
     remoteError: remote?.error || null,
+  };
+}
+
+/* AIF_STOCK_DIAGNOSE_V1 - read-only, useful for model 1290261 and future
+ * discrepancies. Compares true AIF available stock, outbox, mapping and exact
+ * Shopify inventory levels. No writes and no guessing based on page screenshots.
+ */
+export async function diagnoseAifShopifyStock(client, searchValue, options = {}) {
+  const search = text(searchValue);
+  if (search.length < 2 || search.length > 100) {
+    throw Object.assign(new Error("Adj meg SKU-t, vonalkódot vagy modellkódot (2–100 karakter)."), {
+      code: "aif_shopify_stock_diagnose_invalid_search", statusCode: 400,
+    });
+  }
+  const config = envConfig();
+  const result = await client.query(`
+    SELECT v.id::text AS variant_id, v.barcode, v.internal_sku, v.size, v.color_name, v.color_code,
+           v.status AS variant_status, pm.model_code, pm.title_ro, pm.status AS model_status,
+           b.name AS brand_name, m.sku AS mapped_sku, m.shopify_product_id,
+           m.shopify_variant_id, m.shopify_inventory_item_id, m.sync_status,
+           m.last_synced_csikszereda_qty, m.last_synced_kezdi_qty, m.last_synced_at, m.last_error,
+           o.status AS outbox_status, o.last_error AS outbox_error, o.reason AS outbox_reason,
+           o.desired_csikszereda_qty, o.desired_kezdi_qty, o.next_attempt_at,
+           COALESCE(st.ciuc_qty,0)::int AS ciuc_qty,
+           COALESCE(st.kezdi_qty,0)::int AS kezdi_qty,
+           COALESCE(st.all_qty,0)::int AS total_available,
+           COALESCE(st.total_qty,0)::int AS total_physical,
+           COALESCE(st.reserved_qty,0)::int AS total_reserved
+    FROM aif_product_variants v
+    JOIN aif_product_models pm ON pm.id=v.model_id
+    LEFT JOIN aif_brands b ON b.id=pm.brand_id
+    LEFT JOIN aif_shopify_variant_map m ON m.variant_id=v.id
+    LEFT JOIN aif_shopify_sync_outbox o ON o.variant_id=v.id
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(sum(CASE WHEN s.location_id::text=$2 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0) AS ciuc_qty,
+        COALESCE(sum(CASE WHEN s.location_id::text=$3 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0) AS kezdi_qty,
+        COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0) AS all_qty,
+        COALESCE(sum(COALESCE(s.qty,0)),0) AS total_qty,
+        COALESCE(sum(COALESCE(s.reserved_qty,0)),0) AS reserved_qty
+      FROM aif_stock s WHERE s.variant_id=v.id
+    ) st ON true
+    WHERE trim(COALESCE(v.barcode,''))=$1
+       OR trim(COALESCE(v.internal_sku,''))=$1
+       OR trim(COALESCE(pm.model_code,''))=$1
+       OR trim(COALESCE(m.sku,''))=$1
+       OR pm.model_code ILIKE ('%' || $1 || '%')
+       OR pm.title_ro ILIKE ('%' || $1 || '%')
+       OR EXISTS (SELECT 1 FROM aif_variant_supplier_codes sc
+                  WHERE sc.variant_id=v.id
+                    AND (trim(COALESCE(sc.supplier_product_code,''))=$1
+                         OR trim(COALESCE(sc.supplier_variant_code,''))=$1
+                         OR trim(COALESCE(sc.supplier_barcode,''))=$1))
+    ORDER BY pm.title_ro, v.color_name, v.size
+    LIMIT $4
+  `, [search, config.aifCsikszeredaLocationId, config.aifKezdiLocationId,
+      Math.min(50, Math.max(1, Number(options.limit || 30)))]);
+
+  const items = [];
+  for (const row of result.rows) {
+    const flags = [];
+    const aifQuantities = { csikszereda: row.ciuc_qty, kezdi: row.kezdi_qty };
+    let shopify = null;
+    if (!row.shopify_variant_id) {
+      flags.push("mapping_missing");
+    } else {
+      const query = `query AifShopifyStockDiagnosis($id: ID!) {
+        productVariant(id: $id) {
+          id sku barcode title inventoryQuantity sellableOnlineQuantity availableForSale inventoryPolicy
+          inventoryItem {
+            id tracked
+            inventoryLevels(first: 100) {
+              nodes {
+                location { id name }
+                quantities(names: ["available", "on_hand", "committed"]) { name quantity }
+              }
+            }
+          }
+          product { id title handle status onlineStoreUrl }
+        }
+      }`;
+      try {
+        const remote = (await shopifyGraphql(query, { id: text(row.shopify_variant_id) })).data?.productVariant;
+        if (!remote) {
+          flags.push("remote_variant_missing");
+        } else {
+          const levels = (remote.inventoryItem?.inventoryLevels?.nodes || []).map((level) => ({
+            locationId: text(level.location?.id),
+            locationName: text(level.location?.name),
+            quantities: Object.fromEntries((level.quantities || []).map((q) => [text(q.name), Number(q.quantity || 0)])),
+          }));
+          const byId = new Map(levels.map((level) => [level.locationId, level]));
+          const ciuc = byId.get(config.shopifyCsikszeredaLocationId) || null;
+          const kezdi = byId.get(config.shopifyKezdiLocationId) || null;
+          if (normalizeSku(remote.sku) !== normalizeSku(row.barcode)) flags.push("sku_mismatch");
+          if (text(remote.inventoryItem?.id) !== text(row.shopify_inventory_item_id)) flags.push("inventory_item_mismatch");
+          if (text(remote.product?.id) !== text(row.shopify_product_id)) flags.push("shopify_product_id_mismatch");
+          if (remote.inventoryItem?.tracked !== true) flags.push("shopify_inventory_not_tracked");
+          if (text(remote.product?.status).toUpperCase() !== "ACTIVE") flags.push("shopify_product_not_active");
+          if (!remote.product?.onlineStoreUrl) flags.push("online_store_not_published");
+          if (row.total_available > 0 && remote.sellableOnlineQuantity === 0) flags.push("shopify_online_sellable_zero");
+          if (remote.availableForSale === false) flags.push("shopify_variant_not_available_for_sale");
+          if (!ciuc || !kezdi) flags.push("shopify_location_inactive_or_missing");
+          if (ciuc && Number(ciuc.quantities.available ?? 0) !== row.ciuc_qty) flags.push("csikszereda_stock_mismatch");
+          if (kezdi && Number(kezdi.quantities.available ?? 0) !== row.kezdi_qty) flags.push("kezdi_stock_mismatch");
+          shopify = {
+            productId: remote.product?.id || null,
+            productTitle: remote.product?.title || null,
+            productHandle: remote.product?.handle || null,
+            productStatus: remote.product?.status || null,
+            onlineStoreUrl: remote.product?.onlineStoreUrl || null,
+            variantId: remote.id, sku: remote.sku, barcode: remote.barcode,
+            inventoryQuantity: remote.inventoryQuantity,
+            sellableOnlineQuantity: remote.sellableOnlineQuantity,
+            availableForSale: remote.availableForSale,
+            inventoryPolicy: remote.inventoryPolicy,
+            tracked: remote.inventoryItem?.tracked === true,
+            inventoryItemId: remote.inventoryItem?.id || null,
+            levels,
+          };
+        }
+      } catch (error) {
+        flags.push("shopify_read_failed");
+        shopify = { error: error?.message || String(error), code: error?.code || null };
+      }
+    }
+    if (row.last_synced_at === null) flags.push("never_synced");
+    if (row.outbox_status === "error" || row.outbox_status === "blocked") flags.push("outbox_needs_attention");
+    if (text(row.last_error)) flags.push("mapping_error");
+    if (row.total_available > row.ciuc_qty + row.kezdi_qty) flags.push("allin_stock_outside_managed_locations");
+    if (row.total_available > 0 && shopify?.inventoryQuantity === 0) flags.push("shopify_variant_reports_zero_stock");
+    items.push({ allin: row, expectedManaged: aifQuantities, shopify, flags: [...new Set(flags)] });
+  }
+  return {
+    ok: true, readOnly: true, search, checkedAt: new Date().toISOString(),
+    config: {
+      aifCsikszeredaLocationId: config.aifCsikszeredaLocationId,
+      aifKezdiLocationId: config.aifKezdiLocationId,
+      shopifyCsikszeredaLocationId: config.shopifyCsikszeredaLocationId,
+      shopifyKezdiLocationId: config.shopifyKezdiLocationId,
+    },
+    items,
+    note: "Ha minden készlet egyezik, de a webbolt mégis elfogyottnak mutatja: Shopify publikáció, szállítási profil és fulfillment helyszín ellenőrzendő.",
   };
 }
 
