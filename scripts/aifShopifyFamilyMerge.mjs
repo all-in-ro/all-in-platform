@@ -53,21 +53,48 @@ const FAMILIES = Object.freeze({
       'gid://shopify/Product/11160961024327',
     ],
   },
+  // 62S = ROȘU, nem COBALT: a gyartoi cikkszamot es az EAN-t kulso
+  // katalogusadat is megerositi. A roșu opcios termek lesz a megmarado.
   '4f::4f-4fjss23uswtm006::62s': {
-    label: '4F SWIMMING TRUNKS M006 - neve COBALT, szine rosu: ellenorizendo',
-    reviewOnly: true,
+    label: '4F SWIMMING TRUNKS M006 / 62S - roșu (146/152, 158/164)',
+    target: 'gid://shopify/Product/11160956830023',
     products: [
       'gid://shopify/Product/11160956469575',
       'gid://shopify/Product/11160956830023',
     ],
+    identity: {
+      modelCode: '4f:4fjss23uswtm006',
+      colorCode: '62S',
+      targetColor: 'roșu',
+      skuBySize: { '146/152': '5904698182022', '158/164': '5904698182039' },
+      sourceTitles: {
+        'gid://shopify/Product/11160956469575': '4F SWIMMING TRUNKS M006-COBALT',
+        'gid://shopify/Product/11160956830023': '4F SWIMMING TRUNKS M006-COBALT',
+      },
+    },
+    // A COBALT cimke bizonyithatoan hibas; a valodi 62S szin piros.
+    correctedTitle: '4F SWIMMING TRUNKS M006 - Roșu',
   },
+  // 25UUSHJ093-413: ugyanaz a 3 darabos, tobb szinu Performance
+  // Cotton boxer-csomag M es XL meretben. A multicolor opcios marad.
   'under-armour::under-armour-25uushj093::413': {
-    label: 'Under Armour boxer 413 - eltero termeknev: ellenorizendo',
-    reviewOnly: true,
+    label: 'Under Armour Performance Cotton 6in 3PK / 413 (M, XL)',
+    target: 'gid://shopify/Product/11359079694663',
     products: [
       'gid://shopify/Product/11160846500167',
       'gid://shopify/Product/11359079694663',
     ],
+    identity: {
+      modelCode: 'under_armour:25uushj093',
+      colorCode: '413',
+      targetColor: 'multicolor',
+      skuBySize: { 'M': '1200122271855', 'XL': '1200122271879' },
+      sourceTitles: {
+        'gid://shopify/Product/11160846500167': 'Boxeri Bărbați Under Armour Perf Cotton 6in (Pachet 3 Perechi)',
+        'gid://shopify/Product/11359079694663': 'UA PERFORMANCE COTTON - SOLID 6 3PK',
+      },
+    },
+    correctedTitle: 'Boxeri Bărbați Under Armour Performance Cotton 6in (3 Perechi)',
   },
 });
 
@@ -97,15 +124,20 @@ function logJson(title, data) { console.log(`\n${title}\n${JSON.stringify(data, 
 const PRODUCT_QUERY = `query AifMergeProducts($ids:[ID!]!) {
   nodes(ids:$ids) {
     ... on Product {
-      id handle title vendor status
+      id handle title vendor status productType category { id }
+      featuredImage { id url }
       options { id name position values }
       variants(first:100) {
         pageInfo { hasNextPage }
         nodes {
           id title sku barcode price compareAtPrice taxable inventoryPolicy
+          image { id url }
+          metafields(first:1) { pageInfo { hasNextPage } nodes { id } }
           selectedOptions { name value }
           inventoryItem {
-            id sku tracked requiresShipping unitCost { amount currencyCode }
+            id sku tracked requiresShipping
+            harmonizedSystemCode countryCodeOfOrigin provinceCodeOfOrigin
+            unitCost { amount currencyCode }
             measurement { weight { value unit } }
             inventoryLevels(first:50) {
               pageInfo { hasNextPage }
@@ -150,7 +182,7 @@ async function loadMappings(db, allInVariantIds) {
     SELECT m.variant_id::text, m.sku AS mapped_sku,
            m.shopify_product_id,m.shopify_variant_id,m.shopify_inventory_item_id,
            v.barcode, v.size,v.color_code,v.color_name,v.status AS variant_status,
-           pm.status AS model_status,
+           pm.status AS model_status, pm.model_code,
            COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0))
               FILTER (WHERE s.location_id::text=$2),0)::int AS ciuc,
            COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0))
@@ -221,6 +253,9 @@ function createVariantInput(oldVariant, desiredOptions, mapped, locations) {
     requiresShipping: true,
   };
   if (oldVariant.inventoryItem.unitCost?.amount != null) item.cost = oldVariant.inventoryItem.unitCost.amount;
+  for(const key of ['harmonizedSystemCode','countryCodeOfOrigin','provinceCodeOfOrigin']) {
+    if(oldVariant.inventoryItem[key]) item[key]=oldVariant.inventoryItem[key];
+  }
   if (oldVariant.inventoryItem.measurement?.weight?.value != null) {
     item.measurement = {weight:oldVariant.inventoryItem.measurement.weight};
   }
@@ -278,6 +313,28 @@ async function archiveProduct(product) {
   assert(info?.product?.status==='ARCHIVED','ARCHIVE_UNVERIFIED','Archiválás nem igazolható.',product.id);
 }
 
+const TITLE_UPDATE_MUTATION = `mutation AifMergeCorrectProductTitle($product:ProductUpdateInput!) {
+  productUpdate(product:$product) { product { id title handle status seo { title } } userErrors { field message } }
+}`;
+async function correctProductTitle(targetId, expectedHandle, expectedTitle) {
+  if(!expectedTitle) return false;
+  const live=(await getProducts([targetId])).get(targetId);
+  assert(live && live.handle===expectedHandle && live.status==='ACTIVE',
+    'TITLE_TARGET_CHANGED','A celfulek neve/statusza kozben megvaltozott.');
+  if(live.title===expectedTitle) return false;
+  const r=await shopifyGraphql(TITLE_UPDATE_MUTATION,{
+    product:{id:targetId,title:expectedTitle,handle:expectedHandle,seo:{title:expectedTitle.slice(0,70)}}
+  });
+  const payload=r.data?.productUpdate;
+  if(payload?.userErrors?.length) fail('TITLE_UPDATE_FAILED',
+    payload.userErrors.map(x=>x.message).join(' | '),payload.userErrors);
+  assert(payload?.product?.id===targetId && payload?.product?.title===expectedTitle
+    && payload?.product?.handle===expectedHandle && payload?.product?.status==='ACTIVE'
+    && payload?.product?.seo?.title===expectedTitle.slice(0,70),
+    'TITLE_UPDATE_UNVERIFIED','A termeknev / SEO cim / handle nem egyezik.',payload);
+  return true;
+}
+
 const STOCK_SET = `mutation AifMergeRetireStock($input:InventorySetQuantitiesInput!,$key:String!) {
  inventorySetQuantities(input:$input) @idempotent(key:$key) {
   inventoryAdjustmentGroup { createdAt }
@@ -317,36 +374,54 @@ async function redirectArchivedProduct(fromHandle, toHandle) {
 }
 
 function parseArgs(argv) {
-  const a={apply:false, family:'', confirm:'', plan:false};
+  const a={apply:false, family:'', confirm:'', plan:false, planAuto:false, applyAuto:false, maxAuto:5};
   for(let i=0;i<argv.length;i++) {
     const v=argv[i];
     if(v==='--apply') a.apply=true;
     else if(v==='--plan') a.plan=true;
+    else if(v==='--plan-auto') a.planAuto=true;
+    else if(v==='--apply-auto') a.applyAuto=true;
+    else if(v==='--max-auto') a.maxAuto=Number(argv[++i]);
     else if(v==='--family') a.family=argv[++i] || '';
     else if(v==='--confirm') a.confirm=argv[++i] || '';
     else if(v==='--help') a.help=true;
     else fail('BAD_OPTION',`Ismeretlen parameter: ${v}`);
   }
   if(a.apply && (!a.family || !a.confirm)) fail('CONFIRM_REQUIRED','A módosításhoz --apply --family <kulcs> --confirm <cél-handle> szükséges.');
+  if(a.applyAuto && (a.apply || a.family || a.plan)) fail('AUTO_CONFLICT','Az --apply-auto külön üzemmód.');
+  if(a.planAuto && (a.apply || a.family || a.applyAuto)) fail('AUTO_CONFLICT','A --plan-auto külön üzemmód.');
+  if(!Number.isInteger(a.maxAuto) || a.maxAuto<1 || a.maxAuto>20) fail('BAD_BATCH_SIZE','--max-auto 1 és 20 között lehet.');
+  if(a.applyAuto && !/^[a-f0-9]{64}$/.test(a.confirm)) fail('BATCH_HASH_REQUIRED','Az --apply-auto futtatáshoz 64 karakteres --confirm <terv-ujjlenyomat> kell.');
   return a;
 }
 
-async function buildFamilyPlan(db,familyKey,settings,locations) {
-  const audit=await auditAifShopifyProductFamilies(db,{limit:100});
+async function buildFamilyPlan(db,familyKey,settings,locations,auditOverride=null) {
+  const audit=auditOverride || await auditAifShopifyProductFamilies(db,{limit:5000});
   const family=audit.duplicates.find(x=>x.familyKey===familyKey);
   if(!family) return {familyKey,label:settings.label,status:'not_duplicated_or_already_archived',instructions:'Az aktiv termekek kozott nem talalhato a korabbi duplikacio.'};
   const actualIds=family.products.map(x=>x.productId).sort();
   const expectedIds=[...settings.products].sort();
-  assert(actualIds.includes(settings.target) && actualIds.every(id=>expectedIds.includes(id)),
+  assert(actualIds.includes(settings.target) && equalIds(actualIds,expectedIds),
     'UNEXPECTED_FAMILY_PRODUCTS',
     'Az auditban nem a várt Shopify termékek szerepelnek; kódmódosítás nélkül nem egyesítünk.',{actualIds,expectedIds});
   const products=await getProducts(expectedIds);
   const target=products.get(settings.target);
-  if(settings.reviewOnly) return {
-    familyKey,label:settings.label,status:'manual_review_required',products:family.products,
-    reason:'A katalógus szín- vagy megnevezésadata nem megbízható; az automatikus összevonás blokkolva.'
-  };
   assert(target && target.status==='ACTIVE','TARGET_INACTIVE','A kijelolt celtermek nem aktiv.');
+  if(settings.identity) {
+    // Az egyszer megerositett, valodi SKU-k es szinkodok jelentik a guardot;
+    // nev/foto hasonlosag alapjan soha nem egyesitunk automatikusan.
+    for(const [productId,expectedTitle] of Object.entries(settings.identity.sourceTitles || {})) {
+      const p=products.get(productId);
+      const allowed=[expectedTitle, settings.correctedTitle].map(norm);
+      assert(p && allowed.includes(norm(p.title)),'PRODUCT_TITLE_CHANGED',
+        'A cel/forras Shopify nev megvaltozott. Ujra kell ellenorizni.',
+        {productId,actual:p?.title,expected:expectedTitle});
+    }
+    const targetColors=[...new Set(target.variants.nodes.map(v=>norm(selectedByKind(v,'color'))))];
+    assert(targetColors.length===1 && targetColors[0]===norm(settings.identity.targetColor),
+      'TARGET_COLOR_CHANGED','A celtermek szinopcioja nem a jovahagyott szin.',
+      {actual:targetColors,expected:settings.identity.targetColor});
+  }
   const allProducts=[...products.values()];
   assert(allProducts.every(p=>p.status==='ACTIVE'),'SOURCE_ALREADY_ARCHIVED',
     'A termekcsalad egy resze mar archivalt; uj tervet kell kesziteni.');
@@ -357,6 +432,29 @@ async function buildFamilyPlan(db,familyKey,settings,locations) {
   }
   const allInIds=family.products.flatMap(p=>p.variants.map(v=>v.allInVariantId));
   const maps=await loadMappings(db,allInIds);
+  if(settings.identity) {
+    const required=settings.identity.skuBySize;
+    const actual=[];
+    for(const p of allProducts) {
+      for(const variant of p.variants.nodes) {
+        const reported=reportedVariantMap.get(variant.id);
+        const mapping=maps.get(reported?.allInVariantId);
+        const size=str(reported?.size);
+        actual.push(size);
+        assert(mapping && norm(mapping.model_code)===norm(settings.identity.modelCode)
+          && norm(mapping.color_code)===norm(settings.identity.colorCode),
+          'FAMILY_IDENTITY_CHANGED','AllIn modell- vagy szinkod elteres: egyesites tiltva.',
+          {sku:variant.sku,actualModel:mapping?.model_code,actualColor:mapping?.color_code,
+            expectedModel:settings.identity.modelCode,expectedColor:settings.identity.colorCode});
+        assert(str(required[size]) && norm(variant.sku)===norm(required[size])
+          && norm(mapping.barcode)===norm(required[size]),
+          'SKU_SIZE_IDENTITY_CHANGED','Az SKU / EAN / meret parositasa nem a jovahagyott.',
+          {size,sku:variant.sku,barcode:mapping.barcode,expected:required[size]});
+      }
+    }
+    assert(actual.length===Object.keys(required).length && actual.every(x=>actual.filter(y=>y===x).length===1),
+      'UNEXPECTED_FAMILY_SIZES','A termekcsalad meretei megvaltoztak.',{actual,expected:Object.keys(required)});
+  }
   const targetEntries=target.variants.nodes;
   assert(targetEntries.length>=1,'EMPTY_TARGET','A celtermeken nincs meret.');
   const toMove=[];
@@ -415,12 +513,13 @@ async function buildFamilyPlan(db,familyKey,settings,locations) {
   return {familyKey,label:settings.label,status:'ready',target:{id:target.id,handle:target.handle,title:target.title,
     options:compactOptions(target),existingVariants:targetEntries.length},
     oldProducts:allProducts.filter(x=>x.id!==target.id).map(x=>({id:x.id,handle:x.handle,variants:x.variants.nodes.length})),
-    toMove, shopifyProductSnapshots:allProducts, auditProductCount:family.productCount};
+    toMove, correctedTitle:settings.correctedTitle || null,
+    shopifyProductSnapshots:allProducts, auditProductCount:family.productCount};
 }
 
 async function applyPlan(db,plan,locations) {
   const client=await db.connect();
-  const result={familyKey:plan.familyKey,target:plan.target.handle,created:[],mapped:[],archived:[],inventoryCleared:[],redirects:[],warnings:[]};
+  const result={familyKey:plan.familyKey,target:plan.target.handle,created:[],mapped:[],archived:[],inventoryCleared:[],redirects:[],warnings:[],titleCorrected:false};
   try {
     // AllIn DB remains source of truth. Every mutation is followed by exact checks.
     for(const step of plan.toMove) {
@@ -486,6 +585,17 @@ async function applyPlan(db,plan,locations) {
       result.mapped.push({sku:step.sku,allInVariantId:step.allInVariantId,newVariantId:created.id});
       console.log('OK variant:',step.sku, '->',created.id);
     }
+    // Ha az osszes SKU mar jol kapcsolodik, helyesbitjuk a korabbi hibas
+    // vasarloi cimket. Sikertelen nevatiras eseten NEM archiválunk forrast.
+    if(plan.correctedTitle) {
+      result.titleCorrected=await correctProductTitle(plan.target.id,plan.target.handle,plan.correctedTitle);
+      // Csak a megjelenitendo Shopify nevet frissitjuk az AllIn mappingban;
+      // sem SKU, sem keszlet, sem belso termeknev nem valtozik.
+      await client.query(`UPDATE aif_shopify_variant_map
+        SET shopify_product_title=$2, updated_at=now()
+        WHERE shopify_product_id=$1 AND shopify_product_title IS DISTINCT FROM $2`,
+        [plan.target.id,plan.correctedTitle]);
+    }
     // Source products are archived only once EVERY original SKU is safely remapped.
     for(const old of plan.oldProducts) {
       const stock=await client.query(`SELECT count(*)::int AS n FROM aif_shopify_variant_map WHERE shopify_product_id=$1`,[old.id]);
@@ -496,8 +606,7 @@ async function applyPlan(db,plan,locations) {
       result.archived.push({id:old.id,handle:old.handle});
       for(const v of live.variants.nodes) {
         try {
-          await zeroArchivedSourceStock(v);
-          result.inventoryCleared.push(v.sku);
+          if (await zeroArchivedSourceStock(v)) result.inventoryCleared.push(v.sku);
         } catch(err) {
           result.warnings.push(`ARCHIVED_OLD_STOCK ${v.sku}: ${err.message}`);
         }
@@ -512,23 +621,163 @@ async function applyPlan(db,plan,locations) {
   } finally {client.release();}
 }
 
+/*
+ * Catalog-wide safe candidates. Uncertain models, different colorways,
+ * different image sets or name/product-type conflicts are always REVIEW.
+ * Identical title alone is NEVER enough to merge two Shopify products.
+ */
+function automaticCandidate(family) {
+  const products=(family.products || []).filter(x=>x.status==='ACTIVE');
+  if(products.length<2) return {block:'not_duplicate'};
+  if(products.length>12) return {block:'too_many_products'};
+  if(products.some(p=>!(p.variants||[]).length)) return {block:'missing_family_variants'};
+  const titles=new Set(products.map(p=>norm(p.title)));
+  if(titles.size!==1 || ![...titles][0]) return {block:'different_titles'};
+  const sizes=products.flatMap(p=>p.variants||[]).map(v=>norm(v.size));
+  const skus=products.flatMap(p=>p.variants||[]).map(v=>norm(v.sku));
+  if(sizes.some(x=>!x) || new Set(sizes).size!==sizes.length) return {block:'size_collision'};
+  if(skus.some(x=>!x) || new Set(skus).size!==skus.length) return {block:'sku_collision'};
+  const sorted=[...products].sort((a,b)=>
+    (b.variants?.length||0)-(a.variants?.length||0) || a.handle.localeCompare(b.handle));
+  return {settings:{
+    label:`AUTO: ${sorted[0].title} / ${family.color || family.familyKey}`,
+    target:sorted[0].productId,
+    products:products.map(x=>x.productId),
+    auto:true,
+  }};
+}
+
+function assertAutomaticProductIdentity(plan) {
+  const all=plan.shopifyProductSnapshots || [];
+  assert(all.length>=2,'AUTO_FEW_PRODUCTS','Keves termek egyesiteshez.');
+  const values=key=>new Set(all.map(x=>norm(x[key])));
+  assert(values('title').size===1 && values('vendor').size===1 && values('productType').size===1,
+    'AUTO_PRODUCT_DETAILS_DIFFER','Cim, marka vagy termektipus elter; kezi ellenorzes szukseges.');
+  const categories=new Set(all.map(x=>str(x.category?.id)));
+  assert(categories.size===1,'AUTO_CATEGORY_DIFFER','A Shopify termekkategoria nem egyezik.');
+  const canonicalOptions=all.map(p=>(p.options||[]).map(o=>identityOfOption(o.name)).join('|'));
+  assert(new Set(canonicalOptions).size===1 && canonicalOptions.every(x=>x==='color|size' || x==='size'),
+    'AUTO_OPTIONS_DIFFER','A termekopciok szerkezete nem egyezik.');
+  const colors=[...new Set(all.flatMap(p=>p.variants.nodes.map(v=>norm(selectedByKind(v,'color')))))];
+  if(canonicalOptions[0]==='color|size') {
+    assert(colors.length===1 && colors[0], 'AUTO_COLOR_NAMES_DIFFER',
+      'Azonos modell-szinkod mellett Shopify szinmegnevezes elter; kezi ellenorzes.');
+  }
+  // Unlike an interactive merge, an automatic merge must never discard a
+  // distinct source image. Variant-specific images and product hero photos
+  // can have other product IDs; matching CDN URL is the safe subset.
+  const heroUrls=new Set(all.map(p=>str(p.featuredImage?.url).split('?')[0]));
+  assert(heroUrls.size===1,'AUTO_IMAGES_DIFFER',
+    'A termekfotok elternek; automatikusan nem dobunk el kepet.');
+  const hero=[...heroUrls][0];
+  assert(hero,'AUTO_IMAGES_UNKNOWN','Termekkep hianyzik.');
+  for(const product of all) for(const variant of product.variants.nodes) {
+    assert(variant.metafields && variant.metafields.nodes?.length===0 && !variant.metafields.pageInfo?.hasNextPage,
+      'AUTO_VARIANT_METAFIELDS', 'A variansnak kulon Shopify metafieldje van; automatikusan nem veszitjuk el.');
+    const u=str(variant.image?.url).split('?')[0];
+    assert(!u || u===hero,'AUTO_VARIANT_IMAGE_DIFFERS',
+      'Kulon variansfoto van; kezi kep-egyesites kell.', {sku:variant.sku,image:u});
+    assert(norm(variant.barcode)===norm(variant.sku) && str(variant.barcode),
+      'AUTO_BARCODE_MISMATCH','SKU nem egyezik vonalkoddal.');
+  }
+  return true;
+}
+
+function batchFingerprint(plans) {
+  const snapshot=plans.map(p=>({
+    familyKey:p.familyKey,
+    target:p.target.id,
+    targetHandle:p.target.handle,
+    oldProducts:p.oldProducts.map(x=>({id:x.id,handle:x.handle})).sort((a,b)=>a.id.localeCompare(b.id)),
+    toMove:p.toMove.map(v=>({sku:v.sku,source:v.sourceProductId,size:v.size,
+      ciuc:v.ciuc,kezdi:v.kezdi,oldVariantId:v.oldVariantId,oldInventoryItemId:v.oldInventoryItemId,
+      allInVariantId:v.allInVariantId})).sort((a,b)=>a.sku.localeCompare(b.sku)),
+  }));
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+async function autoBatchPlans(pool,locations,maxAuto) {
+  const audit=await auditAifShopifyProductFamilies(pool,{limit:5000});
+  // Audit exposes all active, confidently mapped model+color collisions.
+  const candidates=[], review=[];
+  for(const family of (audit.duplicates||[]).sort((a,b)=>a.familyKey.localeCompare(b.familyKey))) {
+    const extracted=automaticCandidate(family);
+    if(!extracted.settings) {
+      review.push({familyKey:family.familyKey,reason:extracted.block,products:family.productCount});
+      continue;
+    }
+    try {
+      const plan=await buildFamilyPlan(pool,family.familyKey,extracted.settings,locations,audit);
+      if(plan.status!=='ready') throw Object.assign(new Error(plan.status),{code:'NO_READY_PLAN'});
+      assertAutomaticProductIdentity(plan);
+      candidates.push(plan);
+    } catch(e) {
+      review.push({familyKey:family.familyKey,reason:e.code||'CHECK_FAILED',message:e.message,products:family.productCount});
+    }
+  }
+  const selected=candidates.slice(0,maxAuto);
+  return {audit,count: candidates.length,selected,skipped: candidates.slice(maxAuto).length,
+    review,fingerprint:batchFingerprint(selected)};
+}
+
+async function runAutomaticBatch(pool,locations,args) {
+  const batch=await autoBatchPlans(pool,locations,args.maxAuto);
+  console.log('\n=== TELJES KATALÓGUS: BIZTOS EGYESÍTÉSEK ===');
+  console.table(batch.selected.map(x=>({
+    csalad:x.familyKey,termek:x.target.handle,atvezetendo:x.toMove.length,
+    archivalt:x.oldProducts.length,
+  })));
+  console.log('Tovabbi biztos jeloltek:',batch.skipped);
+  console.log('Kezi vizsgalatos csaladok:',batch.review.length);
+  console.table(batch.review.slice(0,35));
+  console.log('TERV UJJLENYOMAT:',batch.fingerprint);
+  if(!args.applyAuto) {
+    console.log(`Csak a biztos jeloltek futtatasahoz: node scripts/aifShopifyFamilyMerge.mjs --apply-auto --max-auto ${args.maxAuto} --confirm ${batch.fingerprint}`);
+    return;
+  }
+  assert(batch.selected.length,'NO_SAFE_CANDIDATES','Nincs automatikusan biztonsagos csalad.');
+  assert(args.confirm===batch.fingerprint,'BATCH_CHANGED',
+    'A katalógus vagy készlet megvaltozott a terv ota; uj tervellenorzes szukseges.',{
+      expected:batch.fingerprint,provided:args.confirm,
+    });
+  const outcomes=[];
+  for(const plan of batch.selected) {
+    console.log('\nEGYESITES:',plan.familyKey);
+    // Source, mapping and stock are re-read in applyPlan before every write.
+    const result=await applyPlan(pool,plan,locations);
+    outcomes.push({familyKey:plan.familyKey,result});
+    if(result.warnings.length) {
+      console.error('FIGYELMEZTETES - a tobbi csaladot nem inditom el.');
+      process.exitCode=2;
+      break;
+    }
+  }
+  logJson('CSOPORTOS EGYESITES EREDMENYE',outcomes);
+}
+
 async function main(){
   const args=parseArgs(process.argv.slice(2));
   if(args.help){
     console.log('node scripts/aifShopifyFamilyMerge.mjs --plan [--family <familyKey>]');
     console.log('node scripts/aifShopifyFamilyMerge.mjs --apply --family <familyKey> --confirm <target-handle>');
+    console.log('node scripts/aifShopifyFamilyMerge.mjs --plan-auto [--max-auto 5]');
+    console.log('node scripts/aifShopifyFamilyMerge.mjs --apply-auto --max-auto 5 --confirm <64-character plan hash>');
     return;
   }
   const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});
   let lock=null;
   try {
     const locations=managedLocations();
-    if(args.apply) {
+    if(args.apply || args.applyAuto) {
       assert(['1','true','yes','on'].includes(norm(process.env.SHOPIFY_SYNC_ENABLED)),
         'SHOPIFY_SYNC_DISABLED','A készletszinkron nincs bekapcsolva, nem végzünk átállítást.');
       lock=await acquireAifShopifyProcessLock(pool);
       assert(lock?.locked,'PROCESSOR_BUSY','Shopify szinkron masik instance-on fut; most ne egyesits.');
       await ensureAifShopifyTables(pool);
+    }
+    if(args.planAuto || args.applyAuto) {
+      await runAutomaticBatch(pool,locations,args);
+      return;
     }
     const keys=args.family ? [args.family] : Object.keys(FAMILIES);
     for(const key of keys){
@@ -550,7 +799,6 @@ async function main(){
         logJson(`TERV: ${setting.label}`,safe);
         continue;
       }
-      assert(!setting.reviewOnly,'REVIEW_REQUIRED','Ezt a termekcsaladot kezi ellenorzes nelkul tilos egyesiteni.');
       assert(plan.status==='ready','PLAN_NOT_READY','A terv nem biztonsagos / a duplikacio mar nem aktiv.',plan);
       assert(args.confirm===plan.target.handle,'BAD_CONFIRM',`Pontos handle megerosites szukseges: --confirm ${plan.target.handle}`);
       const outcome=await applyPlan(pool,plan,locations);
