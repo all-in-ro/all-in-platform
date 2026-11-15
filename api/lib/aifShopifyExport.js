@@ -1973,7 +1973,7 @@ function exportRemoteProductGroups(variants) {
     if (!id) continue;
     const existing = products.get(id);
     if (!existing) products.set(id, {
-      id, handle: text(product.handle), title: text(product.title), skuCount: 0,
+      id, handle: text(product.handle), title: text(product.title), status: text(product.status), skuCount: 0,
     });
     if (text(variant.sku)) products.get(id).skuCount += 1;
   }
@@ -2152,7 +2152,7 @@ export async function auditAifShopifyProductFamilies(client, options = {}) {
       brand,
       code: brand ? exportRemoteCanonicalCode(handle, brand) : "",
     };
-  }).filter((product) => product.code && /[0-9]/.test(product.code));
+  }).filter((product) => product.status === "ACTIVE" && product.code && /[0-9]/.test(product.code));
   // The legacy-handle review is quadratic; keep it bounded on larger shops.
   if (handleProducts.length > 5000) {
     throw Object.assign(new Error("A teljes handle-duplikáció audit túl nagy ehhez a kézi lekérdezéshez."), {
@@ -2176,14 +2176,19 @@ export async function auditAifShopifyProductFamilies(client, options = {}) {
       });
     }
   }
+  // Archived legacy products remain available to order-history/audit lookups.
+  // They are NOT visible storefront duplicates once a verified consolidation
+  // has moved the current AllIn map to a single ACTIVE Shopify product.
   const duplicates = [...families.values()]
-    .filter((family) => family.products.size > 1)
     .map((family) => ({
       familyKey: family.familyKey, brand: family.brand,
       modelCode: family.modelCode, color: family.color,
-      productCount: family.products.size,
-      products: [...family.products.values()],
+      productCount: [...family.products.values()].filter((product) => product.status === "ACTIVE").length,
+      products: [...family.products.values()].filter((product) => product.status === "ACTIVE"),
+      archivedProducts: [...family.products.values()].filter((product) => product.status === "ARCHIVED")
+        .map((product) => ({ productId: product.productId, handle: product.handle })),
     }))
+    .filter((family) => family.productCount > 1)
     .sort((a, b) => b.productCount - a.productCount || a.familyKey.localeCompare(b.familyKey));
   return {
     ok: true, readOnly: true, generatedAt: new Date().toISOString(),
