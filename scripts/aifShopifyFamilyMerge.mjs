@@ -314,24 +314,61 @@ async function archiveProduct(product) {
 }
 
 const TITLE_UPDATE_MUTATION = `mutation AifMergeCorrectProductTitle($product:ProductUpdateInput!) {
-  productUpdate(product:$product) { product { id title handle status seo { title } } userErrors { field message } }
+  productUpdate(product:$product) { product { id title handle status seo { title description } } userErrors { field message } }
 }`;
+const TITLE_STATE_QUERY = `query AifMergeCurrentTitle($id:ID!) {
+  product(id:$id) { id title handle status seo { title description } }
+}`;
+async function readProductTitleState(productId) {
+  const r = await shopifyGraphql(TITLE_STATE_QUERY,{id:productId});
+  return r.data?.product || null;
+}
+function validateCorrectedTitle(product, targetId, expectedHandle, expectedTitle) {
+  const explicitSeoTitle=str(product?.seo?.title);
+  // Shopify uses the product title as the effective SEO title when the
+  // optional custom SEO title is null. Null is NOT a failed title update.
+  // Never accept a different, explicitly set SEO title silently.
+  assert(product?.id===targetId && product?.title===expectedTitle
+    && product?.handle===expectedHandle && product?.status==='ACTIVE'
+    && (!explicitSeoTitle || explicitSeoTitle===expectedTitle.slice(0,70)),
+    'TITLE_UPDATE_UNVERIFIED',
+    'A termeknev / az explicit SEO cim / handle nem egyezik.',
+    {product, effectiveSeoTitle: explicitSeoTitle || product?.title || null});
+}
 async function correctProductTitle(targetId, expectedHandle, expectedTitle) {
   if(!expectedTitle) return false;
-  const live=(await getProducts([targetId])).get(targetId);
-  assert(live && live.handle===expectedHandle && live.status==='ACTIVE',
-    'TITLE_TARGET_CHANGED','A celfulek neve/statusza kozben megvaltozott.');
-  if(live.title===expectedTitle) return false;
-  const r=await shopifyGraphql(TITLE_UPDATE_MUTATION,{
-    product:{id:targetId,title:expectedTitle,handle:expectedHandle,seo:{title:expectedTitle.slice(0,70)}}
-  });
+  const live=await readProductTitleState(targetId);
+  assert(live && live.id===targetId && live.handle===expectedHandle && live.status==='ACTIVE',
+    'TITLE_TARGET_CHANGED','A celtermek handle/status adata kozben megvaltozott.');
+  const titleNeedsUpdate=live.title!==expectedTitle;
+  const explicitSeo=str(live.seo?.title);
+  const seoNeedsUpdate=Boolean(explicitSeo && explicitSeo!==expectedTitle.slice(0,70));
+  if(!titleNeedsUpdate && !seoNeedsUpdate) {
+    validateCorrectedTitle(live,targetId,expectedHandle,expectedTitle);
+    return false;
+  }
+  // Preserve Shopify's default SEO-title fallback instead of forcing a custom
+  // title. If a custom SEO title exists, preserve its description while fixing
+  // the title; updating only one SEO field can clear the other on Shopify.
+  const input={id:targetId,handle:expectedHandle};
+  if(titleNeedsUpdate) input.title=expectedTitle;
+  if(seoNeedsUpdate) input.seo={title:expectedTitle.slice(0,70),
+    ...(str(live.seo?.description) ? {description:live.seo.description} : {})};
+  const r=await shopifyGraphql(TITLE_UPDATE_MUTATION,{product:input});
   const payload=r.data?.productUpdate;
   if(payload?.userErrors?.length) fail('TITLE_UPDATE_FAILED',
     payload.userErrors.map(x=>x.message).join(' | '),payload.userErrors);
-  assert(payload?.product?.id===targetId && payload?.product?.title===expectedTitle
-    && payload?.product?.handle===expectedHandle && payload?.product?.status==='ACTIVE'
-    && payload?.product?.seo?.title===expectedTitle.slice(0,70),
-    'TITLE_UPDATE_UNVERIFIED','A termeknev / SEO cim / handle nem egyezik.',payload);
+  assert(payload?.product?.id===targetId,'TITLE_UPDATE_NO_PRODUCT',
+    'Shopify nem adott vissza frissitett termeket.',payload);
+  // Read back the persisted record. In particular, Shopify can return
+  // seo.title=null when it falls back to the now-correct product title.
+  let last=null;
+  for(let attempt=0; attempt<3; attempt++) {
+    last=await readProductTitleState(targetId);
+    if(last?.title===expectedTitle && last?.handle===expectedHandle && last?.status==='ACTIVE') break;
+    if(attempt<2) await wait(700);
+  }
+  validateCorrectedTitle(last,targetId,expectedHandle,expectedTitle);
   return true;
 }
 
@@ -434,13 +471,12 @@ async function buildFamilyPlan(db,familyKey,settings,locations,auditOverride=nul
   const maps=await loadMappings(db,allInIds);
   if(settings.identity) {
     const required=settings.identity.skuBySize;
-    const actual=[];
+    const seenBySize=new Map();
     for(const p of allProducts) {
       for(const variant of p.variants.nodes) {
         const reported=reportedVariantMap.get(variant.id);
         const mapping=maps.get(reported?.allInVariantId);
         const size=str(reported?.size);
-        actual.push(size);
         assert(mapping && norm(mapping.model_code)===norm(settings.identity.modelCode)
           && norm(mapping.color_code)===norm(settings.identity.colorCode),
           'FAMILY_IDENTITY_CHANGED','AllIn modell- vagy szinkod elteres: egyesites tiltva.',
@@ -450,10 +486,30 @@ async function buildFamilyPlan(db,familyKey,settings,locations,auditOverride=nul
           && norm(mapping.barcode)===norm(required[size]),
           'SKU_SIZE_IDENTITY_CHANGED','Az SKU / EAN / meret parositasa nem a jovahagyott.',
           {size,sku:variant.sku,barcode:mapping.barcode,expected:required[size]});
+        const previous=seenBySize.get(size);
+        if(previous) {
+          // Interrupted merges can leave one old ACTIVE variant and its newly
+          // created target copy side by side until the source is archived.
+          // This is only safe for the EXACT SAME SKU, size and AllIn variant;
+          // one of the copies must be on the predetermined survivor product.
+          assert(previous.productId!==p.id
+            && (previous.productId===target.id || p.id===target.id)
+            && previous.sku===norm(variant.sku)
+            && previous.allInVariantId===reported.allInVariantId
+            && previous.count===1,
+            'UNEXPECTED_FAMILY_SIZES',
+            'Ugyanaz a meret nem igazolt korabbi merge miatti masolat.',
+            {size,previous,current:{productId:p.id,sku:variant.sku,allInVariantId:reported.allInVariantId}});
+          previous.count=2;
+        } else {
+          seenBySize.set(size,{size,sku:norm(variant.sku),allInVariantId:reported.allInVariantId,productId:p.id,count:1});
+        }
       }
     }
-    assert(actual.length===Object.keys(required).length && actual.every(x=>actual.filter(y=>y===x).length===1),
-      'UNEXPECTED_FAMILY_SIZES','A termekcsalad meretei megvaltoztak.',{actual,expected:Object.keys(required)});
+    assert(seenBySize.size===Object.keys(required).length
+      && Object.keys(required).every(size=>seenBySize.has(size)),
+      'UNEXPECTED_FAMILY_SIZES','A termekcsalad meretei megvaltoztak.',
+      {actual:[...seenBySize.values()],expected:Object.keys(required)});
   }
   const targetEntries=target.variants.nodes;
   assert(targetEntries.length>=1,'EMPTY_TARGET','A celtermeken nincs meret.');
