@@ -11,6 +11,8 @@ import { processAifShopifyImageOutboxBatch, enqueueAifShopifyImageBacklog } from
 import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 import { processAifShopifyWarehouseBatch } from "./aifShopifyWarehouse.js";
 
+import { processAifShopifyPriceSyncBatch } from "./aifShopifyPriceSync.js";
+
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
 
 function envBool(value, fallback = false) {
@@ -158,6 +160,21 @@ async function tick(state) {
       return;
     }
 
+
+    // Independent durable price queue. Inventory/order work keeps priority.
+    // Failure here never fails the stock batch. Try again after 5 seconds.
+    if (Date.now() - Number(state.lastPriceSyncAt || 0) >= 5000) {
+      state.lastPriceSyncAt = Date.now();
+      try {
+        const prices = await processAifShopifyPriceSyncBatch(state.pool, { limit: 3 });
+        if (prices.queued || prices.processed) {
+          console.log("AIF Shopify price sync batch", JSON.stringify({ instanceId: state.instanceId, ...prices }));
+        }
+      } catch (error) {
+        state.lastPriceSyncAt = Date.now() + 25000;
+        console.error("AIF Shopify price sync batch error", error?.message || String(error));
+      }
+    }
 
     let newness = null;
 
@@ -320,6 +337,7 @@ export function startAifShopifyEmbeddedWorker(pool, options = {}) {
     ),
 
     lastNewnessSyncAt: 0,
+    lastPriceSyncAt: 0,
     imageBacklogSeeded: false,
   };
 
