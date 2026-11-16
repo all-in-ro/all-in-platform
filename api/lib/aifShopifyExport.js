@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { colorIdentityKey, preferredColorLabel, canonicalShopifyColorLabel } from "./aifShopifyColorNames.js";
 import { aifImageGallery } from "./aifImageGallery.js";
 import {
   enqueueAifShopifyVariant,
@@ -1058,7 +1059,7 @@ function canSeparateAmbiguousColorways(rows) {
 
 
 function canonicalHumanColorName(value) {
-  const raw = text(value);
+  const raw = canonicalShopifyColorLabel(text(value));
   if (!raw) return "";
 
   const key = normalizeKey(raw)
@@ -1124,13 +1125,37 @@ function normalizeExportRowsForOptions(rows, groupingMode = "product_code") {
         .filter(Boolean)
     );
 
-    const singleKnownColor = groupColors.length === 1 ? groupColors[0] : "";
+    // AIF_SHOPIFY_COLOR_ALIAS_PREVENTION_V1:
+    // "VERDE INCHIS", "Verde inchis", "Verde închis" = AZONOS szín.
+    // A teljes termékcsoporton belül EGYSÉGES opcióértéket exportálunk.
+    // Nem vonunk össze különböző gyári kódokat, SKU-kat vagy szín+méret
+    // ütközést: azt a lentebbi létező validáció továbbra is blokkolja.
+    const labelsByIdentity = new Map();
+    for (const item of groupRows) {
+      const direct = resolvedRowColorName(item);
+      if (!direct) continue;
+      const key = colorIdentityKey(direct);
+      const labels = labelsByIdentity.get(key) || [];
+      labels.push(direct);
+      for (const hint of [item?.supplier_color_name, item?.mapped_color_name]) {
+        if (colorIdentityKey(hint) === key) labels.push(hint);
+      }
+      labelsByIdentity.set(key, labels);
+    }
+    const labelByIdentity = new Map(
+      [...labelsByIdentity].map(([key, values]) => [key, preferredColorLabel(values)])
+    );
+
+    const singleKnownColor = groupColors.length === 1
+      ? labelByIdentity.get(colorIdentityKey(groupColors[0])) || groupColors[0] : "";
     const colorRequired = groupColors.length > 0;
     const separateByCode = canSeparateAmbiguousColorways(groupRows);
     const mode = cleanGroupingMode(groupingMode);
 
     for (const row of groupRows) {
-      const directColor = resolvedRowColorName(row);
+      const originalColor = resolvedRowColorName(row);
+      const directColor = originalColor
+        ? labelByIdentity.get(colorIdentityKey(originalColor)) || originalColor : "";
       const inheritedColor = !directColor && singleKnownColor ? singleKnownColor : "";
       const colorCode = exportColorIdentityCode(row);
       const plainColor = directColor || inheritedColor;
