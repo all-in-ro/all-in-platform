@@ -285,21 +285,58 @@ async function applyOne(productId,expectedHash,preloaded=null) {
   };
 }
 
-async function allCandidates() {
-  const list=await listActiveProducts();
-  return list.filter(p=>aliasGroups(p).length).sort((a,b)=>a.handle.localeCompare(b.handle));
+// A teljes Shopify-lista színopcióit már a gyors lekérdezésben megvizsgáljuk.
+// A drágább részletes variánslekérdezésre csak a tényleges aliasjelöltek kerülnek.
+// Így a CLEAN nem marad hamisan 0, amikor nincs javítandó termék.
+function catalogAuditSummary(activeProducts, candidateProducts, plans) {
+  const withColorOption = activeProducts.filter((product) => Boolean(colorOption(product))).length;
+  const noColorOption = activeProducts.length - withColorOption;
+  const counts = {
+    READY: 0,
+    BLOCKED: 0,
+    CLEAN: withColorOption - candidateProducts.length,
+  };
+  for (const plan of plans) {
+    invariant(Object.hasOwn(counts, plan.status), 'UNKNOWN_PLAN_STATUS', plan.status);
+    counts[plan.status] += 1;
+  }
+  invariant(
+    counts.READY + counts.BLOCKED + counts.CLEAN === withColorOption,
+    'AUDIT_TOTAL_MISMATCH',
+    { counts, withColorOption, candidates: candidateProducts.length },
+  );
+  return {
+    activeProductsScanned: activeProducts.length,
+    productsWithColorOption: withColorOption,
+    productsWithoutColorOption: noColorOption,
+    candidateProducts: candidateProducts.length,
+    detailedProductsChecked: plans.length,
+    counts,
+  };
 }
 
 async function buildAllPlans() {
-  const candidates=await allCandidates();
-  const plans=[];
-  for(const short of candidates) {
+  const activeProducts = await listActiveProducts();
+  const candidates = activeProducts
+    .filter((product) => aliasGroups(product).length > 0)
+    .sort((a, b) => a.handle.localeCompare(b.handle));
+  const plans = [];
+  for (const short of candidates) {
     try { plans.push(analyze(await loadFullProduct(short.id))); }
-    catch(error) { plans.push({productId:short.id,handle:short.handle,status:'BLOCKED',errors:[error.code||error.message]}); }
+    catch (error) {
+      plans.push({
+        productId: short.id,
+        handle: short.handle,
+        status: 'BLOCKED',
+        errors: [error.code || error.message],
+      });
+    }
   }
-  const ready=plans.filter(p=>p.status==='READY');
-  const fingerprint=sha(plans.map(p=>({id:p.productId,status:p.status,hash:p.hash||null,errors:p.errors||[]}))); 
-  return {plans,ready,fingerprint};
+  const ready = plans.filter((plan) => plan.status === 'READY');
+  const summary = catalogAuditSummary(activeProducts, candidates, plans);
+  // A korábbi SHA-képzés változatlan: az éles művelet csak a részletes tervekhez kötött.
+  const fingerprint = sha(plans.map(p=>({id:p.productId,status:p.status,hash:p.hash||null,errors:p.errors||[]})));
+  return { plans, ready, fingerprint, summary };
 }
 
 function printPlan(plan) {
@@ -356,7 +393,27 @@ function selfTest() {
   copy.variants.nodes[1].inventoryQuantity=3;
   invariant(analyze(copy).hash!==plan.hash,'TEST_STOCK_FINGERPRINT');
   invariant(colorIdentityKey('VERDE INCHIS')===colorIdentityKey('Verde închis'),'TEST_COLOR_KEY');
-  console.log('ÖNELLENŐRZÉS: OK (színékezet, kis/nagybetű, ütközés tiltva, készlet/SKU/kép verifikáció, SHA-256)');
+  const cleanColorProduct = { options: [
+    { name: 'Culoare', optionValues: [{ name: 'Verde închis' }] },
+  ] };
+  const noColorProduct = { options: [{ name: 'Mărime', optionValues: [{ name: '128' }] }] };
+  const candidateProduct = { options: [
+    { name: 'Culoare', optionValues: [{ name: 'VERDE INCHIS' }, { name: 'Verde închis' }] },
+  ] };
+  const summary = catalogAuditSummary(
+    [cleanColorProduct, noColorProduct, candidateProduct],
+    [candidateProduct],
+    [{ status: 'READY' }],
+  );
+  invariant(
+    summary.activeProductsScanned === 3 &&
+    summary.productsWithColorOption === 2 &&
+    summary.productsWithoutColorOption === 1 &&
+    summary.counts.CLEAN === 1 &&
+    summary.counts.READY === 1,
+    'TEST_AUDIT_SUMMARY', summary,
+  );
+  console.log('ÖNELLENŐRZÉS: OK (színékezet, ütközés tiltva, készlet/SKU/kép verifikáció, SHA-256, valódi auditösszesítés)');
 }
 
 async function main() {
@@ -402,14 +459,23 @@ async function main() {
     return;
   }
   const report=await buildAllPlans();
-  const counts={READY:0,BLOCKED:0,CLEAN:0};
-  for(const p of report.plans) counts[p.status]=(counts[p.status]||0)+1;
+  const summary=report.summary;
   console.log('\nSHOPIFY SZÍNELNEVEZÉS-AUDIT (CSAK OLVASÁS)');
-  console.table(report.plans.map(p=>({
-    handle:p.handle,status:p.status,colors:p.groups?.map(g=>g.variantsBefore.map(v=>v.name).join(' / ')).join(' | ')||'',
-    updates:p.updates?.length||0,collisions:p.collisions?.length||0,
-  })));
-  console.log('ÖSSZESEN:',counts,'| Ellenőrzendő termékek:',report.plans.length);
+  console.log(`Aktív Shopify-termékek átvizsgálva: ${summary.activeProductsScanned}`);
+  console.log(`Színopcióval rendelkező termékek: ${summary.productsWithColorOption}`);
+  console.log(`Színopció nélküli termékek: ${summary.productsWithoutColorOption}`);
+  console.log(`Részletesen ellenőrzött aliasjelöltek: ${summary.detailedProductsChecked}`);
+  if (report.plans.length) {
+    console.table(report.plans.map(p=>({
+      handle:p.handle,status:p.status,colors:p.groups?.map(g=>g.variantsBefore.map(v=>v.name).join(' / ')).join(' | ')||'',
+      updates:p.updates?.length||0,collisions:p.collisions?.length||0,
+    })));
+  } else {
+    console.log('Nem található azonos terméken belüli, csak írásmódban eltérő színpár.');
+  }
+  console.log('ÖSSZESEN:', summary.counts, '| Aliasjelöltek:', summary.candidateProducts);
+  console.log('CLEAN = ellenőrzött színopciókban nincs duplikált színnév; nem a teljes SKU- vagy készletaudit eredménye.');
+  console.log('Külön Shopify-termékek összevonását ez az ellenőrzés nem vizsgálja.');
   if(args.plan) {
     for(const p of report.plans.filter(p=>p.status==='BLOCKED')) {
       console.log(`\nBLOKKOLT: ${p.handle}`);printPlan(p);
