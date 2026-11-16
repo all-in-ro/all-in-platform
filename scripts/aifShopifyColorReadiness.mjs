@@ -2,13 +2,15 @@
  * ALLINFASHION / Shopify colour-family readiness audit
  *
  * READ ONLY. This script never invokes a Shopify mutation and only SELECTs
- * data from AllIn. Run AFTER aifShopifyCatalogAudit.mjs; it uses the latest
- * model-colors-review.json to choose exact Shopify Product IDs.
+ * data from AllIn. It AUTOMATICALLY runs the read-only catalog audit first,
+ * so a Render redeploy cannot leave it dependent on an expired reports JSON.
+ * --use-existing-audit deliberately reuses report files, for offline review.
  *
  * node scripts/aifShopifyColorReadiness.mjs --self-test
  * node scripts/aifShopifyColorReadiness.mjs --all
  * node scripts/aifShopifyColorReadiness.mjs --model 1290261
  * node scripts/aifShopifyColorReadiness.mjs --all --out ./reports/aif-color-readiness
+ * node scripts/aifShopifyColorReadiness.mjs --all --use-existing-audit
  *
  * A technically clean family is NOT an authorization to merge. Customer-facing
  * color names, color-code aliases, target choices, and images still require
@@ -16,6 +18,8 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { shopifyGraphql } from '../api/lib/aifShopify.js';
 
@@ -40,7 +44,7 @@ const makeCsv=(rows,columns)=>[
 ].join('\r\n')+'\r\n';
 
 function parseArgs(argv){
-  const args={all:false,model:null,source:'./reports/aif-shopify-catalog',out:'./reports/aif-color-readiness',selfTest:false};
+  const args={all:false,model:null,source:'./reports/aif-shopify-catalog',out:'./reports/aif-color-readiness',selfTest:false,useExistingAudit:false};
   for(let i=0;i<argv.length;i++){
     const flag=argv[i];
     if(flag==='--all') args.all=true;
@@ -48,6 +52,7 @@ function parseArgs(argv){
     else if(flag==='--source') args.source=str(argv[++i]);
     else if(flag==='--out') args.out=str(argv[++i]);
     else if(flag==='--self-test') args.selfTest=true;
+    else if(flag==='--use-existing-audit') args.useExistingAudit=true;
     else if(flag==='--help') args.help=true;
     else throw new Error(`Ismeretlen kapcsoló: ${flag}`);
   }
@@ -56,6 +61,53 @@ function parseArgs(argv){
   if(args.model && !/^[a-z0-9:_-]+$/i.test(args.model)) throw new Error('Hibás modellkód.');
   if(!args.source || !args.out) throw new Error('Hiányzó könyvtár.');
   return args;
+}
+
+// All input for an actual run is rebuilt in THIS Render instance. `reports/`
+// is ephemeral, and even an existing report might describe a pre-merge catalog.
+// Invoking the known read-only auditor eliminates both the missing-file and
+// stale-product-ID cases without a separate manual command.
+const AUDIT_SCRIPT=fileURLToPath(new URL('./aifShopifyCatalogAudit.mjs',import.meta.url));
+async function runFreshAudit(outputDirectory){
+  const out=path.resolve(outputDirectory);
+  try{await fs.access(AUDIT_SCRIPT);}catch(error){
+    if(error?.code==='ENOENT')
+      throw new Error(`Hiányzik a katalógusaudit szkript: ${AUDIT_SCRIPT}. A két szkript legyen ugyanabban a scripts/ könyvtárban.`);
+    throw error;
+  }
+  console.log('\n=== FRISS, CSAK OLVASÓ SHOPIFY + ALLIN KATALÓGUSAUDIT ===');
+  console.log('Az előellenőrző automatikusan újragenerálja az átmeneti auditjelentést.');
+  const result=await new Promise((resolve,reject)=>{
+    const child=spawn(process.execPath,[AUDIT_SCRIPT,'--out',out],{
+      cwd:process.cwd(),env:process.env,stdio:'inherit'
+    });
+    child.once('error',reject);
+    child.once('close',(code,signal)=>resolve({code,signal}));
+  });
+  if(result.code!==0)
+    throw new Error(`Az automatikus katalógusaudit nem sikerült (${result.signal||'kilépési kód: '+result.code}). Az előellenőrzés nem használ régi adatokat.`);
+}
+async function loadCatalogSnapshot(sourceDir,{useExistingAudit=false,refresh=runFreshAudit}={}){
+  const folder=path.resolve(sourceDir);
+  if(!useExistingAudit)await refresh(folder);
+  const filenames=['model-colors-review.json','issues.json'];
+  const contents=[];
+  for(const name of filenames){
+    let raw;
+    try {raw=await fs.readFile(path.join(folder,name),'utf8');}
+    catch(error){
+      if(error?.code==='ENOENT')
+        throw new Error(`Hiányzik: ${path.join(folder,name)}. A normál futás önállóan készíti el. A --use-existing-audit csak akkor használható, ha az auditfájlok valóban léteznek.`);
+      throw error;
+    }
+    let parsed;
+    try {parsed=JSON.parse(raw);}catch(error){
+      throw new Error(`Sérült audit JSON: ${name}: ${error.message}`);
+    }
+    if(!Array.isArray(parsed))throw new Error(`Hibás auditfájl (tömböt várunk): ${name}`);
+    contents.push(parsed);
+  }
+  return {families:contents[0],issues:contents[1]};
 }
 
 const PRODUCT_QUERY=`query AifColourFamilyReadOnly($id:ID!){
@@ -263,6 +315,8 @@ function selfTest(){
     [option({selectedOptions:[{name:'Mărime',value:'S/M'}]},'size')==='S/M','Méret kiolvasás'],
     [parseArgs(['--all']).all===true,'Kapcsolók'],
     [parseArgs(['--model','1290261']).model==='1290261','Célzott modell'],
+    [parseArgs(['--all']).useExistingAudit===false,'Friss audit alapértelmezés'],
+    [parseArgs(['--all','--use-existing-audit']).useExistingAudit===true,'Létező audit használata'],
     [makeCsv([{name:'a,b'}],['name']).includes('"a,b"'),'CSV escape'],
   ];
   for(const [ok,label] of tests)if(!ok)throw new Error('ÖNELLENŐRZÉS SIKERTELEN: '+label);
@@ -311,7 +365,8 @@ async function main(){
   const args=parseArgs(process.argv.slice(2));
   if(args.help){
     console.log('Használat: node scripts/aifShopifyColorReadiness.mjs --self-test | --all | --model 1290261');
-    console.log('Opciók: --source ./reports/aif-shopify-catalog --out ./reports/aif-color-readiness');
+    console.log('Alapból friss Shopify+AllIn audit készül ugyanebben a futásban.');
+    console.log('Opciók: --source ./reports/aif-shopify-catalog --out ./reports/aif-color-readiness --use-existing-audit');
     return;
   }
   if(args.selfTest){selfTest();return;}
@@ -322,8 +377,8 @@ async function main(){
   ];
   if(locs.some(x=>!x.shop) || !process.env.AIF_LOCATION_CSIKSZEREDA_ID || !process.env.AIF_LOCATION_KEZDI_ID)
     throw new Error('A két Shopify és AllIn üzletazonosítója hiányzik a környezeti változókból.');
-  const raw=JSON.parse(await fs.readFile(path.join(args.source,'model-colors-review.json'),'utf8'));
-  const issues=JSON.parse(await fs.readFile(path.join(args.source,'issues.json'),'utf8'));
+  const {families:raw,issues}=await loadCatalogSnapshot(args.source,{useExistingAudit:args.useExistingAudit});
+  console.log(`\nAktuálisan több színre bontott modellcsaládok: ${raw.length}`);
   const familyList=raw.filter(x=>!args.model || norm(x.model).split(':').at(-1)===norm(args.model).split(':').at(-1));
   if(!familyList.length)throw new Error('A megadott modell nem szerepel az aktuális auditban.');
   const names=new Set(familyList.map(x=>x.modelKey));
@@ -372,7 +427,7 @@ async function main(){
       allapot:x.status,blokkok:x.blokk?x.blokk.split(' | ').length:0,
       vizsgalat:x.ellenorizendo?x.ellenorizendo.split(' | ').length:0
     })));
-    console.log('\n=== 3 ELLENŐRZENDŐ, ALLIN-BEN NEM TALÁLT AKTÍV SHOPIFY SKU ===');
+    console.log(`\n=== ${unknownSku.length} ELLENŐRZENDŐ, ALLIN-BEN NEM TALÁLT AKTÍV SHOPIFY SKU ===`);
     console.table(unknownSku);
     console.log('Jelentések:',out);
     console.log('Minden lekérdezés OLVASÁSI művelet. TECHNICAL_OK sem jogosít éles egyesítésre.');
@@ -381,4 +436,4 @@ async function main(){
 
 if(process.argv[1] && path.resolve(process.argv[1])===new URL(import.meta.url).pathname)
   main().catch(error=>{console.error('ELŐELLENŐRZÉS HIBA:',error.message);process.exitCode=1;});
-export { parseArgs,optionKind,option,compareFamily,makeCsv };
+export { parseArgs,optionKind,option,compareFamily,makeCsv,loadCatalogSnapshot,runFreshAudit };
