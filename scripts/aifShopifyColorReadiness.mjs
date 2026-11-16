@@ -8,6 +8,7 @@
  *
  * node scripts/aifShopifyColorReadiness.mjs --self-test
  * node scripts/aifShopifyColorReadiness.mjs --all
+ * node scripts/aifShopifyColorReadiness.mjs --all --details  // Print issues immediately, no JSON read step
  * node scripts/aifShopifyColorReadiness.mjs --model 1290261
  * node scripts/aifShopifyColorReadiness.mjs --all --out ./reports/aif-color-readiness
  * node scripts/aifShopifyColorReadiness.mjs --all --use-existing-audit
@@ -44,7 +45,7 @@ const makeCsv=(rows,columns)=>[
 ].join('\r\n')+'\r\n';
 
 function parseArgs(argv){
-  const args={all:false,model:null,source:'./reports/aif-shopify-catalog',out:'./reports/aif-color-readiness',selfTest:false,useExistingAudit:false};
+  const args={all:false,model:null,source:'./reports/aif-shopify-catalog',out:'./reports/aif-color-readiness',selfTest:false,useExistingAudit:false,details:false};
   for(let i=0;i<argv.length;i++){
     const flag=argv[i];
     if(flag==='--all') args.all=true;
@@ -52,6 +53,7 @@ function parseArgs(argv){
     else if(flag==='--source') args.source=str(argv[++i]);
     else if(flag==='--out') args.out=str(argv[++i]);
     else if(flag==='--self-test') args.selfTest=true;
+    else if(flag==='--details') args.details=true;
     else if(flag==='--use-existing-audit') args.useExistingAudit=true;
     else if(flag==='--help') args.help=true;
     else throw new Error(`Ismeretlen kapcsoló: ${flag}`);
@@ -308,12 +310,39 @@ function compareFamily(family,products,mappings,locs){
   };
 }
 
+/** Print model-specific blockers and review reasons during the SAME Render Shell run.
+ * Report files on Render are ephemeral: a separate shell may be another instance.
+ * This output is the durable user-visible result, requiring no later JSON read.
+ */
+function buildDetailsLines(models){
+  const lines=[];
+  const groups=[
+    ['BLOCKED','BLOKKOLT MODELLEK: PONTOS OKOK'],
+    ['REVIEW','FELÜLVIZSGÁLANDÓ MODELLEK: PONTOS OKOK'],
+  ];
+  for(const [status,title] of groups){
+    const selected=models.filter(m=>m.technicalStatus===status);
+    lines.push(`\n=== ${title} (${selected.length}) ===`);
+    for(const m of selected){
+      lines.push(`\n${str(m.model)} | ${m.productCount} termék / ${m.variantCount} SKU | Shopify: ${m.shopifyQty} db | AllIn: ${m.allInQty} db`);
+      for(const b of m.blockers||[])lines.push(`  BLOKK: ${b}`);
+      for(const r of m.reviews||[])lines.push(`  ELLENŐRIZENDŐ: ${r}`);
+    }
+  }
+  const passed=models.filter(m=>m.technicalStatus==='TECHNICAL_OK');
+  lines.push(`\n=== TECHNICAL_OK (${passed.length}) ===`);
+  for(const m of passed)lines.push(`  ${str(m.model)} | ${m.productCount} termék / ${m.variantCount} SKU | Shopify: ${m.shopifyQty} db | AllIn: ${m.allInQty} db`);
+  lines.push('\nA fentiek az aktuális előellenőrzésből származnak. Egyesítés nem történt.');
+  return lines;
+}
+
 function selfTest(){
   const tests=[
     [optionKind('Mărime')==='size','Ékezetes méret'],
     [optionKind('Culoare')==='color','Román szín'],
     [option({selectedOptions:[{name:'Mărime',value:'S/M'}]},'size')==='S/M','Méret kiolvasás'],
     [parseArgs(['--all']).all===true,'Kapcsolók'],
+    [parseArgs(['--all','--details']).details===true,'Részletek közvetlen kiírása'],
     [parseArgs(['--model','1290261']).model==='1290261','Célzott modell'],
     [parseArgs(['--all']).useExistingAudit===false,'Friss audit alapértelmezés'],
     [parseArgs(['--all','--use-existing-audit']).useExistingAudit===true,'Létező audit használata'],
@@ -358,7 +387,10 @@ function selfTest(){
   const unlabeled=compareFamily(fakeFamily,fakeProducts,fakeMaps,fakeLocs);
   if(unlabeled.technicalStatus!=='REVIEW' || !unlabeled.reviews.some(x=>x.startsWith('GYÁRI_KÓD_A_SZÍNVÁLASZTÓBAN')))
     throw new Error('ÖNELLENŐRZÉS SIKERTELEN: numerikus szín felülvizsgálata');
-  console.log('ÖNELLENŐRZÉS: OK (read-only, 2 színes modell, készlet, képek, blokk, színcímke, CSV)');
+  const lines=buildDetailsLines([{technicalStatus:'BLOCKED',model:'test-model',productCount:2,variantCount:2,shopifyQty:1,allInQty:1,blockers:['TEST_BLOCK'],reviews:['TEST_REVIEW']}]);
+  if(!lines.join('\n').includes('BLOKK: TEST_BLOCK') || !lines.join('\n').includes('ELLENŐRIZENDŐ: TEST_REVIEW'))
+    throw new Error('ÖNELLENŐRZÉS SIKERTELEN: inline hibakimenet');
+  console.log('ÖNELLENŐRZÉS: OK (read-only, készlet, képek, blokk, színcímke, CSV, közvetlen részletes kimenet)');
 }
 
 async function main(){
@@ -366,7 +398,7 @@ async function main(){
   if(args.help){
     console.log('Használat: node scripts/aifShopifyColorReadiness.mjs --self-test | --all | --model 1290261');
     console.log('Alapból friss Shopify+AllIn audit készül ugyanebben a futásban.');
-    console.log('Opciók: --source ./reports/aif-shopify-catalog --out ./reports/aif-color-readiness --use-existing-audit');
+    console.log('Opciók: --details (a konkrét hibákat azonnal a konzolra írja), --source ./reports/aif-shopify-catalog --out ./reports/aif-color-readiness --use-existing-audit');
     return;
   }
   if(args.selfTest){selfTest();return;}
@@ -421,12 +453,17 @@ async function main(){
       ['marka','modell','termekek','szinek','sku','shopifyKeszlet','allInKeszlet','status','blokk','ellenorizendo']));
     await fs.writeFile(path.join(out,'shopify-sku-without-allin.json'),JSON.stringify(unknownSku,null,2)+'\n');
     console.log('\n=== MODELLCSALÁDOK ELŐELLENŐRZÉSE (NINCS ÍRÁS) ===');
-    console.table(compact.map(x=>({
-      marka:x.marka,modell:x.modell,termekek:x.termekek,variansok:x.sku,
-      shopify:x.shopifyKeszlet,allIn:x.allInKeszlet,
-      allapot:x.status,blokkok:x.blokk?x.blokk.split(' | ').length:0,
-      vizsgalat:x.ellenorizendo?x.ellenorizendo.split(' | ').length:0
-    })));
+    if(args.details){
+      // Readable in Render Shell and its logs; no follow-up families.json read.
+      for(const line of buildDetailsLines(report))console.log(line);
+    }else{
+      console.table(compact.map(x=>({
+        marka:x.marka,modell:x.modell,termekek:x.termekek,variansok:x.sku,
+        shopify:x.shopifyKeszlet,allIn:x.allInKeszlet,
+        allapot:x.status,blokkok:x.blokk?x.blokk.split(' | ').length:0,
+        vizsgalat:x.ellenorizendo?x.ellenorizendo.split(' | ').length:0
+      })));
+    }
     console.log(`\n=== ${unknownSku.length} ELLENŐRZENDŐ, ALLIN-BEN NEM TALÁLT AKTÍV SHOPIFY SKU ===`);
     console.table(unknownSku);
     console.log('Jelentések:',out);
