@@ -26,6 +26,24 @@ const FAMILIES = Object.freeze({
     targetId: 'gid://shopify/Product/11160843845959',
     targetHandle: 'under-armour-1376700-001',
     title: 'Șapcă Bărbați Under Armour UA Blitzing',
+    // Confirmed UA 1376700 colourways. These values only replace raw numeric
+    // colour placeholders; existing human-readable Shopify/AllIn labels win.
+    // The original target 001 is intentionally not renamed by the merge.
+    verifiedColorLabels: {
+      '001': 'Negru / Alb', '002': 'Negru',
+      '011': 'Gri / Albastru deschis',
+      '025': 'Gri închis / Galben',
+      '035': 'Gri oțel / Alb',
+      '044': 'Gri / Albastru',
+      '046': 'Gri / Roșu',
+      '100': 'Alb / Negru',
+      '279': 'Bej / Verde',
+      '299': 'Kaki / Alb',
+      '390': 'Verde militar / Negru',
+      '411': 'Bleumarin / Negru',
+      '452': 'Albastru deschis / Alb',
+      '600': 'Roșu / Alb',
+    },
     codes: {
       '001':'11160843845959', '002':'11160843911495', '011':'11160843977031',
       '025':'11160844009799', '035':'11160844075335', '044':'11160844206407',
@@ -40,6 +58,16 @@ const FAMILIES = Object.freeze({
     targetId: 'gid://shopify/Product/11160844828999',
     targetHandle: 'under-armour-1376708-001',
     title: 'Șapcă Băieți Under Armour Blitzing Low Stretch Fit',
+    // Confirmed UA 1376708 colourways: 012 Pitch Gray/Black,
+    // 400 Royal/White, 411 Midnight Navy/White. Retain the existing human
+    // labels for 001 (negru) and 002 (negru/gri).
+    verifiedColorLabels: {
+      '001': 'Negru',
+      '002': 'Negru / Gri',
+      '012': 'Gri închis / Negru',
+      '400': 'Albastru regal / Alb',
+      '411': 'Bleumarin / Alb',
+    },
     codes: {
       '001':'11160844828999', '002':'11160844894535', '012':'11160844960071',
       '400':'11160845058375', '411':'11160845156679',
@@ -205,13 +233,15 @@ function imageForVariant(p,v) {
 function mediaTag(model,sourceId,mediaId) {
   return `AIF-COLOR-${model}-${sourceId.split('/').pop()}-${mediaId.split('/').pop()}`;
 }
-function chooseColorLabels(colors) {
+function chooseColorLabels(colors, trustedNames = {}) {
   const groups=new Map();
   for(const c of colors) {
     const clean=str(c.colorOption);
     const recognized=clean && norm(clean)!==norm(c.code) && !/^\d{1,4}$/.test(clean);
     const db=str(c.dbName);
-    const human=recognized?clean: (db && !/^\d{1,4}$/.test(db)?db:c.code);
+    const dbHuman=db && !/^\d{1,4}$/.test(db);
+    const trusted=str(trustedNames[c.code]);
+    const human=recognized?clean: (dbHuman?db: (trusted||c.code));
     c.label=human;
     const key=norm(human);
     groups.set(key,[...(groups.get(key)||[]),c]);
@@ -382,7 +412,13 @@ async function makePlan(db, model, locs) {
   // completed run may have already archived one or more source products.
   const sourceSum=all.filter(x=>x.id!==target.id).reduce((n,x)=>n+x.product.variants.nodes.length,0);
   ensure(sourceSum===oldPairs.length,'SOURCE_COUNT_MISMATCH','Kihagyott forrásvariáns.');
-  const colorList=chooseColorLabels(groupedColors);
+  const colorList=chooseColorLabels(groupedColors,family.verifiedColorLabels);
+  // A successful merge must never put supplier stock codes (012, 400, etc.)
+  // into the customer-facing colour selector. Stop BEFORE any write if an
+  // unverified label remains.
+  for(const c of colorList) ensure(!/^\d{1,4}$/.test(str(c.label)),
+    'COLOR_LABEL_UNVERIFIED','Az egyik Shopify-szín csak gyári kód. Ellenőrzött színnév szükséges.',
+    {model,code:c.code,shopifyValue:c.colorOption,allInValue:c.dbName});
   // The surviving black colour is already in the target. A newly imported
   // colour with the same human label must keep its distinct supplier code.
   const targetColourLabels=new Set(target.variants.nodes
@@ -711,7 +747,24 @@ function selfTest() {
     {code:'452',colorOption:'452'}]);
   ensure(pairs[1].label==='gri (011)' && pairs[2].label==='gri (035)',
     'TEST_LABEL_COLLISION','Nem különül el két azonos nevű szín.');
-  ensure(pairs[3].label==='452','TEST_CODE_LABEL','Ismeretlen színkódot nem találunk ki.');
+  ensure(pairs[3].label==='452','TEST_UNKNOWN_LABEL','Ismeretlen színkódot nem találunk ki.');
+  const child=chooseColorLabels([
+    {code:'012',colorOption:'012',dbName:'012'},
+    {code:'400',colorOption:'400',dbName:''},
+    {code:'411',colorOption:'411',dbName:''},
+    {code:'002',colorOption:'negru/gri',dbName:'002'},
+  ],FAMILIES['1376708'].verifiedColorLabels);
+  ensure(child[0].label==='Gri închis / Negru'
+      && child[1].label==='Albastru regal / Alb'
+      && child[2].label==='Bleumarin / Alb'
+      && child[3].label==='negru/gri',
+    'TEST_VERIFIED_LABELS','A gyári színnév-feloldás vagy a meglévő színnév megőrzése hibás.');
+  const men=chooseColorLabels([
+    {code:'025',colorOption:'025',dbName:'025'},
+    {code:'452',colorOption:'452',dbName:''},
+  ],FAMILIES['1376700'].verifiedColorLabels);
+  ensure(men[0].label==='Gri închis / Galben' && men[1].label==='Albastru deschis / Alb',
+    'TEST_MENS_LABELS','Férfi sapkák gyári színnév-feloldása hibás.');
   ensure(optionKind('Mărime')==='size' && optionKind('Culoare')==='color',
     'TEST_OPTIONS','Román méret/szín opciók hibásak.');
   ensure(checksum({a:1})===checksum({a:1}) && checksum({a:1})!==checksum({a:2}),
@@ -719,7 +772,7 @@ function selfTest() {
   const family=FAMILIES['1376700'];
   ensure(Object.keys(family.codes).length===14 && Object.keys(FAMILIES['1376708'].codes).length===5,
     'TEST_FAMILY_ALLOWLIST','A két család termékszáma nem egyezik.');
-  console.log('ÖNELLENŐRZÉS: OK (színcímkék, opciók, ujjlenyomat, 14+5 engedélyezett termék)');
+  console.log('ÖNELLENŐRZÉS: OK (román színnevek, opciók, ujjlenyomat, 14+5 engedélyezett termék)');
 }
 async function main() {
   const a=parseArgs(process.argv.slice(2));
