@@ -2112,6 +2112,24 @@ function barcodeConflictInfoFromApi(value: unknown): WarehouseBarcodeConflictInf
   };
 }
 
+function warehouseDetailSaveErrorText(value: unknown) {
+  const error = value && typeof value === "object" ? value as Record<string, any> : {};
+  const code = String(error.code || "").trim();
+  const message = String(error.message || error.error || "").trim();
+  const conflict = barcodeConflictInfoFromApi(error);
+  if (conflict) return `A ${conflict.barcode} vonalkód már ehhez a termékhez tartozik: ${[conflict.title || conflict.modelCode, conflict.color, conflict.size].filter(Boolean).join(" / ")}.`;
+  if (code === "product_code_save_failed" || code === "product_code_save_mismatch") return message || "A termékkód módosítása nem mentődött el.";
+  if (code === "product_code_too_long") return "A termékkód legfeljebb 160 karakter lehet.";
+  if (code === "sn_cod_clear_confirmation_required") return message || "Az S/N/COD törléséhez külön megerősítés szükséges.";
+  if (/supplier not found or inactive/i.test(message)) return "A kiválasztott beszállító nem létezik vagy inaktív.";
+  if (/category not found/i.test(message)) return "A kiválasztott kategória nem található.";
+  if (/subcategory not found/i.test(message)) return "A kiválasztott alkategória nem található.";
+  if (/invalid gender/i.test(message)) return "A kiválasztott nem nincs a törzsadatok között.";
+  if (/product name required/i.test(message)) return "A terméknév kötelező.";
+  if (message && message !== "failed to update variant") return message;
+  return `A mentés sikertelen${error.status ? ` (HTTP ${error.status})` : ""}.`;
+}
+
 function WarehouseBarcodeConflictNotice({
   info,
   onOpen,
@@ -5195,10 +5213,12 @@ function supplierCodeRowsFromDetail(d: DetailResponse | null | undefined) {
 
 function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
   const item = (d?.item || {}) as Record<string, any>;
+  const attrs = item.attributes && typeof item.attributes === "object" ? item.attributes : {};
   const supplierRows = supplierCodeRowsFromDetail(d);
   const active = supplierRows.find((row: any) => row && row.is_active !== false && String(row.supplier_product_code || "").trim());
   const anyRow = supplierRows.find((row: any) => row && String(row.supplier_product_code || "").trim());
   return firstWarehouseText(
+    attrs.manualProductCode,
     item.supplier_product_code,
     item.supplierProductCode,
     active?.supplier_product_code,
@@ -5224,6 +5244,7 @@ function previousSupplierProductCodesFromDetail(d: DetailResponse | null | undef
   };
 
   for (const row of supplierCodeRowsFromDetail(d)) add(row?.supplier_product_code);
+  if (Array.isArray(attrs.manualProductCodeHistory)) attrs.manualProductCodeHistory.forEach(add);
   add(attrs.legacyProductCode);
   add(attrs.legacy_product_code);
   add(attrs.legacyOriginalProductCode);
@@ -7066,7 +7087,7 @@ async function apiVariantHistory(id: string) {
 }
 
 async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
-  return fetchJSON<{ ok: true }>(`/api/aif/variants/${encodeURIComponent(id)}`, {
+  return fetchJSON<{ ok: true; productCode?: string | null }>(`/api/aif/variants/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -8031,6 +8052,7 @@ export default function AllInWarehouse() {
   const [duplicateSkuOpen, setDuplicateSkuOpen] = useState(false);
   const [barcodeReturnNotice, setBarcodeReturnNotice] = useState<WarehouseBarcodeReturnTarget | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
+  const [detailSaveError, setDetailSaveError] = useState("");
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [editBaseline, setEditBaseline] = useState<EditForm>(emptyForm());
   const [detailCloseConfirmOpen, setDetailCloseConfirmOpen] = useState(false);
@@ -10598,6 +10620,7 @@ export default function AllInWarehouse() {
     // tudja visszanyitni / felülírni az adatlap állapotát.
     detailLoadSequenceRef.current += 1;
     setDetailCloseConfirmOpen(false);
+    setDetailSaveError("");
     setDetail(null);
     setDetailBusy(false);
     setGalleryNotice("");
@@ -10703,6 +10726,7 @@ export default function AllInWarehouse() {
       if (barcodeScanner || saving) return;
       event.preventDefault();
       event.stopPropagation();
+      if (detailSaveError) { setDetailSaveError(""); return; }
       if (detailCloseConfirmOpen) {
         setDetailCloseConfirmOpen(false);
         return;
@@ -10711,7 +10735,7 @@ export default function AllInWarehouse() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [detail, detailHasChanges, detailCloseConfirmOpen, barcodeScanner, saving, detailBusy]);
+  }, [detail, detailHasChanges, detailCloseConfirmOpen, detailSaveError, barcodeScanner, saving, detailBusy]);
 
   const canSaveCategoryForm = Boolean(categoryForm.nameRo.trim());
   const canSaveSubCategoryForm = Boolean(subCategoryForm.parentId && subCategoryForm.nameRo.trim());
@@ -15246,6 +15270,7 @@ export default function AllInWarehouse() {
     setHighlightProductId("");
     setDetailCloseConfirmOpen(false);
     setEditBarcodeConflict(null);
+    setDetailSaveError("");
     setMessage("");
     setGalleryNotice("");
     setGalleryRecovery(warehouseReadPendingGallery(cleanId));
@@ -15698,6 +15723,7 @@ export default function AllInWarehouse() {
   }
 
   async function saveDetail(options: { closeAfter?: boolean; closeAfterSave?: boolean } = {}) {
+    setDetailSaveError("");
     const shouldCloseAfter = Boolean(options.closeAfter || options.closeAfterSave);
     if (!detail?.item?.id) return false;
     if (!detailHasChanges) {
@@ -15708,6 +15734,7 @@ export default function AllInWarehouse() {
     if (effectiveEditBarcodeConflict) {
       setEditBarcodeConflict(effectiveEditBarcodeConflict);
       setDetailCloseConfirmOpen(false);
+      setDetailSaveError(`A ${effectiveEditBarcodeConflict.barcode} vonalkód már másik termékhez tartozik.`);
       setMessage("");
       return false;
     }
@@ -15770,6 +15797,11 @@ export default function AllInWarehouse() {
 
       const normalizedEditColor = normalizeColor(edit.colorName);
       const normalizedEditSize = normalizeSize(edit.size);
+      const productCodeChanged = edit.supplierProductCode.trim() !== editBaseline.supplierProductCode.trim();
+      if (productCodeChanged && !edit.supplierProductCode.trim()) {
+        setDetailSaveError("A termékkód nem lehet üres.");
+        return false;
+      }
       const supplierVariantCode = firstWarehouseText(
         detail.item.supplier_variant_code,
         detail.item.supplierVariantCode,
@@ -15811,10 +15843,12 @@ export default function AllInWarehouse() {
         subCategoryCode: edit.subCategoryCode || null,
         barcode: edit.barcode,
         supplierId: edit.supplierId || null,
-        supplierProductCode: edit.supplierProductCode,
-        productCode: edit.supplierProductCode,
-        // A termékkód modell-szintű adat, ezért több színnél és méretnél is azonos lehet.
-        // A rejtett variánskód, a szín és a méret együtt különbözteti meg a variánsokat.
+        ...(productCodeChanged ? {
+          supplierProductCode: edit.supplierProductCode.trim(),
+          productCode: edit.supplierProductCode.trim(),
+        } : {}),
+        // A termékkód több színnél és méretnél is azonos lehet.
+        // A vonalkód a variáns egyedi azonosítója.
         supplierVariantCode: supplierVariantCode || null,
         supplierColorCode: edit.colorCode || normalizedEditColor || null,
         supplierSize: normalizedEditSize || null,
@@ -15831,7 +15865,11 @@ export default function AllInWarehouse() {
         // render kepbaseline-jat latna. Ez ved a bolti fotok felulirasa ellen.
         status: edit.variantStatus,
       };
-      await apiVariantUpdate(detail.item.id, variantUpdatePayload);
+      const updateResult = await apiVariantUpdate(detail.item.id, variantUpdatePayload);
+      if (productCodeChanged && updateResult.productCode !== undefined &&
+          String(updateResult.productCode || "").trim() !== edit.supplierProductCode.trim()) {
+        throw Object.assign(new Error(`A termékkód nem mentődött: ${edit.supplierProductCode}.`), { code: "product_code_save_mismatch" });
+      }
 
       // Azonos termék + azonos szín + más méret esetén a kép és a leírás közös.
       // Más színhez NEM nyúlunk. Így pl. S/M/L ugyanazt a DENIM fotót/leírást kapja,
@@ -15878,6 +15916,9 @@ export default function AllInWarehouse() {
       }
 
       const d = await apiVariantDetail(detail.item.id);
+      if (productCodeChanged && supplierProductCodeFromDetail(d) !== edit.supplierProductCode.trim()) {
+        throw Object.assign(new Error(`A termékkód nem mentődött: ${edit.supplierProductCode}.`), { code: "product_code_save_mismatch" });
+      }
       detailCacheRef.current.set(detailId, { data: d, loadedAt: Date.now() });
       seasonModelId = warehouseModelId(d.item) || seasonModelId;
 
@@ -16029,10 +16070,10 @@ export default function AllInWarehouse() {
       if (conflictInfo) {
         setEditBarcodeConflict(conflictInfo);
         setDetailCloseConfirmOpen(false);
-        setMessage("");
-      } else {
-        setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
       }
+      setDetailCloseConfirmOpen(false);
+      setDetailSaveError(warehouseDetailSaveErrorText(e));
+      setMessage("");
       return false;
     } finally {
       setSaving(false);
@@ -20542,7 +20583,7 @@ export default function AllInWarehouse() {
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_10px_22px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-60"
                 type="button"
-                disabled={saving || Boolean(effectiveEditBarcodeConflict)}
+                disabled={saving}
                 title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Előbb adj meg másik egyedi SKU-t." : undefined}
                 onClick={() => { void saveDetailAndClose(); }}
               >
@@ -20687,7 +20728,7 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/[0.10] bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
-                      <label className={label}>Termékkód<input className={input} value={edit.supplierProductCode} onChange={(e) => setEdit((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 1329582-402" /></label>
+                      <label className={label}>Termékkód<input id="aif-detail-product-code" className={input} value={edit.supplierProductCode} onChange={(e) => setEdit((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 1329582-402" /></label>
                       <label className={label}>
                         <span className="flex items-center gap-1.5">
                           <span>Vonalkód / Shopify SKU alap</span>
@@ -20713,7 +20754,7 @@ export default function AllInWarehouse() {
                           </span>
                         </span>
                         <div className="relative">
-                          <input className={`${input} w-full pr-12`} value={edit.barcode} onChange={(e) => { setEditBarcodeConflict(null); setEdit((x) => ({ ...x, barcode: e.target.value })); }} />
+                          <input id="aif-detail-barcode" className={`${input} w-full pr-12`} value={edit.barcode} onChange={(e) => { setEditBarcodeConflict(null); setEdit((x) => ({ ...x, barcode: e.target.value })); }} />
                           <button
                             className="absolute right-1.5 top-1.5 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/70 text-white shadow-[0_0_10px_rgba(42,141,139,0.18)] hover:bg-[#2a8d8b] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/45"
                             type="button"
@@ -20856,7 +20897,7 @@ export default function AllInWarehouse() {
                     </div>
                     {!detail.supplierCodes?.length ? (
                       <p className="rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs text-[#d7fffd]">
-                        Ehhez a variánshoz még nincs beszállítói kapcsolat. Válassz beszállítót, majd mentsd az adatlapot.
+                        Nincs beszállítói kapcsolat. A termékkód ettől függetlenül menthető.
                       </p>
                     ) : null}
                   </div>
@@ -20880,7 +20921,7 @@ export default function AllInWarehouse() {
                 <button
                   className={`${detailSaveButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                   onClick={() => void saveDetailAndClose()}
-                  disabled={saving || galleryMutationRef.current || !detailCanSave || Boolean(effectiveEditBarcodeConflict)}
+                  disabled={saving || galleryMutationRef.current || !detailCanSave}
                   title={effectiveEditBarcodeConflict
                     ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t."
                     : !detailCanSave ? "Nincs mentendő módosítás." : "Módosítások mentése, képek ellenőrzése és adatlap bezárása"}
@@ -20893,6 +20934,32 @@ export default function AllInWarehouse() {
           </div>
         </div>
       )}
+
+      {detail && detailSaveError && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[2147483250] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setDetailSaveError(""); }}
+        >
+          <div role="alertdialog" aria-modal="true" aria-label="Mentési hiba" aria-describedby="aif-detail-save-error-text"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-rose-300/35 bg-[#354153] text-white shadow-[0_26px_80px_rgba(0,0,0,0.6)]">
+            <div className="flex items-center gap-2 border-b border-rose-200/15 px-4 py-3">
+              <AlertTriangle size={18} className="shrink-0 text-rose-300" />
+              <span className="text-base">Mentés sikertelen</span>
+            </div>
+            <p id="aif-detail-save-error-text" className="break-words px-4 py-4 text-sm leading-relaxed text-white/90">{detailSaveError}</p>
+            <div className="flex justify-end border-t border-white/10 px-4 py-3">
+              <button type="button" className={btn} autoFocus onClick={() => {
+                const focusField = /termékkód/i.test(detailSaveError) ? "aif-detail-product-code"
+                  : /vonalkód|SKU/i.test(detailSaveError) ? "aif-detail-barcode" : "";
+                setDetailSaveError("");
+                if (focusField) window.requestAnimationFrame(() => document.getElementById(focusField)?.focus());
+              }}>Rendben</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
 
       {activationBlockMissing && typeof document !== "undefined" ? createPortal(
         <div
