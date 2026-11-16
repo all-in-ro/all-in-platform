@@ -3448,7 +3448,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          v.status AS variant_status,
          m.id AS model_id,
          m.model_code,
-         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
+         COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
          m.title_ro, m.title_hu, m.description_ro, m.shopify_title,
          m.gender, m.product_type, m.season, m.material, m.status AS model_status,
          b.name AS brand_name, b.code AS brand_code,
@@ -15933,6 +15933,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       const primarySupplierCode = supplierCodes.rows.find((row) => row.is_active !== false) || supplierCodes.rows[0] || null;
+      const manualCode = text(variant.rows[0]?.attributes?.manualProductCode);
+      const effectiveProductCode = manualCode
+        || text(primarySupplierCode?.supplier_product_code)
+        || null;
       const galleryFamily = await aifGalleryFamily(pool, variantId);
       const effectiveGallery = galleryFamily ? aifGalleryFamilyPresentation(galleryFamily) : null;
       const item = {
@@ -15943,10 +15947,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         } : {}),
         gallery_inherited: Boolean(effectiveGallery?.inherited),
         gallery_conflict: Boolean(effectiveGallery?.conflict),
-        supplier_product_code: primarySupplierCode?.supplier_product_code || null,
-        supplierProductCode: primarySupplierCode?.supplier_product_code || null,
-        product_code: primarySupplierCode?.supplier_product_code || null,
-        productCode: primarySupplierCode?.supplier_product_code || null,
+        supplier_product_code: effectiveProductCode,
+        supplierProductCode: effectiveProductCode,
+        product_code: effectiveProductCode,
+        productCode: effectiveProductCode,
         supplier_variant_code: primarySupplierCode?.supplier_variant_code || null,
         supplierVariantCode: primarySupplierCode?.supplier_variant_code || null,
         supplier_color_code: primarySupplierCode?.supplier_color_code || null,
@@ -16004,7 +16008,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
       const current = await client.query(
         `SELECT v.id, v.model_id, v.barcode, v.sn_cod, v.buy_price, v.sell_price, v.compare_at_price,
-                v.status AS variant_status, v.size, v.image_url, v.images,
+                v.status AS variant_status, v.size, v.image_url, v.images, v.attributes,
                 m.status AS model_status, m.title_ro
          FROM aif_product_variants v
          JOIN aif_product_models m ON m.id=v.model_id
@@ -16091,6 +16095,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const variantAttributePatch = body.attributes && typeof body.attributes === "object" && !Array.isArray(body.attributes)
         ? { ...body.attributes }
         : {};
+      // A termékkód ismétlődhet egy modellen belül, a vonalkód nem.
+      // A beszállítói kódtáblában supplier_id NOT NULL, ezért kézi javítást
+      // mindig a variáns attributes mezőjében is tárolunk. NINCS új modell, SKU vagy készletmódosítás.
+      const manualProductCodeProvided = ["supplierProductCode", "supplier_product_code", "productCode", "product_code"]
+        .some(key => body[key] !== undefined);
+      const manualProductCode = manualProductCodeProvided
+        ? emptyToNull(body.supplierProductCode ?? body.supplier_product_code ?? body.productCode ?? body.product_code)
+        : undefined;
+      if (manualProductCodeProvided && manualProductCode && manualProductCode.length > 160) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "A termékkód legfeljebb 160 karakter lehet.", code: "product_code_too_long", field: "supplierProductCode" });
+      }
+      if (manualProductCodeProvided) {
+        variantAttributePatch.manualProductCode = manualProductCode;
+        const existingAttrs = current.rows[0].attributes && typeof current.rows[0].attributes === "object"
+          ? current.rows[0].attributes : {};
+        const oldManualCode = text(existingAttrs.manualProductCode);
+        if (oldManualCode && oldManualCode !== text(manualProductCode)) {
+          const history = Array.isArray(existingAttrs.manualProductCodeHistory)
+            ? existingAttrs.manualProductCodeHistory.map(text).filter(Boolean) : [];
+          variantAttributePatch.manualProductCodeHistory = [...new Set([...history, oldManualCode])].slice(-25);
+        }
+      }
       const tariffProvided = body.customsTariffCode !== undefined || body.customs_tariff_code !== undefined || body.tariffCode !== undefined || body.tariff_code !== undefined || body.hsCode !== undefined || body.hs_code !== undefined || body.taricCode !== undefined || body.taric_code !== undefined;
       if (tariffProvided) {
         const tariff = emptyToNull(body.customsTariffCode ?? body.customs_tariff_code ?? body.tariffCode ?? body.tariff_code ?? body.hsCode ?? body.hs_code ?? body.taricCode ?? body.taric_code);
@@ -16302,17 +16329,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const supplierIdProvided = body.supplierId !== undefined || body.supplier_id !== undefined;
-      const supplierProductCodeProvided =
-        body.supplierProductCode !== undefined || body.supplier_product_code !== undefined ||
-        body.productCode !== undefined || body.product_code !== undefined;
+      const supplierProductCodeProvided = manualProductCodeProvided;
       const supplierVariantCodeProvided = body.supplierVariantCode !== undefined || body.supplier_variant_code !== undefined;
       const supplierColorCodeProvided = body.supplierColorCode !== undefined || body.supplier_color_code !== undefined;
       const supplierSizeProvided = body.supplierSize !== undefined || body.supplier_size !== undefined;
       const supplierLinkProvided = supplierIdProvided || supplierProductCodeProvided || supplierVariantCodeProvided || supplierColorCodeProvided || supplierSizeProvided;
       if (supplierLinkProvided) {
-        const supplierProductCode = supplierProductCodeProvided
-          ? emptyToNull(body.supplierProductCode ?? body.supplier_product_code ?? body.productCode ?? body.product_code)
-          : undefined;
+        const supplierProductCode = manualProductCode;
         const supplierVariantCode = supplierVariantCodeProvided
           ? emptyToNull(body.supplierVariantCode ?? body.supplier_variant_code)
           : undefined;
@@ -16385,6 +16408,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               ]
             );
           }
+        }
+      }
+
+      // Ha a termékkód nem került ténylegesen az adatbázisba, teljes ROLLBACK;
+      // a felület soha többé nem írhat ki hamis sikeres mentést.
+      if (manualProductCodeProvided) {
+        const persisted = await client.query(
+          `SELECT attributes->>'manualProductCode' AS product_code FROM aif_product_variants WHERE id=$1`,
+          [variantId]
+        );
+        if (text(persisted.rows[0]?.product_code) !== text(manualProductCode)) {
+          const error = new Error(`A termékkód nem mentődött: ${text(manualProductCode) || "üres"}.`);
+          error.code = "product_code_save_failed";
+          error.statusCode = 409;
+          throw error;
         }
       }
 
@@ -16469,18 +16507,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (sharedGalleryPrevious.length) await aifQueueGalleryChanges(client, sharedGalleryPrevious);
       }
       await client.query("COMMIT");
-      res.json({ ok: true, updatedGalleryVariantIds: sharedGalleryPrevious.map(row => row.variantId) });
+      res.json({ ok: true, productCode: manualProductCodeProvided ? manualProductCode : undefined,
+        updatedGalleryVariantIds: sharedGalleryPrevious.map(row => row.variantId) });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
+      if (e?.code === "product_code_save_failed") {
+        return res.status(409).json({ error: e.message, code: e.code, field: "supplierProductCode" });
+      }
       if (e && e.code === "23505") {
+        // A 23505 önmagában NEM bizonyít vonalkódütközést.
+        const key = text(e.constraint);
         const requestedBarcode = assignedBarcodeValue(req.body?.barcode);
-        if (requestedBarcode) {
+        if (requestedBarcode && /barcode|sku/i.test(key)) {
           const conflict = await findVariantBarcodeConflict(pool, requestedBarcode, null).catch(() => null);
-          return barcodeConflictResponse(res, requestedBarcode, conflict);
+          if (conflict) return barcodeConflictResponse(res, requestedBarcode, conflict);
         }
         return res.status(409).json({
-          error: "A termék mentése egy már létező egyedi kóddal ütközött.",
+          error: key ? `Egyedi adatütközés: ${key}.` : "Az adatbázis egyedi mezőütközést jelzett.",
           code: "unique_conflict",
+          constraint: key || null,
         });
       }
       if (e?.statusCode === 409 &&
@@ -16489,7 +16534,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           conflictingVariants:e.conflictingVariants || [] });
       }
       console.error("AIF update variant failed", e);
-      res.status(500).json({ error: "failed to update variant" });
+      if (e?.code === "23503") {
+        return res.status(409).json({ error: "Hiányzó vagy érvénytelen kapcsolt adat: " + text(e.constraint || "hivatkozás"), code: "reference_conflict" });
+      }
+      res.status(500).json({ error: "A termék mentése sikertelen (" + text(e?.code || "szerverhiba") + ").", code: "variant_save_failed" });
     } finally {
       client.release();
     }
@@ -17025,7 +17073,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                WHEN lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1)) THEN 10
                WHEN lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1)) THEN 11
                WHEN lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1)) THEN 12
-               WHEN lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1)) THEN 13
+               WHEN lower(btrim(COALESCE(v.attributes->>'manualProductCode','')))=lower(btrim($1)) THEN 13
+               WHEN lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1)) THEN 14
                WHEN lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1)) THEN 14
                WHEN lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1)) THEN 15
                WHEN lower(btrim(COALESCE(v.attributes->>'legacyProductCode','')))=lower(btrim($1)) THEN 16
@@ -17036,6 +17085,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                WHEN lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1)) THEN 'internal_sku'
                WHEN lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1)) THEN 'supplier_sku'
                WHEN lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1)) THEN 'sn_cod'
+               WHEN lower(btrim(COALESCE(v.attributes->>'manualProductCode','')))=lower(btrim($1)) THEN 'manual_product_code'
                WHEN lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1)) THEN 'supplier_product_code'
                WHEN lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1)) THEN 'supplier_variant_code'
                WHEN lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1)) THEN 'model_code'
@@ -17053,6 +17103,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
                OR lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1))
                OR lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(v.attributes->>'manualProductCode','')))=lower(btrim($1))
                OR lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1))
                OR lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1))
                OR lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1))
@@ -17079,10 +17130,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            v.sn_cod,
            v.sn_cod AS "snCod",
            m.model_code,
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS supplier_product_code,
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "supplierProductCode",
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS product_code,
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "productCode",
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS supplier_product_code,
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "supplierProductCode",
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS product_code,
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "productCode",
            si.supplier_variant_code,
            si.supplier_codes,
            m.title_ro,
@@ -17262,8 +17313,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            v.status AS status,
            m.id AS model_id,
            m.model_code,
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
-           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS "supplierProductCode",
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
+           COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS "supplierProductCode",
            si.supplier_variant_code,
            si.supplier_color_code,
            si.supplier_size,
@@ -17946,6 +17997,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         OR COALESCE(m.shopify_title,'') ILIKE ${p}
           OR ${aifReceiptHistorySearchSql('v', p)}
         OR COALESCE(v.internal_sku,'') ILIKE ${p}
+        OR COALESCE(v.attributes->>'manualProductCode','') ILIKE ${p}
         OR COALESCE(v.attributes->>'legacyProductCode','') ILIKE ${p}
         OR COALESCE(v.attributes->>'legacyOriginalProductCode','') ILIKE ${p}
         OR COALESCE(v.attributes->>'legacyOriginalTitle','') ILIKE ${p}
@@ -18169,8 +18221,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          v.status AS status,
          m.id AS model_id,
          COALESCE(NULLIF(m.model_code,''), NULLIF(lid.normalized->>'modelCode',''), lid.supplier_product_code) AS model_code,
-         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS supplier_product_code,
-         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS "supplierProductCode",
+         COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS supplier_product_code,
+         COALESCE(NULLIF(v.attributes->>'manualProductCode',''), NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS "supplierProductCode",
          COALESCE(NULLIF(si.supplier_variant_code,''), NULLIF(lid.normalized->>'supplierVariantCode',''), NULLIF(lid.normalized->>'variantCode','')) AS supplier_variant_code,
          COALESCE(NULLIF(si.supplier_color_code,''), lid.supplier_color_code, NULLIF(lid.normalized->>'supplierColorCode',''), NULLIF(lid.normalized->>'colorCode','')) AS supplier_color_code,
          COALESCE(NULLIF(si.supplier_size,''), lid.supplier_size, NULLIF(lid.normalized->>'supplierSize',''), NULLIF(lid.normalized->>'size','')) AS supplier_size,
@@ -18217,8 +18269,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          si.supplier_source_codes,
          si.supplier_names,
          si.supplier_codes,
-         COALESCE(si.supplier_product_code, lid.supplier_product_code) AS supplier_product_code,
-         COALESCE(si.supplier_product_code, lid.supplier_product_code) AS "supplierProductCode",
+         COALESCE(NULLIF(v.attributes->>'manualProductCode',''), si.supplier_product_code, lid.supplier_product_code) AS supplier_product_code,
+         COALESCE(NULLIF(v.attributes->>'manualProductCode',''), si.supplier_product_code, lid.supplier_product_code) AS "supplierProductCode",
          si.supplier_variant_code AS supplier_variant_code,
          si.supplier_variant_code AS "supplierVariantCode"
        FROM aif_product_variants v
