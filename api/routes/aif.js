@@ -10368,16 +10368,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function commitBatchRows(client, { batchId, rowIds = null, actor = "system", priceChoices = null, requirePriceChoice = false }) {
+  async function commitBatchRows(client, { batchId, rowIds = null, actor = "system", priceChoices = null, requirePriceChoice = false, preparedSchema = false }) {
     if (!isUuidText(batchId)) {
       const e = new Error("Import csomag nem található.");
       e.statusCode = 404;
       e.code = "invalid_import_batch_id";
       throw e;
     }
-    await ensureSnCodSchema(client);
-    await ensureAifReceiptBarcodeAliasSchema(client);
-    await ensureAifReceiptMergeSchema(client);
+    if (!preparedSchema) {
+      await ensureSnCodSchema(client);
+      await ensureAifReceiptBarcodeAliasSchema(client);
+      await ensureAifReceiptMergeSchema(client);
+    }
     const batchRes = await client.query(
       `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
               r.invoice_number AS reception_invoice_number,
@@ -10927,6 +10929,204 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return res.status(status>=400&&status<600?status:500).json({error:error?.message||'Az ár-egyeztetés nem sikerült.'});
     }
   });
+
+  // A hosszú recepciók részletfeldolgozásához a szükséges DDL egyszer, külön
+  // sikeresen lezárt tranzakcióban fut, nem minden 4-soros tranzakcióban újra.
+  let aifIncomingChunkSchemaReady = false;
+  let aifIncomingChunkSchemaPromise = null;
+  async function ensureAifIncomingChunkSchema() {
+    if (aifIncomingChunkSchemaReady) return;
+    if (!aifIncomingChunkSchemaPromise) {
+      aifIncomingChunkSchemaPromise = (async () => {
+        // A snCodSchemaEnsured jelzőt csak ténylegesen commitolt DDL után állítjuk.
+        await ensureSnCodSchema(pool);
+        const schemaClient = await pool.connect();
+        try {
+          await schemaClient.query('BEGIN');
+          await ensureAifReceiptBarcodeAliasSchema(schemaClient);
+          await ensureAifReceiptMergeSchema(schemaClient);
+          await schemaClient.query('COMMIT');
+          aifIncomingChunkSchemaReady = true;
+        } catch(error) {
+          try {await schemaClient.query('ROLLBACK');} catch{}
+          throw error;
+        } finally {
+          schemaClient.release();
+        }
+      })().catch(error => {
+        aifIncomingChunkSchemaPromise = null;
+        throw error;
+      });
+    }
+    await aifIncomingChunkSchemaPromise;
+  }
+
+  // AIF_INCOMING_CHUNK_COMMIT_V17_BEGIN
+  // A hosszú, 50+ soros importot több, külön tranzakcióban véglegesítjük.
+  // Ezt a két új végpontot a V17 bevételezési felület használja. A régi /commit
+  // és /receptions/.../commit-selected útvonalak érintetlenek maradnak.
+  // Státusz: tisztán olvasás, nem indít újra semmilyen készletműveletet.
+  async function aifImportCommitProgress(db, batchId) {
+    const result = await db.query(`
+      SELECT b.id::text AS "batchId", b.reception_id::text AS "receptionId",
+             b.status AS "batchStatus", b.row_count AS "declaredRows",
+             COALESCE(r.total_rows,0)::int AS "totalRows",
+             COALESCE(r.committed_rows,0)::int AS "committedRows",
+             COALESCE(r.processable_rows,0)::int AS "processableRows",
+             COALESCE(r.error_rows,0)::int AS "errorRows",
+             COALESCE(r.ignored_rows,0)::int AS "ignoredRows",
+             COALESCE(r.remaining_rows,0)::int AS "remainingRows",
+             COALESCE(r.expected_qty,0)::numeric AS "expectedQty",
+             COALESCE(r.committed_qty,0)::numeric AS "committedQty",
+             COALESCE(m.movement_count,0)::int AS "movementCount",
+             COALESCE(m.movement_qty,0)::numeric AS "movementQty",
+             NOT pg_try_advisory_xact_lock(71209,hashtext(b.id::text)) AS processing
+      FROM aif_import_batches b
+      LEFT JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE status <> 'ignored') AS total_rows,
+               count(*) FILTER (WHERE status='committed') AS committed_rows,
+               count(*) FILTER (WHERE status NOT IN ('ignored','committed','error')) AS processable_rows,
+               count(*) FILTER (WHERE status='error') AS error_rows,
+               count(*) FILTER (WHERE status='ignored') AS ignored_rows,
+               count(*) FILTER (WHERE status NOT IN ('ignored','committed')) AS remaining_rows,
+               COALESCE(sum(qty) FILTER (WHERE status <> 'ignored'),0) AS expected_qty,
+               COALESCE(sum(qty) FILTER (WHERE status='committed'),0) AS committed_qty
+        FROM aif_import_rows WHERE batch_id=b.id
+      ) r ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT count(*) AS movement_count, COALESCE(sum(qty_delta),0) AS movement_qty
+        FROM aif_stock_movements
+        WHERE movement_type='incoming'
+          AND ((source_type='import_batch' AND source_id=b.id::text)
+               OR (raw->>'importBatchId'=b.id::text AND raw ? 'rowId'))
+      ) m ON TRUE
+      WHERE b.id=$1::uuid
+      LIMIT 1`, [batchId]);
+    if (!result.rowCount) return null;
+    const row = result.rows[0];
+    return {
+      ...row,
+      expectedQty: Number(row.expectedQty || 0),
+      committedQty: Number(row.committedQty || 0),
+      movementQty: Number(row.movementQty || 0),
+      completed: Number(row.totalRows) > 0 && Number(row.remainingRows) === 0,
+      needsReview: Number(row.processableRows) === 0 && Number(row.errorRows) > 0,
+    };
+  }
+
+  router.get('/import-batches/:id/commit-progress', requireAuthed, async (req, res) => {
+    const batchId = text(req.params.id);
+    if (!isUuidText(batchId)) return invalidImportBatchId(res);
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const progress = await aifImportCommitProgress(pool, batchId);
+      if (!progress) return res.status(404).json({ error:'Az import nem található.' });
+      return res.json({ok:true, ...progress});
+    } catch(error) {
+      console.error('AIF incoming commit progress failed', {batchId, error});
+      return res.status(500).json({error:'Az import állapotának lekérése nem sikerült.'});
+    }
+  });
+
+  router.post('/import-batches/:id/commit-step', requireAuthed, async (req, res) => {
+    const batchId = text(req.params.id);
+    if (!isUuidText(batchId)) return invalidImportBatchId(res);
+    // Legfeljebb 4 sor egy tranzakcióban. Egyetlen kérés se próbáljon
+    // egy teljes, több száz soros importot a proxy határidején belül feldolgozni.
+    const requested = Number(req.body?.limit);
+    const limit = Number.isFinite(requested) ? Math.max(1,Math.min(4,Math.floor(requested))) : 4;
+    const priceChoices = req.body?.priceChoices && typeof req.body.priceChoices === 'object' && !Array.isArray(req.body.priceChoices)
+      ? req.body.priceChoices : {};
+    let client;
+    let transactionOpen = false;
+    const started = Date.now();
+    try {
+      await ensureAifIncomingChunkSchema();
+      client = await pool.connect();
+      await client.query('BEGIN');
+      transactionOpen = true;
+      // Egyidejű böngészők: a második hívás ne várakozzon a második teljes commitra.
+      const lock = await client.query('SELECT pg_try_advisory_xact_lock(71209,hashtext($1::text)) AS acquired',[batchId]);
+      if (!lock.rows[0]?.acquired) {
+        await client.query('ROLLBACK'); transactionOpen = false;
+        res.setHeader('Cache-Control','no-store');
+        return res.status(202).json({ok:true, busy:true, processing:true});
+      }
+      const batchQuery = await client.query(`
+        SELECT id,reception_id,status FROM aif_import_batches
+        WHERE id=$1::uuid FOR UPDATE NOWAIT`, [batchId]);
+      if (!batchQuery.rowCount) {
+        const error = new Error('Az import nem található.'); error.statusCode=404; throw error;
+      }
+      const batch = batchQuery.rows[0];
+      if (batch.status === 'cancelled') {
+        const error = new Error('A törölt import nem vehető készletre.'); error.statusCode=409; throw error;
+      }
+      if (batch.status === 'committed') {
+        await client.query('COMMIT'); transactionOpen = false;
+        return res.json({ok:true, committed:0, already:true,
+          progress:await aifImportCommitProgress(client,batchId)});
+      }
+      const selected = await client.query(`
+        SELECT id::text AS id FROM aif_import_rows
+        WHERE batch_id=$1::uuid AND status NOT IN ('ignored','committed','error')
+        ORDER BY row_no ASC,id ASC LIMIT $2 FOR UPDATE`, [batchId,limit]);
+      const rowIds=selected.rows.map(row=>row.id);
+      if (!rowIds.length) {
+        await client.query('COMMIT'); transactionOpen = false;
+        return res.json({ok:true, committed:0, noPending:true,
+          progress:await aifImportCommitProgress(client,batchId)});
+      }
+      // A régi teljes importtal azonos ár-jóváhagyási védelmet tartjuk meg.
+      // A V17 a teljes import eltérő árait még az első darab előtt megkérdezi.
+      if (batch.reception_id) {
+        const review=await incomingReceptionPriceReview(client,String(batch.reception_id),rowIds);
+        if (review.items.length) {
+          const allApproved=review.items.every(item=>item.rowIds.every(id =>
+            ['keep_existing','use_incoming'].includes(String(priceChoices[id]?.choice || ''))
+            && String(priceChoices[id]?.variantId || '')===String(item.variantId)
+          ));
+          if (!allApproved) {
+            const error=new Error('Az eladási ár megváltozott vagy nincs jóváhagyva. Frissítsd az ár-egyeztetést.');
+            error.code='price_review_required'; error.statusCode=409; throw error;
+          }
+        }
+      }
+      const result=await commitBatchRows(client,{
+        batchId, rowIds, actor:actorFrom(req), priceChoices,
+        requirePriceChoice:true, preparedSchema:true,
+      });
+      await client.query('COMMIT'); transactionOpen = false;
+      // Az állapotlekérés hibája nem teheti sikertelenné a már COMMIT-olt műveletet.
+      let progress=null;
+      try { progress=await aifImportCommitProgress(client,batchId); }
+      catch(error) { console.error('AIF commit-step: post-commit progress warning', {batchId,error}); }
+      console.info('AIF incoming commit-step',{
+        batchId, selected:rowIds.length, committed:result.committed,
+        failed:result.failedCount, durationMs:Date.now()-started,
+        remaining:progress?.remainingRows ?? null,
+      });
+      res.setHeader('Cache-Control','no-store');
+      return res.json({ok:true, ...result, progress, selectedRows:rowIds.length});
+    } catch(error) {
+      if (transactionOpen && client) {
+        try {await client.query('ROLLBACK');} catch{}
+      }
+      if (error?.code==='55P03') {
+        // Egy korábbi vagy másik felületről indított commit éppen lezárja az importot.
+        return res.status(202).json({ok:true,busy:true,processing:true});
+      }
+      const status=Number(error?.statusCode || 500);
+      console.error('AIF incoming commit-step failed', {batchId,durationMs:Date.now()-started,error});
+      return res.status(status>=400 && status<600 ? status : 500).json({
+        error:error?.message || 'A készletre vételi részlet nem sikerült.',
+        code:error?.code || null,
+      });
+    } finally {
+      if (client) client.release();
+    }
+  });
+  // AIF_INCOMING_CHUNK_COMMIT_V17_END
 
   router.post("/import-batches/:id/commit", requireAuthed, async (req, res) => {
     const batchId = text(req.params.id);
