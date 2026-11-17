@@ -6386,6 +6386,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/receptions", requireAuthed, async (req, res) => {
+    // V20: egy atmeneti PostgreSQL hiba nem dontheti le a Node szervert.
+    try {
     await ensureAifReceptionDocumentSchema();
     const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 80)));
     const search = text(req.query.q || req.query.search);
@@ -6542,6 +6544,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     `;
     const r = await pool.query(sql, args);
     res.json({ items: r.rows });
+    } catch (error) {
+      // Az ideiglenes adatbazis-kieses kezelt HTTP 503-at adjon, ne
+      // kezeletlen async rejectiont es ezzel Node processz-osszeomlast.
+      const pgCode = String(error?.code ?? "");
+      const pgMessage = String(error?.message ?? "");
+      const transientDbError =
+        /^(?:08[0-9A-Z]{3}|57P0[123]|53300)$/.test(pgCode) ||
+        /connection terminated|connection ended|connection is closed|database system is in recovery mode|terminating connection|server closed the connection|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout exceeded when trying to connect/i.test(pgMessage);
+      console.error("AIF receptions list failed", {
+        code: pgCode || null,
+        message: pgMessage,
+        transientDbError,
+      });
+      if (!res.headersSent) {
+        res.set("Cache-Control", "no-store");
+        if (transientDbError) res.set("Retry-After", "5");
+        res.status(transientDbError ? 503 : 500).json({
+          error: transientDbError
+            ? "Az adatbazis atmenetileg nem erheto el. Kerjuk, probalja ujra nehany masodperc mulva."
+            : "A recepciolista betoltese nem sikerult.",
+          code: transientDbError ? "DATABASE_TEMPORARILY_UNAVAILABLE" : "RECEPTIONS_LIST_FAILED",
+        });
+      }
+    }
   });
 
 
