@@ -92,6 +92,37 @@ type IncomingPriceReviewDialog = AifIncomingPriceReviewResponse & {
   rowIds: string[];
 };
 
+// Csak a ténylegesen beérkezett API-válasz után jelzünk kész állapotot.
+// A szerver nem küld soronkénti progress eseményeket: a futó sáv szándékosan nem százalékos.
+type IncomingCommitPhase = "checking" | "committing" | "refreshing" | "success" | "partial" | "uncertain" | "failed";
+type IncomingCommitProgress = {
+  batchId: string;
+  receptionId: string;
+  sourceName: string;
+  rowCount: number;
+  startedAt: number;
+  phase: IncomingCommitPhase;
+  detail: string;
+  committed?: number;
+  failed?: number;
+};
+
+// A timeout csak a böngésző várakozását korlátozza, NEM indít újabb készletműveletet.
+// Ha a mentés eredménye bizonytalan, kizárólag olvasással ellenőrizzük az állapotát.
+async function aifIncomingWithDeadline<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error("A szerver válasza túl sokáig tart.")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
 type InvoiceDifferencePrompt = {
   currentGoodsValue: number;
   targetGoodsValue: number;
@@ -2113,6 +2144,13 @@ function AllInIncomingReception(_props: Props) {
   const [incomingInputMode, setIncomingInputMode] = useState<IncomingInputMode>("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [commitProgress, setCommitProgress] = useState<IncomingCommitProgress | null>(null);
+  const [commitElapsedSec, setCommitElapsedSec] = useState(0);
+  const [commitStatusChecking, setCommitStatusChecking] = useState(false);
+  // Bizonytalan szerverválasz után ugyanazt az importot nem indítjuk újra vaktában.
+  const [unconfirmedCommitBatchIds, setUnconfirmedCommitBatchIds] = useState<string[]>([]);
+  const commitInFlightRef = useRef<string | null>(null);
+
   const [invoiceDifferencePrompt, setInvoiceDifferencePrompt] = useState<InvoiceDifferencePrompt | null>(null);
   const [incomingPriceReview, setIncomingPriceReview] = useState<IncomingPriceReviewDialog | null>(null);
   const [incomingPriceChoices, setIncomingPriceChoices] = useState<Record<string, 'keep_existing' | 'use_incoming'>>({});
@@ -2128,6 +2166,22 @@ function AllInIncomingReception(_props: Props) {
   const [editLocationName, setEditLocationName] = useState("");
   const [editLocationType, setEditLocationType] = useState<LocationType>("warehouse");
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
+
+  useEffect(() => {
+    if (!commitProgress) return;
+    const update = () => setCommitElapsedSec(Math.max(0, Math.floor((Date.now() - commitProgress.startedAt) / 1000)));
+    update();
+    const intervalId = window.setInterval(update, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [commitProgress?.startedAt, Boolean(commitProgress)]);
+
+  useEffect(() => {
+    if (commitProgress?.phase !== "success") return;
+    const timeoutId = window.setTimeout(() => {
+      setCommitProgress((current) => current?.phase === "success" ? null : current);
+    }, 18000);
+    return () => window.clearTimeout(timeoutId);
+  }, [commitProgress?.phase, commitProgress?.batchId]);
 
   useEffect(() => {
     const anyModalOpen = Boolean(incomingPriceReview || invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen || purchaseOrderPickerOpen);
@@ -4142,8 +4196,111 @@ function AllInIncomingReception(_props: Props) {
     await performSaveDraft(adjustedRows, "distributed");
   }
 
+  const incomingCommitIsWorking = (phase: IncomingCommitPhase) =>
+    phase === "checking" || phase === "committing" || phase === "refreshing";
+
+  function startIncomingCommitProgress(batch: AifImportBatchSummary, phase: IncomingCommitPhase = "checking") {
+    setCommitProgress({
+      batchId: String(batch.id),
+      receptionId: String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || ""),
+      sourceName: String(batch.source_file_name || "Import"),
+      rowCount: Number(batch.row_count || 0),
+      startedAt: Date.now(),
+      phase,
+      detail: phase === "committing" ? "A szerver készletre veszi a sorokat. A műveletet ne indítsd újra." : "Az import és az eladási árak ellenőrzése…",
+    });
+  }
+
+  function moveIncomingCommitProgress(phase: IncomingCommitPhase, detail: string, extra: Partial<IncomingCommitProgress> = {}) {
+    setCommitProgress((previous) => previous ? { ...previous, ...extra, phase, detail } : previous);
+  }
+
+  // A sikeres POST után az olvasási hibák nem tehetik látszólag sikertelenné a készletre vételt.
+  async function refreshIncomingCommitState(receptionId: string) {
+    const tasks: Promise<unknown>[] = [loadBatches(), loadReceptions()];
+    if (receptionId) tasks.push(apiAifGetReception(receptionId));
+    try {
+      const results = await aifIncomingWithDeadline(Promise.allSettled(tasks), 16000);
+      const receptionResult = receptionId ? results[2] : null;
+      let receiptValueText = "";
+      if (receptionResult?.status === "fulfilled" && receptionResult.value) {
+        const fresh = receptionResult.value as AifReceptionDetail;
+        fillReceptionHeader(fresh, { clearDraftRows: false });
+        setIncomingStep("review");
+        if (fresh.item?.sales_total_ron != null) {
+          receiptValueText = ` A Receptió új eladási összértéke: ${moneyText(toNumber(fresh.item.sales_total_ron), "RON")}.`;
+        }
+      }
+      return { refreshed: results.every((result) => result.status === "fulfilled"), receiptValueText };
+    } catch {
+      return { refreshed: false, receiptValueText: "" };
+    }
+  }
+
+  // Read-only státuszlekérés. Nem ismétli a POST-ot, ezért félbeszakadt hálózati válasznál is biztonságos.
+  async function readIncomingBatchState(batchId: string) {
+    const data = await aifIncomingWithDeadline(apiAifListImportBatches(50), 12000);
+    const items = (data.items || []) as AifImportBatchSummary[];
+    setBatches(items);
+    return items.find((item) => String(item.id) === String(batchId)) || null;
+  }
+
+  async function verifyIncomingCommitStatus(batchId = commitProgress?.batchId || "", receptionId = commitProgress?.receptionId || "") {
+    if (!batchId || commitStatusChecking) return;
+    setCommitStatusChecking(true);
+    try {
+      const found = await readIncomingBatchState(batchId);
+      if (found && String(found.status || "").toLowerCase() === "committed") {
+        const refreshed = await refreshIncomingCommitState(receptionId);
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        moveIncomingCommitProgress("success", refreshed.refreshed
+          ? "A készletre vétel az adatbázis szerint kész. A lista is frissült."
+          : "A készletre vétel igazoltan kész, a lista frissítése részleges. Használd a Frissítés gombot.");
+        setMessage("A készletre vétel ellenőrizve: a szerver szerint készletre vett. Újabb készletre vételt nem indítottunk.");
+      } else if (commitProgress?.phase === "partial" && found) {
+        // A szerver eredetileg visszaigazolta a részleges sikerességet, ezért ez nem ismeretlen állapot.
+        moveIncomingCommitProgress("partial", `A részleges import jelenlegi állapota: ${String(found.status || "ismeretlen")}. A hibás sorokat külön ellenőrizd.`);
+        setMessage("A részben készletre vett import állapotát frissítettük. A hibás sorokat a receptióban kell kijavítani.");
+      } else {
+        const state = found ? String(found.status || "ismeretlen") : "az import nem található az első 50 között";
+        setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+        moveIncomingCommitProgress("uncertain", `Jelenlegi állapot: ${state}. Nem indítottunk újabb mentést.`);
+        setMessage(`Az import (${state}) készletre vétele még nem igazolt. Ne nyomd meg még egyszer a Készletre vétel gombot.`);
+      }
+    } catch (error: any) {
+      setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+      moveIncomingCommitProgress("uncertain", "Az állapotlekérés nem sikerült. Újabb készletre vételt ne indíts.");
+      setMessage(`Az import ellenőrzése sikertelen: ${error?.message || "a szerver nem válaszolt"}. A készletműveletet nem ismételtük meg.`);
+    } finally {
+      setCommitStatusChecking(false);
+    }
+  }
+
+  async function handleUncertainIncomingCommit(batch: AifImportBatchSummary, error: unknown) {
+    const receptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || "");
+    moveIncomingCommitProgress("refreshing", "A válasz megszakadt, biztonságos állapotellenőrzés következik…");
+    let confirmed = false;
+    try {
+      const found = await readIncomingBatchState(String(batch.id));
+      confirmed = String(found?.status || "").toLowerCase() === "committed";
+    } catch { /* Az ellenőrzés nem ír a készletbe. */ }
+
+    if (confirmed) {
+      const refresh = await refreshIncomingCommitState(receptionId);
+      setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== String(batch.id)));
+      moveIncomingCommitProgress("success", refresh.refreshed
+        ? "A kapcsolat megszakadt, de az adatbázis igazolta a sikeres készletre vételt."
+        : "A készletre vétel megtörtént; a lista frissítése még ellenőrizhető.");
+      setMessage("A szerver válasza megszakadt, de az import státusza committed. A készletre vételt nem ismételtük meg.");
+    } else {
+      setUnconfirmedCommitBatchIds((current) => current.includes(String(batch.id)) ? current : [...current, String(batch.id)]);
+      moveIncomingCommitProgress("uncertain", "A mentés eredménye még nem igazolt. Az Állapot ellenőrzése biztonságos, az újraindítás nem.");
+      setMessage(`A szerver válasza bizonytalan (${error instanceof Error ? error.message : String(error)}). Ugyanazt a készletre vételt nem indítottuk újra; ellenőrizd az import állapotát.`);
+    }
+  }
+
   async function applyIncomingBatchCommitResult(batch: AifImportBatchSummary, result: any) {
-    const receptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || '').trim();
+    const receptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || "").trim();
     const committedRows = Array.isArray(result.committedRowResults)
       ? result.committedRowResults
       : Array.isArray(result.committedRows) ? result.committedRows : [];
@@ -4159,85 +4316,102 @@ function AllInIncomingReception(_props: Props) {
         receptionId: receptionId || null,
         committed: result.committed ?? null,
         failedCount: result.failedCount ?? null,
-        variantIds: Array.from(new Set(committedVariantIds.map((id: unknown) => String(id || '').trim()).filter(Boolean))),
+        variantIds: Array.from(new Set(committedVariantIds.map((id: unknown) => String(id || "").trim()).filter(Boolean))),
         committedRows: committedRows.length || Number(result.committedRows || result.committed || 0),
         committedRowResults: committedRows,
         rowCount: committedRows.length || Number(result.committed || 0),
         totalQty: committedTotalQty || null,
       });
     }
-    await Promise.all([loadBatches(), loadReceptions()]);
-    let receiptValueText = '';
-    if (receptionId) {
-      try {
-        const fresh = await apiAifGetReception(receptionId);
-        fillReceptionHeader(fresh, { clearDraftRows: false });
-        setIncomingStep('review');
-        if (fresh.item.sales_total_ron != null) {
-          receiptValueText = ` A Receptió új eladási összértéke: ${moneyText(toNumber(fresh.item.sales_total_ron), 'RON')}.`;
-        }
-      } catch {
-        // A készletre vétel sikerült; hálózati hiba nem változtat ezen.
-      }
-    }
+
+    moveIncomingCommitProgress("refreshing", "A készletművelet válasza megérkezett. Listák és recepció frissítése…");
+    const refreshed = await refreshIncomingCommitState(receptionId);
     const failedCount = Number(result.failedCount || result.failedRows?.length || 0);
+    const committedCount = Number(result.committed || 0);
+    const refreshNote = refreshed.refreshed ? "" : " A háttér-listafrissítés nem fejeződött be; a Frissítés gombbal újra lekérhető, F5 nélkül.";
+
     if (failedCount > 0) {
-      const firstError = result.failedRows?.[0]?.error || result.warning || 'Néhány sor nem került készletre.';
-      setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}.${receiptValueText} ${firstError}`);
+      const firstError = result.failedRows?.[0]?.error || result.warning || "Néhány sor nem került készletre.";
+      moveIncomingCommitProgress("partial", `Sikeres: ${committedCount} sor, hibás: ${failedCount}. Ellenőrizd a hibás sorokat.`, { committed: committedCount, failed: failedCount });
+      setMessage(`Készletre vétel részben kész. Sikeres: ${committedCount}, hibás: ${failedCount}.${refreshed.receiptValueText} ${firstError}${refreshNote}`);
     } else {
-      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.${receiptValueText} Az eladási ár döntése a Receptióban is érvényes; a beszállítói számla összege nem módosult.`);
+      moveIncomingCommitProgress("success", refreshed.refreshed
+        ? `${committedCount} sor sikeresen készletre véve. Minden lista frissült.`
+        : `${committedCount} sor sikeresen készletre véve. A lista frissítése részben elakadt.`, { committed: committedCount, failed: 0 });
+      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${committedCount}.${refreshed.receiptValueText} Az eladási ár döntése a Receptióban is érvényes; a beszállítói számla összege nem módosult.${refreshNote}`);
     }
+    setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== String(batch.id)));
   }
 
   async function commitBatch(batch: AifImportBatchSummary) {
-    if (!batch?.id) return;
+    if (!batch?.id || busy || commitInFlightRef.current) return;
+    if (unconfirmedCommitBatchIds.includes(String(batch.id))) {
+      setMessage("Ennek az importnak még bizonytalan a státusza. Előbb az alul megjelenő Állapot ellenőrzése gombot használd.");
+      return;
+    }
     if (Number(batch.row_count || 0) <= 0) {
-      setMessage('A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor.');
+      setMessage("A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor.");
       return;
     }
-    if (Number(batch.error_count || 0) > 0) {
-      setMessage('A készletre vétel nem indítható: az importban ellenőrzendő vagy hibás sor van.');
+    if (Number(batch.error_count || 0) > 0 || String(batch.status || "") === "committed") {
+      setMessage("Az import már készletre van véve, vagy még hibás sorokat tartalmaz. Frissítsd a listát.");
       return;
     }
+    commitInFlightRef.current = String(batch.id);
     setBusy(true);
-    setMessage('');
+    setMessage("");
+    startIncomingCommitProgress(batch);
+    let postStarted = false;
     try {
-      const receptionId = String((batch as any).reception_id || (batch as any).receptionId || '').trim();
+      const receptionId = String((batch as any).reception_id || (batch as any).receptionId || "").trim();
       if (receptionId) {
-        const receipt = await apiAifGetReception(receptionId);
+        const receipt = await aifIncomingWithDeadline(apiAifGetReception(receptionId), 25000);
         const rowIds = (receipt.rows || []).filter((row: any) =>
-          String(row.batch_id || '') === String(batch.id)
-          && !['ignored','committed'].includes(String(row.status || '').toLowerCase())
+          String(row.batch_id || "") === String(batch.id)
+          && !["ignored", "committed"].includes(String(row.status || "").toLowerCase())
         ).map((row: any) => String(row.id));
         if (!rowIds.length) {
-          setMessage('A kiválasztott importban nincs még készletre vehető sor. Frissítsd az importlistát.');
+          moveIncomingCommitProgress("failed", "Ebben az importban nincs készletre vehető sor; frissítsd a listát.");
+          setMessage("A kiválasztott importban nincs még készletre vehető sor. Frissítsd az importlistát.");
           return;
         }
-        const review = await apiAifPreviewReceptionPrices(receptionId, rowIds);
+        const review = await aifIncomingWithDeadline(apiAifPreviewReceptionPrices(receptionId, rowIds), 30000);
         if (review.items.length) {
           setIncomingPriceReview({ ...review, receptionId, batchId: String(batch.id), rowIds });
           setIncomingPriceChoices({});
-          setIncomingPriceError('');
+          setIncomingPriceError("");
+          setCommitProgress(null); // A folyamat az ár jóváhagyására vár, nincs futó készletművelet.
           return;
         }
       }
-      const result = await apiAifCommitImportBatch(batch.id);
+      postStarted = true;
+      moveIncomingCommitProgress("committing", "A szerver készletre veszi a sorokat. Nincs még igazolt kész eredmény; ne indítsd újra.");
+      const result = await aifIncomingWithDeadline(apiAifCommitImportBatch(batch.id), 165000);
       await applyIncomingBatchCommitResult(batch, result);
     } catch (error: any) {
-      await Promise.all([loadBatches(), loadReceptions()]).catch(() => undefined);
-      setMessage(error?.message || 'A készletre vétel nem sikerült. Ellenőrizd az import sorokat.');
+      if (postStarted) {
+        await handleUncertainIncomingCommit(batch, error);
+      } else {
+        moveIncomingCommitProgress("failed", error?.message || "Az ellenőrzés nem sikerült.");
+        setMessage(error?.message || "A készletre vétel előzetes ellenőrzése nem sikerült. Nem indult készletművelet.");
+      }
     } finally {
+      commitInFlightRef.current = null;
       setBusy(false);
     }
   }
 
   async function applyIncomingPriceChoices() {
-    if (!incomingPriceReview || busy) return;
-    if (incomingPriceReview.items.some((item) => !incomingPriceChoices[item.variantId])) {
-      setIncomingPriceError('Minden eltérő eladási árnál válassz: régi vagy új.');
+    if (!incomingPriceReview || busy || commitInFlightRef.current) return;
+    if (unconfirmedCommitBatchIds.includes(incomingPriceReview.batchId)) {
+      setIncomingPriceError("A korábbi készletművelet eredménye nem igazolt. Előbb ellenőrizd az állapotot.");
       return;
     }
-    const choices: Record<string,AifIncomingPriceChoice> = {};
+    if (incomingPriceReview.items.some((item) => !incomingPriceChoices[item.variantId])) {
+      setIncomingPriceError("Minden eltérő eladási árnál válassz: régi vagy új.");
+      return;
+    }
+    const choices: Record<string, AifIncomingPriceChoice> = {};
     for (const item of incomingPriceReview.items) {
       for (const rowId of item.rowIds) {
         choices[rowId] = {
@@ -4248,18 +4422,27 @@ function AllInIncomingReception(_props: Props) {
         };
       }
     }
+    const batch = batches.find((entry) => String(entry.id) === incomingPriceReview.batchId);
+    if (!batch) {
+      setIncomingPriceError("Az import nem található. Frissítsd az importlistát.");
+      return;
+    }
+
+    commitInFlightRef.current = String(batch.id);
     setBusy(true);
-    setIncomingPriceError('');
+    setIncomingPriceError("");
+    startIncomingCommitProgress(batch, "committing");
     try {
-      const batch = batches.find((entry) => String(entry.id) === incomingPriceReview.batchId);
-      if (!batch) throw new Error('Az import nem található. Frissítsd az importlistát.');
-      const result = await apiAifCommitImportBatch(incomingPriceReview.batchId, { priceChoices: choices });
+      const result = await aifIncomingWithDeadline(apiAifCommitImportBatch(batch.id, { priceChoices: choices }), 165000);
       setIncomingPriceReview(null);
       setIncomingPriceChoices({});
       await applyIncomingBatchCommitResult(batch, result);
     } catch (error: any) {
-      setIncomingPriceError(error?.message || 'Az ár-választás és készletre vétel nem sikerült. Frissítsd az ár-egyeztetést.');
+      setIncomingPriceReview(null); // Bizonytalan POST után nem kínálunk véletlen dupla jóváhagyást.
+      setIncomingPriceChoices({});
+      await handleUncertainIncomingCommit(batch, error);
     } finally {
+      commitInFlightRef.current = null;
       setBusy(false);
     }
   }
@@ -5410,7 +5593,7 @@ function AllInIncomingReception(_props: Props) {
               <div className="flex flex-wrap gap-2">
                 <button type="button" className={neutralBtn} disabled={busy} onClick={() => void refreshIncomingPriceReview()}><RefreshCw size={14}/> Frissítés</button>
                 <button type="button" className={neutralBtn} disabled={busy} onClick={() => {setIncomingPriceReview(null);setIncomingPriceChoices({});setIncomingPriceError('');}}>Mégse</button>
-                <button type="button" className={primaryBtn} disabled={busy || incomingPriceReview.items.some((item)=>!incomingPriceChoices[item.variantId])} onClick={() => void applyIncomingPriceChoices()}>
+                <button type="button" className={primaryBtn} disabled={busy || unconfirmedCommitBatchIds.includes(incomingPriceReview.batchId) || incomingPriceReview.items.some((item)=>!incomingPriceChoices[item.variantId])} onClick={() => void applyIncomingPriceChoices()}>
                   {busy ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle size={14}/>} {busy ? 'Készletre vétel…' : 'Árak jóváhagyása és készletre vétel'}
                 </button>
               </div>
@@ -5838,6 +6021,85 @@ function AllInIncomingReception(_props: Props) {
           </div>
         </div>
       )}
+
+      {commitProgress && typeof document !== "undefined" ? createPortal(
+        <>
+          <style>{`
+            @keyframes aifIncomingToastRise {
+              from { opacity: 0; transform: translate(-50%, 30px) scale(.97); }
+              to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            }
+            @keyframes aifIncomingToastBeam {
+              0% { transform: translateX(-110%); }
+              100% { transform: translateX(340%); }
+            }
+            @media (prefers-reduced-motion: reduce) {
+              .aif-incoming-toast { animation: none !important; }
+              .aif-incoming-beam { animation: none !important; }
+            }
+          `}</style>
+          <div
+            className="aif-incoming-toast fixed bottom-[max(12px,env(safe-area-inset-bottom))] left-1/2 z-[2100] w-[min(calc(100vw-24px),570px)] overflow-hidden rounded-[20px] border border-[#b8fff7]/45 bg-[#263348] text-white shadow-[0_24px_80px_rgba(0,0,0,.55),0_0_0_1px_rgba(255,255,255,.08)]"
+            style={{ animation: "aifIncomingToastRise .38s cubic-bezier(.2,.85,.25,1) both" }}
+            role="status"
+            aria-live="polite"
+            aria-label="Bevételezés folyamatjelző"
+          >
+            <div className="absolute inset-x-0 top-0 h-[3px] overflow-hidden bg-white/10">
+              {incomingCommitIsWorking(commitProgress.phase) ? (
+                <div className="aif-incoming-beam h-full w-[36%] rounded-full bg-gradient-to-r from-transparent via-[#a9fff4] to-[#36c9c3] shadow-[0_0_16px_rgba(99,216,211,.65)]" style={{ animation: "aifIncomingToastBeam 2.1s ease-in-out infinite" }} />
+              ) : (
+                <div className={`h-full w-full ${commitProgress.phase === "success" ? "bg-[#67d4d1]" : commitProgress.phase === "partial" || commitProgress.phase === "uncertain" ? "bg-amber-300" : "bg-rose-400"}`} />
+              )}
+            </div>
+            <div className="p-3.5 sm:p-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className={`mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${commitProgress.phase === "success" ? "border-emerald-200/35 bg-emerald-400/15 text-emerald-100" : commitProgress.phase === "partial" || commitProgress.phase === "uncertain" ? "border-amber-200/35 bg-amber-400/15 text-amber-100" : commitProgress.phase === "failed" ? "border-rose-200/35 bg-rose-400/15 text-rose-100" : "border-[#9be9e5]/35 bg-[#208d8b]/22 text-[#bff8f5]"}`}>
+                  {incomingCommitIsWorking(commitProgress.phase) ? <RefreshCw size={19} className="animate-spin" /> : commitProgress.phase === "success" ? <CheckCircle size={20} /> : <AlertTriangle size={19} />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="text-[11px] uppercase tracking-[0.11em] text-[#cffffd]/75">Áru bevételezés</p>
+                    <span className="rounded-md border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-white/80">{commitProgress.rowCount} sor</span>
+                    <span className="ml-auto text-[11px] tabular-nums text-white/55">{Math.floor(commitElapsedSec / 60)}:{String(commitElapsedSec % 60).padStart(2, "0")}</span>
+                  </div>
+                  <p className="mt-1 truncate text-[11px] text-white/48" title={commitProgress.sourceName}>{commitProgress.sourceName}</p>
+                  <p className="mt-1.5 text-[13px] leading-5 text-white/92">{commitProgress.detail}</p>
+                </div>
+                {!incomingCommitIsWorking(commitProgress.phase) && commitProgress.phase !== "uncertain" ? (
+                  <button type="button" className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/16 bg-white/[0.06] text-white/75 transition hover:bg-white/15 hover:text-white" onClick={() => setCommitProgress(null)} aria-label="Folyamatjelző bezárása" title="Bezárás"><X size={14} /></button>
+                ) : null}
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-1.5 text-center text-[10px]">
+                {([
+                  ["checking", "Ellenőrzés"],
+                  ["committing", "Készletre vétel"],
+                  ["refreshing", "Frissítés"],
+                ] as Array<[IncomingCommitPhase, string]>).map(([phase, title], index) => {
+                  const rank = commitProgress.phase === "checking" ? 0 : commitProgress.phase === "committing" ? 1 : 2;
+                  const done = !["uncertain", "failed"].includes(commitProgress.phase) && index < rank;
+                  const active = commitProgress.phase === phase;
+                  return <div key={phase} className={`rounded-lg border px-1.5 py-1.5 ${active ? "border-[#91f1e9]/45 bg-[#208d8b]/24 text-white" : done || commitProgress.phase === "success" ? "border-emerald-200/20 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-white/[0.035] text-white/45"}`}>{done || commitProgress.phase === "success" ? "✓ " : ""}{title}</div>;
+                })}
+              </div>
+              {(commitProgress.phase === "uncertain" || commitProgress.phase === "partial" || commitProgress.phase === "success") && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+                  <span className="text-[11px] leading-4 text-white/50">{commitProgress.phase === "uncertain" ? "Csak állapotlekérés, nincs újabb mentés" : commitProgress.phase === "partial" ? "A hibás sorok külön ellenőrzendők" : "Készletre vétel visszaigazolva"}</span>
+                  <button
+                    type="button"
+                    disabled={commitStatusChecking || Boolean(commitInFlightRef.current)}
+                    onClick={() => void verifyIncomingCommitStatus()}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#93eee7]/35 bg-[#208d8b]/24 px-3 text-[11px] text-[#e6fffc] transition hover:bg-[#208d8b]/42 disabled:cursor-wait disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={commitStatusChecking ? "animate-spin" : ""} /> {commitStatusChecking ? "Ellenőrzés…" : "Állapot ellenőrzése"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </>,
+        document.body,
+      ) : null}
 
       <div className={wrap}>
         <header className={topCard}>
@@ -6542,7 +6804,7 @@ function AllInIncomingReception(_props: Props) {
                   <div className="flex flex-wrap gap-2 sm:justify-end">
                     <button
                       className={primaryBtn}
-                      disabled={busy || b.status === "committed" || Number(b.row_count || 0) <= 0 || Number(b.error_count || 0) > 0}
+                      disabled={busy || unconfirmedCommitBatchIds.includes(String(b.id)) || b.status === "committed" || Number(b.row_count || 0) <= 0 || Number(b.error_count || 0) > 0}
                       onClick={() => commitBatch(b)}
                       title={Number(b.row_count || 0) <= 0 ? "Nincs mentett terméksor ehhez az importhoz." : Number(b.error_count || 0) > 0 ? "Az importban ellenőrzendő vagy hibás sor van." : ""}
                       type="button"
@@ -6551,9 +6813,9 @@ function AllInIncomingReception(_props: Props) {
                     </button>
                     <button
                       className={dangerBtn}
-                      disabled={busy}
+                      disabled={busy || unconfirmedCommitBatchIds.includes(String(b.id))}
                       onClick={() => setDeleteImportBatchTarget(b)}
-                      title="Csak az import előzmény törlése. Termék/készlet marad."
+                      title={unconfirmedCommitBatchIds.includes(String(b.id)) ? "Bizonytalan készletművelet: előbb az állapotot ellenőrizd." : "Csak az import előzmény törlése. Termék/készlet marad."}
                       type="button"
                     >
                       <Trash2 size={14} /> Törlés
