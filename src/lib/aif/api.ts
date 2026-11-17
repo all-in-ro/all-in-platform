@@ -959,6 +959,62 @@ export type AifCommitImportBatchResult = {
   failedRows?: Array<{ id?: string; rowNo?: number | string | null; error?: string; code?: string | null; detail?: string | null; constraint?: string | null }>;
 };
 
+// V17: rövid, tranzakciónként legfeljebb négy soros bevételezés.
+// Az állapotlekérés csak olvas; a POST egyetlen biztonságos részletet véglegesít.
+export type AifImportCommitProgress = {
+  ok?: boolean;
+  batchId: string;
+  receptionId?: string | null;
+  batchStatus: string;
+  declaredRows: number;
+  totalRows: number;
+  committedRows: number;
+  processableRows: number;
+  errorRows: number;
+  ignoredRows: number;
+  remainingRows: number;
+  expectedQty: number;
+  committedQty: number;
+  movementCount: number;
+  movementQty: number;
+  processing: boolean;
+  completed: boolean;
+  needsReview: boolean;
+};
+
+export type AifCommitImportBatchStepResult = Partial<AifCommitImportBatchResult> & {
+  ok: boolean;
+  busy?: boolean;
+  processing?: boolean;
+  already?: boolean;
+  noPending?: boolean;
+  selectedRows?: number;
+  progress?: AifImportCommitProgress | null;
+};
+
+export function apiAifGetImportCommitProgress(batchId: string) {
+  return fetchAifJSON<AifImportCommitProgress>(
+    `/import-batches/${encodeURIComponent(batchId)}/commit-progress`,
+    { cache: "no-store" },
+  );
+}
+
+export function apiAifCommitImportBatchStep(
+  batchId: string,
+  options?: { priceChoices?: Record<string, AifIncomingPriceChoice>; limit?: number },
+) {
+  return fetchAifJSON<AifCommitImportBatchStepResult>(
+    `/import-batches/${encodeURIComponent(batchId)}/commit-step`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        priceChoices: options?.priceChoices || {},
+        limit: options?.limit ?? 4,
+      }),
+    },
+  );
+}
+
 export function apiAifCommitImportBatch(batchId: string, options?: { priceChoices?: Record<string, AifIncomingPriceChoice> }) {
   return fetchAifJSON<AifCommitImportBatchResult>(
     `/import-batches/${encodeURIComponent(batchId)}/commit`,
