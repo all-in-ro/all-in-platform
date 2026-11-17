@@ -6455,7 +6455,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ) / 100
       ELSE 1::numeric
     END`;
+    // V19: a lista előbb kiválasztja a kért recepciókat, és csak ezután összesít.
+    // Korábban a sorok és a készletmozgások egyidejű JOIN-ja N*M sorra
+    // sokszorozta a teljes adatot (pl. 51 terméksor × 51 mozgás = 2601 sor).
+    // Ez lassította az oldalt, és a darabszámlálókat is hibássá tehette.
+    // Kizárólag olvasó SELECT: készlet, bizonylat és ár nem módosul.
     const sql = `
+      WITH selected_receptions AS (
+        SELECT r.id
+        FROM aif_receptions r
+        LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+        LEFT JOIN aif_locations l ON l.id=r.target_location_id
+        ${where.length ? "WHERE " + where.join(" AND ") : ""}
+        ORDER BY r.created_at DESC
+        LIMIT ${limitParam}
+      )
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
         r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
@@ -6465,28 +6479,48 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         s.name AS supplier_name,
         l.name AS location_name,
         po.order_number AS purchase_order_number,
-        count(DISTINCT b.id)::int AS import_batches,
-        count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
-        count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
-        count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
-        count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
-        count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
-        count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
+        import_stats.import_batches,
+        import_stats.import_rows,
+        import_stats.committed_rows,
+        import_stats.error_rows,
+        import_stats.ignored_rows,
+        import_stats.remaining_rows,
+        import_stats.committed_batches,
         COALESCE(sale_totals.sales_total_ron,0)::numeric(14,2) AS sales_total_ron,
         COALESCE(sale_totals.current_sales_total_ron,sale_totals.sales_total_ron,0)::numeric(14,2) AS current_sales_total_ron,
-        (count(sm.id) > 0) AS has_stock_movements,
+        stock_flags.has_stock_movements,
         (
           r.status <> 'committed'
-          AND count(DISTINCT b.id) FILTER (WHERE b.status='committed') = 0
-          AND count(sm.id) = 0
+          AND import_stats.committed_batches = 0
+          AND NOT stock_flags.has_stock_movements
         ) AS can_delete
-      FROM aif_receptions r
+      FROM selected_receptions selected
+      JOIN aif_receptions r ON r.id=selected.id
       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
       LEFT JOIN aif_locations l ON l.id=r.target_location_id
       LEFT JOIN aif_purchase_orders po ON po.id=r.purchase_order_id
-      LEFT JOIN aif_import_batches b ON b.reception_id=r.id
-      LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
-      LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
+      LEFT JOIN LATERAL (
+        SELECT
+          count(DISTINCT b.id)::int AS import_batches,
+          count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
+          count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+          count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
+          count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
+          count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
+          count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches
+        FROM aif_import_batches b
+        LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+        WHERE b.reception_id=r.id
+      ) import_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT EXISTS (
+          SELECT 1
+          FROM aif_import_batches b_stock
+          JOIN aif_stock_movements sm
+            ON sm.source_type='import_batch' AND sm.source_id=b_stock.id::text
+          WHERE b_stock.reception_id=r.id
+        ) AS has_stock_movements
+      ) stock_flags ON true
       LEFT JOIN LATERAL (
         SELECT
           round(COALESCE(sum(
@@ -6504,10 +6538,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         LEFT JOIN aif_product_variants v_sale ON v_sale.id=rw_sale.variant_id
         WHERE b_sale.reception_id=r.id AND rw_sale.status <> 'ignored'
       ) sale_totals ON true
-      ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      GROUP BY r.id, s.name, l.name, po.order_number, sale_totals.sales_total_ron, sale_totals.current_sales_total_ron
       ORDER BY r.created_at DESC
-      LIMIT ${limitParam}
     `;
     const r = await pool.query(sql, args);
     res.json({ items: r.rows });
