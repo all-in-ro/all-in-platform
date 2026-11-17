@@ -740,6 +740,20 @@ function shiftCustomerPaymentTotal(snapshot: AifShopShiftSnapshot | null | undef
   );
 }
 
+// AIF_SELLER_DAILY_REVENUE_SPLIT_V22
+// A teljes napi bevételt kizárólag a már meglévő, könyvelt fizetésekből
+// bontjuk fel: az új eladások után befolyt pénz + tartozásbefizetések.
+// Ne számoljuk hozzá a kezdő kasszát, és ne könyveljünk új pénzmozgást.
+function shiftRevenueBreakdown(snapshot: AifShopShiftSnapshot | null | undefined) {
+  const collectedCents = Math.round(shiftCollectedTotal(snapshot) * 100);
+  const debtCents = Math.round(shiftCustomerPaymentTotal(snapshot) * 100);
+  return {
+    collected: collectedCents / 100,
+    newSales: (collectedCents - debtCents) / 100,
+    debtPayments: debtCents / 100,
+  };
+}
+
 function shiftStatusLabel(status?: string | null) {
   if (status === "accepted") return "Átvéve";
   if (status === "cancelled") return "Visszavonva";
@@ -3551,6 +3565,8 @@ export default function AllInShopOperations({
   );
   const historyAvailable = datedSummaryData?.history?.basis === "selected_day_end";
   const historyComplete = datedSummaryData?.history?.complete !== false;
+  const fullDayRevenueSplit = shiftRevenueBreakdown(datedShiftData?.totals);
+  const ownDayRevenueSplit = shiftRevenueBreakdown(currentEmployeeDay);
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -3829,8 +3845,8 @@ export default function AllInShopOperations({
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 border-t border-white/16 pt-2 text-[10px] text-white/72 sm:grid-cols-3">
                     <span className="text-[12px]">Kedvezmény: <strong className="font-normal text-white">{formatMoney(dayCollectedDiscount)}</strong></span>
-                    <span className="text-[12px]">Eladás: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
-                    <span>Tartozásrendezés: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
+                    <span className="text-[12px]">Új eladásokból befolyt: <strong className="font-normal text-white">{formatMoney(daySalesRevenue)}</strong></span>
+                    <span className="text-[12px]">Tartozás befizetése: <strong className="font-normal text-white">{formatMoney(dayCustomerPaymentTotal)}</strong></span>
                   </div>
                 </button>
                 <div className="flex min-w-0 flex-col justify-between rounded-2xl border border-white/12 bg-[#374357] px-3.5 py-3">
@@ -4256,11 +4272,20 @@ export default function AllInShopOperations({
                           {(numberValue(datedShiftData?.totals.voucherIssuedTotal)>0.005 || numberValue(datedShiftData?.totals.voucherRedeemedTotal)>0.005) ? (
                             <p className="mt-1 text-[10px] text-[#bdf8f5]/70">Utalvány eladva: {formatMoney(datedShiftData?.totals.voucherIssuedTotal)} · Beváltva: {formatMoney(datedShiftData?.totals.voucherRedeemedTotal)}</p>
                           ) : null}
-                          <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-white/44">
-                            <span>Bruttó <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</strong></span>
-                            <span>Kedvezmény <strong className="font-normal text-amber-100/86">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</strong></span>
-                            <span>Eladás <strong className="font-normal text-white/78">{formatMoney(datedShiftData?.totals.revenue || 0)}</strong></span>
-                            <span>Nyitó kassza <strong className="font-normal text-[#d7fffd]">{datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}</strong></span>
+                          <div className="mt-2.5 grid grid-cols-2 gap-2 text-left" aria-label="Napi bevétel részletes bontása">
+                            <div className="rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/15 px-2.5 py-2">
+                              <p className="text-[10px] leading-4 text-[#cffffd]/78">Új eladásokból befolyt</p>
+                              <p className="mt-1 whitespace-nowrap text-[15px] tabular-nums text-white">{formatMoney(fullDayRevenueSplit.newSales)}</p>
+                            </div>
+                            <div className="rounded-xl border border-white/14 bg-white/[0.045] px-2.5 py-2">
+                              <p className="text-[10px] leading-4 text-white/65">Tartozások befizetése</p>
+                              <p className="mt-1 whitespace-nowrap text-[15px] tabular-nums text-white">{formatMoney(fullDayRevenueSplit.debtPayments)}</p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap justify-end gap-x-3 gap-y-1 text-[9px] text-white/50">
+                            <span>Bruttó: <span className="text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</span></span>
+                            <span>Kedvezmény: <span className="text-amber-100/86">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</span></span>
+                            <span>Nyitó kassza: <span className="text-[#d7fffd]">{datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}</span></span>
                           </div>
                         </div>
                       </div>
@@ -4300,13 +4325,20 @@ export default function AllInShopOperations({
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5">
                           <p className="text-[9px] text-white/38">Napi bevétel</p>
                           <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(shiftCollectedTotal(currentEmployeeDay))}</p>
-                          {shiftCustomerPaymentTotal(currentEmployeeDay) > 0.005 ? (
-                            <p className="mt-1 text-[8px] text-[#bdf8f5]/60">ebből tartozás {formatMoney(shiftCustomerPaymentTotal(currentEmployeeDay))}</p>
-                          ) : null}
                         </div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Eladás</p><p className="mt-1 text-sm">{currentEmployeeDay?.transactions || 0}</p></div>
                         <div className="rounded-xl border border-white/10 bg-black/10 p-2.5"><p className="text-[9px] text-white/38">Darab</p><p className="mt-1 text-sm">{currentEmployeeDay?.itemsSold || 0}</p></div>
                         <div className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 p-2.5"><p className="text-[9px] text-[#cffffd]/48">Kezdő kassza</p><p className="mt-1 text-sm text-[#d7fffd]">{currentEmployeeDay?.openingCash == null ? "–" : formatMoney(currentEmployeeDay.openingCash)}</p></div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2" aria-label="Saját napi bevétel bontása">
+                        <div className="rounded-xl border border-[#9be9e5]/24 bg-[#2a8d8b]/12 px-3 py-2">
+                          <p className="text-[10px] leading-4 text-[#cffffd]/72">Új eladásokból befolyt</p>
+                          <p className="mt-1 text-sm tabular-nums text-white">{formatMoney(ownDayRevenueSplit.newSales)}</p>
+                        </div>
+                        <div className="rounded-xl border border-white/12 bg-black/10 px-3 py-2">
+                          <p className="text-[10px] leading-4 text-white/54">Tartozások befizetése</p>
+                          <p className="mt-1 text-sm tabular-nums text-white">{formatMoney(ownDayRevenueSplit.debtPayments)}</p>
+                        </div>
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><p className="text-[9px] text-white/38">Készpénz</p><p className="mt-1 text-sm">{formatMoney(shiftPayment(currentEmployeeDay, "cash").amount)}</p></div>
@@ -4327,6 +4359,7 @@ export default function AllInShopOperations({
                       <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] gap-2.5">
                         {(datedShiftData?.employees || []).map((employee) => {
                           const active = employeeKey(employee.name) === employeeKey(actor);
+                          const employeeRevenueSplit = shiftRevenueBreakdown(employee);
                           return (
                             <button type="button" onClick={() => void openEmployeeSales(employee)} key={employee.name} className={`rounded-2xl border p-3.5 text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/48 hover:shadow-[0_10px_24px_rgba(0,0,0,0.18)] active:translate-y-0 ${active ? "border-[#9be9e5]/42 bg-[#2a8d8b]/16" : "border-white/10 bg-[#293548]"}`} title={`${employee.name} napi termékeinek megnyitása`}>
                               <div className="flex items-start justify-between gap-3">
@@ -4338,9 +4371,16 @@ export default function AllInShopOperations({
                               </div>
                               <p className="mt-3 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(shiftCollectedTotal(employee))}</p>
                               <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-white/32">Napi bevétel</p>
-                              <p className="mt-1 text-[9px] text-white/36">
-                                Eladás {formatMoney(employee.revenue)}{shiftCustomerPaymentTotal(employee) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(employee))}` : ""}
-                              </p>
+                              <div className="mt-2 grid grid-cols-2 gap-1.5" aria-label={`${employee.name} napi bevételének bontása`}>
+                                <div className="rounded-lg border border-[#9be9e5]/20 bg-[#2a8d8b]/12 px-2 py-2">
+                                  <p className="text-[10px] leading-4 text-[#cffffd]/74">Új eladásokból befolyt</p>
+                                  <p className="mt-1 text-[12px] tabular-nums text-white">{formatMoney(employeeRevenueSplit.newSales)}</p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-black/10 px-2 py-2">
+                                  <p className="text-[10px] leading-4 text-white/54">Tartozások befizetése</p>
+                                  <p className="mt-1 text-[12px] tabular-nums text-white">{formatMoney(employeeRevenueSplit.debtPayments)}</p>
+                                </div>
+                              </div>
                               <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
                                 <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2"><p className="text-white/40">Bruttó</p><p className="mt-1 text-[12px] text-white">{formatMoney(employee.salesBeforeDiscount)}</p></div>
                                 <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2"><p className="text-white/40">Kedvezmény</p><p className="mt-1 text-[12px] text-amber-100">{formatMoney(employee.discountTotal)}</p></div>
@@ -5768,7 +5808,7 @@ export default function AllInShopOperations({
                       <div className="col-span-2 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 p-3">
                         <p className="text-[9px] text-[#cffffd]/55">Műszak befolyt összeg</p>
                         <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(shiftCollectedTotal(handoverShiftPreview))}</p>
-                        <p className="mt-1 text-[8px] text-white/40">Eladás {formatMoney(handoverShiftPreview?.revenue || 0)}{shiftCustomerPaymentTotal(handoverShiftPreview) > 0.005 ? ` • tartozás ${formatMoney(shiftCustomerPaymentTotal(handoverShiftPreview))}` : ""}</p>
+                        <p className="mt-1 text-[10px] text-white/58">Új eladásokból befolyt: {formatMoney(shiftRevenueBreakdown(handoverShiftPreview).newSales)} • Tartozások befizetése: {formatMoney(shiftRevenueBreakdown(handoverShiftPreview).debtPayments)}</p>
                       </div>
                       <div className="rounded-xl border border-white/10 bg-black/10 p-3"><p className="text-[9px] text-white/38">Bruttó érték</p><p className="mt-1 text-base">{formatMoney(handoverShiftPreview?.salesBeforeDiscount || 0)}</p></div>
                       <div className="rounded-xl border border-amber-200/16 bg-amber-400/8 p-3"><p className="text-[9px] text-amber-100/58">Kedvezmény</p><p className="mt-1 text-base text-amber-50">{formatMoney(handoverShiftPreview?.discountTotal || 0)}</p></div>
