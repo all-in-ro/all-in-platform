@@ -9247,6 +9247,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const existingReceptionId = emptyToNull(body.receptionId || body.reception_id);
       let receptionId = null;
 
+      // V18: azonos beszállító + számlaszám + számlaév nem hozhat létre
+      // második recepciót. A meglévő explicit azonosító folytatható.
+      const invoiceKey = `${String(supplier.id)}:${String(reception.invoiceDate).slice(0,4)}:${String(reception.invoiceNumber).trim().toLowerCase()}`;
+      await client.query(`SELECT pg_advisory_xact_lock(71818,hashtext($1::text))`, [invoiceKey]);
+      const existingInvoice = await client.query(
+        `SELECT id::text AS id, aviz_number, status
+         FROM aif_receptions
+         WHERE supplier_id=$1 AND lower(btrim(invoice_number))=lower(btrim($2))
+           AND EXTRACT(YEAR FROM invoice_date)=EXTRACT(YEAR FROM $3::date)
+           AND status <> 'cancelled'
+           AND ($4::text IS NULL OR id::text<>$4::text)
+         ORDER BY created_at ASC LIMIT 1`,
+        [supplier.id, reception.invoiceNumber, reception.invoiceDate, existingReceptionId]
+      );
+      if (existingInvoice.rowCount) {
+        await client.query('ROLLBACK');
+        const item = existingInvoice.rows[0];
+        return res.status(409).json({
+          code: 'duplicate_reception_invoice',
+          existingReceptionId: item.id,
+          existingAviz: item.aviz_number || null,
+          error: `Ez a beszállítói számla már szerepel a rendszerben (${item.aviz_number || item.id}). Ne mentsd újra az XLS-t! Válaszd a Meglévő receptió folytatása lehetőséget.`,
+        });
+      }
+
       if (existingReceptionId) {
         const currentReception = await client.query(
           `SELECT id, status FROM aif_receptions WHERE id::text=$1 FOR UPDATE`,
@@ -10401,6 +10426,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
 
     const batch = batchRes.rows[0];
+    // A sorfeldolgozó összes hívója alatt is érvényes a dupla számla védelme.
+    await assertUniqueIncomingReceptionBeforeCommit(client, batch.reception_id);
     if (batch.status === "cancelled") {
       const e = new Error("Törölt import nem vehető készletre.");
       e.statusCode = 400;
@@ -10815,6 +10842,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const groups = new Map();
     const allPricesByVariant = new Map();
+    const priceObservations = [];
     let selectedQty = 0;
     const identificationWarnings = [];
     for (const row of found.rows) {
@@ -10847,6 +10875,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const existing = candidates.rows[0];
       if (!existing) continue;
       const previousPrice = aifPriceNumber(existing.sell_price);
+      priceObservations.push({
+        variantId: String(existing.id),
+        rowId: String(row.id),
+        incomingPrice,
+      });
       for(const source of target.receiptMergeSources || []) {
         const oldPrice=aifPriceNumber(source.sell_price);
         if(oldPrice===null || (previousPrice!==null && !aifPriceChanged(oldPrice,previousPrice))) continue;
@@ -10916,16 +10949,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
       seenPrices.set(item.variantId,item.incomingPrice);
     }
-    return { ok:true,items:Array.from(groups.values()), selectedRowCount:found.rowCount,selectedQty, identificationWarnings };
+    return { ok:true,items:Array.from(groups.values()), selectedRowCount:found.rowCount,selectedQty, identificationWarnings, priceObservations };
   }
 
   router.post('/receptions/:id/price-review',requireAuthed,async(req,res)=>{
+    const startedAt = Date.now();
+    const rowCount = Array.isArray(req.body?.rowIds) ? req.body.rowIds.length : 0;
     try {
       const result = await incomingReceptionPriceReview(pool,text(req.params.id),req.body?.rowIds);
+      const durationMs = Date.now()-startedAt;
+      if (durationMs > 2000) console.info('AIF reception price preview', {
+        receptionId: text(req.params.id), rows: rowCount, durationMs,
+        priceDifferences: result.items.length, identificationWarnings: result.identificationWarnings?.length || 0,
+      });
+      res.setHeader('Cache-Control','no-store');
       return res.json(result);
     } catch(error) {
       const status=Number(error?.statusCode||500);
-      console.error('AIF reception price preview failed',error);
+      console.error('AIF reception price preview failed', {
+        receptionId:text(req.params.id), rows:rowCount, durationMs:Date.now()-startedAt, error,
+      });
       return res.status(status>=400&&status<600?status:500).json({error:error?.message||'Az ár-egyeztetés nem sikerült.'});
     }
   });
@@ -10959,6 +11002,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     }
     await aifIncomingChunkSchemaPromise;
+  }
+
+  // V18: ha ugyanahhoz a beszállítói számlához több recepció van, EGYIKET
+  // sem szabad véglegesíteni, amíg a duplikátumot nem rendeztük.
+  // Az előnézetet és az állapotellenőrzést nem korlátozzuk.
+  async function assertUniqueIncomingReceptionBeforeCommit(db, receptionId) {
+    if (!receptionId) return;
+    const conflict = await db.query(`
+      SELECT duplicate.id::text AS duplicate_id, duplicate.aviz_number
+      FROM aif_receptions original
+      JOIN aif_receptions duplicate
+        ON duplicate.supplier_id=original.supplier_id
+       AND lower(btrim(duplicate.invoice_number))=lower(btrim(original.invoice_number))
+       AND EXTRACT(YEAR FROM duplicate.invoice_date)=EXTRACT(YEAR FROM original.invoice_date)
+       AND duplicate.id<>original.id
+       AND duplicate.status<>'cancelled'
+      WHERE original.id=$1::uuid
+      LIMIT 1`, [receptionId]);
+    if (!conflict.rowCount) return;
+    const error = new Error(`Ehhez a beszállítói számlához több recepció létezik. Az egyik másolat: ${conflict.rows[0].aviz_number || conflict.rows[0].duplicate_id}. Előbb a duplikátumot kell rendezni; készlet nem változott.`);
+    error.statusCode = 409;
+    error.code = 'duplicate_reception_invoice';
+    throw error;
   }
 
   // AIF_INCOMING_CHUNK_COMMIT_V17_BEGIN
@@ -11062,6 +11128,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (batch.status === 'cancelled') {
         const error = new Error('A törölt import nem vehető készletre.'); error.statusCode=409; throw error;
       }
+      await assertUniqueIncomingReceptionBeforeCommit(client, batch.reception_id);
       if (batch.status === 'committed') {
         await client.query('COMMIT'); transactionOpen = false;
         return res.json({ok:true, committed:0, already:true,
@@ -11141,6 +11208,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT reception_id FROM aif_import_batches WHERE id::text=$1`, [batchId]
       );
       const receptionId = batchReceipt.rows[0]?.reception_id || null;
+      await assertUniqueIncomingReceptionBeforeCommit(client, receptionId);
       if (receptionId) {
         const pending = await client.query(
           `SELECT id::text AS id FROM aif_import_rows
@@ -11215,6 +11283,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Receptió nem található." });
       }
+      await assertUniqueIncomingReceptionBeforeCommit(client, rec.rows[0].id);
 
       let batches;
       if (rowIds && rowIds.length) {
