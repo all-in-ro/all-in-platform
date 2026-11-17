@@ -2304,6 +2304,8 @@ export type AifIncomingPriceReviewResponse = {
   items: AifIncomingPriceReviewItem[];
   selectedRowCount: number;
   selectedQty: number;
+  identificationWarnings?: Array<{ rowId: string; rowNo?: number; code?: string; error?: string }>;
+  priceObservations?: Array<{ variantId: string; rowId: string; incomingPrice: number }>;
 };
 
 export type AifIncomingPriceChoice = {
@@ -2318,6 +2320,76 @@ export function apiAifPreviewReceptionPrices(id: string, rowIds: string[]) {
     `/receptions/${encodeURIComponent(id)}/price-review`,
     { method: "POST", body: JSON.stringify({ rowIds }) }
   );
+}
+
+// V18: az előzetes ár-egyeztetést rövid, kizárólag olvasó kérésekre bontjuk.
+// Nincs készletmódosítás; mindegyik kérés eredménye összevonásra kerül, és az
+// azonos variánshoz érkező eltérő árakat a teljes listán ellenőrizzük.
+export async function apiAifPreviewReceptionPricesInParts(
+  id: string,
+  rowIds: string[],
+  onProgress?: (checked: number, total: number) => void,
+): Promise<AifIncomingPriceReviewResponse> {
+  const ids = Array.from(new Set(rowIds.map(String).filter(Boolean)));
+  if (!ids.length) throw new Error("Nincsenek ár-egyeztetendő sorok.");
+  const chunkSize = 3;
+  const chunks: string[][] = [];
+  for (let start = 0; start < ids.length; start += chunkSize) {
+    chunks.push(ids.slice(start, start + chunkSize));
+  }
+  const allItems = new Map<string, AifIncomingPriceReviewItem>();
+  const variantPrices = new Map<string, string>();
+  const identificationWarnings: NonNullable<AifIncomingPriceReviewResponse["identificationWarnings"]> = [];
+  const priceObservations: NonNullable<AifIncomingPriceReviewResponse["priceObservations"]> = [];
+  let checked = 0;
+  let selectedQty = 0;
+  // Legfeljebb két egyidejű olvasó kérés: a hosszú 51 soros ellenőrzés
+  // nem egyetlen HTTP-kérésen függ, de a PostgreSQL poolt sem terheljük túl.
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const chunk = chunks[next++];
+      const res = await apiAifPreviewReceptionPrices(id, chunk);
+      selectedQty += Number(res.selectedQty || 0);
+      identificationWarnings.push(...(res.identificationWarnings || []));
+      priceObservations.push(...(res.priceObservations || []));
+      for (const observation of res.priceObservations || []) {
+        const variantId = String(observation.variantId);
+        const price = Number(observation.incomingPrice).toFixed(2);
+        const known = variantPrices.get(variantId);
+        if (known !== undefined && known !== price) {
+          throw new Error("Ugyanaz a termék több eltérő eladási árral szerepel az importban. Előbb egységesítsd az árakat a receptió sorain.");
+        }
+        variantPrices.set(variantId, price);
+      }
+      for (const item of res.items || []) {
+        const key = `${item.variantId}|${Number(item.incomingPrice).toFixed(2)}`;
+        const existing = allItems.get(key);
+        if (existing) {
+          existing.rowIds = Array.from(new Set([...existing.rowIds, ...item.rowIds]));
+          existing.incomingRowCount += Number(item.incomingRowCount || 0);
+          existing.incomingQty += Number(item.incomingQty || 0);
+        } else {
+          allItems.set(key, { ...item, rowIds: [...item.rowIds] });
+        }
+      }
+      checked += chunk.length;
+      onProgress?.(checked, ids.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(2, chunks.length) }, () => worker()));
+  const choicePrices = new Map<string, string>();
+  for (const item of allItems.values()) {
+    const price = Number(item.incomingPrice).toFixed(2);
+    const old = choicePrices.get(item.variantId);
+    if (old !== undefined && old !== price) {
+      throw new Error("Azonos termékre különböző új eladási árak érkeztek. Javítsd a receptió sorainak árait.");
+    }
+    choicePrices.set(item.variantId, price);
+  }
+  if (checked !== ids.length) throw new Error("Az ár-egyeztetés nem ellenőrizte az összes kijelölt sort.");
+  return { ok: true, items: [...allItems.values()], selectedRowCount: checked,
+    selectedQty, identificationWarnings, priceObservations };
 }
 
 export function apiAifCommitReceptionRows(
