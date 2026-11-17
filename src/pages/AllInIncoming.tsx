@@ -44,7 +44,7 @@ import {
   apiAifGetImportCommitProgress,
   apiAifCommitImportBatchStep,
   type AifImportCommitProgress,
-  apiAifPreviewReceptionPrices,
+  apiAifPreviewReceptionPricesInParts,
   type AifIncomingPriceReviewResponse,
   type AifIncomingPriceChoice,
   apiAifAppendImportRows,
@@ -4566,7 +4566,14 @@ function AllInIncomingReception(_props: Props) {
           setMessage("A kiválasztott importban nincs még készletre vehető sor. Frissítsd az importlistát.");
           return;
         }
-        const review = await aifIncomingWithDeadline(apiAifPreviewReceptionPrices(receptionId, rowIds), 30000);
+        moveIncomingCommitProgress("checking", `Eladási ár ellenőrzése: 0/${rowIds.length} sor. A készlet még nem változik…`);
+        const review = await apiAifPreviewReceptionPricesInParts(receptionId, rowIds, (checked, total) => {
+          moveIncomingCommitProgress("checking", `Eladási ár ellenőrzése: ${checked}/${total} sor kész. Készletmódosítás még nem történt.`);
+        });
+        if (review.identificationWarnings?.length) {
+          const first = review.identificationWarnings[0];
+          throw new Error(`Termékazonosítási figyelmeztetés a(z) ${first.rowNo || "?"}. sorban: ${first.error || "kézi egyeztetés szükséges"}`);
+        }
         if (review.items.length) {
           setIncomingPriceReview({ ...review, receptionId, batchId: String(batch.id), rowIds });
           setIncomingPriceChoices({});
@@ -4642,7 +4649,10 @@ function AllInIncomingReception(_props: Props) {
     setBusy(true);
     setIncomingPriceError('');
     try {
-      const preview = await apiAifPreviewReceptionPrices(incomingPriceReview.receptionId, incomingPriceReview.rowIds);
+      const preview = await apiAifPreviewReceptionPricesInParts(incomingPriceReview.receptionId, incomingPriceReview.rowIds);
+      if (preview.identificationWarnings?.length) {
+        throw new Error(preview.identificationWarnings[0]?.error || "Termékazonosítási hiba: a készletre vétel nem indítható.");
+      }
       if (!preview.items.length) {
         setIncomingPriceReview(null);
         setIncomingPriceChoices({});
