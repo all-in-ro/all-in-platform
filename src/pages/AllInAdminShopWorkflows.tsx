@@ -630,6 +630,44 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   const totalCard = total((snapshot) => paidBy(snapshot, "card"));
   const metricText = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : money(value);
   const multipleDays = receiptDates.length > 1;
+
+  // The cash receipt keeps the four existing business-wide financial metrics.
+  // For multi-day handovers, show each EXACT selected day separately, followed
+  // by the period totals. Values come from the same unfiltered store totals as
+  // the previous PDF; a missing day must never be displayed as a fabricated 0.
+  type FinancialFour = [number | null, number | null, number | null, number | null];
+  const hasFinancialTotals = (shifts: AifShopShiftDayOverview | null) => {
+    const snapshot = shifts?.totals;
+    return Boolean(snapshot && !snapshot.actor
+      && snapshot.salesBeforeDiscount != null
+      && Number.isFinite(Number(snapshot.salesBeforeDiscount))
+      && Array.isArray(snapshot.payments));
+  };
+  const fourForDay = (shifts: AifShopShiftDayOverview | null): FinancialFour => {
+    if (!hasFinancialTotals(shifts)) return [null, null, null, null];
+    const snapshot = shifts!.totals;
+    const amountBy = (method: string) => paidBy(snapshot, method);
+    const collected = ["cash", "card", "bank_transfer"].reduce((sum, method) => sum + amountBy(method), 0);
+    return [
+      numberValue(snapshot.salesBeforeDiscount),
+      Math.round(collected * 100) / 100,
+      amountBy("cash"),
+      amountBy("card"),
+    ];
+  };
+  const renderFinancialFour = (values: FinancialFour) => {
+    const labels = ["Bruttó", "Napi bevétel", "Készpénz", "Bankkártya"] as const;
+    return `<div class="audit-values">${labels.map((label, index) =>
+      `<div class="audit-value"><div class="audit-head"><span class="audit-number">${index + 1}</span> ${label}</div><div class="audit-money">${escapePrintHtml(metricText(values[index]))}</div></div>`
+    ).join("")}</div>`;
+  };
+  const financialDailyRows = multipleDays ? dayReports.map((report) =>
+    `<section class="audit-financial-day" aria-label="${escapePrintHtml(report.date)} napi pénzügyi adatai">`
+    + `<div class="audit-financial-heading">${escapePrintHtml(report.date.replace(/-/g, "."))}.</div>`
+    + renderFinancialFour(fourForDay(report.shifts))
+    + `</section>`
+  ).join("") : "";
+  const financialTotals = renderFinancialFour([totalGross, totalCollected, totalCash, totalCard]);
   const cashAndShiftRows: string[] = [];
   for (const report of dayReports) {
     const prefix = multipleDays ? `${report.date.replace(/-/g, ".")} • ` : "";
@@ -701,7 +739,13 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   .label { font-size: 8px; text-transform: uppercase; letter-spacing: .10em; color: #778292; margin-bottom: 1.5mm; }
   .value { font-size: 12px; line-height: 1.35; }
   .audit-scope { margin: 3mm 0 -2mm; font-size: 8px; letter-spacing: .04em; color: #586476; }
-  .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; }
+  .audit-values { margin-top: 4mm; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2mm; }
+  .audit-financial-day { margin-top: 3mm; break-inside: avoid; page-break-inside: avoid; }
+  .audit-financial-heading { font-size: 10px; color: #354153; font-weight: 700; padding-bottom: 1mm; border-bottom: 1px solid #dbe2ea; }
+  .audit-financial-day .audit-values, .audit-financial-total .audit-values { margin-top: 1.5mm; }
+  .audit-financial-total { margin-top: 3mm; padding-top: 2.5mm; border-top: 2px solid #354153; break-inside: avoid; page-break-inside: avoid; }
+  .audit-financial-total .audit-financial-heading { border: 0; padding-bottom: 0; font-size: 10px; }
+  .audit-financial-total .audit-value { background: #f1f5f9; border-color: #9baabb; }
   .audit-value { min-height: 14mm; border: 1px solid #c3cad4; border-radius: 2mm; padding: 2mm; break-inside: avoid; }
   .audit-head { display: flex; align-items: center; gap: 4px; color: #5e6978; font-size: 8px; text-transform: uppercase; }
   .audit-number { display: inline-flex; flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #354153; align-items: center; justify-content: center; font-size: 9px; color: #354153; font-weight: 700; }
@@ -725,12 +769,57 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
   .footer { margin-top: 4mm; padding-top: 3mm; border-top: 1px solid #d5dbe3; display: flex; justify-content: space-between; gap: 20px; font-size: 8px; color: #7b8593; }
   .status { font-weight: 700; letter-spacing: .08em; }
   @media print {
-    .audit-value, .audit-list-row, .audit-note { break-inside: avoid; }
+    .audit-value, .audit-list-row, .audit-note, .signatures { break-inside: avoid; }
+    /* Two- and three-day cash receipts should stay compact on A4 without
+       shrinking the four original financial figures or hiding the signatures. */
+    .sheet.multi-day-sheet { padding: 4mm; }
+    .multi-day-sheet h1 { margin-top: 3mm; font-size: 18px; }
+    .multi-day-sheet .lead { margin-bottom: 2mm; }
+    .multi-day-sheet .grid { gap: 2mm; }
+    .multi-day-sheet .box { min-height: 12mm; padding: 2mm; }
+    .multi-day-sheet .audit-scope { margin-top: 2mm; }
+    .multi-day-sheet .audit-financial-day { margin-top: 1.8mm; }
+    .multi-day-sheet .audit-financial-day .audit-values { margin-top: 1mm; }
+    .multi-day-sheet .audit-financial-total { margin-top: 2mm; padding-top: 1.5mm; }
+    .multi-day-sheet .audit-financial-total .audit-values { margin-top: 1mm; }
+    .multi-day-sheet .audit-value { min-height: 11mm; padding: 1.5mm; }
+    .multi-day-sheet .audit-money { margin-top: 1mm; font-size: 12px; }
+    .multi-day-sheet .audit-section { margin-top: 1.8mm; padding: 1.5mm 2.5mm; }
+    .multi-day-sheet .audit-section-title { margin-bottom: 1mm; }
+    .multi-day-sheet .audit-list-row { padding: .65mm 0; }
+    .multi-day-sheet .audit-note { padding: 1mm 0; }
+    .multi-day-sheet .amount { margin: 2mm 0; padding: 2.5mm; }
+    .multi-day-sheet .amount .value { font-size: 21px; }
+    .multi-day-sheet .statement { margin-top: 2mm; padding: 2mm 0; }
+    .multi-day-sheet .signatures { margin-top: 4mm; }
+    .multi-day-sheet .signame { margin-bottom: 4mm; }
+    .multi-day-sheet .footer { margin-top: 2mm; padding-top: 2mm; }
+    /* Extra compact for three-day and longer periods; never compress amounts
+       horizontally and never truncate any financial amount. */
+    .three-plus-days .top { padding-bottom: 2mm; }
+    .three-plus-days h1 { margin: 2.5mm 0 1mm; font-size: 17px; }
+    .three-plus-days .lead { margin-bottom: 1.5mm; }
+    .three-plus-days .box { min-height: 10.5mm; padding: 1.5mm; }
+    .three-plus-days .audit-financial-heading { font-size: 9px; padding-bottom: .5mm; }
+    .three-plus-days .audit-financial-day { margin-top: 1.1mm; }
+    .three-plus-days .audit-financial-total { margin-top: 1.3mm; padding-top: 1.2mm; }
+    .three-plus-days .audit-value { min-height: 10mm; padding: 1mm 1.5mm; }
+    .three-plus-days .audit-head { font-size: 7.5px; }
+    .three-plus-days .audit-money { margin-top: .8mm; font-size: 12px; }
+    .three-plus-days .audit-section { margin-top: 1.1mm; padding: 1mm 2mm; }
+    .three-plus-days .audit-list-row { padding: .4mm 0; font-size: 8.5px; }
+    .three-plus-days .audit-note { padding: .6mm 0; }
+    .three-plus-days .amount { margin: 1.3mm 0; padding: 2mm; }
+    .three-plus-days .amount .value { font-size: 20px; }
+    .three-plus-days .statement { margin-top: 1.5mm; padding: 1.5mm 0; }
+    .three-plus-days .signatures { margin-top: 3mm; }
+    .three-plus-days .signame { margin-bottom: 3mm; }
+    .three-plus-days .footer { margin-top: 1.2mm; padding-top: 1.5mm; }
   }
 </style>
 </head>
 <body>
-  <main class="sheet">
+  <main class="sheet ${multipleDays ? "multi-day-sheet" : ""} ${receiptDates.length >= 3 ? "three-plus-days" : ""}">
     <div class="top">
       <div>
         <div class="brand">ALLINFASHION</div>
@@ -765,12 +854,9 @@ async function printCashHandoverReceipt(store: StoreDef, item: any) {
     </section>
 
     <p class="audit-scope">Teljes üzleti forgalom • minden eladó együtt</p>
-    <section class="audit-values" aria-label="A teljes üzleti forgalom 1-4. pénzügyi mutatói">
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">1</span> Bruttó</div><div class="audit-money">${escapePrintHtml(metricText(totalGross))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">2</span> Napi bevétel</div><div class="audit-money">${escapePrintHtml(metricText(totalCollected))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">3</span> Készpénz</div><div class="audit-money">${escapePrintHtml(metricText(totalCash))}</div></div>
-      <div class="audit-value"><div class="audit-head"><span class="audit-number">4</span> Bankkártya</div><div class="audit-money">${escapePrintHtml(metricText(totalCard))}</div></div>
-    </section>
+    ${financialDailyRows}
+    ${multipleDays ? `<section class="audit-financial-total" aria-label="Az átadási időszak pénzügyi összesítése"><div class="audit-financial-heading">IDŐSZAK ÖSSZESEN</div>${financialTotals}</section>`
+      : `<section aria-label="A teljes üzleti forgalom 1-4. pénzügyi mutatói">${financialTotals}</section>`}
 
     <section class="audit-section">
       <div class="audit-section-title"><span class="audit-number">5</span> Kassza és műszak</div>
