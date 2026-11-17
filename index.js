@@ -70,6 +70,38 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+// A Pool 'error' esemenye CSAK az idle kapcsolatokat vedi.
+// Egy pool.connect() altal hasznalatba vett kliens sajat 'error' esemenye
+// kezelo nelkul az egesz Node.js folyamatot leallithatja.
+// A kapcsolat lezarasat es a tranzakcio rollback/release kezeleset
+// tovabbra is a hivo kod / pg-pool vegzi: itt csak a kezeletlen
+// EventEmitter 'error' miatti process crash-t elozzuk meg.
+function protectPgPoolClients(dbPool, poolName) {
+  const observed = new WeakSet();
+  const checkedOut = new WeakSet();
+
+  // A 'connect' csak az uj, sikeresen letrejott fizikai kapcsolatra fut.
+  dbPool.on("connect", (client) => {
+    if (observed.has(client)) return;
+    observed.add(client);
+    client.on("error", (error) => {
+      // Az idle hibakat a meglevo dbPool.on('error') kulon naplozza.
+      if (!checkedOut.has(client)) return;
+      console.error(`PostgreSQL: ${poolName} aktiv kliens kapcsolathiba`, {
+        message: String(error?.message || error),
+        code: error?.code || null,
+        severity: error?.severity || null,
+      });
+    });
+  });
+
+  dbPool.on("acquire", (client) => { checkedOut.add(client); });
+  dbPool.on("release", (_error, client) => {
+    if (client) checkedOut.delete(client);
+  });
+  dbPool.on("remove", (client) => { checkedOut.delete(client); });
+}
+
 // --- postgres pool ---
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -87,6 +119,7 @@ pool.on("error", (error) => {
     severity: error?.severity || null,
   });
 });
+protectPgPoolClients(pool, "fo pool");
 
 // Az auth nem állhat sorba a hosszú raktári / Shopify tranzakciók MÖGÉ.
 // Külön, kicsi, határidős pool ugyanahhoz a PostgreSQL adatbázishoz.
@@ -106,6 +139,7 @@ sessionPool.on("error", (error) => {
     code: error?.code || null,
   });
 });
+protectPgPoolClients(sessionPool, "auth/session pool");
 
 // --- R2 (Cloudflare API / Bearer token) ---
 // Uploads go through Cloudflare's REST API (api.cloudflare.com). This matches the working CUPE flow.
