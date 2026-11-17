@@ -41,7 +41,9 @@ import {
   AifColorType,
   AifPurchaseOrderDetail,
   AifPurchaseOrderSummary,
-  apiAifCommitImportBatch,
+  apiAifGetImportCommitProgress,
+  apiAifCommitImportBatchStep,
+  type AifImportCommitProgress,
   apiAifPreviewReceptionPrices,
   type AifIncomingPriceReviewResponse,
   type AifIncomingPriceChoice,
@@ -93,7 +95,7 @@ type IncomingPriceReviewDialog = AifIncomingPriceReviewResponse & {
 };
 
 // Csak a ténylegesen beérkezett API-válasz után jelzünk kész állapotot.
-// A szerver nem küld soronkénti progress eseményeket: a futó sáv szándékosan nem százalékos.
+// A szerver részletenként valós darab- és sorszámot küld: csak a visszaigazolt sorokból számolunk százalékot.
 type IncomingCommitPhase = "checking" | "committing" | "refreshing" | "success" | "partial" | "uncertain" | "failed";
 type IncomingCommitProgress = {
   batchId: string;
@@ -105,6 +107,7 @@ type IncomingCommitProgress = {
   detail: string;
   committed?: number;
   failed?: number;
+  remaining?: number;
 };
 
 // A timeout csak a böngésző várakozását korlátozza, NEM indít újabb készletműveletet.
@@ -2149,6 +2152,8 @@ function AllInIncomingReception(_props: Props) {
   const [commitStatusChecking, setCommitStatusChecking] = useState(false);
   // Bizonytalan szerverválasz után ugyanazt az importot nem indítjuk újra vaktában.
   const [unconfirmedCommitBatchIds, setUnconfirmedCommitBatchIds] = useState<string[]>([]);
+  // Újrakezdés csak a szerverről frissen ellenőrzött, nem futó importon engedélyezett.
+  const [resumableCommitBatchId, setResumableCommitBatchId] = useState("");
   const commitInFlightRef = useRef<string | null>(null);
 
   const [invoiceDifferencePrompt, setInvoiceDifferencePrompt] = useState<InvoiceDifferencePrompt | null>(null);
@@ -4237,40 +4242,76 @@ function AllInIncomingReception(_props: Props) {
     }
   }
 
-  // Read-only státuszlekérés. Nem ismétli a POST-ot, ezért félbeszakadt hálózati válasznál is biztonságos.
-  async function readIncomingBatchState(batchId: string) {
-    const data = await aifIncomingWithDeadline(apiAifListImportBatches(50), 12000);
-    const items = (data.items || []) as AifImportBatchSummary[];
-    setBatches(items);
-    return items.find((item) => String(item.id) === String(batchId)) || null;
+  // Az állapot már nem az utolsó 50 importlistából van kikövetkeztetve.
+  // Az új endpoint pontosan ezt a batch-et, az összes sorát és a tényleges
+  // készletmozgásokat olvassa vissza, mindenféle újabb készletírás nélkül.
+  async function readIncomingBatchState(batchId: string): Promise<AifImportCommitProgress> {
+    const progress = await aifIncomingWithDeadline(apiAifGetImportCommitProgress(batchId), 18000);
+    if (!progress?.batchId) throw new Error("Az import állapota nem ellenőrizhető.");
+    return progress;
   }
 
+  function incomingMovementTotalsMatch(progress: AifImportCommitProgress) {
+    return Number(progress.committedRows) === Number(progress.movementCount)
+      && Math.abs(Number(progress.committedQty) - Number(progress.movementQty)) < 0.000001;
+  }
+
+  function showIncomingVerifiedProgress(progress: AifImportCommitProgress, detail?: string) {
+    setCommitProgress((current) => current ? {
+      ...current,
+      rowCount: Number(progress.totalRows || current.rowCount || 0),
+      committed: Number(progress.committedRows || 0),
+      failed: Number(progress.errorRows || 0),
+      remaining: Number(progress.remainingRows || 0),
+      detail: detail || current.detail,
+    } : current);
+  }
+
+  // Ez kizárólag GET: az ellenőrzés nem küld újabb bevételezést.
   async function verifyIncomingCommitStatus(batchId = commitProgress?.batchId || "", receptionId = commitProgress?.receptionId || "") {
-    if (!batchId || commitStatusChecking) return;
+    if (!batchId || commitStatusChecking || commitInFlightRef.current) return;
     setCommitStatusChecking(true);
     try {
-      const found = await readIncomingBatchState(batchId);
-      if (found && String(found.status || "").toLowerCase() === "committed") {
+      const progress = await readIncomingBatchState(batchId);
+      showIncomingVerifiedProgress(progress);
+      if (progress.processing) {
+        setResumableCommitBatchId("");
+        moveIncomingCommitProgress("uncertain", "A szerver jelenleg is dolgozik az importon. Nem küldtünk újabb készletműveletet.");
+        setMessage("A szerver még feldolgozza az importot. Ne indíts újabb készletre vételt.");
+      } else if (progress.completed && incomingMovementTotalsMatch(progress)) {
         const refreshed = await refreshIncomingCommitState(receptionId);
+        setResumableCommitBatchId("");
         setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
         moveIncomingCommitProgress("success", refreshed.refreshed
-          ? "A készletre vétel az adatbázis szerint kész. A lista is frissült."
-          : "A készletre vétel igazoltan kész, a lista frissítése részleges. Használd a Frissítés gombot.");
-        setMessage("A készletre vétel ellenőrizve: a szerver szerint készletre vett. Újabb készletre vételt nem indítottunk.");
-      } else if (commitProgress?.phase === "partial" && found) {
-        // A szerver eredetileg visszaigazolta a részleges sikerességet, ezért ez nem ismeretlen állapot.
-        moveIncomingCommitProgress("partial", `A részleges import jelenlegi állapota: ${String(found.status || "ismeretlen")}. A hibás sorokat külön ellenőrizd.`);
-        setMessage("A részben készletre vett import állapotát frissítettük. A hibás sorokat a receptióban kell kijavítani.");
-      } else {
-        const state = found ? String(found.status || "ismeretlen") : "az import nem található az első 50 között";
+          ? `Mind a ${progress.committedRows} terméksor készletre került. A listák frissültek.`
+          : `Mind a ${progress.committedRows} terméksor készletre került. A listák külön frissíthetők.`);
+        setMessage(`A készletre vétel ellenőrizve: ${progress.committedRows} sor, ${progress.committedQty} db. Dupla feldolgozást nem indítottunk.`);
+      } else if (!incomingMovementTotalsMatch(progress)) {
+        setResumableCommitBatchId("");
         setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
-        moveIncomingCommitProgress("uncertain", `Jelenlegi állapot: ${state}. Nem indítottunk újabb mentést.`);
-        setMessage(`Az import (${state}) készletre vétele még nem igazolt. Ne nyomd meg még egyszer a Készletre vétel gombot.`);
+        moveIncomingCommitProgress("uncertain", "A készletmozgások és a készletre vett sorok nem egyeznek. Admin ellenőrzés szükséges.");
+        setMessage("A készlet- és importsorszámok eltérnek. Ne indítsd újra a műveletet; ellenőrizni kell a naplót.");
+      } else if (progress.processableRows === 0 && progress.errorRows > 0) {
+        setResumableCommitBatchId("");
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        moveIncomingCommitProgress("partial", `${progress.committedRows} sikeres, ${progress.errorRows} hibás sor. A hibás sorokat javítani kell.`);
+        await refreshIncomingCommitState(receptionId);
+        setMessage(`${progress.committedRows} sor készleten; ${progress.errorRows} sor hibás. A hibás sorokat külön javítsd, ne indíts vakon újabb bevételezést.`);
+      } else if (progress.processableRows > 0 && progress.errorRows === 0) {
+        setResumableCommitBatchId(batchId);
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        moveIncomingCommitProgress("uncertain", `${progress.committedRows}/${progress.totalRows} sor kész, ${progress.processableRows} vár feldolgozásra. Ellenőrzött állapotból folytatható.`);
+        setMessage(`A ${progress.batchStatus} importban ${progress.processableRows} sor még vár. Az alsó „Folytatás ellenőrzés után” gombbal, az állapot újraellenőrzésével folytatható.`);
+      } else {
+        setResumableCommitBatchId("");
+        setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+        moveIncomingCommitProgress("uncertain", `Az import állapota (${progress.batchStatus}) nem egyeztethető; nem indítottunk újabb mentést.`);
       }
     } catch (error: any) {
+      setResumableCommitBatchId("");
       setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
       moveIncomingCommitProgress("uncertain", "Az állapotlekérés nem sikerült. Újabb készletre vételt ne indíts.");
-      setMessage(`Az import ellenőrzése sikertelen: ${error?.message || "a szerver nem válaszolt"}. A készletműveletet nem ismételtük meg.`);
+      setMessage(`Az import ellenőrzése sikertelen: ${error?.message || "a szerver nem válaszolt"}. Nem ismételtük meg a készletműveletet.`);
     } finally {
       setCommitStatusChecking(false);
     }
@@ -4278,24 +4319,44 @@ function AllInIncomingReception(_props: Props) {
 
   async function handleUncertainIncomingCommit(batch: AifImportBatchSummary, error: unknown) {
     const receptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || "");
-    moveIncomingCommitProgress("refreshing", "A válasz megszakadt, biztonságos állapotellenőrzés következik…");
-    let confirmed = false;
+    const batchId = String(batch.id);
+    setResumableCommitBatchId("");
+    moveIncomingCommitProgress("refreshing", "A hálózati válasz megszakadt. A szerveren lévő állapotot ellenőrizzük, mentést nem ismétlünk…");
     try {
-      const found = await readIncomingBatchState(String(batch.id));
-      confirmed = String(found?.status || "").toLowerCase() === "committed";
-    } catch { /* Az ellenőrzés nem ír a készletbe. */ }
-
-    if (confirmed) {
-      const refresh = await refreshIncomingCommitState(receptionId);
-      setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== String(batch.id)));
-      moveIncomingCommitProgress("success", refresh.refreshed
-        ? "A kapcsolat megszakadt, de az adatbázis igazolta a sikeres készletre vételt."
-        : "A készletre vétel megtörtént; a lista frissítése még ellenőrizhető.");
-      setMessage("A szerver válasza megszakadt, de az import státusza committed. A készletre vételt nem ismételtük meg.");
-    } else {
-      setUnconfirmedCommitBatchIds((current) => current.includes(String(batch.id)) ? current : [...current, String(batch.id)]);
-      moveIncomingCommitProgress("uncertain", "A mentés eredménye még nem igazolt. Az Állapot ellenőrzése biztonságos, az újraindítás nem.");
-      setMessage(`A szerver válasza bizonytalan (${error instanceof Error ? error.message : String(error)}). Ugyanazt a készletre vételt nem indítottuk újra; ellenőrizd az import állapotát.`);
+      const progress = await readIncomingBatchState(batchId);
+      showIncomingVerifiedProgress(progress);
+      if (progress.completed && incomingMovementTotalsMatch(progress)) {
+        const refreshed = await refreshIncomingCommitState(receptionId);
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        moveIncomingCommitProgress("success", refreshed.refreshed
+          ? `A kapcsolat megszakadt, de mind a ${progress.committedRows} sor igazoltan készletre került.`
+          : `Mind a ${progress.committedRows} sor készletre került; csak a lista frissítése hiányos.`);
+        setMessage("A kapcsolat megszakadt, de az import összes sora készletre került. Újabb mentés nem történt.");
+      } else if (progress.processing) {
+        setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+        moveIncomingCommitProgress("uncertain", `A szerver még dolgozik. ${progress.committedRows}/${progress.totalRows} sor igazolt; ne nyomd meg újra a gombot.`);
+        setMessage("A szerver még dolgozik; biztonságos állapotellenőrzéssel követhető a folyamat.");
+      } else if (!incomingMovementTotalsMatch(progress)) {
+        setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+        moveIncomingCommitProgress("uncertain", "A készletmozgások ellenőrzése eltérést talált; admin vizsgálat szükséges.");
+        setMessage("A sorok és a készletmozgások nem egyeznek. Nem indítunk újabb mentést.");
+      } else if (progress.processableRows > 0 && !progress.errorRows) {
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        setResumableCommitBatchId(batchId);
+        moveIncomingCommitProgress("uncertain", `${progress.committedRows}/${progress.totalRows} sor kész. ${progress.processableRows} sor még vár; a folytatás előtt újraellenőrzünk.`);
+        setMessage(`Az időtúllépés után ${progress.committedRows} sor igazolt. A fennmaradó ${progress.processableRows} sor az alsó Folytatás gombbal kezelhető.`);
+      } else if (progress.processableRows === 0 && progress.errorRows > 0) {
+        setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+        moveIncomingCommitProgress("partial", `${progress.committedRows} sikeres, ${progress.errorRows} hibás sor. Ellenőrzés szükséges.`);
+        setMessage("A szerver egyes sorokat hibásnak jelölt; ezeket javítani kell. Az elkészült sorok megmaradtak.");
+      } else {
+        setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+        moveIncomingCommitProgress("uncertain", "Az import eredménye még nem igazolt. Csak állapotellenőrzést végezz.");
+      }
+    } catch { 
+      setUnconfirmedCommitBatchIds((current) => current.includes(batchId) ? current : [...current, batchId]);
+      moveIncomingCommitProgress("uncertain", `Nem sikerült visszaolvasni az importot (${error instanceof Error ? error.message : String(error)}). Nem indítottunk újabb készletműveletet.`);
+      setMessage("A szerver válasza bizonytalan, és az ellenőrzés sem sikerült. Ne indíts újabb bevételezést ellenőrzés nélkül.");
     }
   }
 
@@ -4328,24 +4389,153 @@ function AllInIncomingReception(_props: Props) {
     const refreshed = await refreshIncomingCommitState(receptionId);
     const failedCount = Number(result.failedCount || result.failedRows?.length || 0);
     const committedCount = Number(result.committed || 0);
+    const verifiedCommittedRows = Number(result.verifiedCommittedRows ?? committedCount);
+    const verifiedQtyText = result.verifiedQty == null ? "" : ` • ${Number(result.verifiedQty)} db`;
     const refreshNote = refreshed.refreshed ? "" : " A háttér-listafrissítés nem fejeződött be; a Frissítés gombbal újra lekérhető, F5 nélkül.";
 
     if (failedCount > 0) {
       const firstError = result.failedRows?.[0]?.error || result.warning || "Néhány sor nem került készletre.";
-      moveIncomingCommitProgress("partial", `Sikeres: ${committedCount} sor, hibás: ${failedCount}. Ellenőrizd a hibás sorokat.`, { committed: committedCount, failed: failedCount });
-      setMessage(`Készletre vétel részben kész. Sikeres: ${committedCount}, hibás: ${failedCount}.${refreshed.receiptValueText} ${firstError}${refreshNote}`);
+      moveIncomingCommitProgress("partial", `Összesen készleten: ${verifiedCommittedRows} sor${verifiedQtyText}, hibás: ${failedCount}. Ellenőrizd a hibás sorokat.`, { committed: verifiedCommittedRows, failed: failedCount });
+      setMessage(`Készletre vétel részben kész: ${verifiedCommittedRows} sor${verifiedQtyText}, hibás: ${failedCount}.${refreshed.receiptValueText} ${firstError}${refreshNote}`);
     } else {
       moveIncomingCommitProgress("success", refreshed.refreshed
-        ? `${committedCount} sor sikeresen készletre véve. Minden lista frissült.`
-        : `${committedCount} sor sikeresen készletre véve. A lista frissítése részben elakadt.`, { committed: committedCount, failed: 0 });
-      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${committedCount}.${refreshed.receiptValueText} Az eladási ár döntése a Receptióban is érvényes; a beszállítói számla összege nem módosult.${refreshNote}`);
+        ? `${verifiedCommittedRows} sor${verifiedQtyText} sikeresen készletre véve. Minden lista frissült.`
+        : `${verifiedCommittedRows} sor${verifiedQtyText} sikeresen készletre véve. A lista frissítése részben elakadt.`, { committed: verifiedCommittedRows, failed: 0 });
+      setMessage(`Készletre vétel kész: összesen ${verifiedCommittedRows} sor${verifiedQtyText}. Most véglegesítve: ${committedCount} sor.${refreshed.receiptValueText} Az ár-döntés érvényes, a beszállítói számla összege nem módosult.${refreshNote}`);
     }
     setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== String(batch.id)));
   }
 
-  async function commitBatch(batch: AifImportBatchSummary) {
+  // Egy kattintás => több rövid, külön COMMIT-olt szerverhívás.
+  // Nem küldjük újra ugyanazt a készletműveletet HTTP-hibánál vagy timeoutnál.
+  async function runIncomingChunkCommit(batch: AifImportBatchSummary, priceChoices: Record<string, AifIncomingPriceChoice> = {}) {
+    const batchId = String(batch.id);
+    let state = await readIncomingBatchState(batchId);
+    showIncomingVerifiedProgress(state);
+    if (state.processing) throw new Error("Ezt az importot már feldolgozza egy másik művelet.");
+    if (!incomingMovementTotalsMatch(state)) {
+      throw new Error("A korábbi készletmozgások száma vagy mennyisége nem egyezik az importsorokkal.");
+    }
+    if (state.errorRows > 0 && state.processableRows === 0) {
+      moveIncomingCommitProgress("partial", `A korábbi feldolgozásban ${state.errorRows} hibás sor van; javítás szükséges.`);
+      setMessage("A hibás sorokat a receptióban javítsd. Automatikusan nem próbáljuk újra őket.");
+      return;
+    }
+    if (!state.completed && state.processableRows === 0 && state.errorRows === 0) {
+      throw new Error("Az import státusza nem egyeztethető a terméksorokkal. Admin ellenőrzés szükséges.");
+    }
+    if (state.completed) {
+      if (!incomingMovementTotalsMatch(state)) throw new Error("Az import és a készletmozgások nem egyeznek.");
+      const refreshed = await refreshIncomingCommitState(String(state.receptionId || ""));
+      moveIncomingCommitProgress("success", `Ez az import már kész: ${state.committedRows} sor és ${state.committedQty} darab. ${refreshed.refreshed ? "A lista frissült." : "A lista külön frissíthető."}`);
+      setMessage("A készletre vétel korábban már sikerült. Nem küldtünk újabb készletmódosítást.");
+      setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+      return;
+    }
+
+    let newlyCommitted = 0;
+    let newlyCommittedQty = 0;
+    const committedRowResults: any[] = [];
+    const failedRows: any[] = [];
+    const variantIds = new Set<string>();
+    const maxSteps = Math.ceil(Number(state.processableRows || 0) / 4) + 10;
+    let steps = 0;
+    let busyPolls = 0;
+
+    while (state.processableRows > 0 && steps < maxSteps) {
+      moveIncomingCommitProgress("committing", `${state.committedRows}/${state.totalRows} sor készletre véve. A következő legfeljebb 4 sor feldolgozása…`, {
+        committed: state.committedRows, failed: state.errorRows, remaining: state.remainingRows,
+        rowCount: state.totalRows,
+      });
+      // Egy kérés csak legfeljebb négy sort módosít. Ha a válasz megszakad,
+      // nincs automatikus újrapróbálkozás: a catch csak GET státuszt kér.
+      const part = await aifIncomingWithDeadline(
+        apiAifCommitImportBatchStep(batchId, { priceChoices, limit: 4 }), 85000,
+      );
+      if (part.busy || part.processing) {
+        if (++busyPolls > 12) throw new Error("Az importot egy másik munkamenet továbbra is feldolgozza.");
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
+        state = await readIncomingBatchState(batchId);
+        showIncomingVerifiedProgress(state);
+        if (state.processing) continue;
+        // A következő iteration csak a felszabadult szerverzár után indul.
+        continue;
+      }
+      busyPolls = 0;
+      steps++;
+      newlyCommitted += Number(part.committed || 0);
+      newlyCommittedQty += Number(part.committedTotalQty || 0);
+      for (const row of part.committedRowResults || []) {
+        committedRowResults.push(row);
+        if (row.variantId) variantIds.add(String(row.variantId));
+      }
+      for (const id of part.variantIds || []) if (id) variantIds.add(String(id));
+      failedRows.push(...(part.failedRows || []));
+      state = part.progress || await readIncomingBatchState(batchId);
+      showIncomingVerifiedProgress(state);
+      if (!incomingMovementTotalsMatch(state)) {
+        throw new Error("A készletre vett sorok és a mozgásnapló eltérnek. A folyamatot megállítottuk az ellenőrzéshez.");
+      }
+      if (state.processableRows > 0 && Number(part.selectedRows || 0) === 0) {
+        throw new Error("A szerver nem választott új sort, ezért nem indítunk végtelen készletműveletet.");
+      }
+      // A böngésző megjelenítheti a valódi, adatbázisból visszaolvasott haladást.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 75));
+    }
+
+    if (state.processableRows > 0) throw new Error("Nem fejeződött be minden importcsomag. Az állapot ellenőrizhető, újraindítás nem történt.");
+    if (!incomingMovementTotalsMatch(state)) throw new Error("Az import és a készletmozgások összesítése eltér; kézi ellenőrzés szükséges.");
+    setResumableCommitBatchId("");
+    await applyIncomingBatchCommitResult(batch, {
+      committed: newlyCommitted,
+      committedTotalQty: newlyCommittedQty,
+      committedRowResults,
+      variantIds: Array.from(variantIds),
+      failedRows,
+      failedCount: state.errorRows,
+      warning: state.errorRows ? `${state.errorRows} sor hibás.` : null,
+      verifiedTotalRows: state.totalRows,
+      verifiedCommittedRows: state.committedRows,
+      verifiedQty: state.committedQty,
+    });
+  }
+
+  async function resumeIncomingCommitAfterCheck() {
+    const batchId = commitProgress?.batchId || "";
+    if (!batchId || busy || commitInFlightRef.current || commitStatusChecking) return;
+    setCommitStatusChecking(true);
+    try {
+      const state = await readIncomingBatchState(batchId);
+      if (state.processing || !incomingMovementTotalsMatch(state)) {
+        setResumableCommitBatchId("");
+        setMessage("A szerver még dolgozik, vagy a készletnapló nem egyezik. Újabb készletre vétel nincs engedélyezve.");
+        return;
+      }
+      if (state.processableRows === 0 || state.errorRows > 0) {
+        setResumableCommitBatchId("");
+        setMessage("Az import már kész, vagy hibás sorokat tartalmaz. Kattints az Állapot ellenőrzése gombra.");
+        return;
+      }
+      const old = batches.find((item) => String(item.id) === batchId);
+      const batch = old || ({
+        id: batchId, row_count: state.totalRows, error_count: 0, status: state.batchStatus,
+        reception_id: state.receptionId, source_file_name: commitProgress?.sourceName || "Import",
+      } as AifImportBatchSummary);
+      setResumableCommitBatchId("");
+      setUnconfirmedCommitBatchIds((current) => current.filter((id) => id !== batchId));
+      // A friss GET egyértelműen igazolta: nincs futó commit és vannak nyitott sorok.
+      void commitBatch(batch, true);
+    } catch (error: any) {
+      setResumableCommitBatchId("");
+      setMessage(error?.message || "A biztonságos folytatás ellenőrzése nem sikerült.");
+    } finally {
+      setCommitStatusChecking(false);
+    }
+  }
+
+  async function commitBatch(batch: AifImportBatchSummary, verifiedResume = false) {
     if (!batch?.id || busy || commitInFlightRef.current) return;
-    if (unconfirmedCommitBatchIds.includes(String(batch.id))) {
+    if (!verifiedResume && unconfirmedCommitBatchIds.includes(String(batch.id))) {
       setMessage("Ennek az importnak még bizonytalan a státusza. Előbb az alul megjelenő Állapot ellenőrzése gombot használd.");
       return;
     }
@@ -4360,6 +4550,7 @@ function AllInIncomingReception(_props: Props) {
     commitInFlightRef.current = String(batch.id);
     setBusy(true);
     setMessage("");
+    setResumableCommitBatchId("");
     startIncomingCommitProgress(batch);
     let postStarted = false;
     try {
@@ -4386,8 +4577,7 @@ function AllInIncomingReception(_props: Props) {
       }
       postStarted = true;
       moveIncomingCommitProgress("committing", "A szerver készletre veszi a sorokat. Nincs még igazolt kész eredmény; ne indítsd újra.");
-      const result = await aifIncomingWithDeadline(apiAifCommitImportBatch(batch.id), 165000);
-      await applyIncomingBatchCommitResult(batch, result);
+      await runIncomingChunkCommit(batch);
     } catch (error: any) {
       if (postStarted) {
         await handleUncertainIncomingCommit(batch, error);
@@ -4431,12 +4621,12 @@ function AllInIncomingReception(_props: Props) {
     commitInFlightRef.current = String(batch.id);
     setBusy(true);
     setIncomingPriceError("");
+    setResumableCommitBatchId("");
     startIncomingCommitProgress(batch, "committing");
     try {
-      const result = await aifIncomingWithDeadline(apiAifCommitImportBatch(batch.id, { priceChoices: choices }), 165000);
+      await runIncomingChunkCommit(batch, choices);
       setIncomingPriceReview(null);
       setIncomingPriceChoices({});
-      await applyIncomingBatchCommitResult(batch, result);
     } catch (error: any) {
       setIncomingPriceReview(null); // Bizonytalan POST után nem kínálunk véletlen dupla jóváhagyást.
       setIncomingPriceChoices({});
@@ -6045,12 +6235,13 @@ function AllInIncomingReception(_props: Props) {
             aria-live="polite"
             aria-label="Bevételezés folyamatjelző"
           >
-            <div className="absolute inset-x-0 top-0 h-[3px] overflow-hidden bg-white/10">
-              {incomingCommitIsWorking(commitProgress.phase) ? (
-                <div className="aif-incoming-beam h-full w-[36%] rounded-full bg-gradient-to-r from-transparent via-[#a9fff4] to-[#36c9c3] shadow-[0_0_16px_rgba(99,216,211,.65)]" style={{ animation: "aifIncomingToastBeam 2.1s ease-in-out infinite" }} />
-              ) : (
-                <div className={`h-full w-full ${commitProgress.phase === "success" ? "bg-[#67d4d1]" : commitProgress.phase === "partial" || commitProgress.phase === "uncertain" ? "bg-amber-300" : "bg-rose-400"}`} />
-              )}
+            <div className="absolute inset-x-0 top-0 h-[4px] overflow-hidden bg-white/10">
+              <div
+                className={`relative h-full rounded-full transition-[width] duration-500 ease-out ${commitProgress.phase === "failed" ? "bg-rose-400" : commitProgress.phase === "partial" ? "bg-amber-300" : "bg-gradient-to-r from-[#247e7d] via-[#40beb8] to-[#a9fff4]"}`}
+                style={{ width: `${commitProgress.rowCount > 0 ? Math.min(100, Math.max(0, Math.round(100 * ((commitProgress.committed || 0) + (commitProgress.failed || 0)) / commitProgress.rowCount))) : 0}%` }}
+              >
+                {incomingCommitIsWorking(commitProgress.phase) && <div className="aif-incoming-beam absolute inset-y-0 h-full w-1/2 bg-gradient-to-r from-transparent via-white/60 to-transparent" style={{ animation: "aifIncomingToastBeam 2.1s ease-in-out infinite" }} />}
+              </div>
             </div>
             <div className="p-3.5 sm:p-4">
               <div className="flex min-w-0 items-start gap-3">
@@ -6060,7 +6251,7 @@ function AllInIncomingReception(_props: Props) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="text-[11px] uppercase tracking-[0.11em] text-[#cffffd]/75">Áru bevételezés</p>
-                    <span className="rounded-md border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-white/80">{commitProgress.rowCount} sor</span>
+                    <span className="rounded-md border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-white/80">{commitProgress.committed ?? 0}/{commitProgress.rowCount} kész · {commitProgress.failed ?? 0} hibás</span>
                     <span className="ml-auto text-[11px] tabular-nums text-white/55">{Math.floor(commitElapsedSec / 60)}:{String(commitElapsedSec % 60).padStart(2, "0")}</span>
                   </div>
                   <p className="mt-1 truncate text-[11px] text-white/48" title={commitProgress.sourceName}>{commitProgress.sourceName}</p>
@@ -6085,14 +6276,26 @@ function AllInIncomingReception(_props: Props) {
               {(commitProgress.phase === "uncertain" || commitProgress.phase === "partial" || commitProgress.phase === "success") && (
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
                   <span className="text-[11px] leading-4 text-white/50">{commitProgress.phase === "uncertain" ? "Csak állapotlekérés, nincs újabb mentés" : commitProgress.phase === "partial" ? "A hibás sorok külön ellenőrzendők" : "Készletre vétel visszaigazolva"}</span>
-                  <button
-                    type="button"
-                    disabled={commitStatusChecking || Boolean(commitInFlightRef.current)}
-                    onClick={() => void verifyIncomingCommitStatus()}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#93eee7]/35 bg-[#208d8b]/24 px-3 text-[11px] text-[#e6fffc] transition hover:bg-[#208d8b]/42 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    <RefreshCw size={12} className={commitStatusChecking ? "animate-spin" : ""} /> {commitStatusChecking ? "Ellenőrzés…" : "Állapot ellenőrzése"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={commitStatusChecking || Boolean(commitInFlightRef.current)}
+                      onClick={() => void verifyIncomingCommitStatus()}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#93eee7]/35 bg-[#208d8b]/24 px-3 text-[11px] text-[#e6fffc] transition hover:bg-[#208d8b]/42 disabled:cursor-wait disabled:opacity-50"
+                    >
+                      <RefreshCw size={12} className={commitStatusChecking ? "animate-spin" : ""} /> {commitStatusChecking ? "Ellenőrzés…" : "Állapot ellenőrzése"}
+                    </button>
+                    {commitProgress.phase === "uncertain" && resumableCommitBatchId === commitProgress.batchId && (
+                      <button
+                        type="button"
+                        disabled={commitStatusChecking || Boolean(commitInFlightRef.current) || busy}
+                        onClick={() => void resumeIncomingCommitAfterCheck()}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#96ffdb]/55 bg-[#188b69] px-3 text-[11px] text-white transition hover:bg-[#1a9c77] disabled:opacity-50"
+                      >
+                        <CheckCircle size={12} /> Folytatás ellenőrzés után
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
