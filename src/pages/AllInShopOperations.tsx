@@ -4294,10 +4294,12 @@ export default function AllInShopOperations({
                         {PAYMENT_META.map((metaItem) => {
                           const Icon = metaItem.icon;
                           if (metaItem.method === "discount") {
+                            // Teljes uzleti nap: minden dolgozo osszes kedvezmenye,
+                            // nem a bejelentkezett elado sajat napi kedvezmenye.
                             return (
                               <div key={metaItem.method} className="rounded-2xl border border-amber-200/20 bg-amber-400/10 p-3">
                                 <div className="flex items-center gap-2 text-[11px] text-amber-100/72"><Icon size={15} />Kedvezmény</div>
-                                <p className="mt-2 text-lg text-amber-50">{formatMoney(dayCollectedDiscount)}</p>
+                                <p className="mt-2 text-lg text-amber-50">{formatMoney(datedShiftData?.totals.discountTotal)}</p>
                               </div>
                             );
                           }
