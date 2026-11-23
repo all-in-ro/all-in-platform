@@ -4282,10 +4282,10 @@ export default function AllInShopOperations({
                               <p className="mt-1 whitespace-nowrap text-[15px] tabular-nums text-white">{formatMoney(fullDayRevenueSplit.debtPayments)}</p>
                             </div>
                           </div>
-                          <div className="mt-2 flex flex-wrap justify-end gap-x-3 gap-y-1 text-[9px] text-white/50">
-                            <span>Bruttó: <span className="text-white/78">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</span></span>
-                            <span>Kedvezmény: <span className="text-amber-100/86">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</span></span>
-                            <span>Nyitó kassza: <span className="text-[#d7fffd]">{datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}</span></span>
+                          <div className="mt-2.5 flex flex-wrap justify-end gap-x-3 gap-y-1.5 border-t border-white/12 pt-2 text-[12px] leading-5 tabular-nums">
+                            <span className="whitespace-nowrap text-[#d7fffd]">Bruttó: <span className="font-medium">{formatMoney(datedShiftData?.totals.salesBeforeDiscount || 0)}</span></span>
+                            <span className="whitespace-nowrap text-amber-100/90">Kedvezmény: <span className="font-medium text-amber-100">{formatMoney(datedShiftData?.totals.discountTotal || 0)}</span></span>
+                            <span className="whitespace-nowrap text-[#d7fffd]">Nyitó kassza: <span className="font-medium">{datedShiftData?.totals.openingCash == null ? "–" : formatMoney(datedShiftData.totals.openingCash)}</span></span>
                           </div>
                         </div>
                       </div>
