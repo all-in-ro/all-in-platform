@@ -57,6 +57,7 @@ import {
 import {
   apiAifAdminDeleteShopSaleLine,
   apiAifShopSaleDetail,
+  apiAifAdminCorrectedShopPaymentLines,
   type AifShopSaleDetailResponse,
   apiAifShopDailyAuditPdfUrl,
   apiAifDownloadShopDailyAuditExcel,
@@ -1783,6 +1784,8 @@ export default function AllInAdminMagazinDashboard({
   });
   const [applied, setApplied] = useState(draft);
   const [data, setData] = useState<AifAdminShopOverviewResponse | null>(null);
+  // A kétféle fizetéssel rendezett bizonylatoknál az ikon terméksori legyen.
+  const [correctedLineMethods, setCorrectedLineMethods] = useState<Record<string, "cash" | "card">>({});
   // A fő kintlévőség az Üzleti kliensek oldal aktuális összesítését használja,
   // nem az időszaki hiteles eladások eladásnapi történeti értékét.
   const [liveDebt, setLiveDebt] = useState<{ amount: number; year: number } | null>(null);
@@ -1849,9 +1852,10 @@ export default function AllInAdminMagazinDashboard({
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    setCorrectedLineMethods({});
     try {
       const debtYear = Number(localIsoDate(new Date()).slice(0, 4));
-      const [response, shiftResponse, customerResult, voucherResult] = await Promise.all([
+      const [response, shiftResponse, customerResult, voucherResult, correctedPayments] = await Promise.all([
         apiAifAdminShopOverview({
           location: locationCode,
           ...applied,
@@ -1881,7 +1885,11 @@ export default function AllInAdminMagazinDashboard({
           result: null as VoucherFinanceReport | null,
           error: caught instanceof Error ? caught.message : "A voucher napló nem ellenőrizhető.",
         })),
+        apiAifAdminCorrectedShopPaymentLines({
+          location: locationCode, from: applied.from, to: applied.to,
+        }).catch(() => ({ ok: true as const, methods: {} as Record<string, "cash" | "card"> })),
       ]);
+      setCorrectedLineMethods(correctedPayments.methods || {});
       setData(response);
       setShiftDay(shiftResponse);
       setVoucherReport(voucherResult.result);
@@ -1908,6 +1916,7 @@ export default function AllInAdminMagazinDashboard({
       }
     } catch (loadError: any) {
       setData(null);
+      setCorrectedLineMethods({});
       setVoucherReport(null);
       setVoucherReportError("A pénzügyi adatok lekérése nem sikerült.");
       setLiveDebt(null);
@@ -3072,7 +3081,8 @@ export default function AllInAdminMagazinDashboard({
                           )}
                           {(() => {
                             const method = String(
-                              (sale as AifAdminShopRecentSale & { paymentMethod?: string | null }).paymentMethod
+                              correctedLineMethods[String(sale.lineId || "")]
+                                || (sale as AifAdminShopRecentSale & { paymentMethod?: string | null }).paymentMethod
                                 || sale.settlementMethod || ""
                             ).trim().toLowerCase();
 

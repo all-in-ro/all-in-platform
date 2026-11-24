@@ -55,6 +55,7 @@ import {
   apiAifCloseShopDay,
   apiAifCreateShopCashMovement,
   apiAifCreateShopSaleLineNote,
+  apiAifCorrectShopSalePaymentMethod,
   apiAifCreateShopShiftHandover,
   apiAifGetShopCustomer,
   apiAifListLocations,
@@ -2304,6 +2305,14 @@ export default function AllInShopOperations({
   const [customerQuickDetail, setCustomerQuickDetail] = useState<AifShopCustomerDetail | null>(null);
   const [customerQuickLoading, setCustomerQuickLoading] = useState(false);
   const [customerQuickError, setCustomerQuickError] = useState("");
+  // V25: fizetési mód javítása, valódi könyvelt pénzmozgással.
+  const [paymentFixTarget, setPaymentFixTarget] = useState<AifShopDailyProductItem | null>(null);
+  const [paymentFixDetail, setPaymentFixDetail] = useState<AifShopSaleDetailResponse | null>(null);
+  const [paymentFixLoading, setPaymentFixLoading] = useState(false);
+  const [paymentFixSaving, setPaymentFixSaving] = useState(false);
+  const [paymentFixError, setPaymentFixError] = useState("");
+  const [paymentFixNotice, setPaymentFixNotice] = useState("");
+  const paymentFixRequestRef = useRef(0);
   const [selectedDailySale, setSelectedDailySale] = useState<AifShopDailySaleItem | null>(null);
   const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
@@ -2916,6 +2925,63 @@ export default function AllInShopOperations({
     }
   }
 
+  function closePaymentFix() {
+    if (paymentFixSaving) return;
+    paymentFixRequestRef.current += 1;
+    setPaymentFixTarget(null);
+    setPaymentFixDetail(null);
+    setPaymentFixError("");
+    setPaymentFixLoading(false);
+  }
+
+  async function openPaymentFix(item: AifShopDailyProductItem) {
+    if (!item.saleId) return;
+    const requestId = ++paymentFixRequestRef.current;
+    setPaymentFixTarget(item);
+    setPaymentFixDetail(null);
+    setPaymentFixError("");
+    setPaymentFixLoading(true);
+    try {
+      const detail = await apiAifShopSaleDetail({ location: locationCode, id: item.saleId, recordType: "sale" });
+      if (paymentFixRequestRef.current === requestId) setPaymentFixDetail(detail);
+    } catch (caught) {
+      if (paymentFixRequestRef.current === requestId) setPaymentFixError(
+        caught instanceof Error ? caught.message : "A bizonylat nem ellenőrizhető."
+      );
+    } finally {
+      if (paymentFixRequestRef.current === requestId) setPaymentFixLoading(false);
+    }
+  }
+
+  async function savePaymentFix() {
+    const detail = paymentFixDetail;
+    const clickedLine = detail?.lines?.find((line) => line.id === paymentFixTarget?.lineId);
+    const original = clickedLine?.paymentMethod;
+    if (!paymentFixTarget?.lineId || !detail || !clickedLine ||
+        (original !== "cash" && original !== "card") || paymentFixSaving) return;
+    const replacement = original === "cash" ? "card" : "cash";
+    setPaymentFixSaving(true);
+    setPaymentFixError("");
+    try {
+      const updated = await apiAifCorrectShopSalePaymentMethod({
+        location: locationCode, saleId: detail.id, lineId: paymentFixTarget.lineId,
+        expectedMethod: original, paymentMethod: replacement,
+      });
+      setPaymentFixNotice(`${updated.saleNumber}: ${original === "cash" ? "Készpénz" : "Bankkártya"} → ${replacement === "cash" ? "Készpénz" : "Bankkártya"} • ${formatMoney(updated.amount)}. A pénzügyi összesítés frissítve.`);
+      paymentFixRequestRef.current += 1;
+      setPaymentFixTarget(null);
+      setPaymentFixDetail(null);
+      void refreshSummaryPage(summaryDate);
+      window.dispatchEvent(new CustomEvent("aif:shop-payment-corrected", {
+        detail: { locationCode, date: updated.workDate, saleId: updated.saleId },
+      }));
+    } catch (caught) {
+      setPaymentFixError(caught instanceof Error ? caught.message : "A fizetési mód javítása nem sikerült.");
+    } finally {
+      setPaymentFixSaving(false);
+    }
+  }
+
   function closeSaleDetail() {
     setSelectedDailySale(null);
     setSaleDetail(null);
@@ -3337,6 +3403,13 @@ export default function AllInShopOperations({
     setCustomerQuickDetail(null);
     setCustomerQuickError("");
     setCustomerQuickLoading(false);
+    paymentFixRequestRef.current += 1;
+    setPaymentFixTarget(null);
+    setPaymentFixDetail(null);
+    setPaymentFixLoading(false);
+    setPaymentFixSaving(false);
+    setPaymentFixError("");
+    setPaymentFixNotice("");
     setSelectedDailySale(null);
     setSaleDetail(null);
     setSaleDetailError("");
@@ -3423,6 +3496,10 @@ export default function AllInShopOperations({
           if (!dailyNotesSaving) setDailyNotesOpen(false);
           return;
         }
+        if (paymentFixTarget) {
+          if (!paymentFixSaving) closePaymentFix();
+          return;
+        }
         if (saleLineNoteTarget) {
           if (!saleLineNoteSaving) closeSaleLineNote();
           return;
@@ -3472,7 +3549,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, galleryProduct, handoverOpen, handoverSaving, mode, onClose, open, pdfChoice, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
+  }, [cashCalendarMode, cashHistoryOpen, cashMoveOpen, cashMoveSaving, customerQuickId, dailyNotesOpen, dailyNotesSaving, dayCloseOpen, dayCloseSaving, employeeSalesTarget, galleryProduct, handoverOpen, handoverSaving, mode, onClose, open, pdfChoice, paymentFixSaving, paymentFixTarget, saleLineNoteSaving, saleLineNoteTarget, selectedDailySale]);
 
   function openSellerPdfChoice(handoverId?: string) {
     setPdfChoice({date:summaryDate,...(handoverId?{handoverId}:{})});
@@ -3567,6 +3644,14 @@ export default function AllInShopOperations({
   const historyComplete = datedSummaryData?.history?.complete !== false;
   const fullDayRevenueSplit = shiftRevenueBreakdown(datedShiftData?.totals);
   const ownDayRevenueSplit = shiftRevenueBreakdown(currentEmployeeDay);
+  const paymentFixLine = paymentFixDetail?.lines.find((line) => line.id === paymentFixTarget?.lineId) || null;
+  const paymentFixCurrent = paymentFixLine?.paymentMethod === "cash" || paymentFixLine?.paymentMethod === "card"
+    ? paymentFixLine.paymentMethod : null;
+  const paymentFixReady = Boolean(paymentFixDetail && paymentFixLine && paymentFixCurrent &&
+    paymentFixDetail.recordType === "sale" && paymentFixDetail.saleType === "sale" &&
+    paymentFixDetail.status === "completed" && paymentFixDetail.paymentStatus === "paid" &&
+    Math.abs(numberValue(paymentFixDetail.balanceDue)) < 0.005 &&
+    Math.abs(numberValue(paymentFixDetail.total) - numberValue(paymentFixDetail.paidTotal)) < 0.005);
 
   return createPortal(
     <div className="fixed inset-0 z-[255] flex items-center justify-center bg-[#111827]/84 p-3 backdrop-blur-sm sm:p-5">
@@ -4485,6 +4570,12 @@ export default function AllInShopOperations({
                       ) : null}
                     </div>
                   </div>
+                  {paymentFixNotice ? (
+                    <div role="status" className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b]/18 px-3 py-2 text-[12px] text-[#e6fffd]">
+                      <span className="flex items-center gap-2"><CheckCircle2 size={16} className="shrink-0" />{paymentFixNotice}</span>
+                      <button type="button" onClick={() => setPaymentFixNotice("")} className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-white/10" aria-label="Üzenet bezárása"><X size={14} /></button>
+                    </div>
+                  ) : null}
                   {outstandingOnly && historyAvailable ? (
                     <p className="px-1 pt-2 text-[11px] leading-5 text-white/55">
                       {formatDate(summaryDate)} nap végi állapota, kizárólag az ezen a napon kiadott tételekről. A későbbi rendezés külön jelzést kap.
@@ -4521,7 +4612,13 @@ export default function AllInShopOperations({
                         linkedSale?.paymentLabel ||
                         (unpaid ? "Utólag fizet" : "Nincs adat"),
                       );
-                      const paymentKey = paymentLabel.toLocaleLowerCase("hu-HU");
+                      const paymentKey = paymentLabel.toLocaleLowerCase("hu-HU").trim();
+                      const canFixThisPayment = Boolean(
+                        item.saleId && !settlement && !unpaid && !summaryLoading && !shiftLoading &&
+                        item.recordType === "sale" && item.saleType === "sale" &&
+                        !item.transferredFrom && !item.moneyTransferredFrom &&
+                        (paymentKey === "készpénz" || paymentKey === "bankkártya")
+                      );
                       const normalPriceTotal = numberValue(item.listTotal) > 0.005
                         ? numberValue(item.listTotal)
                         : Math.max(
@@ -4657,24 +4754,24 @@ export default function AllInShopOperations({
 
                                 <span className="h-4 w-px shrink-0 bg-white/10" aria-hidden="true" />
 
-                                <span
-                                  className="inline-flex items-center gap-1.5 text-[11px] text-white/66"
-                                  title={`Fizetés: ${paymentLabel}`}
-                                >
-                                  <PaymentIcon
-                                    size={14}
-                                    className={
-                                      paymentKey.includes("készpénz")
-                                        ? "text-[#8ee6e2]"
-                                        : paymentKey.includes("kártya")
-                                          ? "text-[#a9c8ff]"
-                                          : paymentKey.includes("átutalás")
-                                            ? "text-[#c7b5ff]"
-                                            : "text-white/52"
-                                    }
-                                  />
-                                  <span>{paymentLabel}</span>
-                                </span>
+                                {canFixThisPayment ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void openPaymentFix(item)}
+                                    className="group/payment inline-flex min-h-[30px] items-center gap-1.5 rounded-lg border border-[#9be9e5]/22 bg-[#2a8d8b]/[0.08] px-2 text-[11px] text-[#d7fffd] transition hover:border-[#9be9e5]/65 hover:bg-[#2a8d8b]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9be9e5]/60"
+                                    title="Fizetési mód javítása: készpénz ↔ bankkártya"
+                                    aria-label={`${item.title}: ${paymentLabel} fizetési mód javítása`}
+                                  >
+                                    <PaymentIcon size={14} className={paymentKey === "készpénz" ? "text-[#8ee6e2]" : "text-[#a9c8ff]"} />
+                                    <span>{paymentLabel}</span>
+                                    <ArrowRightLeft size={12} className="text-[#9be9e5]/65 group-hover/payment:text-[#d7fffd]" />
+                                  </button>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 text-[11px] text-white/66" title={`Fizetés: ${paymentLabel}`}>
+                                    <PaymentIcon size={14} className={paymentKey.includes("készpénz") ? "text-[#8ee6e2]" : paymentKey.includes("kártya") ? "text-[#a9c8ff]" : paymentKey.includes("átutalás") ? "text-[#c7b5ff]" : "text-white/52"} />
+                                    <span>{paymentLabel}</span>
+                                  </span>
+                                )}
 
                                 {item.soldAt ? (
                                   <>
@@ -4933,6 +5030,57 @@ export default function AllInShopOperations({
             error={saleDetailError}
             onClose={closeSaleDetail}
           />
+        ) : null}
+
+        {paymentFixTarget ? createPortal(
+          <div className="fixed inset-0 z-[610] flex items-center justify-center bg-[#07121f]/90 p-3 backdrop-blur-md sm:p-5"
+            onMouseDown={(event) => { if (event.currentTarget === event.target && !paymentFixSaving) closePaymentFix(); }}>
+            <section role="dialog" aria-modal="true" aria-label="Fizetési mód javítása"
+              className="w-full max-w-[550px] overflow-hidden rounded-[26px] border border-[#9be9e5]/48 bg-[#303a4c] text-white shadow-[0_38px_115px_rgba(0,0,0,0.68)]">
+              <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#20434f] via-[#256669] to-[#2a8d8b] px-5 py-4">
+                <span className="flex items-center gap-3"><span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-white/10"><ArrowRightLeft size={21} /></span><span className="text-lg">Fizetési mód javítása</span></span>
+                <button type="button" onClick={closePaymentFix} disabled={paymentFixSaving} aria-label="Bezárás"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-black/10 hover:bg-white/10 disabled:opacity-40"><X size={17} /></button>
+              </header>
+              <div className="space-y-3 p-5">
+                {paymentFixLoading ? <p role="status" className="flex items-center gap-2 py-7 text-sm text-white/65"><Loader2 size={18} className="animate-spin"/> Bizonylat ellenőrzése…</p> : (
+                  <>
+                    <p className="text-[12px] text-white/70">{paymentFixDetail?.saleNumber || paymentFixTarget.saleNumber || "Bizonylat"} • {paymentFixLine ? formatMoney(paymentFixLine.lineTotal) : "–"}</p>
+                    <p className="truncate text-[12px] text-white/55" title={paymentFixTarget.title}>{paymentFixTarget.title}</p>
+                    {paymentFixDetail && numberValue(paymentFixDetail.lineCount) > 1 ? (
+                      <p className="rounded-xl border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] text-[#d7fffd]">Csak a kiválasztott terméksor módosul.</p>
+                    ) : null}
+                    {paymentFixReady && paymentFixCurrent ? (
+                      <div className="flex items-center gap-3 rounded-2xl border border-[#9be9e5]/24 bg-[#273548] p-3.5">
+                        <div className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-xl border border-white/14 bg-[#344154] px-3 text-sm">
+                          {paymentFixCurrent === "cash" ? <Banknote size={18} className="text-[#8ee6e2]"/> : <CreditCard size={18} className="text-[#a9c8ff]"/>}
+                          {paymentFixCurrent === "cash" ? "Készpénz" : "Bankkártya"}
+                        </div>
+                        <ArrowRight size={19} className="shrink-0 text-[#9be9e5]"/>
+                        <div className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/50 bg-[#2a8d8b]/34 px-3 text-sm text-[#e6fffd]">
+                          {paymentFixCurrent === "cash" ? <CreditCard size={18}/> : <Banknote size={18}/>}
+                          {paymentFixCurrent === "cash" ? "Bankkártya" : "Készpénz"}
+                        </div>
+                      </div>
+                    ) : paymentFixDetail ? (
+                      <p className="rounded-xl border border-amber-200/28 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">Ez nem egyetlen, teljesen kifizetett KP/kártya bizonylat. Nem módosítható innen.</p>
+                    ) : null}
+                  </>
+                )}
+                {paymentFixError ? <p role="alert" className="rounded-xl border border-rose-200/42 bg-rose-600/18 px-3.5 py-3 text-[12px] text-rose-50">{paymentFixError}</p> : null}
+              </div>
+              <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+                <button type="button" onClick={closePaymentFix} disabled={paymentFixSaving}
+                  className="h-11 rounded-xl border border-white/18 bg-white/[0.05] px-4 text-sm text-white/80 hover:bg-white/[0.09] disabled:opacity-40">Mégse</button>
+                <button type="button" onClick={() => void savePaymentFix()}
+                  disabled={!paymentFixReady || paymentFixSaving || paymentFixLoading}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/55 bg-[#2a8d8b] px-5 text-sm text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40">
+                  {paymentFixSaving ? <Loader2 size={16} className="animate-spin"/> : <Check size={17}/>}
+                  {paymentFixSaving ? "Mentés…" : "Javítás mentése"}
+                </button>
+              </footer>
+            </section>
+          </div>, document.body
         ) : null}
 
         {saleLineNoteTarget ? (() => {
