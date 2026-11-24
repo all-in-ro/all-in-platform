@@ -397,7 +397,36 @@ function SmartSelect({
   );
 }
 
-// AIF_RECEPTION_PAYMENT_BADGE_V28: a piros/zold allapot maga a muvelet.
+// AIF_RECEPTION_PAYMENT_BADGE_V29: nincs pasztell szin es vastag keret.
+// Zold = sajat #108D8B, piros = #E21C2A, sarga = #FACC15.
+type ReceptionPaymentStatus = "unpaid" | "partial" | "paid";
+const RECEPTION_PAYMENT_COLORS: Record<ReceptionPaymentStatus, string> = {
+  unpaid: "#E21C2A", partial: "#FACC15", paid: "#108D8B",
+};
+const RECEPTION_PAYMENT_LABELS: Record<ReceptionPaymentStatus, string> = {
+  unpaid: "Fizetetlen", partial: "Részben fizetve", paid: "Kifizetve",
+};
+function receptionPaymentStatus(item: AifReceptionSummary): ReceptionPaymentStatus {
+  return item.payment_status === "paid" ? "paid" : item.payment_status === "partial" ? "partial" : "unpaid";
+}
+function receptionPaidAmount(item: AifReceptionSummary) {
+  const value = item.paid_amount ?? (item.payment_status === "paid" ? item.invoice_gross : 0);
+  return Math.max(0, Math.round(n(value) * 100) / 100);
+}
+function receptionRemainingAmount(item: AifReceptionSummary) {
+  return Math.max(0, Math.round((n(item.invoice_gross) - receptionPaidAmount(item)) * 100) / 100);
+}
+function parseReceptionPaymentAmount(value: string): number | null {
+  const raw = String(value || "").replace(/[\s\u00a0\u202f]/g, "").trim();
+  if (!raw) return null;
+  let candidate = raw;
+  if (/^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)) candidate = raw.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(raw)) candidate = raw.replace(/,/g, "");
+  else candidate = raw.replace(",", ".");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(candidate)) return null;
+  const numeric = Number(candidate);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric * 100) / 100 : null;
+}
 function ReceptionPaymentBadge({
   item, onClick, disabled = false, compact = false,
 }: {
@@ -406,28 +435,25 @@ function ReceptionPaymentBadge({
   disabled?: boolean;
   compact?: boolean;
 }) {
-  const paid = item.payment_status === "paid";
-  const hint = paid && item.paid_on ? dateText(item.paid_on) : "Kifizetésre vár";
+  const state = receptionPaymentStatus(item);
+  const color = RECEPTION_PAYMENT_COLORS[state];
+  const paid = receptionPaidAmount(item);
+  const left = receptionRemainingAmount(item);
+  const extra = state === "partial"
+    ? `Fizetve ${money(paid, item.currency_code)} · hátra ${money(left, item.currency_code)}`
+    : state === "paid" && item.paid_on ? `Kifizetve: ${dateText(item.paid_on)}` : "";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={`${cell(item.invoice_number)}: ${paid ? `Kifizetve ${hint}` : 'Nincs kifizetve'}. Kattintás a módosításhoz.`}
-      title={paid ? `Kifizetve: ${hint} · Kattintás a módosításhoz` : "Nincs kifizetve · Kattintás a rögzítéshez"}
-      className={`group/payment inline-flex max-w-full items-center gap-2 rounded-xl border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/65 active:scale-[0.98] disabled:cursor-wait disabled:opacity-50 ${
-        compact ? "px-2.5 py-2" : "w-full justify-center px-1.5 py-2"
-      } ${paid
-        ? "border-emerald-300/35 bg-emerald-400/[0.10] text-emerald-50 hover:border-emerald-200/65 hover:bg-emerald-400/[0.19]"
-        : "border-rose-300/32 bg-rose-400/[0.085] text-rose-50 hover:border-rose-200/65 hover:bg-rose-400/[0.17]"
-      }`}
+    <button type="button" onClick={onClick} disabled={disabled}
+      aria-label={`${cell(item.invoice_number)}: ${RECEPTION_PAYMENT_LABELS[state]}${extra ? `, ${extra}` : ""}. Fizetés módosítása.`}
+      title={`${RECEPTION_PAYMENT_LABELS[state]}${extra ? ` · ${extra}` : ""} · Kattints a módosításhoz`}
+      style={{borderLeftColor:color}}
+      className={`group/payment inline-flex min-w-0 max-w-full items-center gap-2.5 rounded-lg border-l-[3px] px-2 py-2 text-left transition hover:bg-white/[0.10] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-[0.985] disabled:cursor-wait disabled:opacity-55 ${compact ? "" : "w-full"}`}
     >
-      <span aria-hidden="true" className={`relative inline-flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border ${paid ? "border-emerald-200/60 bg-emerald-400/18" : "border-rose-200/60 bg-rose-400/14"}`}>
-        <span className={`h-2 w-2 rounded-full ${paid ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.65)]" : "bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.50)]"}`} />
-      </span>
+      <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full border border-white/55" style={{backgroundColor:color,boxShadow:`0 0 0 2px ${color}28`}} />
       <span className="min-w-0">
-        <span className="block whitespace-nowrap text-[10px] font-medium leading-4">{paid ? "Kifizetve" : "Nincs fizetve"}</span>
-        {paid && item.paid_on && <span className="block whitespace-nowrap text-[9px] leading-3 tabular-nums opacity-65">{hint}</span>}
+        <span className="block whitespace-nowrap text-[14px] font-semibold leading-5 text-white">{RECEPTION_PAYMENT_LABELS[state]}</span>
+        {state === "partial" && <span className="block whitespace-nowrap text-[11px] font-medium leading-4 text-white">Hátra: {money(left, item.currency_code)}</span>}
+        {state === "paid" && item.paid_on && <span className="block whitespace-nowrap text-[11px] font-medium leading-4 text-white">{dateText(item.paid_on)}</span>}
       </span>
     </button>
   );
@@ -638,7 +664,7 @@ function HungarianDatePicker({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className={`flex h-10 w-full items-center justify-between rounded-xl border px-3 text-left text-xs text-white outline-none transition ${
+        className={`flex h-11 w-full items-center justify-between rounded-xl border px-3 text-left text-[14px] font-semibold text-white outline-none transition ${
           open ? "border-[#7bd7d4]/55 bg-[#465264] ring-2 ring-[#7bd7d4]/18" : "border-white/22 bg-[#3f4959] hover:bg-[#465264]"
         }`}
       >
@@ -856,7 +882,11 @@ function buildFilteredReceptionsReportHtml(
       <td class="money sales">${pdfEscape(money(receptionCurrentSalesTotalRon(row), "RON"))}</td>
       <td class="qty">${pdfNumber(row.total_qty || 0, 0)}</td>
       <td class="center">${pdfEscape(receptionStatusTextRo(row.status))}</td>
-      <td class="center" style="color:${row.payment_status === "paid" ? "#067647" : "#b42318"};font-weight:700">${row.payment_status === "paid" ? "● Kifizetve" : "● Nincs fizetve"}${row.payment_status === "paid" && row.paid_on ? `<div style="font-weight:400;font-size:7px">${pdfEscape(dateText(row.paid_on))}</div>` : ""}</td>
+      <td class="center" style="color:${RECEPTION_PAYMENT_COLORS[receptionPaymentStatus(row)]};font-weight:700;font-size:8px">
+        ● ${pdfEscape(RECEPTION_PAYMENT_LABELS[receptionPaymentStatus(row)])}
+        ${receptionPaymentStatus(row) === "partial" ? `<div style="color:#172033;font-size:7px;font-weight:600;margin-top:2px">Fizetve: ${pdfEscape(money(receptionPaidAmount(row), row.currency_code))}<br>Hátra: ${pdfEscape(money(receptionRemainingAmount(row), row.currency_code))}${row.paid_on ? `<br>Utolsó fiz.: ${pdfEscape(dateText(row.paid_on))}` : ""}</div>` : ""}
+        ${receptionPaymentStatus(row) === "paid" && row.paid_on ? `<div style="color:#172033;font-weight:600;font-size:7px;margin-top:2px">${pdfEscape(dateText(row.paid_on))}</div>` : ""}
+      </td>
     </tr>`).join("");
 
   return `<!doctype html>
@@ -1117,7 +1147,7 @@ function statusText(s?: string | null) {
 function receptionStatusBadgeClass(s?: string | null) {
   const v = String(s || "").toLowerCase();
   if (v === "committed") {
-    return "border-[#9be9e5]/55 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.22)]";
+    return "border-[#108D8B] bg-[#108D8B] text-white";
   }
   if (v === "needs_review") {
     return "border-amber-200/35 bg-amber-500/14 text-amber-50";
@@ -2036,11 +2066,12 @@ export default function AllInReceptions(_props: Props) {
   const [priceReviewError, setPriceReviewError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
   const [paymentTarget, setPaymentTarget] = useState<AifReceptionSummary | null>(null);
-  const [paymentDraftPaid, setPaymentDraftPaid] = useState(false);
-  const [paymentDraftDate, setPaymentDraftDate] = useState(receptionQuickDate(0));
+  const [paymentDraftStatus, setPaymentDraftStatus] = useState<ReceptionPaymentStatus>("unpaid");
+  const [paymentDraftAmount, setPaymentDraftAmount] = useState("");
+  const [paymentDraftDate, setPaymentDraftDate] = useState("");
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState("");
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState<"all" | "paid" | "unpaid">("all");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<"all" | ReceptionPaymentStatus>("all");
   const [rowErrorTarget, setRowErrorTarget] = useState<any | null>(null);
   const [rowColorResolution, setRowColorResolution] = useState<any | null>(null);
   const [rowColorResolutionLoading, setRowColorResolutionLoading] = useState(false);
@@ -2239,23 +2270,34 @@ export default function AllInReceptions(_props: Props) {
   const salesTvaText = useMemo(() => salesTvaLabel(salesTvaSettings), [salesTvaSettings]);
 
   const visibleReceptions = useMemo(() => items.filter((item) =>
-    paymentStatusFilter === "all" || (item.payment_status === "paid" ? "paid" : "unpaid") === paymentStatusFilter
+    paymentStatusFilter === "all" || receptionPaymentStatus(item) === paymentStatusFilter
   ), [items, paymentStatusFilter]);
-  const paidReceptionsCount = items.filter((item) => item.payment_status === "paid").length;
-  const unpaidReceptionsCount = items.length - paidReceptionsCount;
+  const paidReceptionsCount = items.filter((item) => receptionPaymentStatus(item) === "paid").length;
+  const partialReceptionsCount = items.filter((item) => receptionPaymentStatus(item) === "partial").length;
+  const unpaidReceptionsCount = items.filter((item) => receptionPaymentStatus(item) === "unpaid").length;
 
   function openReceptionPayment(item: AifReceptionSummary) {
     if (paymentSaving) return;
+    const paymentState = receptionPaymentStatus(item);
     setPaymentTarget(item);
-    setPaymentDraftPaid(item.payment_status === "paid");
+    setPaymentDraftStatus(paymentState);
+    setPaymentDraftAmount(paymentState === "partial" ? receptionPaidAmount(item).toFixed(2).replace(".", ",") : "");
     setPaymentDraftDate(dateOnly(item.paid_on) || "");
     setPaymentError("");
   }
 
   async function saveReceptionPayment() {
     if (!paymentTarget || paymentSaving) return;
-    const paidOn = paymentDraftPaid ? paymentDraftDate : null;
-    if (paymentDraftPaid && (!isoParts(paymentDraftDate) || paymentDraftDate > receptionQuickDate(0))) {
+    const nextStatus = paymentDraftStatus;
+    const gross = Math.round(n(paymentTarget.invoice_gross) * 100) / 100;
+    const amountEntered = parseReceptionPaymentAmount(paymentDraftAmount);
+    const amount = nextStatus === "unpaid" ? 0 : nextStatus === "paid" ? gross : amountEntered;
+    const paidOn = nextStatus === "unpaid" ? null : paymentDraftDate;
+    if (nextStatus === "partial" && (amount === null || amount <= 0 || amount >= gross)) {
+      setPaymentError("A részfizetés legyen nagyobb 0-nál, de kisebb a számla végösszegénél.");
+      return;
+    }
+    if (nextStatus !== "unpaid" && (!isoParts(paymentDraftDate) || paymentDraftDate > receptionQuickDate(0))) {
       setPaymentError("Válassz érvényes, nem jövőbeli kifizetési dátumot.");
       return;
     }
@@ -2263,19 +2305,24 @@ export default function AllInReceptions(_props: Props) {
     setPaymentError("");
     try {
       const saved = await apiAifSetReceptionPayment(paymentTarget.id, {
-        status: paymentDraftPaid ? "paid" : "unpaid",
+        status: nextStatus,
         paidOn,
-        expectedStatus: paymentTarget.payment_status === "paid" ? "paid" : "unpaid",
+        paidAmount: amount ?? 0,
+        expectedStatus: receptionPaymentStatus(paymentTarget),
         expectedPaidOn: dateOnly(paymentTarget.paid_on) || null,
+        expectedPaidAmount: receptionPaidAmount(paymentTarget),
+        expectedInvoiceGross: Math.round(n(paymentTarget.invoice_gross) * 100) / 100,
       });
       setItems((previous) => previous.map((item) => item.id === paymentTarget.id
         ? { ...item, ...saved.item } : item));
       setDetail((previous) => previous && previous.item.id === paymentTarget.id
         ? { ...previous, item: { ...previous.item, ...saved.item } } : previous);
       setPaymentTarget(null);
-      setMessage(paymentDraftPaid
-        ? `Számla kifizetve: ${cell(paymentTarget.invoice_number)} · ${dateText(paidOn)}`
-        : `Fizetési jelölés visszavonva: ${cell(paymentTarget.invoice_number)}`);
+      setMessage(nextStatus === "paid"
+        ? `Kifizetve: ${cell(paymentTarget.invoice_number)} · ${dateText(paidOn)}`
+        : nextStatus === "partial"
+          ? `Részfizetés mentve: ${cell(paymentTarget.invoice_number)} · ${money(amount, paymentTarget.currency_code)}`
+          : `Fizetetlenként jelölve: ${cell(paymentTarget.invoice_number)}`);
     } catch (error: any) {
       setPaymentError(String(error?.message || "A fizetési állapot nem menthető."));
     } finally {
@@ -2299,7 +2346,7 @@ export default function AllInReceptions(_props: Props) {
     try {
       const result = await apiAifListReceptions({ limit: 5000, search, supplier, location, currency, status, from, to });
       const reportItems = (result.items || []).filter((item) =>
-        paymentStatusFilter === "all" || (item.payment_status === "paid" ? "paid" : "unpaid") === paymentStatusFilter
+        paymentStatusFilter === "all" || receptionPaymentStatus(item) === paymentStatusFilter
       );
       const supplierLabel = supplier
         ? supplierDisplayName((meta?.suppliers || []).find((item) => item.id === supplier || item.code === supplier)?.name || supplier)
@@ -2315,7 +2362,7 @@ export default function AllInReceptions(_props: Props) {
         location: locationLabel,
         currency: currencyLabel,
         status: statusLabel,
-        payment: paymentStatusFilter === "paid" ? "Kifizetve" : paymentStatusFilter === "unpaid" ? "Nincs fizetve" : "Összes számla",
+        payment: paymentStatusFilter === "paid" ? "Kifizetve" : paymentStatusFilter === "partial" ? "Részben fizetve" : paymentStatusFilter === "unpaid" ? "Fizetetlen" : "Összes számla",
         from,
         to,
       }).replace(
@@ -3147,27 +3194,28 @@ export default function AllInReceptions(_props: Props) {
         <section className={card}>
           <SectionTitle title="Receptió lista" right={
             <div className="flex flex-wrap items-center gap-1.5">
-              {([ ["all", "Összes", items.length], ["unpaid", "Nincs fizetve", unpaidReceptionsCount], ["paid", "Kifizetve", paidReceptionsCount] ] as const).map(([value, labelText, count]) =>
-                <button key={value} type="button" onClick={() => setPaymentStatusFilter(value)}
-                  aria-pressed={paymentStatusFilter === value}
-                  className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[10px] transition ${
-                    paymentStatusFilter === value ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white shadow-sm" : "border-white/13 bg-[#293548]/55 text-white/68 hover:border-white/30 hover:text-white"
-                  }`}>
-                  {value !== "all" && <span className={`h-1.5 w-1.5 rounded-full ${value === "paid" ? "bg-emerald-300" : "bg-rose-400"}`}/>}
-                  {labelText}<span className="ml-0.5 rounded-md bg-white/10 px-1.5 py-0.5 tabular-nums">{count}</span>
-                </button>
-              )}
+              {([ ["all", "Összes", items.length], ["unpaid", "Fizetetlen", unpaidReceptionsCount], ["partial", "Részben fizetve", partialReceptionsCount], ["paid", "Kifizetve", paidReceptionsCount] ] as const).map(([value, labelText, count]) => {
+                const active = paymentStatusFilter === value;
+                const accent = value === "all" ? "#108D8B" : RECEPTION_PAYMENT_COLORS[value];
+                return <button key={value} type="button" onClick={() => setPaymentStatusFilter(value)}
+                  aria-pressed={active}
+                  style={active ? {backgroundColor:accent,borderColor:accent,color:value === "partial" ? "#172033" : "#FFFFFF"} : undefined}
+                  className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-[12px] font-semibold transition ${active ? "shadow-sm" : "border-white/25 bg-[#293548] text-white hover:border-white/55 hover:bg-[#3b485a]"}`}>
+                  {value !== "all" && <span className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/35" style={{backgroundColor:active ? value === "partial" ? "#172033" : "#ffffff" : accent}} />}
+                  {labelText}<span className={`ml-0.5 rounded-md px-1.5 py-0.5 tabular-nums ${active ? "bg-black/15" : "bg-white/15"}`}>{count}</span>
+                </button>;
+              })}
             </div>
           } />
           <div className="overflow-hidden">
-            <div className="hidden overflow-x-auto lg:block">
-              <table className="w-full table-fixed text-left text-xs">
+            <div className="hidden overflow-x-auto overscroll-x-contain lg:block" aria-label="Receptiólista. Kisebb képernyőn vízszintesen görgethető.">
+              <table className="w-full min-w-[1320px] table-fixed text-left text-[14px]">
                 <colgroup>
-                  {[3, 12, 10, 8, 12, 13, 12, 4, 8, 10, 8].map((width, idx) =>
-                    <col key={idx} style={{ width: `${width}%` }} />)}
+                  {[42, 184, 144, 174, 187, 175, 54, 132, 152, 76].map((width, idx) =>
+                    <col key={idx} style={{ width: `${width}px` }} />)}
                 </colgroup>
-                <thead className="bg-[#293448] text-[9px] font-normal uppercase tracking-[0.045em] text-white/65 [&_th]:font-normal">
-                  <tr className="[&_th]:px-2 [&_th]:py-3">
+                <thead className="bg-[#293448] text-[11px] font-semibold uppercase tracking-[0.035em] text-white [&_th]:font-semibold">
+                  <tr className="[&_th]:px-3 [&_th]:py-4">
                     <th className="!px-1 text-center">
                       <button type="button" onClick={() => setReceptionListNumberDescending((current) => !current)}
                         className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white transition hover:bg-[#319c99]"
@@ -3177,8 +3225,7 @@ export default function AllInReceptions(_props: Props) {
                     </th>
                     <th>Számlaszám</th>
                     <th>Beszállító</th>
-                    <th>Célhely</th>
-                    <th>Dátumok</th>
+                    <th>Számla / bevételezés</th>
                     <th className="text-right">Beszerzési érték</th>
                     <th className="text-right text-[#baf7f3]">Eladási érték (RON)</th>
                     <th className="text-center">Db</th>
@@ -3191,31 +3238,33 @@ export default function AllInReceptions(_props: Props) {
                   {visibleReceptions.map((r, index) => {
                     const displayReceptionNo = receptionListNumberDescending ? visibleReceptions.length - index : index + 1;
                     return <tr key={r.id} className="group/rec transition-colors hover:bg-[#617286]/25">
-                      <td className="px-1 py-3 text-center text-[11px] tabular-nums text-[#baf7f3]/80">{displayReceptionNo}</td>
-                      <td className="min-w-0 px-2 py-3"><span className="block truncate text-[11px] font-medium text-white" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
-                      <td className="px-2 py-3"><span className="block truncate text-[11px] text-white/82" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span></td>
-                      <td className="px-2 py-3"><span className="block truncate text-[10px] text-white/75" title={cell(r.location_name)}>{cell(r.location_name)}</span></td>
-                      <td className="px-2 py-2">
-                        <div className="space-y-1.5 rounded-lg border border-white/[0.07] bg-[#29374b]/25 px-2 py-1.5 tabular-nums">
-                          <div className="flex items-baseline justify-between gap-2"><span className="text-[9px] text-white/46">Számla</span><span className="whitespace-nowrap text-[10px] text-white/90">{dateText(r.invoice_date)}</span></div>
-                          <div className="flex items-baseline justify-between gap-2"><span className="text-[9px] text-white/46">Bevét.</span><span className="whitespace-nowrap text-[10px] text-white/74">{dateText(r.reception_date)}</span></div>
+                      <td className="px-1 py-3.5 text-center text-[12px] font-semibold tabular-nums text-white">{displayReceptionNo}</td>
+                      <td className="min-w-0 px-3 py-3.5"><span className="block break-words text-[14px] font-semibold leading-[1.4] text-white" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
+                      <td className="px-3 py-3.5">
+                        <span className="block break-words text-[14px] font-semibold leading-5 text-white" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span>
+                        <span className="mt-0.5 block text-[11px] font-medium text-white">{cell(r.location_name)}</span>
+                      </td>
+                      <td className="px-3 py-3.5">
+                        <div className="space-y-1 tabular-nums">
+                          <div className="flex items-baseline justify-between gap-2"><span className="text-[11px] font-medium text-white">Számla</span><span className="whitespace-nowrap text-[12px] font-semibold text-white">{dateText(r.invoice_date)}</span></div>
+                          <div className="flex items-baseline justify-between gap-2"><span className="text-[11px] font-medium text-white">Bevét.</span><span className="whitespace-nowrap text-[12px] font-semibold text-white">{dateText(r.reception_date)}</span></div>
                         </div>
                       </td>
-                      <td className="px-2 py-2 text-right tabular-nums">
-                        <span className="block whitespace-nowrap text-[11px] font-medium text-white">{money(r.invoice_gross, r.currency_code)}</span>
-                        <span className="mt-1 block whitespace-nowrap text-[9px] text-white/45">Nettó: {money(receptionNetInvoiceValue(r), r.currency_code)}</span>
+                      <td className="px-3 py-3.5 text-right tabular-nums">
+                        <span className="block whitespace-nowrap text-[14px] font-semibold text-white">{money(r.invoice_gross, r.currency_code)}</span>
+                        <span className="mt-1 block whitespace-nowrap text-[11px] font-medium text-white">Nettó: {money(receptionNetInvoiceValue(r), r.currency_code)}</span>
                       </td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right text-[11px] tabular-nums font-medium text-[#c7fff9]">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
-                      <td className="px-1 py-2 text-center text-[11px] tabular-nums text-white/82">{r.total_qty || 0}</td>
-                      <td className="px-1 py-2 text-center"><span className={`inline-flex max-w-full items-center justify-center whitespace-nowrap rounded-full border px-2 py-1 text-[9px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span></td>
-                      <td className="px-1 py-2"><ReceptionPaymentBadge item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/></td>
+                      <td className="whitespace-nowrap px-3 py-3.5 text-right text-[14px] font-semibold tabular-nums text-white">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
+                      <td className="px-1 py-3.5 text-center text-[13px] font-semibold tabular-nums text-white">{r.total_qty || 0}</td>
+                      <td className="px-1 py-3.5 text-center"><span className={`inline-flex max-w-full items-center justify-center whitespace-nowrap rounded-full border border-transparent px-2.5 py-1.5 text-[11px] font-semibold ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span></td>
+                      <td className="px-1 py-2.5"><ReceptionPaymentBadge item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/></td>
                       <td className="px-1 py-2"><div className="flex items-center justify-end gap-1">
                         <button className={tinyIconBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button" title={r.status === "committed" ? "Adatok" : "Folytatás"} aria-label="Receptió megnyitása"><Eye size={14}/></button>
                         <ReceptionActionsMenu disabled={busy} canDelete={Boolean(r.can_delete)} onVerification={() => void exportReceptionVerificationPdf(r.id)} onPdf={() => void exportReceptionPdf(r.id)} onDelete={() => setDeleteTarget(r)} />
                       </div></td>
                     </tr>;
                   })}
-                  {!visibleReceptions.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={11}>Nincs receptió a kiválasztott szűrésben.</td></tr>}
+                  {!visibleReceptions.length && <tr><td className="px-3 py-8 text-center text-white" colSpan={10}>Nincs receptió a kiválasztott szűrésben.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -3228,18 +3277,18 @@ export default function AllInReceptions(_props: Props) {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-1.5 text-[10px] tabular-nums text-[#d7fffd]">{displayReceptionNo}</span>
-                        <p className="truncate text-xs text-white">{cell(r.invoice_number)}</p>
+                        <p className="break-words text-sm font-semibold text-white">{cell(r.invoice_number)}</p>
                       </div>
-                      <p className="mt-1 text-xs text-white/62">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
+                      <p className="mt-1 text-[12px] font-medium text-white">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
                     <span className={`inline-flex items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Számla dátuma</p><p>{dateText(r.invoice_date)}</p><p className="mt-1.5 text-[10px] text-white/46">Bevételezés: {dateText(r.reception_date)}</p></div>
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
-                    <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
-                    <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Jelenlegi eladási érték (RON)</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionCurrentSalesTotalRon(r), "RON")}</p>{Math.round(receptionCurrentSalesTotalRon(r) * 100) !== Math.round(receptionSalesTotalRon(r) * 100) ? <p className="mt-1 text-[10px] text-white/55">Receptiókori: {money(receptionSalesTotalRon(r), "RON")}</p> : null}</div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Számla dátuma</p><p>{dateText(r.invoice_date)}</p><p className="mt-1.5 text-[12px] font-medium text-white">Bevételezés: {dateText(r.reception_date)}</p></div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Darab</p><p>{r.total_qty || 0}</p></div>
+                    <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Jelenlegi eladási érték (RON)</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionCurrentSalesTotalRon(r), "RON")}</p>{Math.round(receptionCurrentSalesTotalRon(r) * 100) !== Math.round(receptionSalesTotalRon(r) * 100) ? <p className="mt-1 text-[12px] text-white">Receptiókori: {money(receptionSalesTotalRon(r), "RON")}</p> : null}</div>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
                     <ReceptionPaymentBadge compact item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/>
@@ -4410,60 +4459,80 @@ export default function AllInReceptions(_props: Props) {
       )}
 
       {paymentTarget && (
-        <div className="fixed inset-0 z-[600] flex items-center justify-center bg-[#081521]/84 p-3 backdrop-blur-[8px]"
+        <div className="fixed inset-0 z-[600] flex items-center justify-center bg-[#081521]/88 p-3 backdrop-blur-[9px]"
           role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !paymentSaving) setPaymentTarget(null); }}>
           <section role="dialog" aria-modal="true" aria-label="Beszállítói számla fizetési állapota"
-            className="w-full max-w-[520px] overflow-hidden rounded-[26px] border border-[#9be9e5]/40 bg-[#303a4c] text-white shadow-[0_34px_105px_rgba(0,0,0,0.72)] ring-1 ring-white/[0.05]">
-            <header className="relative overflow-hidden border-b border-white/12 bg-gradient-to-r from-[#1e3849] via-[#235f65] to-[#2a8d8b] px-5 py-4">
-              <div className="pointer-events-none absolute -right-10 -top-14 h-44 w-44 rounded-full bg-white/[0.07] blur-2xl" />
-              <div className="relative flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/10"><WalletCards size={21}/></span>
-                  <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/65">Beszállítói számla</p><h3 className="mt-0.5 text-[19px] font-medium tracking-tight">Fizetés rögzítése</h3></div>
+            className="w-full max-w-[570px] overflow-hidden rounded-[24px] border border-white/35 bg-[#303a4c] text-white shadow-[0_34px_105px_rgba(0,0,0,0.74)]">
+            <header className="relative border-b border-white/20 bg-gradient-to-r from-[#1e3849] via-[#235f65] to-[#108D8B] px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/35 bg-white/15"><WalletCards size={22}/></span>
+                  <div><p className="text-[11px] font-semibold uppercase tracking-widest text-white">Beszállítói számla</p><h3 className="mt-0.5 text-xl font-semibold">Fizetési állapot</h3></div>
                 </div>
-                <button type="button" disabled={paymentSaving} onClick={() => setPaymentTarget(null)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/22 bg-black/10 transition hover:bg-white/15" aria-label="Bezárás"><X size={17}/></button>
+                <button type="button" disabled={paymentSaving} onClick={() => setPaymentTarget(null)} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/30 bg-black/10 transition hover:bg-white/15" aria-label="Bezárás"><X size={18}/></button>
               </div>
             </header>
-            <div className="space-y-4 p-5">
-              <div className="rounded-[17px] border border-white/12 bg-[#263347] p-3.5">
-                <p className="text-[10px] uppercase tracking-[0.09em] text-white/46">{supplierDisplayName(paymentTarget.supplier_name)}</p>
-                <p className="mt-1 truncate text-base font-medium text-white">{cell(paymentTarget.invoice_number)}</p>
-                <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-white/10 pt-3"><span className="text-xs text-white/60">Számla végösszege</span><strong className="text-lg tabular-nums text-[#d7fffd]">{money(paymentTarget.invoice_gross, paymentTarget.currency_code)}</strong></div>
+            <div className="max-h-[75vh] space-y-4 overflow-y-auto p-5">
+              <div className="border-b border-white/20 pb-3">
+                <p className="text-[13px] font-semibold text-white">{supplierDisplayName(paymentTarget.supplier_name)}</p>
+                <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-[15px] font-semibold text-white">{cell(paymentTarget.invoice_number)}</span>
+                  <strong className="text-[19px] font-semibold tabular-nums text-white">{money(paymentTarget.invoice_gross, paymentTarget.currency_code)}</strong>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" disabled={paymentSaving} onClick={() => {setPaymentDraftPaid(false); setPaymentError("");}}
-                  aria-pressed={!paymentDraftPaid}
-                  className={`flex min-h-[74px] items-center gap-3 rounded-2xl border p-3 text-left transition ${!paymentDraftPaid ? "border-rose-300/65 bg-rose-500/20 ring-1 ring-rose-200/10" : "border-white/12 bg-white/[0.035] hover:border-rose-300/30"}`}>
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-rose-300/45 bg-rose-500/12 text-rose-200"><Clock3 size={18}/></span>
-                  <span className="text-[12px] font-medium">Nincs fizetve</span>
-                  {!paymentDraftPaid && <CheckCircle2 size={15} className="ml-auto text-rose-200"/>}
-                </button>
-                <button type="button" disabled={paymentSaving} onClick={() => {setPaymentDraftPaid(true);setPaymentError("");}}
-                  aria-pressed={paymentDraftPaid}
-                  className={`flex min-h-[74px] items-center gap-3 rounded-2xl border p-3 text-left transition ${paymentDraftPaid ? "border-emerald-300/70 bg-emerald-500/20 ring-1 ring-emerald-200/10" : "border-white/12 bg-white/[0.035] hover:border-emerald-300/30"}`}>
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/45 bg-emerald-500/12 text-emerald-200"><CheckCircle2 size={18}/></span>
-                  <span className="text-[12px] font-medium">Kifizetve</span>
-                  {paymentDraftPaid && <CheckCircle2 size={15} className="ml-auto text-emerald-200"/>}
-                </button>
+              <div className="grid grid-cols-3 gap-2" role="group" aria-label="Fizetési állapot kiválasztása">
+                {(["unpaid","partial","paid"] as const).map((state) => {
+                  const chosen = paymentDraftStatus === state;
+                  const color = RECEPTION_PAYMENT_COLORS[state];
+                  return <button key={state} type="button" disabled={paymentSaving}
+                    onClick={() => {setPaymentDraftStatus(state);setPaymentError("");}}
+                    aria-pressed={chosen}
+                    style={chosen ? {backgroundColor:color,borderColor:color,color:state==="partial" ? "#172033" : "#FFFFFF"} : undefined}
+                    className={`flex min-h-[58px] items-center justify-center gap-2 rounded-xl border px-2 py-2 text-center text-[13px] font-semibold leading-4 transition active:scale-[0.985] disabled:opacity-50 ${chosen ? "shadow-[0_5px_16px_rgba(0,0,0,0.20)]" : "border-white/30 bg-[#3d4a5d] text-white hover:bg-[#48576d]"}`}>
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-current">
+                      {chosen ? <Check size={11} strokeWidth={3}/> : <span className="h-2 w-2 rounded-full" style={{backgroundColor:color}}/>}
+                    </span>
+                    {RECEPTION_PAYMENT_LABELS[state]}
+                  </button>;
+                })}
               </div>
-              {paymentTarget.payment_updated_by ? (
-                <p className="text-[10px] text-white/43">
-                  Utoljára módosította: <span className="text-white/70">{paymentTarget.payment_updated_by}</span>
-                  {paymentTarget.payment_updated_at ? ` · ${new Date(paymentTarget.payment_updated_at).toLocaleString("hu-HU", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}
-                </p>
-              ) : null}
-              {paymentDraftPaid && <div className="rounded-[17px] border border-[#9be9e5]/26 bg-[#263b48]/65 p-3.5">
-                <label className="mb-2 flex items-center gap-2 text-[11px] font-medium text-[#d7fffd]"><CalendarDays size={15}/> Kifizetés tényleges dátuma</label>
-                <HungarianDatePicker value={paymentDraftDate} onChange={setPaymentDraftDate} maxDate={receptionQuickDate(0)} ariaLabel="Kifizetés dátuma"/>
-                <p className="mt-2 text-[10px] text-white/44">Válaszd ki azt a napot, amikor a számlát ténylegesen kifizették.</p>
+              {paymentDraftStatus === "partial" && <div className="space-y-3 rounded-xl border border-[#FACC15]/65 bg-[#252f3e] p-4">
+                <label htmlFor="aif-reception-paid-amount" className="block text-[13px] font-semibold text-white">Eddig kifizetett összeg ({paymentTarget.currency_code || "RON"})</label>
+                <input id="aif-reception-paid-amount" type="text" inputMode="decimal" autoComplete="off" disabled={paymentSaving}
+                  value={paymentDraftAmount} onChange={(event) => {setPaymentDraftAmount(event.target.value);setPaymentError("");}}
+                  placeholder="Például: 1500,00"
+                  className="h-12 w-full rounded-xl border border-white/55 bg-[#3f4c60] px-3 text-[16px] font-semibold tabular-nums text-white outline-none placeholder:text-white/60 focus:border-[#FACC15] focus:ring-2 focus:ring-[#FACC15]/25"/>
+                {(() => {
+                  const entered = parseReceptionPaymentAmount(paymentDraftAmount);
+                  const gross = n(paymentTarget.invoice_gross);
+                  const valid = entered !== null && entered > 0 && entered < gross;
+                  return <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-white/25 pt-2.5">
+                    <span className="text-[13px] font-medium text-white">Fennmaradó tartozás</span>
+                    <strong className="text-[18px] font-bold tabular-nums" style={{color:valid ? "#FACC15" : "#FFFFFF"}}>{valid ? money(gross-entered, paymentTarget.currency_code) : "–"}</strong>
+                  </div>;
+                })()}
               </div>}
-              {paymentError && <div role="alert" className="flex gap-2 rounded-xl border border-rose-300/35 bg-rose-600/15 px-3 py-2.5 text-[11px] leading-5 text-rose-100"><AlertTriangle size={16} className="mt-0.5 shrink-0"/>{paymentError}</div>}
+              {paymentDraftStatus === "paid" && <div className="flex flex-wrap items-baseline justify-between gap-2 border-l-[3px] border-[#108D8B] pl-3">
+                <span className="text-[13px] font-medium text-white">Teljesen kifizetett összeg</span>
+                <strong className="text-[16px] font-semibold tabular-nums text-white">{money(paymentTarget.invoice_gross, paymentTarget.currency_code)}</strong>
+              </div>}
+              {paymentDraftStatus !== "unpaid" && <div className="space-y-2">
+                <label className="flex items-center gap-2 text-[13px] font-semibold text-white"><CalendarDays size={17} className="text-[#FACC15]"/> Utolsó kifizetés tényleges dátuma</label>
+                <HungarianDatePicker value={paymentDraftDate} onChange={setPaymentDraftDate} maxDate={receptionQuickDate(0)} ariaLabel="Kifizetés dátuma" />
+              </div>}
+              {paymentDraftStatus === "unpaid" && <p className="border-l-[3px] border-[#E21C2A] pl-3 text-[13px] font-medium text-white">Nincs rögzített kifizetett összeg. A számla teljes összege nyitott marad.</p>}
+              {paymentTarget.payment_updated_by && <p className="text-[12px] font-medium text-white">
+                Utoljára módosította: {paymentTarget.payment_updated_by}
+                {paymentTarget.payment_updated_at ? ` · ${new Date(paymentTarget.payment_updated_at).toLocaleString("hu-HU",{timeZone:"Europe/Bucharest",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}` : ""}
+              </p>}
+              {paymentError && <div role="alert" className="flex items-start gap-2 rounded-xl border border-[#E21C2A] bg-[#E21C2A]/25 px-3 py-3 text-[13px] font-semibold leading-5 text-white"><AlertTriangle size={17} className="mt-0.5 shrink-0 text-[#E21C2A]"/>{paymentError}</div>}
             </div>
-            <footer className="flex items-center justify-end gap-2 border-t border-white/12 bg-[#253144] px-5 py-3.5">
+            <footer className="flex items-center justify-end gap-2 border-t border-white/20 bg-[#253144] px-5 py-3.5">
               <button type="button" disabled={paymentSaving} onClick={() => setPaymentTarget(null)} className={neutralBtn}>Mégse</button>
-              <button type="button" disabled={paymentSaving || (paymentDraftPaid && !paymentDraftDate)} onClick={() => void saveReceptionPayment()} className={`${primaryBtn} min-w-[162px] !bg-[#108D8B] hover:!bg-[#19a39e]`}>
-                {paymentSaving ? <RefreshCw size={16} className="animate-spin"/> : <Check size={16}/>}
-                {paymentSaving ? "Mentés…" : "Állapot mentése"}
+              <button type="button" disabled={paymentSaving || (paymentDraftStatus !== "unpaid" && !paymentDraftDate)} onClick={() => void saveReceptionPayment()}
+                className="inline-flex h-11 min-w-[164px] items-center justify-center gap-2 rounded-xl border border-[#108D8B] bg-[#108D8B] px-4 text-[13px] font-semibold text-white transition hover:bg-[#159d99] disabled:cursor-not-allowed disabled:opacity-50">
+                {paymentSaving ? <RefreshCw size={17} className="animate-spin"/> : <Check size={17}/>}
+                {paymentSaving ? "Mentés…" : "Mentés"}
               </button>
             </footer>
           </section>
