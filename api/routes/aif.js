@@ -2044,9 +2044,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return run();
   }
 
-  // AIF_RECEPTION_SUPPLIER_PAYMENT_V28
-  // A szamla kifizetettsége kulon penzugyi statusz; NEM modosithat keszletet,
-  // beszerzesi erteket, szamlasorokat vagy bolti kasszaadatokat.
+  // AIF_RECEPTION_SUPPLIER_PAYMENT_V29
+  // Onallo beszallitoi szamla-nyilvantartas. NINCS kasszabevetel, keszletmozgas,
+  // szamlaertek- vagy beszerzesi ar modositas. Osszeg a szamla PENZNEMEBEN.
   let aifReceptionPaymentSchemaPromise = null;
   function ensureAifReceptionPaymentSchema() {
     if (!aifReceptionPaymentSchemaPromise) {
@@ -2054,22 +2054,57 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE aif_receptions
           ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'unpaid',
           ADD COLUMN IF NOT EXISTS paid_on date NULL,
+          ADD COLUMN IF NOT EXISTS paid_amount numeric(16,2) NOT NULL DEFAULT 0,
           ADD COLUMN IF NOT EXISTS payment_updated_at timestamptz NULL,
           ADD COLUMN IF NOT EXISTS payment_updated_by text NULL`);
-        // A naplo a receptio esetleges kesobbi torlese utan is nyomot hagy.
+        // V28: a mar kifizetettnek jelolt szamlak teljes osszeget atvesszuk;
+        // az uj, reszben fizetett rekordokhoz NEM nyul ez a migracio.
+        await pool.query(`UPDATE aif_receptions
+          SET paid_amount=GREATEST(COALESCE(invoice_gross,0),0)
+          WHERE payment_status='paid' AND COALESCE(paid_amount,0)=0`);
+        // A naplo torolt recepcionak is megmarad, korabbi sorokat nem irjuk at.
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_reception_payment_events (
           id bigserial PRIMARY KEY,
           reception_id uuid NOT NULL,
           invoice_number text NULL,
           previous_status text NOT NULL,
           previous_paid_on date NULL,
+          previous_paid_amount numeric(16,2) NULL,
           new_status text NOT NULL,
           new_paid_on date NULL,
+          new_paid_amount numeric(16,2) NULL,
           changed_by text NOT NULL,
           changed_at timestamptz NOT NULL DEFAULT now(),
-          CHECK (previous_status IN ('paid','unpaid')),
-          CHECK (new_status IN ('paid','unpaid'))
+          CHECK (previous_status IN ('paid','partial','unpaid')),
+          CHECK (new_status IN ('paid','partial','unpaid'))
         )`);
+        await pool.query(`ALTER TABLE aif_reception_payment_events
+          ADD COLUMN IF NOT EXISTS previous_paid_amount numeric(16,2) NULL,
+          ADD COLUMN IF NOT EXISTS new_paid_amount numeric(16,2) NULL`);
+        // V28 meg csak paid/unpaid statuszra tett CHECK-eket.
+        // Egyetlen atomikus DO-ban csereljuk: megismetelt indulasnal nincs DROP.
+        await pool.query(`DO $$ DECLARE rec record; BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint
+            WHERE conrelid='aif_reception_payment_events'::regclass
+              AND conname='aif_reception_payment_events_previous_three_chk')
+          OR NOT EXISTS (SELECT 1 FROM pg_constraint
+            WHERE conrelid='aif_reception_payment_events'::regclass
+              AND conname='aif_reception_payment_events_new_three_chk') THEN
+            FOR rec IN SELECT conname FROM pg_constraint
+              WHERE conrelid='aif_reception_payment_events'::regclass
+                AND contype='c'
+                AND (pg_get_constraintdef(oid) LIKE '%previous_status%'
+                     OR pg_get_constraintdef(oid) LIKE '%new_status%')
+            LOOP
+              EXECUTE format('ALTER TABLE aif_reception_payment_events DROP CONSTRAINT %I',rec.conname);
+            END LOOP;
+            ALTER TABLE aif_reception_payment_events
+              ADD CONSTRAINT aif_reception_payment_events_previous_three_chk
+                CHECK (previous_status IN ('paid','partial','unpaid')),
+              ADD CONSTRAINT aif_reception_payment_events_new_three_chk
+                CHECK (new_status IN ('paid','partial','unpaid'));
+          END IF;
+        END $$`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_reception_payment_events_reception_idx
           ON aif_reception_payment_events(reception_id,changed_at DESC)`);
         return true;
@@ -6555,7 +6590,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       )
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
-        r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on,
+        r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on, r.paid_amount,
         r.payment_updated_at, r.payment_updated_by,
         r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
@@ -6916,26 +6951,51 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.patch("/receptions/:id", requireAuthed, handleReceptionHeaderUpdate);
   router.post("/receptions/:id/update", requireAuthed, handleReceptionHeaderUpdate);
 
-  // AIF_RECEPTION_PAYMENT_CHANGE_V28: csak az adminisztrator kezelheti.
-  // Row lock + elvart korabbi allapot: ket nyitott bongeszo nem irhatja felul egymast.
+  // AIF_RECEPTION_PAYMENT_CHANGE_V29: fizetetlen / reszben / teljesen.
+  // A reszfizetes OSSZES eddig befizetett osszeg (nem uj kasszamozgas).
+  // Sornál zar, vart statusz+dátum+összeg: masik gep nem irhatja felul.
   router.patch("/receptions/:id/payment", requireAdminOrSecret, async (req, res) => {
     const id = text(req.params.id);
     const nextStatus = text(req.body?.status).toLowerCase();
     const expectedStatus = text(req.body?.expectedStatus).toLowerCase();
     const paidOnInput = req.body?.paidOn == null ? '' : text(req.body.paidOn);
     const expectedPaidInput = req.body?.expectedPaidOn == null ? '' : text(req.body.expectedPaidOn);
-    if (!['paid','unpaid'].includes(nextStatus) || !['paid','unpaid'].includes(expectedStatus)) {
+    const expectedAmountRaw = req.body?.expectedPaidAmount;
+    const expectedGrossRaw = req.body?.expectedInvoiceGross;
+    const amountRaw = req.body?.paidAmount;
+    if (!['paid','partial','unpaid'].includes(nextStatus) ||
+        !['paid','partial','unpaid'].includes(expectedStatus)) {
       return res.status(400).json({ error: 'Érvénytelen fizetési állapot.' });
     }
-    const nextPaidOn = nextStatus === 'paid' ? cleanAifDocumentDate(paidOnInput) : null;
-    if (nextStatus === 'paid' && !nextPaidOn) {
-      return res.status(400).json({ error: 'A kifizetéshez válassz érvényes dátumot.' });
+    // A regi V28 felulet nem ismerte a reszfizetest: ne torolhesse azt csendben.
+    if (expectedAmountRaw === null || expectedAmountRaw === undefined ||
+        String(expectedAmountRaw).trim() === '' || expectedGrossRaw === null ||
+        expectedGrossRaw === undefined || String(expectedGrossRaw).trim() === '') {
+      return res.status(409).json({ error: 'Frissítsd az oldalt az új fizetési nyilvántartáshoz.', code:'reception_payment_client_upgrade_required' });
+    }
+    const moneyCents = (value) => {
+      if (value === null || value === undefined || String(value).trim() === '') return null;
+      const raw = String(value).trim().replace(',', '.');
+      if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+      const numeric = Number(raw);
+      return Number.isSafeInteger(Math.round(numeric*100)) ? Math.round(numeric*100) : null;
+    };
+    const expectedCents = moneyCents(expectedAmountRaw);
+    const expectedGrossCents = moneyCents(expectedGrossRaw);
+    const partialCents = nextStatus === 'partial' ? moneyCents(amountRaw) : null;
+    if (expectedCents === null || expectedGrossCents === null ||
+        (nextStatus === 'partial' && partialCents === null)) {
+      return res.status(400).json({ error: 'A kifizetett összeg hibás. Legfeljebb két tizedest adj meg.' });
+    }
+    const nextPaidOn = nextStatus === 'unpaid' ? null : cleanAifDocumentDate(paidOnInput);
+    if (nextStatus !== 'unpaid' && !nextPaidOn) {
+      return res.status(400).json({ error: 'Válassz érvényes kifizetési dátumot.' });
     }
     if (nextStatus === 'unpaid' && paidOnInput) {
-      return res.status(400).json({ error: 'Nem kifizetett számlához nem tartozhat fizetési dátum.' });
+      return res.status(400).json({ error: 'Fizetetlen számlához nem tartozhat kifizetési dátum.' });
     }
-    if (nextStatus === 'paid' && nextPaidOn > aifBucharestDateKey()) {
-      return res.status(400).json({ error: 'Jövőbeli dátummal nem jelölhető kifizetettnek a számla.' });
+    if (nextPaidOn && nextPaidOn > aifBucharestDateKey()) {
+      return res.status(400).json({ error: 'Jövőbeli dátummal nem rögzíthető kifizetés.' });
     }
     if (expectedPaidInput && !cleanAifDocumentDate(expectedPaidInput)) {
       return res.status(400).json({ error: 'A korábbi kifizetési dátum érvénytelen.' });
@@ -6947,57 +7007,67 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client = await pool.connect();
       await client.query('BEGIN');
       transaction = true;
-      const selected = await client.query(`SELECT id, invoice_number, status,
-          payment_status, to_char(paid_on,'YYYY-MM-DD') AS paid_on
+      const selected = await client.query(`SELECT id,invoice_number,status,invoice_gross,currency_code,
+          payment_status,to_char(paid_on,'YYYY-MM-DD') AS paid_on,paid_amount
         FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
       if (!selected.rowCount) {
-        await client.query('ROLLBACK'); transaction = false;
-        return res.status(404).json({ error: 'A számla nem található.' });
+        await client.query('ROLLBACK'); transaction=false;
+        return res.status(404).json({ error:'A számla nem található.' });
       }
       const previous = selected.rows[0];
       if (String(previous.status).toLowerCase() === 'cancelled') {
-        await client.query('ROLLBACK'); transaction = false;
-        return res.status(409).json({ error: 'Törölt receptió fizetési állapota nem módosítható.' });
+        await client.query('ROLLBACK'); transaction=false;
+        return res.status(409).json({ error:'Törölt receptió fizetési állapota nem módosítható.' });
       }
       const beforeStatus = String(previous.payment_status || 'unpaid');
       const beforePaidOn = previous.paid_on || null;
-      if (beforeStatus !== expectedStatus || beforePaidOn !== (expectedPaidInput || null)) {
-        await client.query('ROLLBACK'); transaction = false;
+      const beforeCents = moneyCents(previous.paid_amount);
+      const grossCents = moneyCents(previous.invoice_gross);
+      if (beforeCents === null || grossCents === null) {
+        await client.query('ROLLBACK'); transaction=false;
+        return res.status(409).json({ error:'A számla összege nem egyértelmű. Ellenőrizd a számlaadatokat.' });
+      }
+      if (beforeStatus !== expectedStatus || beforePaidOn !== (expectedPaidInput || null) ||
+          beforeCents !== expectedCents || grossCents !== expectedGrossCents) {
+        await client.query('ROLLBACK'); transaction=false;
         return res.status(409).json({
-          error: 'Közben megváltozott a számla fizetési állapota. Frissítsd a listát, majd próbáld újra.',
-          code: 'reception_payment_changed',
+          error:'Közben megváltozott a számla fizetési állapota. Frissítsd a listát, majd próbáld újra.',
+          code:'reception_payment_changed',
         });
       }
-      if (beforeStatus === nextStatus && beforePaidOn === nextPaidOn) {
-        await client.query('COMMIT'); transaction = false;
-        return res.json({ ok: true, unchanged: true, item: {
-          id: previous.id, payment_status: beforeStatus, paid_on: beforePaidOn,
+      const nextCents = nextStatus === 'unpaid' ? 0 : nextStatus === 'paid' ? grossCents : partialCents;
+      if (nextStatus === 'partial' && (nextCents <= 0 || nextCents >= grossCents)) {
+        await client.query('ROLLBACK'); transaction=false;
+        return res.status(400).json({ error:'Részfizetésnél az összeg legyen 0-nál több, de a számla végösszegénél kevesebb.' });
+      }
+      if (beforeStatus === nextStatus && beforePaidOn === nextPaidOn && beforeCents === nextCents) {
+        await client.query('COMMIT'); transaction=false;
+        return res.json({ok:true,unchanged:true,item:{
+          id:previous.id,payment_status:beforeStatus,paid_on:beforePaidOn,paid_amount:beforeCents/100,
         }});
       }
       const actor = actorFrom(req);
       const updated = await client.query(`UPDATE aif_receptions
-          SET payment_status=$2, paid_on=$3::date,
-              payment_updated_at=now(), payment_updated_by=$4
-          WHERE id=$1 RETURNING id, payment_status,
-              to_char(paid_on,'YYYY-MM-DD') AS paid_on,
-              payment_updated_at, payment_updated_by`,
-        [previous.id, nextStatus, nextPaidOn, actor]);
+          SET payment_status=$2,paid_on=$3::date,paid_amount=$4::numeric,
+              payment_updated_at=now(),payment_updated_by=$5
+          WHERE id=$1 RETURNING id,payment_status,to_char(paid_on,'YYYY-MM-DD') AS paid_on,
+              paid_amount,payment_updated_at,payment_updated_by`,
+        [previous.id,nextStatus,nextPaidOn,nextCents/100,actor]);
       await client.query(`INSERT INTO aif_reception_payment_events
-        (reception_id,invoice_number,previous_status,previous_paid_on,new_status,new_paid_on,changed_by)
-        VALUES ($1,$2,$3,$4::date,$5,$6::date,$7)`,
-        [previous.id, previous.invoice_number, beforeStatus, beforePaidOn, nextStatus, nextPaidOn, actor]);
-      await client.query('COMMIT'); transaction = false;
-      return res.json({ ok: true, item: updated.rows[0] });
-    } catch (error) {
-      if (transaction && client) await client.query('ROLLBACK').catch(() => {});
-      console.error('AIF reception payment status update failed', error);
-      return res.status(error?.statusCode || 500).json({
-        error: 'A számla fizetési állapotának mentése nem sikerült.',
-        code: error?.code || null,
+        (reception_id,invoice_number,previous_status,previous_paid_on,previous_paid_amount,
+         new_status,new_paid_on,new_paid_amount,changed_by)
+        VALUES ($1,$2,$3,$4::date,$5::numeric,$6,$7::date,$8::numeric,$9)`,
+        [previous.id,previous.invoice_number,beforeStatus,beforePaidOn,beforeCents/100,
+          nextStatus,nextPaidOn,nextCents/100,actor]);
+      await client.query('COMMIT');transaction=false;
+      return res.json({ok:true,item:updated.rows[0]});
+    } catch(error) {
+      if (transaction && client) await client.query('ROLLBACK').catch(()=>{});
+      console.error('AIF reception payment update V29 failed',error);
+      return res.status(error?.statusCode||500).json({
+        error:'A számla fizetési állapotának mentése nem sikerült.',code:error?.code||null,
       });
-    } finally {
-      client?.release();
-    }
+    } finally { client?.release(); }
   });
 
   router.get("/receptions/:id/export.csv", requireAuthed, async (req, res) => {
@@ -7088,7 +7158,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureAifReceptionPaymentSchema();
       const item = await pool.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
-                r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on,
+                r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on, r.paid_amount,
                 r.payment_updated_at, r.payment_updated_by,
                 r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
