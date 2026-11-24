@@ -3873,6 +3873,7 @@ export type AifShopSaleDetailLine = {
   discountAmount: number;
   discountPercent: number;
   lineTotal: number;
+  paymentMethod?: "cash" | "card" | string | null;
 };
 
 export type AifShopSaleDetailResponse = {
@@ -4113,6 +4114,53 @@ export function apiAifShopSaleDetail(options: {
   if (options.asOfDate) q.set("asOfDate", options.asOfDate);
   return fetchAifJSON<AifShopSaleDetailResponse>(
     `/shop-operations/sale-detail/${encodeURIComponent(options.id)}?${q.toString()}`,
+  );
+}
+
+// V25: Normál, kifizetett bolti bizonylat könyvelt fizetési módjának
+// ellenőrzött javítása. A készletet és az eladási összeget nem módosítja.
+export type AifShopSalePaymentMethodCorrectionResult = {
+  ok: true;
+  saleId: string;
+  saleNumber: string;
+  workDate: string;
+  fromMethod: "cash" | "card";
+  toMethod: "cash" | "card";
+  amount: number;
+  lineCount: number;
+  affectedLineCount: number;
+  saleLineId: string;
+  itemCount: number;
+  correctedAt: string;
+};
+
+export function apiAifCorrectShopSalePaymentMethod(options: {
+  location: string;
+  saleId: string;
+  lineId: string;
+  expectedMethod: "cash" | "card";
+  paymentMethod: "cash" | "card";
+}) {
+  return fetchAifJSON<AifShopSalePaymentMethodCorrectionResult>(
+    `/shop-sales/${encodeURIComponent(options.saleId)}/payment-method`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        location: options.location,
+        lineId: options.lineId,
+        expectedMethod: options.expectedMethod,
+        paymentMethod: options.paymentMethod,
+      }),
+    }
+  );
+}
+
+export function apiAifAdminCorrectedShopPaymentLines(options: {
+  location: string; from: string; to: string;
+}) {
+  const q = new URLSearchParams({ location: options.location, from: options.from, to: options.to });
+  return fetchAifJSON<{ ok: true; methods: Record<string, "cash" | "card"> }>(
+    `/admin/shop-payment-line-methods?${q.toString()}`,
+    { cache: "no-store" }
   );
 }
 
