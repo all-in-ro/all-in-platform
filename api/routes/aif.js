@@ -2044,6 +2044,40 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return run();
   }
 
+  // AIF_RECEPTION_SUPPLIER_PAYMENT_V28
+  // A szamla kifizetettsége kulon penzugyi statusz; NEM modosithat keszletet,
+  // beszerzesi erteket, szamlasorokat vagy bolti kasszaadatokat.
+  let aifReceptionPaymentSchemaPromise = null;
+  function ensureAifReceptionPaymentSchema() {
+    if (!aifReceptionPaymentSchemaPromise) {
+      aifReceptionPaymentSchemaPromise = (async () => {
+        await pool.query(`ALTER TABLE aif_receptions
+          ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'unpaid',
+          ADD COLUMN IF NOT EXISTS paid_on date NULL,
+          ADD COLUMN IF NOT EXISTS payment_updated_at timestamptz NULL,
+          ADD COLUMN IF NOT EXISTS payment_updated_by text NULL`);
+        // A naplo a receptio esetleges kesobbi torlese utan is nyomot hagy.
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_reception_payment_events (
+          id bigserial PRIMARY KEY,
+          reception_id uuid NOT NULL,
+          invoice_number text NULL,
+          previous_status text NOT NULL,
+          previous_paid_on date NULL,
+          new_status text NOT NULL,
+          new_paid_on date NULL,
+          changed_by text NOT NULL,
+          changed_at timestamptz NOT NULL DEFAULT now(),
+          CHECK (previous_status IN ('paid','unpaid')),
+          CHECK (new_status IN ('paid','unpaid'))
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_reception_payment_events_reception_idx
+          ON aif_reception_payment_events(reception_id,changed_at DESC)`);
+        return true;
+      })().catch((error) => { aifReceptionPaymentSchemaPromise = null; throw error; });
+    }
+    return aifReceptionPaymentSchemaPromise;
+  }
+
   async function readAifReceptionAvizSettings(client = pool) {
     await ensureAifReceptionDocumentSchema(client);
     const result = await client.query(`SELECT * FROM aif_reception_document_settings WHERE id=1 LIMIT 1`);
@@ -6435,6 +6469,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     // V20: egy atmeneti PostgreSQL hiba nem dontheti le a Node szervert.
     try {
     await ensureAifReceptionDocumentSchema();
+    await ensureAifReceptionPaymentSchema();
     const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 80)));
     const search = text(req.query.q || req.query.search);
     const supplier = text(req.query.supplier || req.query.supplier_id || req.query.supplierId);
@@ -6520,6 +6555,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       )
       SELECT
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
+        r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on,
+        r.payment_updated_at, r.payment_updated_by,
         r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
         r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
@@ -6879,6 +6916,90 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.patch("/receptions/:id", requireAuthed, handleReceptionHeaderUpdate);
   router.post("/receptions/:id/update", requireAuthed, handleReceptionHeaderUpdate);
 
+  // AIF_RECEPTION_PAYMENT_CHANGE_V28: csak az adminisztrator kezelheti.
+  // Row lock + elvart korabbi allapot: ket nyitott bongeszo nem irhatja felul egymast.
+  router.patch("/receptions/:id/payment", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const nextStatus = text(req.body?.status).toLowerCase();
+    const expectedStatus = text(req.body?.expectedStatus).toLowerCase();
+    const paidOnInput = req.body?.paidOn == null ? '' : text(req.body.paidOn);
+    const expectedPaidInput = req.body?.expectedPaidOn == null ? '' : text(req.body.expectedPaidOn);
+    if (!['paid','unpaid'].includes(nextStatus) || !['paid','unpaid'].includes(expectedStatus)) {
+      return res.status(400).json({ error: 'Érvénytelen fizetési állapot.' });
+    }
+    const nextPaidOn = nextStatus === 'paid' ? cleanAifDocumentDate(paidOnInput) : null;
+    if (nextStatus === 'paid' && !nextPaidOn) {
+      return res.status(400).json({ error: 'A kifizetéshez válassz érvényes dátumot.' });
+    }
+    if (nextStatus === 'unpaid' && paidOnInput) {
+      return res.status(400).json({ error: 'Nem kifizetett számlához nem tartozhat fizetési dátum.' });
+    }
+    if (nextStatus === 'paid' && nextPaidOn > aifBucharestDateKey()) {
+      return res.status(400).json({ error: 'Jövőbeli dátummal nem jelölhető kifizetettnek a számla.' });
+    }
+    if (expectedPaidInput && !cleanAifDocumentDate(expectedPaidInput)) {
+      return res.status(400).json({ error: 'A korábbi kifizetési dátum érvénytelen.' });
+    }
+    let client = null;
+    let transaction = false;
+    try {
+      await ensureAifReceptionPaymentSchema();
+      client = await pool.connect();
+      await client.query('BEGIN');
+      transaction = true;
+      const selected = await client.query(`SELECT id, invoice_number, status,
+          payment_status, to_char(paid_on,'YYYY-MM-DD') AS paid_on
+        FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!selected.rowCount) {
+        await client.query('ROLLBACK'); transaction = false;
+        return res.status(404).json({ error: 'A számla nem található.' });
+      }
+      const previous = selected.rows[0];
+      if (String(previous.status).toLowerCase() === 'cancelled') {
+        await client.query('ROLLBACK'); transaction = false;
+        return res.status(409).json({ error: 'Törölt receptió fizetési állapota nem módosítható.' });
+      }
+      const beforeStatus = String(previous.payment_status || 'unpaid');
+      const beforePaidOn = previous.paid_on || null;
+      if (beforeStatus !== expectedStatus || beforePaidOn !== (expectedPaidInput || null)) {
+        await client.query('ROLLBACK'); transaction = false;
+        return res.status(409).json({
+          error: 'Közben megváltozott a számla fizetési állapota. Frissítsd a listát, majd próbáld újra.',
+          code: 'reception_payment_changed',
+        });
+      }
+      if (beforeStatus === nextStatus && beforePaidOn === nextPaidOn) {
+        await client.query('COMMIT'); transaction = false;
+        return res.json({ ok: true, unchanged: true, item: {
+          id: previous.id, payment_status: beforeStatus, paid_on: beforePaidOn,
+        }});
+      }
+      const actor = actorFrom(req);
+      const updated = await client.query(`UPDATE aif_receptions
+          SET payment_status=$2, paid_on=$3::date,
+              payment_updated_at=now(), payment_updated_by=$4
+          WHERE id=$1 RETURNING id, payment_status,
+              to_char(paid_on,'YYYY-MM-DD') AS paid_on,
+              payment_updated_at, payment_updated_by`,
+        [previous.id, nextStatus, nextPaidOn, actor]);
+      await client.query(`INSERT INTO aif_reception_payment_events
+        (reception_id,invoice_number,previous_status,previous_paid_on,new_status,new_paid_on,changed_by)
+        VALUES ($1,$2,$3,$4::date,$5,$6::date,$7)`,
+        [previous.id, previous.invoice_number, beforeStatus, beforePaidOn, nextStatus, nextPaidOn, actor]);
+      await client.query('COMMIT'); transaction = false;
+      return res.json({ ok: true, item: updated.rows[0] });
+    } catch (error) {
+      if (transaction && client) await client.query('ROLLBACK').catch(() => {});
+      console.error('AIF reception payment status update failed', error);
+      return res.status(error?.statusCode || 500).json({
+        error: 'A számla fizetési állapotának mentése nem sikerült.',
+        code: error?.code || null,
+      });
+    } finally {
+      client?.release();
+    }
+  });
+
   router.get("/receptions/:id/export.csv", requireAuthed, async (req, res) => {
     await ensureAifReceptionDocumentSchema();
     const id = text(req.params.id);
@@ -6960,12 +7081,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/receptions/:id", requireAuthed, async (req, res) => {
-    await ensureAifReceptionDocumentSchema();
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "reception id required" });
     try {
+      await ensureAifReceptionDocumentSchema();
+      await ensureAifReceptionPaymentSchema();
       const item = await pool.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
+                r.payment_status, to_char(r.paid_on,'YYYY-MM-DD') AS paid_on,
+                r.payment_updated_at, r.payment_updated_by,
                 r.aviz_number, r.aviz_series, r.aviz_sequence_number, r.aviz_sequence_year,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
