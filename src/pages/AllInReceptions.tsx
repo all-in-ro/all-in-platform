@@ -253,6 +253,32 @@ const neutralBtn = `${btnBase} border-white/15 bg-white/[0.08] text-white hover:
 const dangerBtn = `${btnBase} border-red-500 bg-red-600 text-white hover:bg-red-500`;
 const tinyBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-[#404a5b]/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyIconBtn = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.08] text-white transition hover:bg-[#404a5b]/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
+// AIF_RECEPTION_LIST_FIT_V30: a lista a sajat keretebe fer, vizszintes gorgetes nelkul.
+// Sorszam 36px + darab 44px + muveletek 88px; a tobbi oszlop a fennmarado helyet osztja fel.
+const receptionListColumnWidth = (percent: number) => `calc(${percent}% - ${168 * percent / 100}px)`;
+const receptionListColumns = [
+  "36px",
+  ...[16, 11, 14, 17, 16].map(receptionListColumnWidth),
+  "44px",
+  ...[12, 14].map(receptionListColumnWidth),
+  "88px",
+];
+const receptionListLayoutCss = `
+  .aif-reception-list {
+    container: aif-reception-list / inline-size;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .aif-reception-list-desktop { display: none; min-width: 0; }
+  .aif-reception-list-cards { display: grid; min-width: 0; }
+  .aif-reception-list-table { width: 100%; min-width: 0; table-layout: fixed; }
+  .aif-reception-list-table th,
+  .aif-reception-list-table td { overflow-wrap: anywhere; }
+  @container aif-reception-list (min-width: 1040px) {
+    .aif-reception-list-desktop { display: block; }
+    .aif-reception-list-cards { display: none; }
+  }
+`;
 const statCard = "rounded-2xl border border-white/12 bg-white/[0.06] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const lightPanel = "rounded-2xl border border-white/14 bg-[#404a5b] p-4 text-white shadow-lg";
 const lightLabel = "grid gap-1.5 text-xs text-white/70 font-normal";
@@ -447,13 +473,13 @@ function ReceptionPaymentBadge({
       aria-label={`${cell(item.invoice_number)}: ${RECEPTION_PAYMENT_LABELS[state]}${extra ? `, ${extra}` : ""}. Fizetés módosítása.`}
       title={`${RECEPTION_PAYMENT_LABELS[state]}${extra ? ` · ${extra}` : ""} · Kattints a módosításhoz`}
       style={{borderLeftColor:color}}
-      className={`group/payment inline-flex min-w-0 max-w-full items-center gap-2.5 rounded-lg border-l-[3px] px-2 py-2 text-left transition hover:bg-white/[0.10] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-[0.985] disabled:cursor-wait disabled:opacity-55 ${compact ? "" : "w-full"}`}
+      className={`group/payment inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border-l-2 px-1.5 py-1.5 text-left transition hover:bg-white/[0.10] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-[0.985] disabled:cursor-wait disabled:opacity-55 ${compact ? "" : "w-full"}`}
     >
-      <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full border border-white/55" style={{backgroundColor:color,boxShadow:`0 0 0 2px ${color}28`}} />
-      <span className="min-w-0">
-        <span className="block whitespace-nowrap text-[14px] font-semibold leading-5 text-white">{RECEPTION_PAYMENT_LABELS[state]}</span>
-        {state === "partial" && <span className="block whitespace-nowrap text-[11px] font-medium leading-4 text-white">Hátra: {money(left, item.currency_code)}</span>}
-        {state === "paid" && item.paid_on && <span className="block whitespace-nowrap text-[11px] font-medium leading-4 text-white">{dateText(item.paid_on)}</span>}
+      <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full border border-white/40" style={{backgroundColor:color,boxShadow:`0 0 0 2px ${color}28`}} />
+      <span className="min-w-0 flex-1">
+        <span className="block whitespace-normal [overflow-wrap:anywhere] text-[12px] font-medium leading-4 text-white">{RECEPTION_PAYMENT_LABELS[state]}</span>
+        {state === "partial" && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">Hátra: {money(left, item.currency_code)}</span>}
+        {state === "paid" && item.paid_on && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">{dateText(item.paid_on)}</span>}
       </span>
     </button>
   );
@@ -536,14 +562,14 @@ function ReceptionActionsMenu({
           if (!open) updatePosition();
           setOpen((current) => !current);
         }}
-        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition ${
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition ${
           open
             ? "border-[#8fe9e5]/55 bg-[#2a8d8b] text-white"
             : "border-white/16 bg-white/[0.08] text-white/78 hover:bg-[#465264]"
         } disabled:cursor-not-allowed disabled:opacity-45`}
         title="További műveletek"
       >
-        <MoreVertical size={16} />
+        <MoreVertical size={14} />
       </button>
 
       {open && position && typeof document !== "undefined" ? createPortal(
@@ -3191,7 +3217,8 @@ export default function AllInReceptions(_props: Props) {
           </div>
         </section>
 
-        <section className={card}>
+        <section className={`${card} aif-reception-list`}>
+          <style>{receptionListLayoutCss}</style>
           <SectionTitle title="Receptió lista" right={
             <div className="flex flex-wrap items-center gap-1.5">
               {([ ["all", "Összes", items.length], ["unpaid", "Fizetetlen", unpaidReceptionsCount], ["partial", "Részben fizetve", partialReceptionsCount], ["paid", "Kifizetve", paidReceptionsCount] ] as const).map(([value, labelText, count]) => {
@@ -3207,15 +3234,15 @@ export default function AllInReceptions(_props: Props) {
               })}
             </div>
           } />
-          <div className="overflow-hidden">
-            <div className="hidden overflow-x-auto overscroll-x-contain lg:block" aria-label="Receptiólista. Kisebb képernyőn vízszintesen görgethető.">
-              <table className="w-full min-w-[1320px] table-fixed text-left text-[14px]">
+          <div className="min-w-0">
+            <div className="aif-reception-list-desktop" aria-label="Receptiólista">
+              <table className="aif-reception-list-table text-left text-[12px]">
                 <colgroup>
-                  {[42, 184, 144, 174, 187, 175, 54, 132, 152, 76].map((width, idx) =>
-                    <col key={idx} style={{ width: `${width}px` }} />)}
+                  {receptionListColumns.map((width, idx) =>
+                    <col key={idx} style={{ width }} />)}
                 </colgroup>
-                <thead className="bg-[#293448] text-[11px] font-semibold uppercase tracking-[0.035em] text-white [&_th]:font-semibold">
-                  <tr className="[&_th]:px-3 [&_th]:py-4">
+                <thead className="bg-[#293448] text-[10px] font-medium uppercase tracking-[0.025em] text-white/85 [&_th]:font-medium">
+                  <tr className="[&_th]:px-2 [&_th]:py-3">
                     <th className="!px-1 text-center">
                       <button type="button" onClick={() => setReceptionListNumberDescending((current) => !current)}
                         className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#8fe9e5]/45 bg-[#2a8d8b] text-white transition hover:bg-[#319c99]"
@@ -3238,52 +3265,52 @@ export default function AllInReceptions(_props: Props) {
                   {visibleReceptions.map((r, index) => {
                     const displayReceptionNo = receptionListNumberDescending ? visibleReceptions.length - index : index + 1;
                     return <tr key={r.id} className="group/rec transition-colors hover:bg-[#617286]/25">
-                      <td className="px-1 py-3.5 text-center text-[12px] font-semibold tabular-nums text-white">{displayReceptionNo}</td>
-                      <td className="min-w-0 px-3 py-3.5"><span className="block break-words text-[14px] font-semibold leading-[1.4] text-white" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
-                      <td className="px-3 py-3.5">
-                        <span className="block break-words text-[14px] font-semibold leading-5 text-white" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span>
-                        <span className="mt-0.5 block text-[11px] font-medium text-white">{cell(r.location_name)}</span>
+                      <td className="px-1 py-2.5 text-center text-[10px] font-normal tabular-nums text-white">{displayReceptionNo}</td>
+                      <td className="min-w-0 px-2 py-2.5"><span className="block break-words [overflow-wrap:anywhere] text-[12px] font-medium leading-[1.4] text-white" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
+                      <td className="px-2 py-2.5">
+                        <span className="block break-words [overflow-wrap:anywhere] text-[12px] font-medium leading-5 text-white" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span>
+                        <span className="mt-0.5 block [overflow-wrap:anywhere] text-[10px] font-normal text-white">{cell(r.location_name)}</span>
                       </td>
-                      <td className="px-3 py-3.5">
+                      <td className="px-2 py-2.5">
                         <div className="space-y-1 tabular-nums">
-                          <div className="flex items-baseline justify-between gap-2"><span className="text-[11px] font-medium text-white">Számla</span><span className="whitespace-nowrap text-[12px] font-semibold text-white">{dateText(r.invoice_date)}</span></div>
-                          <div className="flex items-baseline justify-between gap-2"><span className="text-[11px] font-medium text-white">Bevét.</span><span className="whitespace-nowrap text-[12px] font-semibold text-white">{dateText(r.reception_date)}</span></div>
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Számla</span><span className="whitespace-nowrap text-[10px] font-normal text-white">{dateText(r.invoice_date)}</span></div>
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Bevét.</span><span className="whitespace-nowrap text-[10px] font-normal text-white">{dateText(r.reception_date)}</span></div>
                         </div>
                       </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums">
-                        <span className="block whitespace-nowrap text-[14px] font-semibold text-white">{money(r.invoice_gross, r.currency_code)}</span>
-                        <span className="mt-1 block whitespace-nowrap text-[11px] font-medium text-white">Nettó: {money(receptionNetInvoiceValue(r), r.currency_code)}</span>
+                      <td className="px-2 py-2.5 text-right tabular-nums">
+                        <span className="block whitespace-normal text-[12px] font-medium text-white">{money(r.invoice_gross, r.currency_code)}</span>
+                        <span className="mt-1 block whitespace-normal text-[10px] font-normal text-white">Nettó: {money(receptionNetInvoiceValue(r), r.currency_code)}</span>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3.5 text-right text-[14px] font-semibold tabular-nums text-white">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
-                      <td className="px-1 py-3.5 text-center text-[13px] font-semibold tabular-nums text-white">{r.total_qty || 0}</td>
-                      <td className="px-1 py-3.5 text-center"><span className={`inline-flex max-w-full items-center justify-center whitespace-nowrap rounded-full border border-transparent px-2.5 py-1.5 text-[11px] font-semibold ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span></td>
+                      <td className="whitespace-normal px-2 py-2.5 text-right text-[12px] font-medium tabular-nums text-white">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
+                      <td className="px-1 py-2.5 text-center text-[12px] font-medium tabular-nums text-white">{r.total_qty || 0}</td>
+                      <td className="px-1 py-2.5 text-center"><span className={`inline-flex max-w-full items-center justify-center whitespace-normal rounded-full border border-transparent px-2 py-1 leading-4 text-[11px] font-medium ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span></td>
                       <td className="px-1 py-2.5"><ReceptionPaymentBadge item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/></td>
-                      <td className="px-1 py-2"><div className="flex items-center justify-end gap-1">
-                        <button className={tinyIconBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button" title={r.status === "committed" ? "Adatok" : "Folytatás"} aria-label="Receptió megnyitása"><Eye size={14}/></button>
+                      <td className="py-2 pl-2 pr-[18px]"><div className="flex w-full items-center justify-end gap-1.5">
+                        <button className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/12 bg-white/[0.045] text-white/75 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/60 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => openDetail(r.id)} disabled={busy} type="button" title={r.status === "committed" ? "Adatok" : "Folytatás"} aria-label="Receptió megnyitása"><Eye size={13}/></button>
                         <ReceptionActionsMenu disabled={busy} canDelete={Boolean(r.can_delete)} onVerification={() => void exportReceptionVerificationPdf(r.id)} onPdf={() => void exportReceptionPdf(r.id)} onDelete={() => setDeleteTarget(r)} />
                       </div></td>
                     </tr>;
                   })}
-                  {!visibleReceptions.length && <tr><td className="px-3 py-8 text-center text-white" colSpan={10}>Nincs receptió a kiválasztott szűrésben.</td></tr>}
+                  {!visibleReceptions.length && <tr><td className="px-2 py-8 text-center text-white" colSpan={10}>Nincs receptió a kiválasztott szűrésben.</td></tr>}
                 </tbody>
               </table>
             </div>
-            <div className="grid gap-3 p-3 lg:hidden">
+            <div className="aif-reception-list-cards gap-3 p-3">
               {visibleReceptions.map((r, index) => {
                 const displayReceptionNo = receptionListNumberDescending ? visibleReceptions.length - index : index + 1;
                 return (
-                <div key={r.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-1.5 text-[10px] tabular-nums text-[#d7fffd]">{displayReceptionNo}</span>
-                        <p className="break-words text-sm font-semibold text-white">{cell(r.invoice_number)}</p>
+                <div key={r.id} className="min-w-0 rounded-2xl border border-white/12 bg-white/[0.05] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 basis-[200px]">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-1.5 text-[10px] tabular-nums text-[#d7fffd]">{displayReceptionNo}</span>
+                        <p className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-semibold text-white">{cell(r.invoice_number)}</p>
                       </div>
-                      <p className="mt-1 text-[12px] font-medium text-white">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
+                      <p className="mt-1 [overflow-wrap:anywhere] text-[12px] font-medium text-white">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
-                    <span className={`inline-flex items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span>
+                    <span className={`inline-flex max-w-full items-center justify-center whitespace-normal [overflow-wrap:anywhere] rounded-full border px-2.5 py-1 text-[11px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span>
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                  <div className="mt-2 grid min-w-0 grid-cols-2 gap-2 text-xs [&>div]:min-w-0 [&>div]:[overflow-wrap:anywhere]">
                     <div className={statCard}><p className="text-[12px] uppercase text-white">Számla dátuma</p><p>{dateText(r.invoice_date)}</p><p className="mt-1.5 text-[12px] font-medium text-white">Bevételezés: {dateText(r.reception_date)}</p></div>
                     <div className={statCard}><p className="text-[12px] uppercase text-white">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[12px] uppercase text-white">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
@@ -3292,7 +3319,7 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
                     <ReceptionPaymentBadge compact item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/>
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                     <button
                             className={r.status === "committed" ? tinyIconBtn : tinyBtn}
                             onClick={() => openDetail(r.id)}
