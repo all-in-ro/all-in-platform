@@ -1744,10 +1744,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   const AIF_ONE_SIZE_IDENTITY_KEYS = new Set([
     "osfm", "one_size", "onesize", "os", "osf", "ns", "uni", "universal",
   ]);
+  // AIF_APPAREL_SIZE_EQUIVALENCE_V26_20261124
+  // Ugyanaz a fizikai ruhaméret eltérő beszállítói / történeti jelöléssel:
+  // 3XL = XXXL, 2XL = XXL stb. Ezt CSAK azonosság-ellenőrzésre használjuk,
+  // a forrásadat, címke és méret feliratát NEM írjuk át. Az összetett méreteket
+  // (pl. XXL/3XL), numerikus méreteket, illetve zokni- és OSFA-méreteket nem vonjuk össze.
+  const AIF_APPAREL_SIZE_IDENTITY_ALIASES = Object.freeze({
+    "2xs": "xxs", "3xs": "xxxs", "2xl": "xxl", "3xl": "xxxl", "4xl": "xxxxl",
+  });
   function aifVariantSizeIdentity(value) {
     const key = normCode(value);
     if (!key) return "";
-    return AIF_ONE_SIZE_IDENTITY_KEYS.has(key) ? "one_size" : key;
+    if (AIF_ONE_SIZE_IDENTITY_KEYS.has(key)) return "one_size";
+    return AIF_APPAREL_SIZE_IDENTITY_ALIASES[key] || key;
   }
   function sameAifVariantSize(left, right) {
     const a = aifVariantSizeIdentity(left);
@@ -4855,7 +4864,44 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
+  // AIF_MISSING_COLOR_NAME_FROM_VERIFIED_FAMILY_V27_20261125
+  // Importfolyamatban a beszallito gyakran csak 22M szinkodot kuld, szinnevet nem.
+  // Egy masik meretnel mar meglevo, azonos modell + szinkod + beszallitoi
+  // termekkod alapján potoljuk a HIANYZO nevet. Ha ket kulonbozo nev van,
+  // nem valasztunk kozuluk, es soha nem irunk at meglevo konkret szinnevet.
+  async function aifInferMissingImportColorName(client, modelId, normalized) {
+    const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
+    const incomingName = text(normalized.colorName || "");
+    const supplierCode = text(normalized.supplierProductCode || normalized.supplier_product_code || "");
+    if (!modelId || !colorCode || !supplierCode ||
+        (incomingName && normCode(incomingName) !== normCode(colorCode))) return false;
+    const found = await client.query(`
+      SELECT DISTINCT btrim(v.color_name) AS color_name
+      FROM aif_product_variants v
+      WHERE v.model_id=$1::uuid
+        AND lower(btrim(COALESCE(v.color_code,'')))=lower(btrim($2))
+        AND NULLIF(btrim(COALESCE(v.color_name,'')),'') IS NOT NULL
+        AND lower(btrim(v.color_name))<>lower(btrim($2))
+        AND COALESCE(v.status,'active')<>'archived'
+        AND EXISTS (
+          SELECT 1 FROM aif_variant_supplier_codes sc
+          WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+            AND lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($3))
+        )
+      ORDER BY color_name`, [modelId, colorCode, supplierCode]);
+    const names = new Map();
+    for (const row of found.rows) {
+      const name = text(row.color_name);
+      if (name) names.set(normCode(name), name);
+    }
+    if (names.size !== 1) return false;
+    normalized.colorName = [...names.values()][0];
+    normalized.aifInferredColorNameFromVerifiedSibling = true;
+    return true;
+  }
+
   async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active", priceChangeContext = null, receiptVariantId = null }) {
+    await aifInferMissingImportColorName(client, modelId, normalized);
     const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
     const colorName = text(normalized.colorName || "");
     const size = text(normalized.size);
@@ -15890,21 +15936,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     `, [identity.model_id]);
     const owner = r.rows.find(row => row.id === identity.id);
     if (!owner) return null;
-    // Beszallitoi import soran az uj varians sc-kapcsolata csak KESOBB keszul el.
-    // Az eredeti termekkodot addig csak ennel a frissen letrehozott rekordnal
-    // hasznaljuk az azonositashoz; mas varians erteket nem talaljuk ki.
-    const effectiveOwner = {
-      ...owner,
-      supplier_product_code: owner.supplier_product_code || supplierProductCode,
-    };
+    // AIF_MISSING_COLOR_GALLERY_FAMILY_V27_20261125
+    // A korabban beimportalt, hianyzo szinnevu meret is megkaphatja a helyes
+    // csaladi kepet, de KIZAROLAG azonos modell/szinkod/beszallitoi kod
+    // eseten, ha a neves testvervaltozatok mindenkeppen egyetertenek.
+    // Ez az olvasasi feloldas nem ir adatbazist, nem cserel meg letezo kepet.
+    const linkedRows = r.rows.map(row => row.id === owner.id
+      ? { ...row, supplier_product_code: row.supplier_product_code || supplierProductCode }
+      : row);
+    const galleryColorIdentity = (value) => String(value || '').trim().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
+    const resolvedRows = linkedRows.map(row => {
+      const code = galleryColorIdentity(row.color_code);
+      const product = galleryColorIdentity(row.supplier_product_code);
+      const existingName = galleryColorIdentity(row.color_name);
+      if (!code || !product || (existingName && existingName !== code)) return row;
+      const siblingsWithName = linkedRows.filter(peer =>
+        peer.status !== 'archived' &&
+        galleryColorIdentity(peer.color_code) === code &&
+        galleryColorIdentity(peer.supplier_product_code) === product &&
+        galleryColorIdentity(peer.color_name) &&
+        galleryColorIdentity(peer.color_name) !== code);
+      const names = new Map();
+      for (const peer of siblingsWithName) {
+        names.set(galleryColorIdentity(peer.color_name), String(peer.color_name).trim());
+      }
+      return names.size === 1 ? { ...row, color_name: [...names.values()][0] } : row;
+    });
+    const effectiveOwner = resolvedRows.find(row => row.id === identity.id);
     const familyKey = aifGalleryFamilyKey(effectiveOwner);
-    // Kulonbozo szinek, hianyzo szinnevek es eltero beszallitoi termekkodok
-    // semmilyen korulmenyek kozott nem kapjak meg egymas kepeit.
-    // A frissen letrehozott, meg sc nelkuli valtozat is a sajat csoportjahoz
-    // tartozzon, ne essen ki a sajat beveteli szinkronjabol.
     const siblings = familyKey && owner.status !== 'archived'
-      ? r.rows.map(row => row.id === owner.id ? effectiveOwner : row)
-        .filter(row => row.status !== 'archived' && aifGalleryFamilyKey(row) === familyKey)
+      ? resolvedRows.filter(row => row.status !== 'archived' && aifGalleryFamilyKey(row) === familyKey)
       : [effectiveOwner];
     const sources = new Map();
     for (const row of siblings) {
