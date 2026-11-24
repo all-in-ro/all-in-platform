@@ -202,6 +202,10 @@ export type AifReceptionSummary = {
   uitCode?: string | null;
   invoice_date?: string | null;
   reception_date?: string | null;
+  payment_status?: "paid" | "unpaid" | null;
+  paid_on?: string | null;
+  payment_updated_at?: string | null;
+  payment_updated_by?: string | null;
   currency_code: string;
   exchange_rate_to_ron: string | number;
   tva_mode: string;
@@ -2275,6 +2279,20 @@ export function apiAifUpdateReception(id: string, reception: Partial<AifReceptio
     method: "PATCH",
     body: JSON.stringify({ reception }),
   });
+}
+
+/** A beszállítói számla adminisztrátori, naplózott fizetési jelölése. */
+export function apiAifSetReceptionPayment(id: string, input: {
+  status: "paid" | "unpaid";
+  paidOn: string | null;
+  expectedStatus: "paid" | "unpaid";
+  expectedPaidOn: string | null;
+}) {
+  return fetchAifJSON<{ ok: true; unchanged?: boolean; item: Pick<AifReceptionSummary,
+    "id" | "payment_status" | "paid_on" | "payment_updated_at" | "payment_updated_by"> }>(
+    `/receptions/${encodeURIComponent(id)}/payment`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
 }
 
 export function apiAifDeleteReception(id: string) {
