@@ -33811,6 +33811,278 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  // AIF_PAYMENT_METHOD_CORRECTION_V25
+  // Csak a tényleges pénz besorolását korrigálja; új eladás, készletmozgás,
+  // kedvezmény vagy pénzátadás NEM keletkezik. A korábbi módszer auditban megmarad.
+  router.patch("/shop-sales/:id/payment-method", requireAuthed, async (req, res) => {
+    const saleId = text(req.params.id);
+    const saleLineId = text(req.body?.lineId);
+    const requested = String(req.body?.paymentMethod || "").trim().toLowerCase();
+    const expected = String(req.body?.expectedMethod || "").trim().toLowerCase();
+    if (!isUuidText(saleId) || !isUuidText(saleLineId) || !["cash", "card"].includes(requested) ||
+        !["cash", "card"].includes(expected) || requested === expected) {
+      return res.status(400).json({
+        code: "shop_payment_invalid_change",
+        error: "Csak a készpénz és bankkártya közötti valódi javítás engedélyezett."
+      });
+    }
+
+    let client;
+    try {
+      await ensureAifShopSalesSchema();
+      await ensureAifSellerTransferSchema();
+      client = await pool.connect();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, req.body?.location);
+      const sessionRole = normCode(req.session?.role);
+      const isAdmin = aifIsAdminSession(req);
+      if (!isAdmin && sessionRole !== "shop") {
+        throw aifSellerTransferError("Ehhez a javításhoz bolti vagy adminisztrátori belépés kell.", 403, "shop_payment_forbidden");
+      }
+      // A napzárás és a készpénzátadás is ugyanezeket a zárakat használja.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${location.id}`]);
+
+      const saleResult = await client.query(
+        `SELECT s.* FROM aif_shop_sales s
+         WHERE s.id=$1::uuid AND s.location_id=$2
+         FOR UPDATE OF s`, [saleId, location.id]
+      );
+      if (!saleResult.rowCount) {
+        throw aifSellerTransferError("A bizonylat nem található ebben az üzletben.", 404, "shop_payment_sale_not_found");
+      }
+      const sale = saleResult.rows[0];
+      const actor = actorFrom(req);
+      if (!isAdmin && aifEmployeeKey(sale.actor) !== aifEmployeeKey(actor)) {
+        throw aifSellerTransferError("Csak a saját eladásod fizetési módját javíthatod.", 403, "shop_payment_other_seller");
+      }
+      if (sale.status !== "completed" || sale.sale_type !== "sale" ||
+          sale.payment_status !== "paid" || aifNumber(sale.balance_due) > 0.005 ||
+          aifNumber(sale.total) <= 0.005 ||
+          Math.abs(aifNumber(sale.paid_total) - aifNumber(sale.total)) > 0.005) {
+        throw aifSellerTransferError("Csak teljesen kifizetett, normál eladás javítható.", 409, "shop_payment_sale_not_simple");
+      }
+      const workDate = aifBucharestIsoDate(new Date(sale.sold_at));
+      const today = aifBucharestIsoDate();
+      if (workDate > today) {
+        throw aifSellerTransferError("Jövőbeli eladás nem javítható.", 409, "shop_payment_invalid_date");
+      }
+
+      const linesResult = await client.query(
+        `SELECT id,line_no,quantity,line_total,product_title FROM aif_shop_sale_lines
+         WHERE sale_id=$1::uuid ORDER BY line_no,id FOR UPDATE`, [saleId]
+      );
+      const lines = linesResult.rows;
+      const chosenLine = lines.find(line => String(line.id) === saleLineId);
+      const linesValue = aifRoundMoney(lines.reduce((sum, line) => sum + aifNumber(line.line_total), 0));
+      if (!chosenLine || !lines.length ||
+          lines.some(line => aifNumber(line.line_total) <= 0.005) ||
+          Math.abs(linesValue - aifNumber(sale.total)) > 0.005) {
+        throw aifSellerTransferError("A kiválasztott terméksor nem azonosítható vagy a bizonylat nem egyezik.", 409, "shop_payment_unbalanced_lines");
+      }
+      const paymentResult = await client.query(
+        `SELECT p.* FROM aif_shop_sale_payments p
+         WHERE p.sale_id=$1::uuid ORDER BY p.paid_at, p.id FOR UPDATE`, [saleId]
+      );
+      const payments = paymentResult.rows;
+      const paymentTotal = aifRoundMoney(payments.reduce((sum,p) => sum + aifNumber(p.amount), 0));
+      if (!payments.length || Math.abs(paymentTotal - aifNumber(sale.total)) > 0.005 ||
+          payments.some(p => !["cash", "card"].includes(p.method) || p.customer_payment_id ||
+            aifBucharestIsoDate(new Date(p.paid_at)) !== workDate)) {
+        throw aifSellerTransferError("Vegyes, utalványos vagy részfizetéses bizonylat nem javítható automatikusan.", 409, "shop_payment_mixed_receipt");
+      }
+      if (!isAdmin && payments.some(p => aifEmployeeKey(p.actor || sale.actor) !== aifEmployeeKey(actor))) {
+        throw aifSellerTransferError("Másik eladó pénzmozgása nem javítható.", 403, "shop_payment_other_collector");
+      }
+
+      // A szokásos eladás egyetlen fizetési sort kap. Többtermékes nyugtánál
+      // először ugyanebben a tranzakcióban, a valós termékösszegek szerint
+      // osztjuk szét. Így a két egyidejűleg eladott termék KÜLÖN javítható.
+      // Második javításkor már mindegyik fizetési sor saját lineId-t hordoz.
+      const paymentByLine = new Map();
+      let mustSplit = false;
+      if (payments.length === 1 && !payments[0].raw?.correctionLineId) {
+        const originalPayment = payments[0];
+        if (lines.length === 1) {
+          paymentByLine.set(saleLineId, originalPayment);
+        } else {
+          mustSplit = true;
+          // A forrásesemény és az időpont marad; kizárólag a pénzfelosztás
+          // lesz soronként részletesebb, a teljes befolyt összeg változatlan.
+          await client.query(
+            `UPDATE aif_shop_sale_payments SET amount=$2,
+                 raw=COALESCE(raw,'{}'::jsonb)||jsonb_build_object('correctionLineId',$3::text,'correctionOriginPaymentId',$1::text)
+             WHERE id=$1`,
+            [originalPayment.id, aifRoundMoney(lines[0].line_total), String(lines[0].id)]
+          );
+          paymentByLine.set(String(lines[0].id), { ...originalPayment, amount: lines[0].line_total });
+          for (const line of lines.slice(1)) {
+            const raw = originalPayment.raw && typeof originalPayment.raw === "object" && !Array.isArray(originalPayment.raw)
+              ? originalPayment.raw : {};
+            const inserted = await client.query(
+              `INSERT INTO aif_shop_sale_payments
+                (sale_id,method,amount,paid_at,actor,reference,note,raw)
+               VALUES($1::uuid,$2,$3,$4::timestamptz,$5,$6,$7,$8::jsonb)
+               RETURNING id`,
+              [saleId, originalPayment.method, aifRoundMoney(line.line_total), originalPayment.paid_at,
+                originalPayment.actor, originalPayment.reference, originalPayment.note,
+                JSON.stringify({ ...raw, correctionLineId:String(line.id), correctionOriginPaymentId:String(originalPayment.id) })]
+            );
+            paymentByLine.set(String(line.id), { ...originalPayment, id:inserted.rows[0].id, amount:line.line_total });
+          }
+        }
+      } else if (payments.length === lines.length && payments.every(p => isUuidText(p.raw?.correctionLineId))) {
+        for (const payment of payments) {
+          const lineId = String(payment.raw.correctionLineId);
+          const line = lines.find(item => String(item.id) === lineId);
+          if (!line || paymentByLine.has(lineId) ||
+              Math.abs(aifNumber(line.line_total) - aifNumber(payment.amount)) > 0.005) {
+            throw aifSellerTransferError("A fizetés terméksori felosztása eltér. Ellenőrzés szükséges.", 409, "shop_payment_line_map_invalid");
+          }
+          paymentByLine.set(lineId, payment);
+        }
+        if (paymentByLine.size !== lines.length) {
+          throw aifSellerTransferError("Hiányos fizetési felosztás.", 409, "shop_payment_line_map_invalid");
+        }
+      } else {
+        throw aifSellerTransferError("Összetett fizetés: a terméksori javítás nem biztonságos.", 409, "shop_payment_mixed_receipt");
+      }
+      const payment = paymentByLine.get(saleLineId);
+      if (!payment) {
+        throw aifSellerTransferError("A kiválasztott termékhez nincs pontos fizetési sor.", 409, "shop_payment_line_map_invalid");
+      }
+      if (payment.method !== expected) {
+        throw aifSellerTransferError("Időközben megváltozott a fizetés. Frissítsd az összesítést.", 409, "shop_payment_stale_method");
+      }
+      const dependencies = await client.query(
+        `SELECT
+           EXISTS(SELECT 1 FROM aif_shop_exchanges e WHERE e.source_sale_id=$1::uuid AND e.status IN ('completed','cancelled')) AS has_exchange,
+           EXISTS(SELECT 1 FROM aif_shop_seller_transfers t WHERE t.sale_id=$1::uuid AND t.status IN ('pending','accepted')) AS has_transfer`,
+        [saleId]
+      );
+      if (dependencies.rows[0]?.has_exchange || dependencies.rows[0]?.has_transfer) {
+        throw aifSellerTransferError("Ehhez a bizonylathoz csere vagy eladói átvezetés kapcsolódik. Adminisztrátori egyeztetés kell.", 409, "shop_payment_has_dependencies");
+      }
+
+      // A már megszámolt kassza, műszakátadási pillanatkép és átadott boríték
+      // megváltoztatása nem végezhető el egy eladói kattintással.
+      const closed = await client.query(
+        `SELECT id FROM aif_shop_day_closures
+         WHERE location_id=$1 AND work_date >= $2::date LIMIT 1`,
+        [location.id, workDate]
+      );
+      if (closed.rowCount) {
+        throw aifSellerTransferError("Ez a nap már lezárt kasszaelszámolás része. Kérj adminisztrátori pénzügyi helyesbítést.", 409, "shop_payment_closed_day");
+      }
+      const frozenShift = await client.query(
+        `SELECT id FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND work_date=$2::date
+           AND (status='pending' OR (status='accepted' AND cutoff_at >= $3::timestamptz))
+         LIMIT 1`, [location.id, workDate, sale.sold_at]
+      );
+      if (frozenShift.rowCount) {
+        throw aifSellerTransferError("A műszak kasszája már átadás alatt áll vagy át lett adva. Javítás csak pénzügyi egyeztetéssel.", 409, "shop_payment_frozen_shift");
+      }
+      const depositedOrHandedOver = await client.query(
+        `SELECT id FROM aif_shop_cash_movements m
+         WHERE m.location_id=$1 AND m.status IN ('pending','confirmed')
+           AND (
+             (m.movement_type='bank_deposit' AND m.status='confirmed' AND m.requested_at >= $3::timestamptz)
+             OR (m.movement_type='manager_handover' AND
+               CASE WHEN jsonb_typeof(m.raw->'handoverSelectedDates')='array'
+                 THEN (m.raw->'handoverSelectedDates') ? $2::text
+                 ELSE $2::date BETWEEN
+                   COALESCE(m.handover_from_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date)
+                   AND COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date)
+               END)
+           ) LIMIT 1`, [location.id, workDate, sale.sold_at]
+      );
+      if (depositedOrHandedOver.rowCount) {
+        throw aifSellerTransferError("A készpénz már bankba vagy főnöki átvételre került. Előbb egyeztesd az elszámolást.", 409, "shop_payment_cash_already_settled");
+      }
+      // Ha a készpénzt tévesen könyvelték, a javítás nem teheti negatívvá
+      // a valóban szabad pénzt, és nem érintheti a függő borítékot.
+      if (requested === "card") {
+        const cash = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
+        if (aifNumber(cash.availableCash) - aifNumber(cash.pendingOut) - aifNumber(payment.amount) < -0.005) {
+          throw aifSellerTransferError("A javításhoz nincs elegendő szabad készpénz. A kasszát előbb egyeztesd.", 409, "shop_payment_cash_would_be_negative");
+        }
+      }
+
+      await client.query(`UPDATE aif_shop_sale_payments SET method=$2 WHERE id=$1`, [payment.id, requested]);
+      const label = { cash: "Készpénz", card: "Bankkártya" };
+      const amount = aifRoundMoney(payment.amount);
+      const event = await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
+         VALUES($1,'payment_method_corrected',$2,$3,$4::jsonb)
+         RETURNING id,created_at`,
+        [saleId, actor,
+          `Fizetési mód javítása: ${label[expected]} → ${label[requested]} (${amount.toFixed(2)} RON).`,
+          JSON.stringify({ beforeMethod: expected, afterMethod: requested,
+            amount, paymentId: String(payment.id), saleLineId,
+            productTitle: chosenLine.product_title || null,
+            workDate, saleNumber: sale.sale_number,
+            splitReceipt: mustSplit,
+            lineCount: lines.length, itemCount: lines.reduce((sum,line)=>sum+aifNumber(line.quantity),0) })]
+      );
+      await client.query("COMMIT");
+      return res.json({ ok: true, saleId: String(sale.id), saleNumber: sale.sale_number,
+        workDate, fromMethod: expected, toMethod: requested, amount, saleLineId,
+        lineCount: lines.length, affectedLineCount: 1,
+        itemCount: lines.reduce((sum,line)=>sum+aifNumber(line.quantity),0),
+        correctedAt: event.rows[0]?.created_at || new Date().toISOString() });
+    } catch (error) {
+      if (client) try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF payment method correction failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A fizetési mód javítása nem sikerült.", code: error?.code || null
+      });
+    } finally {
+      if (client) client.release();
+    }
+  });
+
+  // V25: kizárólag olvasás a főnöki terméksor-ikonokhoz. Az aggregált
+  // bevételek a könyvelt fizetési sorokból eleve helyesen számolódnak.
+  router.get("/admin/shop-payment-line-methods", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const from = aifValidIsoDate(req.query.from, "");
+      const to = aifValidIsoDate(req.query.to, "");
+      const isRealIsoDay = (day) => {
+        const timestamp = Date.parse(`${day}T12:00:00Z`);
+        return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === day;
+      };
+      if (!from || !to || !isRealIsoDay(from) || !isRealIsoDay(to) || from > to ||
+          (Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) > 366 * 86400000) {
+        return res.status(400).json({ error: "Érvénytelen pénzügyi időszak." });
+      }
+      const result = await pool.query(
+        `SELECT p.raw->>'correctionLineId' AS line_id, p.method
+         FROM aif_shop_sale_payments p
+         JOIN aif_shop_sales s ON s.id=p.sale_id
+         WHERE s.location_id=$1 AND s.status='completed'
+           AND s.sold_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+           AND s.sold_at < (($3::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+           AND p.raw ? 'correctionLineId'
+           AND p.method IN ('cash','card')
+         ORDER BY p.paid_at,p.id LIMIT 5001`,
+        [location.id, from, to]
+      );
+      if (result.rows.length > 5000) return res.status(409).json({ error: "Túl sok helyesbítés. Válassz rövidebb időszakot." });
+      const methods = Object.fromEntries(result.rows
+        .filter(row => isUuidText(row.line_id))
+        .map(row => [String(row.line_id), row.method]));
+      return res.json({ ok: true, methods });
+    } catch (error) {
+      console.error("AIF corrected shop payment lines failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A fizetési módok nem kérhetők le." });
+    }
+  });
+
   router.get("/shop-operations/sale-detail/:id", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
@@ -34151,7 +34423,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [s.id]
         ),
         pool.query(
-          `SELECT method, amount, paid_at
+          `SELECT method, amount, paid_at, raw
            FROM aif_shop_sale_payments
            WHERE sale_id=$1
            ORDER BY paid_at ASC, id ASC`,
@@ -34181,7 +34453,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         lineTotal: aifNumber(row.line_total),
       });
 
-      const currentLines = linesResult.rows.map(mapLine);
+      const paymentByLine = new Map(paymentsResult.rows
+        .filter((p) => isUuidText(p.raw?.correctionLineId))
+        .map((p) => [String(p.raw.correctionLineId), p.method]));
+      const singleMethod = paymentsResult.rows.length === 1
+        && ["cash", "card"].includes(paymentsResult.rows[0].method)
+        ? paymentsResult.rows[0].method : null;
+      const currentLines = linesResult.rows.map((row) => ({
+        ...mapLine(row), paymentMethod: paymentByLine.get(String(row.id)) || singleMethod,
+      }));
       const lines = historicalSale ? history.productLines
         .filter((row) => String(row.sale_id) === String(s.id))
         .map((row) => ({
@@ -34561,6 +34841,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              fs.balance_due,
              fs.sale_type,
              'sale'::text AS record_type,
+             p_line.method AS correction_payment_method,
              COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS title,
              sl.product_code,
              sl.brand_name,
@@ -34610,6 +34891,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              1::int AS transactions
            FROM aif_shop_sale_lines sl
            JOIN filtered_sales fs ON fs.id=sl.sale_id
+           LEFT JOIN aif_shop_sale_payments p_line
+             ON p_line.sale_id=fs.id AND p_line.raw->>'correctionLineId'=sl.id::text
            LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
            LEFT JOIN LATERAL (
              SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
@@ -35283,7 +35566,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           netTotal: aifNumber(row.net_total),
           discountTotal: aifNumber(row.discount_total),
           transactions: aifNumber(row.transactions),
-          paymentLabel: row.payment_label || null,
+          paymentLabel: row.correction_payment_method
+            ? aifPaymentMethodLabel(row.correction_payment_method) : (row.payment_label || null),
           settlementAmount: aifNumber(row.settlement_amount),
           transferredFrom: row.transferred_from || null,
           transferredTo: row.transferred_to || null,
