@@ -479,7 +479,7 @@ function ReceptionPaymentBadge({
       <span className="min-w-0 flex-1">
         <span className="block whitespace-normal [overflow-wrap:anywhere] text-[12px] font-medium leading-4 text-white">{RECEPTION_PAYMENT_LABELS[state]}</span>
         {state === "partial" && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">Hátra: {money(left, item.currency_code)}</span>}
-        {state === "paid" && item.paid_on && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">{dateText(item.paid_on)}</span>}
+        {state === "paid" && item.paid_on && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[12px] font-normal leading-4 tabular-nums text-white/85">{dateText(item.paid_on)}</span>}
       </span>
     </button>
   );
@@ -3273,8 +3273,8 @@ export default function AllInReceptions(_props: Props) {
                       </td>
                       <td className="px-2 py-2.5">
                         <div className="space-y-1 tabular-nums">
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Számla</span><span className="whitespace-nowrap text-[10px] font-normal text-white">{dateText(r.invoice_date)}</span></div>
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Bevét.</span><span className="whitespace-nowrap text-[10px] font-normal text-white">{dateText(r.reception_date)}</span></div>
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Számla</span><span className="whitespace-nowrap text-[12px] font-normal text-white">{dateText(r.invoice_date)}</span></div>
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5"><span className="text-[10px] font-normal text-white">Bevét.</span><span className="whitespace-nowrap text-[12px] font-normal text-white">{dateText(r.reception_date)}</span></div>
                         </div>
                       </td>
                       <td className="px-2 py-2.5 text-right tabular-nums">
