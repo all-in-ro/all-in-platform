@@ -1044,7 +1044,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       };
       const recentLineFilters = buildRecentLineFilters(from, to);
 
-      // Korábbi vásárlás későbbi kliensbefizetése:
+      // Hitelbefizetés (aznapi vagy későbbi), illetve korábbi vásárlás kliensbefizetése:
       // csak megjelenítési eseményt készítünk az admin naplóhoz.
       // Nincs INSERT/UPDATE, nincs készletmozgás, és nem számít új eladásnak.
       const buildSettlementLineFilters = (rangeFrom, rangeTo, statistics = false) => {
@@ -1055,7 +1055,8 @@ export default function createAifAdminShopOverviewRouter(deps) {
           `p.customer_payment_id IS NOT NULL`,
           `abs(COALESCE(p.amount,0)) > 0`,
           `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
-          statistics ? `s.sale_type='credit'` : `(p.paid_at AT TIME ZONE 'Europe/Bucharest')::date <> (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date`,
+          statistics ? `s.sale_type='credit'` : `(s.sale_type='credit' OR (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date <> (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date)`,
+          `p.method<>'credit'`,
           `GREATEST(sl.quantity - COALESCE(ret.returned_qty,0),0) > 0`,
         ];
         const push = (value) => {
@@ -1113,9 +1114,12 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return { args, where: where.join(" AND ") };
       };
       const settlementLineFilters = buildSettlementLineFilters(from, to);
-      const creditRankingFilters = buildSettlementLineFilters(from, to, true);
-      const creditRankingResult = await pool.query(`
+      // Ugyanaz a termékszintű rendezési számítás a rangsorhoz és a darabszámhoz.
+      // Nincs új eladás vagy készletmozgás; a teljes rendezéskor beszámított qty-t használjuk.
+      const loadCreditRanking = (creditRankingFilters) => pool.query(`
         SELECT s.id::text AS sale_id,
+          (p.paid_at AT TIME ZONE 'Europe/Bucharest')::date::text AS date,
+          COALESCE(NULLIF(btrim(p.actor),''),NULLIF(btrim(s.actor),''),'Ismeretlen') AS actor,
           COALESCE(NULLIF(sl.brand_name,''),'Ismeretlen márka') AS brand_name,
           COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),
             NULLIF(subc.name_ro,''),'Nincs alkategória') AS category_name,
@@ -1135,10 +1139,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
             AND e.status='completed' AND e.created_at<=p.paid_at
         ) ret ON true
         ${creditSettlementStatisticsJoins()}
-        WHERE ${creditRankingFilters.where} AND p.method<>'credit'
+        WHERE ${creditRankingFilters.where}
           AND credit_stats.amount>0
       `, creditRankingFilters.args);
-
+      const [creditRankingResult, previousCreditRankingResult] = await Promise.all([
+        loadCreditRanking(buildSettlementLineFilters(from, to, true)),
+        loadCreditRanking(buildSettlementLineFilters(previousFrom, previousTo, true)),
+      ]);
+      const creditSettledQty = (rows) => rows.reduce((sum, row) => sum + aifNumber(row.qty), 0);
 
       const [
         stockResult,
@@ -1525,7 +1533,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
              SELECT COALESCE(sum(ex.returned_qty),0)::numeric AS returned_qty
              FROM aif_shop_exchanges ex
              WHERE ex.source_sale_line_id=sl.id
-               AND ex.status='completed'
+               AND ex.status='completed' AND ex.created_at<=p.paid_at
            ) ret ON true
            -- Az egyetlen kliensbefizetés több terméksorhoz is tartozhat.
            -- A soronkénti ténylegesen fizetett összeg és darabszám az allokációból jön.
@@ -1559,7 +1567,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
                SELECT COALESCE(sum(ex2.returned_qty),0)::numeric AS returned_qty
                FROM aif_shop_exchanges ex2
                WHERE ex2.source_sale_line_id=x.id
-                 AND ex2.status='completed'
+                 AND ex2.status='completed' AND ex2.created_at<=p.paid_at
              ) xr ON true
              WHERE x.sale_id=s.id
            ) active_totals ON true
@@ -1729,10 +1737,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
              SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
            )
            SELECT
-             ('exchange:' || el.id::text) AS line_id,
+             CASE WHEN el.id IS NULL THEN 'exchange-return:' || e.id::text ELSE 'exchange:' || el.id::text END AS line_id,
              e.id AS sale_id,
-             el.line_no,
-             el.variant_id,
+             COALESCE(el.line_no,0) AS line_no,
+             COALESCE(el.variant_id,e.source_variant_id) AS variant_id,
              e.exchange_number AS sale_number,
              e.created_at AS sold_at,
              e.actor,
@@ -1747,23 +1755,25 @@ export default function createAifAdminShopOverviewRouter(deps) {
              e.difference AS total,
              e.difference AS paid_total,
              0::numeric AS balance_due,
-             totals.item_count,
-             totals.line_count,
-             COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS product_title,
-             el.product_code,
-             el.barcode,
-             COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,'')) AS brand_name,
+             CASE WHEN el.id IS NULL THEN e.returned_qty ELSE totals.item_count END AS item_count,
+             CASE WHEN el.id IS NULL THEN 1 ELSE totals.line_count END AS line_count,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'title',''),NULLIF(src.product_title,''),NULLIF(src.product_code,''),'Ismeretlen termék')
+               ELSE COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') END AS product_title,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'productCode',''),src.product_code) ELSE el.product_code END AS product_code,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'barcode',''),src.barcode) ELSE el.barcode END AS barcode,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'brandName',''),src.brand_name,b.name) ELSE COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,'')) END AS brand_name,
              NULL::text AS category_name,
-             COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
-             el.color_name,
-             el.size,
-             COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
-             el.quantity,
-             el.unit_price AS list_price,
-             el.unit_price,
+             COALESCE(CASE WHEN el.id IS NULL THEN NULLIF(src.subcategory_name,'') END,NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'colorName',''),src.color_name) ELSE el.color_name END AS color_name,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'size',''),src.size) ELSE el.size END AS size,
+             CASE WHEN el.id IS NULL THEN COALESCE(NULLIF(e.original_snapshot->'product'->>'imageUrl',''),NULLIF(src.image_url,''),NULLIF(v.image_url,'')) ELSE COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) END AS image_url,
+             CASE WHEN el.id IS NULL THEN e.returned_qty ELSE el.quantity END AS quantity,
+             CASE WHEN el.id IS NULL THEN e.return_unit_credit ELSE el.unit_price END AS list_price,
+             CASE WHEN el.id IS NULL THEN e.return_unit_credit ELSE el.unit_price END AS unit_price,
              0::numeric AS line_discount_amount,
              0::numeric AS line_discount_percent,
-             el.line_total,
+             CASE WHEN el.id IS NULL THEN e.return_credit ELSE el.line_total END AS line_total,
+             (el.id IS NULL) AS exchange_return_only,
              'exchange'::text AS record_type,
              false AS deletable,
              e.id AS exchange_id,
@@ -1775,8 +1785,9 @@ export default function createAifAdminShopOverviewRouter(deps) {
              e.settlement_method,
              e.settlement_amount
            FROM filtered_exchanges e
-           JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
-           LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+           LEFT JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
+           LEFT JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
+           LEFT JOIN aif_product_variants v ON v.id=CASE WHEN el.id IS NULL THEN e.source_variant_id ELSE el.variant_id END
            LEFT JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_brands b ON b.id=m.brand_id
            LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
@@ -1938,6 +1949,13 @@ export default function createAifAdminShopOverviewRouter(deps) {
 
       const summary = mapSummary(currentCombinedRow);
       const previousSummary = mapSummary(previousCombinedRow);
+      // Eladások = új (nem hiteles) tranzakciók a meglévő szabály szerint.
+      // Darab = ezek termékei + az időszakban egyszer teljesen rendezett hiteles terméksorok.
+      // A mennyiség a teljes, nem a 500 sorra limitált eseménynaplóból származik.
+      for (const [target, result] of [[summary, creditRankingResult], [previousSummary, previousCreditRankingResult]]) {
+        target.settledCreditItems = creditSettledQty(result.rows);
+        target.itemsSold = aifNumber(target.itemsSold) + target.settledCreditItems;
+      }
       const roundMoney = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
       const applyHistory = (target, cohort) => {
         const live = aifNumber(target.unpaidTotal);
@@ -2107,6 +2125,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
         point.unpaidTotal = roundMoney(Math.max(0,
           point.unpaidTotal - aifNumber(sale.current_balance_due) + aifNumber(sale.balance_due)));
       }
+      for (const row of creditRankingResult.rows) {
+        const point = trendMap.get(String(row.date));
+        if (point) point.itemsSold += aifNumber(row.qty);
+      }
       const trend = Array.from(trendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
       // The daily discount trend follows the same settlement-day allocation.
@@ -2206,6 +2228,14 @@ export default function createAifAdminShopOverviewRouter(deps) {
         const key=sellerKey(actorName);
         const entry=employeeMap.get(key)||{actor:actorName,revenue:0,transactions:0,itemsSold:0,discountTotal:0,unpaidTotal:0};
         entry.revenue=roundSellerMoney(entry.revenue+aifNumber(row.revenue));
+        employeeMap.set(key,entry);
+      }
+      // Rendezett hiteles termékek a tényleges befizetés napján és a pénzt átvevő eladónál.
+      for (const row of creditRankingResult.rows) {
+        const actorName = String(row.actor || 'Ismeretlen');
+        const key = sellerKey(actorName);
+        const entry = employeeMap.get(key) || {actor:actorName,revenue:0,transactions:0,itemsSold:0,discountTotal:0,unpaidTotal:0};
+        entry.itemsSold += aifNumber(row.qty);
         employeeMap.set(key,entry);
       }
       // Include the discount on settled older credit lines under the cashier
@@ -2311,6 +2341,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         recordType: row.record_type || "sale",
         deletable: row.deletable === undefined || row.deletable === null ? true : Boolean(row.deletable),
         exchangeId: row.exchange_id ? String(row.exchange_id) : null,
+        exchangeReturnOnly: row.exchange_return_only === true,
         exchangeNumber: row.exchange_number || null,
         returnCredit: aifNumber(row.return_credit),
         replacementTotal: aifNumber(row.replacement_total),
