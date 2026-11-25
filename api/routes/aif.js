@@ -3000,6 +3000,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const attrs = normalized.attributes && typeof normalized.attributes === "object" && !Array.isArray(normalized.attributes)
       ? { ...normalized.attributes }
       : {};
+    if(normalized.aifColorInputCaptured===true) {
+      attrs.aifColorIdentitySource=normalized.aifColorIdentitySource || null;
+      attrs.aifColorImportMode=normalized.aifColorImportMode || null;
+      attrs.aifSourceColorCode=text(normalized.aifSourceColorCode);
+      attrs.aifSourceColorName=text(normalized.aifSourceColorName);
+    }
     const tariff = customsTariffCodeFromNormalized(normalized);
     if (tariff !== null && tariff !== undefined && String(tariff).trim() !== "") {
       attrs.customsTariffCode = tariff;
@@ -3105,57 +3111,83 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  // A beszállítói termékkód -01/-10 végződése NEM bizonyítja, hogy az színkód.
-  // MAYO CHIX: 121907100-01, S méret: külön MARO és NEGRU, üres COD CULOARE oszloppal.
-  // Ilyenkor a színt kell azonosítónak használnunk, nem a termékkód utolsó részét.
+  // AIF_IMPORT_COLOR_SOURCE_V30_20261125
   const AIF_SOURCE_COLOR_CODE_HEADERS = [
-    "COD CULOARE", "COD CULOARE ", "CODCULOARE", "COD CULOARE PRODUS",
-    "COLOR CODE", "COLOUR CODE", "SZINKOD", "SZÍNKÓD"
+    "COD CULOARE", "CODCULOARE", "COD CULOARE PRODUS", "COD DE CULOARE", "NR CULOARE", "NR. CULOARE", "NR_CULOARE",
+    "NUMAR CULOARE", "NUMĂR CULOARE", "NUMĂR DE CULOARE", "NUMAR DE CULOARE",
+    "COLOR CODE", "COLOUR CODE", "COLOR NO", "COLOR NO.", "COLOUR NO", "COLOUR NO.", "COLOR NUMBER", "COLOUR NUMBER",
+    "SZINKOD", "SZÍNKÓD", "SZÍN KÓD", "SZIN KOD"
   ];
-  const AIF_SOURCE_COLOR_NAME_HEADERS = ["CULOARE", "COLOR", "COLOUR", "SZIN", "SZÍN"];
-
+  const AIF_SOURCE_COLOR_NAME_HEADERS = ["CULOARE", "COLOR", "COLOUR", "SZIN", "SZÍN", "COLOR NAME", "COLOUR NAME", "NUME CULOARE", "DENUMIRE CULOARE", "SZÍNNÉV", "SZINNEV"];
+  const AIF_COLOR_MODES = new Set(['auto','name','code','suffix']);
+  const AIF_COLOR_MODE_PREFIX = 'import_color_mode:';
+  function aifColorMode(value, normalized = {}) {
+    if (AIF_COLOR_MODES.has(value)) return value;
+    return [normalized.brandName, normalized.brandCode].some(v => normCode(v).replace(/_/g,'')==='mayochix') ? 'name' : 'auto';
+  }
+  function aifColorInput(value) {
+    const v=text(value);
+    return /^(?:-|–|—|n\/?a|null)$/i.test(v) ? '' : v;
+  }
+  function aifNameColorIdentity(name) { return normCode(name).toUpperCase(); }
+  function aifCaptureColorSource(n, raw, suffix) {
+    if (n.aifColorInputCaptured === true) return;
+    const rawCode = aifColorInput(rawValueByHeaders(raw,AIF_SOURCE_COLOR_CODE_HEADERS));
+    const rawName = aifColorInput(rawValueByHeaders(raw,AIF_SOURCE_COLOR_NAME_HEADERS));
+    const existing = aifColorInput(n.supplierColorCode || n.supplier_color_code || n.colorCode || n.color_code);
+    const source = text(raw?.source || n.source);
+    const trusted = source==='manual' || source==='purchase_order';
+    const generated = n._aifColorCodeFromName===true || n.aifColorIdentitySource==='color_name_without_explicit_code';
+    // Unknown old payloads: do not promote an inferred suffix to a real Excel code.
+    n.aifSourceColorCode = rawCode || (!generated && (trusted || !suffix || normCode(existing)!==normCode(suffix)) ? existing : '');
+    n.aifSourceColorName = rawName || aifColorInput(n.colorName || n.color_name);
+    n.aifColorSourceUnverified = source==='aif_compact_import' && !rawCode && !rawName && !generated && Boolean(suffix && existing && normCode(existing)===normCode(suffix));
+    n.aifColorInputCaptured = true;
+  }
   function applyProductCodeSplit(normalized, sourceRaw = null) {
-    if (!normalized || typeof normalized !== "object") return normalized;
-    const split = splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
-    if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
-    if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
-
-    const explicitSourceCode = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_CODE_HEADERS);
-    const sourceColorName = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_NAME_HEADERS);
-    if (!normalized.colorName && sourceColorName) normalized.colorName = sourceColorName;
-    const colorName = text(normalized.colorName || normalized.color_name || sourceColorName);
-    const suffix = text(split.colorCode);
-    const numericSuffix = /^\d{1,4}$/.test(suffix);
-    const existingCode = text(normalized.colorCode || normalized.color_code);
-    const supplierCode = text(normalized.supplierColorCode || normalized.supplier_color_code);
-
-    if (explicitSourceCode) {
-      normalized.colorCode = explicitSourceCode;
-      normalized.supplierColorCode = explicitSourceCode;
-      normalized._aifColorCodeFromName = false;
-      normalized.aifColorIdentitySource = "explicit_supplier_color_code";
-    } else if (colorName && numericSuffix &&
-               (Boolean(sourceColorName) || normalized._aifColorCodeFromName === true) &&
-               (!existingCode || normCode(existingCode) === normCode(suffix) ||
-                normalized._aifColorCodeFromName === true) &&
-               (!supplierCode || normCode(supplierCode) === normCode(suffix) ||
-                normalized._aifColorCodeFromName === true)) {
-      // Explicit színkód NINCS. A különböző színeknek külön adatbázis-kulcs kell.
-      // A normCode ékezet- és betűméret-független, ezért későbbi importoknál is stabil.
-      const distinctColorKey = normCode(colorName).toUpperCase();
-      if (distinctColorKey) {
-        normalized.colorCode = distinctColorKey;
-        normalized.supplierColorCode = distinctColorKey;
-        normalized._aifColorCodeFromName = true;
-        normalized.aifColorIdentitySource = "color_name_without_explicit_code";
-      }
-    } else {
-      if (suffix && !existingCode) normalized.colorCode = suffix;
-      if (suffix && !supplierCode) normalized.supplierColorCode = suffix;
-      normalized._aifColorCodeFromName = Boolean(normalized._aifColorCodeFromName);
+    if (!normalized || typeof normalized !== 'object') return normalized;
+    const split=splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
+    if (split.fullCode) normalized.supplierProductCode=normalized.supplierProductCode || split.fullCode;
+    if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode)===String(split.fullCode))) normalized.modelCode=split.modelCode;
+    const suffix=aifColorInput(split.colorCode);
+    aifCaptureColorSource(normalized,sourceRaw,suffix);
+    const mode=aifColorMode(normalized.aifColorImportMode,normalized);
+    const explicit=aifColorInput(normalized.aifSourceColorCode);
+    const sourceName=aifColorInput(normalized.aifSourceColorName);
+    const sourceNameIsCode=sourceName && (explicit || suffix) && normCode(sourceName)===normCode(explicit || suffix) && /\d/.test(sourceName);
+    const name=sourceNameIsCode ? '' : sourceName;
+    let code='', identity='missing';
+    if (mode==='name') {
+      if (name) { code=aifNameColorIdentity(name); identity='color_name_without_explicit_code'; }
+    } else if (explicit) { code=explicit; identity='explicit_supplier_color_code'; }
+    else if (mode==='code') { /* explicit code required */ }
+    else if (mode==='auto' && name) {
+      // Keep the already verified result on model/price helper calls without source.
+      if (normalized.aifColorIdentitySource==='verified_product_suffix' && suffix && normCode(normalized.colorCode)===normCode(suffix)) {
+        code=suffix; identity='verified_product_suffix';
+      } else { code=aifNameColorIdentity(name); identity='color_name_without_explicit_code'; }
+    } else if (suffix) { code=suffix; identity='product_code_suffix'; }
+    else if (name && mode==='auto') { code=aifNameColorIdentity(name); identity='color_name_without_explicit_code'; }
+    const oldName=text(normalized.colorName);
+    if (name && normCode(oldName)!==normCode(name)) normalized.colorHex=null;
+    // An earlier canonical spelling is safe only for the same captured source.
+    normalized.colorName=name || null;
+    normalized.colorCode=code || null;
+    normalized.supplierColorCode=code || null;
+    normalized.color_code=code || null;
+    normalized.supplier_color_code=code || null;
+    normalized.color_name=normalized.colorName;
+    normalized._aifColorCodeFromName=identity==='color_name_without_explicit_code';
+    normalized.aifColorIdentitySource=identity;
+    normalized.aifColorImportMode=mode;
+    if (normalized._aifColorCodeFromName || identity==='missing') {
+      delete normalized.brandColorCodeId;
+      delete normalized.colorTypeCode;
+      normalized.colorHex=null;
     }
     return normalized;
   }
+
 
   // A COLECTIE=FASHION nem terméktípus. A RODESCR és a tényleges alkategória az.
   // A HAJGUMI/ELASTIC DE PAR kiegészítő, nem ruha (ROCHIE).
@@ -3831,7 +3863,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const supplierVariantCode = emptyToNull(
       src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code || input?.variant_code
     );
-    const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code || productSplit.colorCode);
+    const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code);
     const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size || rawSize);
 
     const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brandName || src.brand_name || src.brand || rawBrand);
@@ -3859,7 +3891,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       season: aifSeasonFromSource(src.season ?? src.sezon ?? src.szezon ?? src.seasonName ?? rawSeason),
       _seasonExplicit: aifSeasonExplicit(raw, src),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
-      colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
+      colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode),
+      aifColorInputCaptured: src.aifColorInputCaptured===true,
+      aifColorSourceUnverified: src.aifColorSourceUnverified===true,
+      aifSourceColorCode: src.aifSourceColorCode,
+      aifSourceColorName: src.aifSourceColorName,
+      aifColorImportMode: src.aifColorImportMode,
+      aifColorIdentitySource: src.aifColorIdentitySource,
+      _aifColorCodeFromName: src._aifColorCodeFromName===true,
+      source: src.source,
       colorName: emptyToNull(src.colorName || src.color_name || rawValueByHeaders(raw, AIF_SOURCE_COLOR_NAME_HEADERS)),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
       size: emptyToNull(src.size || supplierSize || rawSize),
@@ -4042,7 +4082,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const oldCode = normCode(owner?.color_code);
     const newCode = normCode(normalized?.colorCode || normalized?.supplierColorCode);
     if (oldName && newName && oldName !== newName) return false;
-    if (oldCode && newCode && oldCode !== newCode) return false;
+    if (oldCode && newCode && oldCode !== newCode) {
+      const suffix=normCode(splitBrandProductCode(normalized?.supplierProductCode).colorCode);
+      if (!(normalized?._aifColorCodeFromName===true && oldName && oldName===newName && suffix && oldCode===suffix)) return false;
+    }
     return Boolean((oldName && newName && oldName === newName) ||
       (oldCode && newCode && oldCode === newCode));
   }
@@ -4616,7 +4659,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         v.id, v.model_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
         v.sell_price, v.buy_price, v.status, v.attributes,
         m.model_code, m.title_ro AS model_title_ro, m.shopify_title, m.status AS model_status, m.brand_id,
-        b.code AS brand_code, b.name AS brand_name
+        b.code AS brand_code, b.name AS brand_name,
+        EXISTS (SELECT 1 FROM aif_variant_supplier_codes sx WHERE sx.variant_id=v.id AND sx.supplier_id::text=$2
+          AND COALESCE(sx.is_active,true)=true AND lower(btrim(COALESCE(sx.supplier_product_code,'')))=lower(btrim($3))) AS same_supplier_product
       FROM aif_product_variants v
       JOIN aif_product_models m ON m.id=v.model_id
       LEFT JOIN aif_brands b ON b.id=m.brand_id
@@ -4633,7 +4678,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const matches = possible.rows.filter(owner => sameBrand(owner) &&
       sameAifVariantSize(owner.size, size) && aifReceiptSameColor(owner, n));
-    if (!matches.length) return null;
+    if (!matches.length) {
+      // A legacy suffix may be the very incorrectly classified physical item.
+      // With no proven separate barcode, do not create another variant silently.
+      const suffix=normCode(splitBrandProductCode(n.supplierProductCode).colorCode);
+      if(n._aifColorCodeFromName===true && suffix && possible.rows.some(owner=>
+        owner.same_supplier_product && sameBrand(owner) && sameAifVariantSize(owner.size,size) &&
+        normCode(owner.color_code)===suffix && normCode(owner.color_name)!==normCode(n.colorName) &&
+        (!barcode || !text(owner.barcode) || /^AIF/i.test(text(owner.barcode)) || /^AIF/i.test(barcode)))) {
+        throw aifReceiptIdentityError('Régi, termékkód-végződésből képzett eltérő szín található ugyanennél a beszállítói terméknél és méretnél. A meglévő variánst ellenőrizni kell, hogy ne keletkezzen dupla készlet.','receipt_color_source_review_required',barcode);
+      }
+      return null;
+    }
     const expanded=await aifReceiptExpandIdentityTarget(client,{...matches[0],receiptMatch:'model_color_size'},{normalized:n,supplierId,supplierCode});
     if(matches.some(owner=>!aifReceiptMergeIds(expanded).includes(String(owner.id)))) {
       throw aifReceiptIdentityError('A lehetséges régi variánsok közül nem mindegyik azonossága bizonyított.','receipt_identity_ambiguous',barcode);
@@ -4709,7 +4765,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
     const subcategoryId = await findSubcategoryId(client, safeNormalized);
-    applyProductCodeSplit(safeNormalized);
+    const productSplit=splitBrandProductCode(safeNormalized.supplierProductCode || safeNormalized.productCode || safeNormalized.modelCode);
+    if(productSplit.fullCode) safeNormalized.supplierProductCode=safeNormalized.supplierProductCode || productSplit.fullCode;
+    if(productSplit.modelCode && (!safeNormalized.modelCode || String(safeNormalized.modelCode)===String(productSplit.fullCode))) safeNormalized.modelCode=productSplit.modelCode;
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
     let modelCode = `${brandKey}:${normCode(baseModelCode)}`;
@@ -5190,7 +5248,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             error.code = 'variant_identity_ambiguous';
             throw error;
           }
-          if (equivalent.length === 1) return equivalent[0];
+          if (equivalent.length === 1) {
+            const old=normCode(equivalent[0].color_code);
+            const suffix=normCode(splitBrandProductCode(normalized.supplierProductCode).colorCode);
+            if(old && old!==normCode(colorCode) && old!==suffix) throw aifReceiptIdentityError('A meglévő variáns színkódja eltér; kézi egyeztetés szükséges.','supplier_variant_color_code_conflict',barcode);
+            return equivalent[0];
+          }
         }
 
         // Régi adatoknál előfordulhat, hogy a színkód még üres, de a normalizált színnév már megvan.
@@ -5233,7 +5296,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const resolveMatchingBarcodeOwner = async (barcodeOwner) => {
       if (!barcodeOwnerMatchesIncomingVariant(barcodeOwner)) throwBarcodeConflict(barcodeOwner);
-      if (!barcodeOwnerColorDiffers(barcodeOwner)) return updateVariantById(barcodeOwner.id);
+      if (!barcodeOwnerColorDiffers(barcodeOwner)) {
+        if(normalized._aifColorCodeFromName===true && normCode(barcodeOwner.color_code)!==normCode(colorCode)) {
+          const other=await findIdentityCandidate();
+          if(other && String(other.id)!==String(barcodeOwner.id)) throw aifReceiptIdentityError('A színnévhez már külön variáns tartozik; kézi egyeztetés szükséges.','barcode_color_target_conflict',barcode);
+        }
+        return updateVariantById(barcodeOwner.id);
+      }
 
       const resolutionMatchesOwner =
         barcodeColorResolutionVariantId &&
@@ -5382,7 +5451,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const candidate=unique[0] || null;
     if(candidate && colorCode && normCode(candidate.color_code) &&
-       normCode(candidate.color_code)!==normCode(colorCode)) {
+       normCode(candidate.color_code)!==normCode(colorCode) &&
+       !(normalized._aifColorCodeFromName===true && normCode(candidate.color_code)===normCode(splitBrandProductCode(productCode).colorCode))) {
       const err=new Error('A meglévő beszállítói termék színkódja eltér az érkezőétől. Nem egyesíthető automatikusan.');
       err.statusCode=409;err.code='supplier_variant_color_code_conflict';throw err;
     }
@@ -5731,6 +5801,117 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function applyBrandColorCodeMapping(client, normalized) {
+    if (!normalized || typeof normalized !== 'object') return false;
+    const brandId=await findBrandIdForNormalized(client,normalized);
+    let mode=aifColorMode(null,normalized);
+    if(brandId) {
+      const settingsTable=await client.query(`SELECT to_regclass('aif_app_settings') AS settings_table`);
+      if(!settingsTable.rows[0]?.settings_table) await ensureAifSettingsTable(client);
+      const brand=await client.query(`SELECT b.code,b.name,s.value FROM aif_brands b
+        LEFT JOIN aif_app_settings s ON s.key=$2 WHERE b.id=$1`,[brandId,AIF_COLOR_MODE_PREFIX+String(brandId)]);
+      const info=brand.rows[0] || {};
+      mode=aifColorMode(info.value?.mode,{brandCode:info.code,brandName:info.name});
+    }
+    normalized.aifColorImportMode=mode;
+    // Re-evaluate from saved source, never from a prior mapping's display name.
+    normalized.aifColorIdentitySource='';
+    normalized.colorHex=null;
+    applyProductCodeSplit(normalized);
+    delete normalized.aifColorConflict;
+    const suffix=aifColorInput(splitBrandProductCode(normalized.supplierProductCode).colorCode);
+    const name=text(normalized.colorName);
+    const nameIdentity=normalized._aifColorCodeFromName===true;
+    const canonicalName=name ? await normalizeColorName(client,name) : null;
+    const lookupCode= nameIdentity && mode==='auto' ? suffix : nameIdentity ? '' : text(normalized.colorCode);
+    let found=null;
+    if(brandId && lookupCode) {
+      const r=await client.query(`SELECT bcc.id,c.code AS color_type_code,c.name_ro,c.name_hu,c.name_en,c.name_de,c.aliases,c.hex
+        FROM aif_brand_color_codes bcc JOIN aif_color_types c ON c.id=bcc.color_type_id
+        WHERE bcc.brand_id=$1 AND bcc.is_active=true AND c.is_active=true AND lower(btrim(bcc.color_code))=lower(btrim($2)) LIMIT 1`,[brandId,lookupCode]);
+      found=r.rows[0] || null;
+    }
+    const agrees=found && (!name || [found.name_ro,found.name_hu,found.name_en,found.name_de,found.color_type_code,...(Array.isArray(found.aliases)?found.aliases:[])].some(v=>normCode(v)===normCode(name) || normCode(v)===normCode(canonicalName)));
+    if(found && agrees && (!nameIdentity || mode==='auto')) {
+      normalized.colorName=found.name_ro;
+      normalized.colorCode=lookupCode;
+      normalized.supplierColorCode=lookupCode;
+      normalized.colorHex=found.hex || null;
+      normalized.brandColorCodeId=found.id;
+      normalized.colorTypeCode=found.color_type_code;
+      if(nameIdentity) normalized.aifColorIdentitySource='verified_product_suffix';
+      normalized._aifColorCodeFromName=false;
+    } else {
+      delete normalized.brandColorCodeId;
+      delete normalized.colorTypeCode;
+      if(canonicalName) normalized.colorName=canonicalName;
+      if(nameIdentity) {
+        normalized.colorCode=aifNameColorIdentity(normalized.colorName);
+        normalized.supplierColorCode=normalized.colorCode;
+      }
+      // An inferred suffix conflicting with a supplied name is NOT a conflict:
+      // it simply is not proven to be a color code. Explicit code conflicts are.
+      if(found && !agrees && !nameIdentity) {
+        normalized.aifColorConflict=`Színütközés: ${lookupCode} → ${found.name_ro}, Excel: ${name}. Javítsd a színnevet vagy a színkódot.`;
+        normalized.colorHex=null;
+      } else if(mode==='name' && !name) normalized.aifColorConflict='A márka színnév alapú: a színnév kötelező.';
+      else if(mode==='code' && !normalized.colorCode) normalized.aifColorConflict='A márka külön beszállítói színkódot igényel.';
+      else if(mode==='suffix' && !normalized.colorCode) normalized.aifColorConflict='A márkához nem található színkód a termékkód végén.';
+      if(canonicalName) {
+        const c=await client.query(`SELECT code,hex FROM aif_color_types WHERE is_active=true AND lower(btrim(name_ro))=lower(btrim($1)) ORDER BY sort_order,code LIMIT 1`,[canonicalName]);
+        normalized.colorHex=c.rows[0]?.hex || null;
+        normalized.colorTypeCode=c.rows[0]?.code || null;
+      }
+    }
+    normalized.color_code=normalized.colorCode || null;
+    normalized.supplier_color_code=normalized.supplierColorCode || null;
+    normalized.color_name=normalized.colorName || null;
+    if(mode==='name' && normalized.aifColorSourceUnverified===true) normalized.aifColorConflict='Régebben mentett színadat: az eredeti Excel-színnév nem bizonyítható. Olvasd be újra az Excel-fájlt, vagy ellenőrizd és add meg kézzel a tényleges színt.';
+    return Boolean(found && agrees && (!nameIdentity || mode==='auto'));
+  }
+
+  function applyLegacyProductCodeSplit(normalized, sourceRaw = null) {
+    if (!normalized || typeof normalized !== "object") return normalized;
+    const split = splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
+    if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
+    if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
+
+    const explicitSourceCode = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_CODE_HEADERS);
+    const sourceColorName = rawValueByHeaders(sourceRaw, AIF_SOURCE_COLOR_NAME_HEADERS);
+    if (!normalized.colorName && sourceColorName) normalized.colorName = sourceColorName;
+    const colorName = text(normalized.colorName || normalized.color_name || sourceColorName);
+    const suffix = text(split.colorCode);
+    const numericSuffix = /^\d{1,4}$/.test(suffix);
+    const existingCode = text(normalized.colorCode || normalized.color_code);
+    const supplierCode = text(normalized.supplierColorCode || normalized.supplier_color_code);
+
+    if (explicitSourceCode) {
+      normalized.colorCode = explicitSourceCode;
+      normalized.supplierColorCode = explicitSourceCode;
+      normalized._aifColorCodeFromName = false;
+      normalized.aifColorIdentitySource = "explicit_supplier_color_code";
+    } else if (colorName && numericSuffix &&
+               (Boolean(sourceColorName) || normalized._aifColorCodeFromName === true) &&
+               (!existingCode || normCode(existingCode) === normCode(suffix) ||
+                normalized._aifColorCodeFromName === true) &&
+               (!supplierCode || normCode(supplierCode) === normCode(suffix) ||
+                normalized._aifColorCodeFromName === true)) {
+      // Explicit színkód NINCS. A különböző színeknek külön adatbázis-kulcs kell.
+      // A normCode ékezet- és betűméret-független, ezért későbbi importoknál is stabil.
+      const distinctColorKey = normCode(colorName).toUpperCase();
+      if (distinctColorKey) {
+        normalized.colorCode = distinctColorKey;
+        normalized.supplierColorCode = distinctColorKey;
+        normalized._aifColorCodeFromName = true;
+        normalized.aifColorIdentitySource = "color_name_without_explicit_code";
+      }
+    } else {
+      if (suffix && !existingCode) normalized.colorCode = suffix;
+      if (suffix && !supplierCode) normalized.supplierColorCode = suffix;
+      normalized._aifColorCodeFromName = Boolean(normalized._aifColorCodeFromName);
+    }
+    return normalized;
+  }
+  async function applyLegacyBrandColorCodeMapping(client, normalized) {
     if (!normalized || typeof normalized !== "object") return false;
     const colorCode = emptyToNull(normalized.colorCode || normalized.supplierColorCode);
     if (!colorCode) return false;
@@ -5758,12 +5939,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return true;
   }
 
-  async function enrichNormalizedRow(client, nr) {
+  async function enrichNormalizedRow(client, nr, {skipColor=false,legacyColor=false}={}) {
     if (nr?.normalized) {
       correctImportedClassification(nr.normalized, nr.raw);
-      applyProductCodeSplit(nr.normalized, nr.raw);
-      const brandColorMapped = await applyBrandColorCodeMapping(client, nr.normalized);
-      if (!brandColorMapped && nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+      if(legacyColor) {
+        applyLegacyProductCodeSplit(nr.normalized,nr.raw);
+        const mapped=await applyLegacyBrandColorCodeMapping(client,nr.normalized);
+        if(!mapped && nr.normalized.colorName) nr.normalized.colorName=await normalizeColorName(client,nr.normalized.colorName);
+      } else if(!skipColor) {
+        applyProductCodeSplit(nr.normalized,nr.raw);
+        await applyBrandColorCodeMapping(client,nr.normalized);
+        if(nr.normalized.aifColorConflict) {nr.errors=[...(nr.errors||[]),nr.normalized.aifColorConflict];nr.status='error';}
+      }
       // Régi kliens még Unisex-et küldhet a GEN=BAIAT/FETE mellé.
       // Csak a bizonyítottan specifikus forrásadat javíthatja a generikus alapértéket.
       const importedGenderFamily = aifGenderFamily(nr.normalized.genderRaw);
@@ -7594,6 +7781,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
     return r.rows[0] || null;
   }
+
+  router.get('/brand-color-import-settings', requireAuthed, async (_req,res) => {
+    try {
+      await ensureAifSettingsTable(pool);
+      const r=await pool.query(`SELECT key,value FROM aif_app_settings WHERE key LIKE $1`,[AIF_COLOR_MODE_PREFIX+'%']);
+      const modes={};
+      for(const row of r.rows) if(AIF_COLOR_MODES.has(row.value?.mode)) modes[row.key.slice(AIF_COLOR_MODE_PREFIX.length)]=row.value.mode;
+      res.json({ok:true,modes});
+    } catch(error) { res.status(500).json({error:'A márkák színbeállításai nem tölthetők be.'}); }
+  });
+  router.patch('/brand-color-import-settings/:id', requireAdminOrSecret, async (req,res) => {
+    const id=text(req.params.id), mode=text(req.body?.mode);
+    if(!isUuidText(id) || !AIF_COLOR_MODES.has(mode)) return res.status(400).json({error:'Érvénytelen márka vagy színazonosítási mód.'});
+    try {
+      const brand=await pool.query(`SELECT id FROM aif_brands WHERE id=$1 AND is_active=true`,[id]);
+      if(!brand.rowCount) return res.status(404).json({error:'A márka nem található.'});
+      await ensureAifSettingsTable(pool);
+      await pool.query(`INSERT INTO aif_app_settings(key,value,updated_by) VALUES($1,$2::jsonb,$3)
+        ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_by=EXCLUDED.updated_by,updated_at=now()`,
+        [AIF_COLOR_MODE_PREFIX+id,JSON.stringify({mode}),actorFrom(req)]);
+      res.json({ok:true,id,mode});
+    } catch(error) { res.status(500).json({error:'A színazonosítási mód nem menthető.'}); }
+  });
 
   router.get("/brand-color-codes", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
@@ -10792,8 +11002,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         correctImportedClassification(normalized, row.raw);
         applyProductCodeSplit(normalized, row.raw);
         normalized.gender = canonicalGender(normalized.gender);
-        const brandColorMapped = await applyBrandColorCodeMapping(client, normalized);
-        if (!brandColorMapped && normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
+        await applyBrandColorCodeMapping(client,normalized);
+        if(normalized.aifColorConflict) throw aifReceiptIdentityError(normalized.aifColorConflict,'import_color_source_conflict',normalized.barcode);
         const brandSizeMapped = await applyBrandSizeCodeMapping(client, normalized);
         if (!brandSizeMapped && normalized.size) normalized.size = await normalizeSizeValue(client, normalized.size);
         const qty = Number(row.qty ?? normalized.qty ?? 0);
@@ -10983,6 +11193,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                purchase_order_line_id=$4,
                normalized=$5::jsonb,
                sell_price_ron=COALESCE($6::numeric,sell_price_ron),
+               supplier_color_code=$7,
                updated_at=now()
            WHERE id=$1`,
           [
@@ -10992,6 +11203,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             purchaseOrderLineId || null,
             JSON.stringify(normalized),
             normalized.aifPriceDecisionApplied === 'keep_existing' ? normalized.sellPrice : null,
+            normalized.supplierColorCode || null,
           ]
         );
 
@@ -11154,6 +11366,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const baseModelCode = normalized.modelCode || normalized.supplierProductCode || row.supplier_product_code;
       let target = null;
       try {
+        await applyBrandColorCodeMapping(client,normalized);
+        if(normalized.aifColorConflict) throw aifReceiptIdentityError(normalized.aifColorConflict,'import_color_source_conflict',normalized.barcode);
         target = await findAifReceiptIdentityTarget(client, {
           normalized, supplierId: row.supplier_id, supplierCode: row.supplier_code,
         });
@@ -11829,6 +12043,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ...(row.normalized || {}),
         ...(body.normalized && typeof body.normalized === "object" ? body.normalized : {}),
       };
+      const editedColors = body.normalized && typeof body.normalized==='object' ? body.normalized : {};
+      const storedColors = row.normalized || {};
+      const colorNameEdited=Object.prototype.hasOwnProperty.call(editedColors,'colorName') && text(editedColors.colorName)!==text(storedColors.colorName);
+      const colorCodeEdited=Object.prototype.hasOwnProperty.call(editedColors,'colorCode') && text(editedColors.colorCode)!==text(storedColors.colorCode);
+      const colorEdited=colorNameEdited || colorCodeEdited;
+      if (colorNameEdited) {
+        nextNormalized.aifColorSourceUnverified=false;
+        nextNormalized.aifSourceColorName=text(editedColors.colorName);
+        nextNormalized.aifColorInputCaptured=true;
+        if (nextNormalized.aifSourceColorCode===undefined) nextNormalized.aifSourceColorCode=text(rawValueByHeaders(row.raw,AIF_SOURCE_COLOR_CODE_HEADERS));
+      }
+      if (colorCodeEdited) {
+        nextNormalized.aifColorSourceUnverified=false;
+        nextNormalized.aifSourceColorCode=text(editedColors.colorCode);
+        nextNormalized.aifColorInputCaptured=true;
+        if (nextNormalized.aifSourceColorName===undefined) nextNormalized.aifSourceColorName=text(nextNormalized.colorName);
+      }
       const existingSnCod = emptyToNull(row.sn_cod);
       if (existingSnCod && !emptyToNull(nextNormalized.snCod ?? nextNormalized.sn_cod)) {
         nextNormalized.snCod = existingSnCod;
@@ -11857,7 +12088,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
-      await enrichNormalizedRow(client, nr);
+      await enrichNormalizedRow(client, nr, {skipColor:isCommitted && !colorEdited});
+      if(isCommitted && !colorEdited) {
+        for(const key of ['colorName','colorCode','supplierColorCode','colorHex','color_name','color_code','supplier_color_code','brandColorCodeId','colorTypeCode','aifColorInputCaptured','aifSourceColorCode','aifSourceColorName','aifColorImportMode','aifColorIdentitySource','_aifColorCodeFromName','aifColorConflict','aifColorSourceUnverified']) {
+          if(Object.prototype.hasOwnProperty.call(storedColors,key)) nr.normalized[key]=storedColors[key]; else delete nr.normalized[key];
+        }
+        nr.normalized.supplierColorCode=storedColors.supplierColorCode ?? row.supplier_color_code ?? null;
+      }
+      if(isCommitted && colorEdited && nr.normalized.aifColorConflict) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({error:nr.normalized.aifColorConflict,code:'import_color_source_conflict'});
+      }
       applyReceptionSellPricePolicyToNormalized(nr.normalized, {
         currencyCode: row.currency_code,
         exchangeRateToRon: row.exchange_rate_to_ron,
@@ -11944,8 +12185,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `UPDATE aif_product_variants SET
              barcode=COALESCE($2, barcode),
              sn_cod=COALESCE($6, sn_cod),
-             color_code=COALESCE($3, color_code),
-             color_name=COALESCE($4, color_name),
+             color_code=CASE WHEN $8::boolean THEN COALESCE($3,color_code) ELSE color_code END,
+             color_name=CASE WHEN $8::boolean THEN COALESCE($4,color_name) ELSE color_name END,
              size=COALESCE($5, size),
              attributes=COALESCE(attributes,'{}'::jsonb) || $7::jsonb,
              updated_at=now()
@@ -11958,6 +12199,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.size,
             nr.normalized.snCod || nr.normalized.sn_cod,
             variantAttributesJsonFromNormalized(nr.normalized),
+            colorEdited,
           ]
         );
         if (nr.normalized.titleRo) {
@@ -11973,8 +12215,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `UPDATE aif_variant_supplier_codes
            SET supplier_product_code=COALESCE($2, supplier_product_code),
                supplier_variant_code=$3,
-               supplier_color_code=$4,
-               supplier_color_name=COALESCE($5, supplier_color_name),
+               supplier_color_code=CASE WHEN $8::boolean THEN $4 ELSE supplier_color_code END,
+               supplier_color_name=CASE WHEN $8::boolean THEN COALESCE($5,supplier_color_name) ELSE supplier_color_name END,
                supplier_size=COALESCE($6, supplier_size),
                raw=$7::jsonb,
                updated_at=now()
@@ -11987,6 +12229,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.colorName,
             nr.normalized.supplierSize,
             JSON.stringify(normalizedForDb),
+            colorEdited,
           ]
         );
       }
@@ -13987,7 +14230,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     await normalizeLegacyBrandReference(client, normalized);
     const nr = { normalized, raw: payload.raw || payload, rowNo: row.row_no, errors: [], status: 'parsed' };
-    await enrichNormalizedRow(client, nr);
+    await enrichNormalizedRow(client, nr, {legacyColor:true});
     nr.normalized.attributes = { ...(nr.normalized.attributes || {}), ...legacyAttributes };
 
     let existing = await resolveLegacyVariantNow(client, row);
@@ -15119,9 +15362,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         qty: requestedQty,
       };
 
+      normalized.aifColorInputCaptured=true;
+      normalized.aifSourceColorCode=text(rawValueByHeaders(manualRaw,AIF_SOURCE_COLOR_CODE_HEADERS) || normalized.supplierColorCode || normalized.colorCode);
+      normalized.aifSourceColorName=text(rawValueByHeaders(manualRaw,AIF_SOURCE_COLOR_NAME_HEADERS) || normalized.colorName);
       applyProductCodeSplit(normalized);
       const row = { rowNo: 1, raw: body.raw || body, normalized, status: "parsed", errors: [] };
       await enrichNormalizedRow(client, row);
+      if(row.normalized.aifColorConflict) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({error:row.normalized.aifColorConflict,code:'import_color_source_conflict'});
+      }
 
       if (!row.normalized.titleRo) {
         await client.query("ROLLBACK");
