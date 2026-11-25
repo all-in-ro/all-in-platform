@@ -34318,7 +34318,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
-  // AIF_PAYMENT_METHOD_CORRECTION_V25
+  // AIF_PAYMENT_METHOD_CORRECTION_V31_20261125
   // Csak a tényleges pénz besorolását korrigálja; új eladás, készletmozgás,
   // kedvezmény vagy pénzátadás NEM keletkezik. A korábbi módszer auditban megmarad.
   router.patch("/shop-sales/:id/payment-method", requireAuthed, async (req, res) => {
@@ -34471,27 +34471,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw aifSellerTransferError("Ehhez a bizonylathoz csere vagy eladói átvezetés kapcsolódik. Adminisztrátori egyeztetés kell.", 409, "shop_payment_has_dependencies");
       }
 
-      // A már megszámolt kassza, műszakátadási pillanatkép és átadott boríték
-      // megváltoztatása nem végezhető el egy eladói kattintással.
+      // V31: lezárt nap és már elfogadott átadás után is engedélyezett a
+      // fizetési BESOROLÁS javítása. A megszámolt pénz és a lezárások
+      // eredeti pillanatképei nem változnak. A korrekció a saját napjára
+      // kerül, tényleges mentési idővel és külön pénzügyi auditbejegyzéssel.
       const closed = await client.query(
-        `SELECT id FROM aif_shop_day_closures
-         WHERE location_id=$1 AND work_date >= $2::date LIMIT 1`,
+        `SELECT id,work_date::text AS work_date FROM aif_shop_day_closures
+         WHERE location_id=$1 AND work_date >= $2::date
+         ORDER BY work_date,id LIMIT 1`,
         [location.id, workDate]
       );
-      if (closed.rowCount) {
-        throw aifSellerTransferError("Ez a nap már lezárt kasszaelszámolás része. Kérj adminisztrátori pénzügyi helyesbítést.", 409, "shop_payment_closed_day");
-      }
-      const frozenShift = await client.query(
-        `SELECT id FROM aif_shop_shift_handovers
+      const shifts = await client.query(
+        `SELECT id,status FROM aif_shop_shift_handovers
          WHERE location_id=$1 AND work_date=$2::date
            AND (status='pending' OR (status='accepted' AND cutoff_at >= $3::timestamptz))
-         LIMIT 1`, [location.id, workDate, sale.sold_at]
+         ORDER BY cutoff_at,id`, [location.id, workDate, sale.sold_at]
       );
-      if (frozenShift.rowCount) {
-        throw aifSellerTransferError("A műszak kasszája már átadás alatt áll vagy át lett adva. Javítás csak pénzügyi egyeztetéssel.", 409, "shop_payment_frozen_shift");
-      }
-      const depositedOrHandedOver = await client.query(
-        `SELECT id FROM aif_shop_cash_movements m
+      const cashMovements = await client.query(
+        `SELECT id,status FROM aif_shop_cash_movements m
          WHERE m.location_id=$1 AND m.status IN ('pending','confirmed')
            AND (
              (m.movement_type='bank_deposit' AND m.status='confirmed' AND m.requested_at >= $3::timestamptz)
@@ -34502,23 +34499,39 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                    COALESCE(m.handover_from_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date)
                    AND COALESCE(m.handover_to_date,(m.requested_at AT TIME ZONE 'Europe/Bucharest')::date)
                END)
-           ) LIMIT 1`, [location.id, workDate, sale.sold_at]
+           ) ORDER BY requested_at,id`, [location.id, workDate, sale.sold_at]
       );
-      if (depositedOrHandedOver.rowCount) {
-        throw aifSellerTransferError("A készpénz már bankba vagy főnöki átvételre került. Előbb egyeztesd az elszámolást.", 409, "shop_payment_cash_already_settled");
+      // Függő, még át nem vett elszámolásnál a folyamatban lévő átadás
+      // összegét nem változtatjuk meg a másik fél tudta nélkül.
+      // A már lezárt / elfogadott / igazolt tételek NEM blokkolók.
+      if (shifts.rows.some(row => row.status === 'pending') || cashMovements.rows.some(row => row.status === 'pending')) {
+        throw aifSellerTransferError("Még folyamatban van az érintett kasszaátadás. Elfogadás vagy visszavonás után a fizetési mód utólag is javítható.", 409, "shop_payment_handover_pending");
       }
-      // Ha a készpénzt tévesen könyvelték, a javítás nem teheti negatívvá
-      // a valóban szabad pénzt, és nem érintheti a függő borítékot.
-      if (requested === "card") {
+      const closedDayId = closed.rows[0]?.id || null;
+      const acceptedShiftIds = shifts.rows.filter(row => row.status === 'accepted').map(row => String(row.id));
+      const confirmedCashMovementIds = cashMovements.rows.filter(row => row.status === 'confirmed').map(row => String(row.id));
+      const historical = workDate < today || Boolean(closedDayId || acceptedShiftIds.length || confirmedCashMovementIds.length);
+      // Történeti besorolás javítása nem mai készpénzkivétel: a mai szabad
+      // kassza összegével ezért nem tiltható. Nyitott, aktuális eladásnál
+      // a meglévő negatívkassza-védelem változatlanul él.
+      if (!historical && requested === "card") {
         const cash = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
         if (aifNumber(cash.availableCash) - aifNumber(cash.pendingOut) - aifNumber(payment.amount) < -0.005) {
           throw aifSellerTransferError("A javításhoz nincs elegendő szabad készpénz. A kasszát előbb egyeztesd.", 409, "shop_payment_cash_would_be_negative");
         }
       }
 
-      await client.query(`UPDATE aif_shop_sale_payments SET method=$2 WHERE id=$1`, [payment.id, requested]);
       const label = { cash: "Készpénz", card: "Bankkártya" };
       const amount = aifRoundMoney(payment.amount);
+      const cashDelta = requested === "cash" ? amount : -amount;
+      const cardDelta = -cashDelta;
+      // A terméksori kapcsolat egysoros nyugtánál is megmarad.
+      // Fizetési dátum, teljes összeg, eladó, készlet változatlan.
+      await client.query(
+        `UPDATE aif_shop_sale_payments SET method=$2,
+           raw=COALESCE(raw,'{}'::jsonb)||jsonb_build_object('correctionLineId',$3::text,'correctionOriginPaymentId',COALESCE(raw->>'correctionOriginPaymentId',id::text))
+         WHERE id=$1`, [payment.id, requested, saleLineId]
+      );
       const event = await client.query(
         `INSERT INTO aif_shop_sale_events (sale_id,event_type,actor,note,payload)
          VALUES($1,'payment_method_corrected',$2,$3,$4::jsonb)
@@ -34530,13 +34543,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             productTitle: chosenLine.product_title || null,
             workDate, saleNumber: sale.sale_number,
             splitReceipt: mustSplit,
+            historical, cashDelta, cardDelta,
+            paidAt: payment.paid_at, locationId: String(location.id),
+            closedDayId: closedDayId ? String(closedDayId) : null,
+            acceptedShiftIds, confirmedCashMovementIds,
+            originalCashSnapshotsPreserved: true,
             lineCount: lines.length, itemCount: lines.reduce((sum,line)=>sum+aifNumber(line.quantity),0) })]
+      );
+      // A vezetői és bolti pénzügyi megjegyzések az eredeti eladás
+      // napján is mutassák a helyesbítést. Az esemény és a megjegyzés ugyanazon
+      // tranzakció része, sikertelen mentésnél mindkettő visszagördül.
+      const signedMoney = value => `${value > 0 ? '+' : ''}${value.toFixed(2)}`;
+      const correctionNote = [
+        `${historical ? 'Utólagos fizetési mód javítás' : 'Fizetési mód javítás'}: ${sale.sale_number} · ${chosenLine.product_title || saleLineId}`,
+        `${label[expected]} → ${label[requested]} (${amount.toFixed(2)} RON).`,
+        `Eredeti nap: ${workDate}. Könyvelt KP: ${signedMoney(cashDelta)} RON; kártya: ${signedMoney(cardDelta)} RON.`,
+        historical ? 'A korábban rögzített kasszaszámlálások és átadási pillanatképek változatlanok; az esetleges fizikai eltérést külön kell egyeztetni.' : 'Készlet és teljes forgalom változatlan.',
+        `Esemény: ${event.rows[0]?.id || ''}`,
+      ].join(' ').slice(0, 2000);
+      await client.query(
+        `INSERT INTO aif_shop_daily_financial_notes (location_id,work_date,actor,note)
+         VALUES ($1,$2::date,$3,$4)`, [location.id,workDate,actor,correctionNote]
       );
       await client.query("COMMIT");
       return res.json({ ok: true, saleId: String(sale.id), saleNumber: sale.sale_number,
         workDate, fromMethod: expected, toMethod: requested, amount, saleLineId,
         lineCount: lines.length, affectedLineCount: 1,
         itemCount: lines.reduce((sum,line)=>sum+aifNumber(line.quantity),0),
+        historical, cashDelta, cardDelta, originalCashSnapshotsPreserved: true,
         correctedAt: event.rows[0]?.created_at || new Date().toISOString() });
     } catch (error) {
       if (client) try { await client.query("ROLLBACK"); } catch {}
