@@ -1,4 +1,5 @@
 import AllInHourlySales from "./AllInHourlySales";
+import AllInGiveaways from "./AllInGiveaways";
 import React, { useEffect, useState } from "react";
 import {
   Activity,
@@ -21,6 +22,7 @@ import {
   Users,
   RotateCcw,
   WalletCards,
+  Trophy,
 } from "lucide-react";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 import AllInLegacyExport from "./AllInLegacyExport";
@@ -41,6 +43,23 @@ function writeHourlyHomeEntry(open: boolean) {
   if (open) state[HOURLY_HOME_VIEW_KEY] = "hourly-sales";
   else delete state[HOURLY_HOME_VIEW_KEY];
   if (open && !isHourlyHomeEntry()) window.history.pushState(state, "");
+  else window.history.replaceState(state, "");
+}
+
+// A nyeremenyjatek ugyanabban az admin keretben nyilik, sajat visszaallithato nezetkent.
+const GIVEAWAY_HOME_VIEW_KEY = "allinfashion:home:giveaways";
+function isGiveawayHomeEntry() {
+  return window.history.state?.[GIVEAWAY_HOME_VIEW_KEY] === true;
+}
+function writeGiveawayHomeEntry(open: boolean) {
+  const state = { ...(window.history.state || {}) };
+  if (open) {
+    state[GIVEAWAY_HOME_VIEW_KEY] = true;
+    delete state[HOURLY_HOME_VIEW_KEY];
+  } else {
+    delete state[GIVEAWAY_HOME_VIEW_KEY];
+  }
+  if (open && !isGiveawayHomeEntry()) window.history.pushState(state, "");
   else window.history.replaceState(state, "");
 }
 
@@ -282,12 +301,14 @@ function MenuGroup({
 function MainMenuButton({
   label,
   hash,
+  onSelect,
   icon: Icon,
   tone = "normal",
   badge,
 }: {
   label: string;
-  hash: string;
+  hash?: string;
+  onSelect?: () => void;
   icon: React.ComponentType<{ className?: string }>;
   tone?: "normal" | "warning" | "danger" | "accent";
   badge?: string;
@@ -323,7 +344,7 @@ function MainMenuButton({
   return (
     <button
       className={`group flex h-12 w-full items-center gap-3 rounded-xl border px-3.5 text-left text-white transition ${toneClass}`}
-      onClick={() => navigate(hash)}
+      onClick={() => { if (onSelect) onSelect(); else if (hash) navigate(hash); }}
       type="button"
     >
       <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${iconToneClass}`}>
@@ -349,11 +370,24 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
   const [foritExportOpen, setForitExportOpen] = useState(false);
   const [hourlySalesOpen, setHourlySalesOpen] = useState(isHourlyHomeEntry);
+  const [giveawaysOpen, setGiveawaysOpen] = useState(isGiveawayHomeEntry);
   useEffect(() => {
-    const restore = () => setHourlySalesOpen(isHourlyHomeEntry());
+    const restore = () => {
+      setHourlySalesOpen(isHourlyHomeEntry());
+      setGiveawaysOpen(isGiveawayHomeEntry());
+    };
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, []);
+  const openGiveaways = () => {
+    writeGiveawayHomeEntry(true);
+    setHourlySalesOpen(false);
+    setGiveawaysOpen(true);
+  };
+  const closeGiveaways = () => {
+    writeGiveawayHomeEntry(false);
+    setGiveawaysOpen(false);
+  };
   const openHourlySales = () => {
     writeHourlyHomeEntry(true);
     setHourlySalesOpen(true);
@@ -474,6 +508,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   };
 
   const logout = async () => {
+    writeGiveawayHomeEntry(false);
     writeHourlyHomeEntry(false);
     try {
       await props.onLogout?.();
@@ -526,6 +561,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
     if (item.hash) navigate(item.hash);
   };
 
+  if (giveawaysOpen) return <AllInGiveaways onBack={closeGiveaways} />;
   if (hourlySalesOpen) return <AllInHourlySales onBack={closeHourlySales} />;
 
   return (
@@ -589,6 +625,11 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             label="Ajándékutalványok"
             hash="#vouchers"
             icon={WalletCards}
+          />
+          <MainMenuButton
+            label="Nyereményjáték"
+            onSelect={openGiveaways}
+            icon={Trophy}
           />
 
           <div className="my-3 border-t border-white/12" />
