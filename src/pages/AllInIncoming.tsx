@@ -316,6 +316,24 @@ const TITLE_RO_FIELD = "titleRo" as AifColumnField;
 const PRODUCT_TYPE_FIELD = "productType" as AifColumnField;
 const SUB_CATEGORY_FIELD = "subCategoryCode" as AifColumnField;
 const COLOR_CODE_FIELD = "colorCode" as AifColumnField;
+const COLOR_NAME_FIELD = "colorName" as AifColumnField;
+const COLOR_NAME_HEADER_ALIASES = ["CULOARE", "COLOR", "COLOUR", "SZÍN", "SZIN", "COLOR NAME", "COLOUR NAME", "NUME CULOARE", "DENUMIRE CULOARE", "SZÍNNÉV", "SZINNEV"];
+type ImportColorMode = "auto" | "name" | "code" | "suffix";
+const IMPORT_COLOR_MODE_OPTIONS: {value: ImportColorMode;label:string;hint:string}[] = [
+  {value:"auto",label:"Automatikus",hint:"Excel színkód / színnév"},
+  {value:"name",label:"Kizárólag színnév",hint:"Nincs gyári színkód"},
+  {value:"code",label:"Beszállítói színkód",hint:"Külön oszlop szükséges"},
+  {value:"suffix",label:"Termékkód végződése",hint:"Kódolt termékek"},
+];
+function importColorInput(value: unknown) {
+  const v=String(value??"").trim();
+  return /^(?:-|–|—|n\/?a|null)$/i.test(v)?"":v;
+}
+function importColorNameKey(value: unknown) { return snCodHeaderKey(value).toUpperCase(); }
+function defaultImportColorMode(n: Record<string,unknown>): ImportColorMode {
+  return [n.brandName,n.brandCode].some(v=>snCodHeaderKey(v).replace(/_/g,"")==="mayochix")?"name":"auto";
+}
+
 const BUY_PRICE_FIELD = "buyPrice" as AifColumnField;
 const SELL_PRICE_FIELD = "sellPrice" as AifColumnField;
 const IGNORE_FIELD = "ignore" as AifColumnField;
@@ -371,6 +389,7 @@ const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   ensureOption(CUSTOMS_TARIFF_FIELD, "Vámtarifa kód");
   ensureOption(BARCODE_FIELD, "Vonalkód");
   ensureOption(COLOR_CODE_FIELD, "Színkód");
+  ensureOption(COLOR_NAME_FIELD, "Színnév");
   ensureOption(IMAGE_URL_FIELD, "Fotó URL");
   ensureOption(DESCRIPTION_FIELD, "Leírás / DESCRIERE");
   ensureOption(MATERIAL_FIELD, "Összetétel");
@@ -528,6 +547,7 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
       if (isSellPriceHeader(col.header)) return { ...col, field: SELL_PRICE_FIELD, label: "Eladási ár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isBarcodeHeader(col.header)) return { ...col, field: BARCODE_FIELD, label: "Vonalkód", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isColorCodeHeader(col.header)) return { ...col, field: COLOR_CODE_FIELD, label: "Színkód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (headerMatchesAny(col.header,COLOR_NAME_HEADER_ALIASES)) return { ...col, field: COLOR_NAME_FIELD, label: "Színnév", confidence: Math.max(Number(col.confidence || 0),100), warnings: [] };
       if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isSubCategoryHeader(col.header)) return { ...col, field: SUB_CATEGORY_FIELD, label: "Alkategória / terméktípus", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isProductTypeHeader(col.header)) return { ...col, field: PRODUCT_TYPE_FIELD, label: "Import terméktípus / RODESCR", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
@@ -568,10 +588,10 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
   const sellPriceColumn = fieldByHeader(SELL_PRICE_FIELD);
   const barcodeColumn = fieldByHeader(BARCODE_FIELD);
   const colorCodeColumn = fieldByHeader(COLOR_CODE_FIELD);
+  const colorNameColumn = fieldByHeader(COLOR_NAME_FIELD);
   const imageColumn = fieldByHeader(IMAGE_URL_FIELD);
   const descriptionColumn = fieldByHeader(DESCRIPTION_FIELD);
   const materialColumn = fieldByHeader(MATERIAL_FIELD);
-  if (!titleColumn && !subCategoryColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !colorCodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
   return rows.map((row) => {
     const raw = (row.raw || {}) as Record<string, unknown>;
     const normalized = { ...(row.normalized || {}) } as Record<string, any>;
@@ -609,13 +629,20 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
       const value = rawValueByExactHeader(raw, barcodeColumn.header);
       if (value) { normalized.barcode = value; normalized.supplierBarcode = value; }
     }
-    if (colorCodeColumn) {
-      const value = rawValueByExactHeader(raw, colorCodeColumn.header);
-      if (value) {
-        normalized.colorCode = value;
-        normalized.supplierColorCode = normalized.supplierColorCode || value;
-      }
-    }
+    // The column mapping is the source of truth, including explicitly empty cells.
+    // Do not retain a parser-generated suffix or a previous mapping's result.
+    normalized.aifColorInputCaptured=true;
+    normalized.aifColorSourceUnverified=false;
+    normalized.aifSourceColorCode=colorCodeColumn ? importColorInput(rawValueByExactHeader(raw,colorCodeColumn.header)) : "";
+    normalized.aifSourceColorName=colorNameColumn ? importColorInput(rawValueByExactHeader(raw,colorNameColumn.header)) : "";
+    normalized.colorCode=normalized.aifSourceColorCode;
+    normalized.supplierColorCode=normalized.aifSourceColorCode;
+    normalized.colorName=normalized.aifSourceColorName;
+    normalized.aifColorIdentitySource="";
+    normalized._aifColorCodeFromName=false;
+    normalized.colorHex="";
+    delete normalized.brandColorCodeId;
+    delete normalized.colorTypeCode;
     if (imageColumn) {
       const value = rawValueByExactHeader(raw, imageColumn.header);
       if (value) { normalized.imageUrl = value; normalized.image_url = value; }
@@ -664,6 +691,7 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     "gender", "genderRaw", "_manualGender", "productType", "product_type", "season", "collection", "colectie",
     "descriptionRo", "description_ro", "description", "material", "composition", "imageUrl", "image_url", "barcode", "supplierBarcode",
     "colorCode", "color_code", "supplierColorCode", "colorName", "color_name", "colorHex", "color_hex", "brandColorCodeId", "colorTypeCode",
+    "aifColorInputCaptured", "aifColorSourceUnverified", "aifSourceColorCode", "aifSourceColorName", "aifColorImportMode", "aifColorIdentitySource", "_aifColorCodeFromName", "source",
     "size", "sizeTypeCode", "brandSizeCodeId", "qty", "quantity", "buyPrice", "buy_price", "sellPrice", "sell_price",
     "sellPriceGrossRon", "sell_price_gross_ron", "sellPriceRon", "sell_price_ron", "sellPriceCurrencyMode", "sell_price_currency_mode", "sellPriceCurrency", "sell_price_currency", "sellPriceIsRon", "sell_price_is_ron",
     "sellPriceIncludesTva", "sell_price_includes_tva", "salesPriceIncludesTva", "salesTvaRate", "sales_tva_rate", "saleTvaRate", "sale_tva_rate",
@@ -674,7 +702,7 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
   const nextNormalized: Record<string, unknown> = {};
   for (const key of keepKeys) {
     const value = (normalized as Record<string, unknown>)[key];
-    if (value === undefined || value === null || value === "") continue;
+    if (value === undefined || value === null || (value === "" && !["aifSourceColorCode","aifSourceColorName"].includes(key))) continue;
     nextNormalized[key] = value;
   }
 
@@ -1219,7 +1247,7 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
         <td>${pdfEscape(categoryDisplay(rawCategory, categories))}</td>
         <td>${pdfEscape(genderLabel(rawGender, genderTypes))}</td>
         <td>${pdfEscape(cell(normalized.colorName))}</td>
-        <td>${pdfEscape(cell(row.supplier_color_code || normalized.colorCode))}</td>
+        <td>${pdfEscape(cell(normalized._aifColorCodeFromName ? "" : (row.supplier_color_code || normalized.colorCode)))}</td>
         <td>${pdfEscape(cell(normalizeAifSizeValue(row.supplier_size || normalized.size)))}</td>
         <td class="num">${pdfNumber(qty, 0)}</td>
         <td class="num">${pdfNumber(row.sell_price_ron ?? normalized.sellPriceGrossRon ?? normalized.sellPrice ?? row.sell_price, 2)}</td>
@@ -1673,6 +1701,8 @@ function isSizeValidationError(error: unknown) {
 function aifRowErrors(row: AifParsedRow, sizeTypes: AifSizeTypeLike[] = [], brandSizeCodes: AifBrandSizeCodeLike[] = []): string[] {
   const normalizedRow = normalizeAifRowSize(row) as AifParsedRow;
   const errors = (baseAifRowErrors(normalizedRow) || []) as string[];
+  const colorConflict=String((normalizedRow.normalized as any)?.aifColorConflict||"");
+  if(colorConflict) errors.push(colorConflict);
   if (!isAcceptedAifSize(sizeValueForRow(normalizedRow), sizeTypes, brandSizeCodes)) return errors;
   return errors.filter((error: unknown) => !isSizeValidationError(error));
 }
@@ -1917,11 +1947,12 @@ function importBarcodeIdentity(row: AifParsedRow) {
   );
   const split = splitCodProdus(productCode);
   const color = firstNonEmptyText(
-    split.colorCode,
-    normalized.supplierColorCode,
     normalized.colorCode,
+    normalized.supplierColorCode,
+    normalized.colorName,
     (row as any)?.supplier_color_code,
-    (row as any)?.color_code
+    (row as any)?.color_code,
+    (normalized as any).aifColorInputCaptured ? "" : split.colorCode
   );
   const size = normalizeAifSizeValue(firstNonEmptyText(
     normalized.supplierSize,
@@ -2054,6 +2085,10 @@ function AllInIncomingReception(_props: Props) {
   const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
   const [currencies, setCurrencies] = useState<AifCurrency[]>([]);
   const [brands, setBrands] = useState<AifBrandOption[]>([]);
+  const [brandColorModes,setBrandColorModes]=useState<Record<string,ImportColorMode>>({});
+  const [brandColorModeSaving,setBrandColorModeSaving]=useState(false);
+  const [brandColorModesReady,setBrandColorModesReady]=useState(false);
+  const [brandColorModeError,setBrandColorModeError]=useState("");
   const [categories, setCategories] = useState<AifCategoryOption[]>([]);
   const [genderTypes, setGenderTypes] = useState<AifGenderOption[]>([]);
   const [supplierBrands, setSupplierBrands] = useState<AifSupplierBrandLink[]>([]);
@@ -2283,7 +2318,7 @@ function AllInIncomingReception(_props: Props) {
 
   const loadedReceptionRows = useMemo(
     () => (loadedReception?.rows || []).map((row: any) => savedReceptionRowWithLatestMeta(row)),
-    [loadedReception, activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes]
+    [loadedReception, activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes, brandColorModes]
   );
   const loadedReceptionRowTotals = useMemo(() => {
     return loadedReceptionRows.reduce(
@@ -2378,7 +2413,24 @@ function AllInIncomingReception(_props: Props) {
     ) || null;
   }
 
+  function colorModeForNormalized(n: Record<string,unknown>): ImportColorMode {
+    const brand=brandForNormalized(n);
+    return (brand && brandColorModes[String(brand.id)]) || defaultImportColorMode(brand ? {...n,brandName:brand.name,brandCode:brand.code}:n);
+  }
+  async function saveBrandColorMode(brandId:string,mode:ImportColorMode) {
+    if(brandColorModeSaving || !brandId) return;
+    setBrandColorModeSaving(true);setBrandColorModeError("");
+    try {
+      const r=await fetch(`/api/aif/brand-color-import-settings/${encodeURIComponent(brandId)}`,{method:"PATCH",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode})});
+      const d=await r.json().catch(()=>null);
+      if(!r.ok || d?.ok!==true) throw new Error(d?.error||"A színazonosítási mód nem menthető.");
+      setBrandColorModes(old=>({...old,[brandId]:mode}));
+      setMessage("A márka színazonosítási módja mentve.");
+    } catch(e:any) {setBrandColorModeError(e?.message||"Mentési hiba.");}
+    finally {setBrandColorModeSaving(false);}
+  }
   function brandColorCodeForNormalized(n: Record<string, unknown>) {
+    if((n as any)._aifColorCodeFromName===true || (n as any).aifColorConflict || colorModeForNormalized(n)==="name") return null;
     const brand = brandForNormalized(n);
     const code = colorCodeKey(n.colorCode || (n as any).supplierColorCode);
     if (!brand || !code) return null;
@@ -2427,32 +2479,65 @@ function AllInIncomingReception(_props: Props) {
     const split = splitCodProdus(sourceProductCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
     if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
-    const suffixIsSupplierColor = /^\d{1,4}$/.test(String(split.colorCode || ""));
-    if (split.colorCode && (!normalized.colorCode || suffixIsSupplierColor)) normalized.colorCode = split.colorCode;
-    if (split.colorCode && (!normalized.supplierColorCode || suffixIsSupplierColor)) normalized.supplierColorCode = split.colorCode;
-
-    const rawColorCode = rawValueByHeader(row, COLOR_CODE_HEADER_ALIASES);
-    if (rawColorCode && !String(normalized.colorCode || "").trim()) normalized.colorCode = String(rawColorCode).trim();
-    if (rawColorCode && !String(normalized.supplierColorCode || "").trim()) normalized.supplierColorCode = String(rawColorCode).trim();
-
-    const brandColor = brandColorCodeForNormalized(normalized) as any;
-    if (brandColor) {
-      normalized.colorName = brandColor.color_name_ro || normalized.colorName || "";
-      normalized.colorHex = brandColor.color_hex || normalized.colorHex || "";
-      normalized.brandColorCodeId = brandColor.id;
-      normalized.colorTypeCode = brandColor.color_type_code || normalized.colorTypeCode || "";
-    } else if (normalized.colorName) {
-      const rawColor = String(normalized.colorName || "").trim();
-      const found = colorTypes.find((c) => {
-        const aliases = Array.isArray(c.aliases) ? c.aliases : [];
-        return [c.code, c.name_ro, c.name_hu, c.name_en, c.name_de, ...aliases].filter(Boolean).some((x) => sameLoose(x, rawColor));
-      });
-      if (found?.name_ro) {
-        normalized.colorName = found.name_ro;
-        normalized.colorHex = found.hex || normalized.colorHex || "";
-        normalized.colorTypeCode = found.code || normalized.colorTypeCode || "";
-      }
+    const suffix=importColorInput(split.colorCode);
+    if(normalized.aifColorInputCaptured!==true) {
+      const rawCode=importColorInput(rawValueByHeader(row,COLOR_CODE_HEADER_ALIASES));
+      const rawName=importColorInput(rawValueByHeader(row,COLOR_NAME_HEADER_ALIASES));
+      const existing=importColorInput(normalized.supplierColorCode||normalized.colorCode||normalized.color_code);
+      const source=String((row.raw as any)?.source||normalized.source||"");
+      const generated=normalized._aifColorCodeFromName===true || normalized.aifColorIdentitySource==="color_name_without_explicit_code";
+      normalized.aifSourceColorCode=rawCode||(!generated&&(source==="manual"||source==="purchase_order"||!suffix||!sameLoose(existing,suffix))?existing:"");
+      normalized.aifSourceColorName=rawName||importColorInput(normalized.colorName||normalized.color_name);
+      normalized.aifColorSourceUnverified=source==="aif_compact_import" && !rawCode && !rawName && !generated && Boolean(suffix && existing && sameLoose(existing,suffix));
+      normalized.aifColorInputCaptured=true;
     }
+    const mode=colorModeForNormalized(normalized);
+    normalized.aifColorImportMode=mode;
+    const explicit=importColorInput(normalized.aifSourceColorCode);
+    const sourceName=importColorInput(normalized.aifSourceColorName);
+    const name=(sourceName && (explicit||suffix) && snCodHeaderKey(sourceName)===snCodHeaderKey(explicit||suffix) && /\d/.test(sourceName))?"":sourceName;
+    const findColor=(value:string)=>colorTypes.find(c=> (c as any).is_active!==false && [c.code,c.name_ro,c.name_hu,c.name_en,c.name_de,...(Array.isArray(c.aliases)?c.aliases:[])].filter(Boolean).some(x=>snCodHeaderKey(x)===snCodHeaderKey(value)));
+    const generic=name?findColor(name):null;
+    const pieces=name?snCodHeaderKey(name).split("_").filter(Boolean):[];
+    const partColors=pieces.length>1?pieces.map(findColor):[];
+    const canonicalName=generic?.name_ro || (partColors.length && partColors.every(Boolean)?Array.from(new Set(partColors.map(c=>c!.name_ro))).join(" / "):name);
+    let code="",identity="missing";
+    if(mode==="name") { if(name){code=importColorNameKey(canonicalName);identity="color_name_without_explicit_code";} }
+    else if(explicit){code=explicit;identity="explicit_supplier_color_code";}
+    else if(mode==="code") { /* no inferred code */ }
+    else if(mode==="auto"&&name){code=importColorNameKey(canonicalName);identity="color_name_without_explicit_code";}
+    else if(suffix){code=suffix;identity="product_code_suffix";}
+    const isName=identity==="color_name_without_explicit_code";
+    const lookupCode=isName&&mode==="auto"?suffix:isName?"":code;
+    const brand=brandForNormalized(normalized);
+    const brandColor=brand&&lookupCode?brandColorCodes.find((item:any)=>item.is_active!==false&&String(item.brand_id)===String(brand.id)&&colorCodeKey(item.color_code)===colorCodeKey(lookupCode)) as any:null;
+    const agrees=brandColor&&(!name||[brandColor.color_name_ro,brandColor.color_name_hu,brandColor.color_name_en,brandColor.color_name_de,brandColor.color_type_code].filter(Boolean).some(x=>snCodHeaderKey(x)===snCodHeaderKey(name)||snCodHeaderKey(x)===snCodHeaderKey(canonicalName)));
+    delete normalized.aifColorConflict;
+    delete normalized.brandColorCodeId;
+    delete normalized.colorTypeCode;
+    normalized.colorName=canonicalName||"";
+    normalized.colorHex=generic?.hex||"";
+    if(generic?.code) normalized.colorTypeCode=generic.code;
+    if(brandColor&&agrees&&(!isName||mode==="auto")) {
+      normalized.colorName=brandColor.color_name_ro||canonicalName||"";
+      normalized.colorHex=brandColor.color_hex||"";
+      normalized.brandColorCodeId=brandColor.id;
+      normalized.colorTypeCode=brandColor.color_type_code||"";
+      code=lookupCode;
+      if(isName) identity="verified_product_suffix";
+    } else if(brandColor&&!agrees&&!isName) {
+      normalized.aifColorConflict=`Színütközés: ${lookupCode} → ${brandColor.color_name_ro}, Excel: ${name}. Javítsd a színnevet vagy a színkódot.`;
+    } else if(mode==="name"&&!name) normalized.aifColorConflict="A márka színnév alapú: a színnév kötelező.";
+    else if(mode==="code"&&!code) normalized.aifColorConflict="A márka külön beszállítói színkódot igényel.";
+    else if(mode==="suffix"&&!code) normalized.aifColorConflict="A márkához nem található színkód a termékkód végén.";
+    normalized.colorCode=code;
+    normalized.supplierColorCode=code;
+    normalized.color_code=code;
+    normalized.supplier_color_code=code;
+    normalized.color_name=normalized.colorName;
+    normalized._aifColorCodeFromName=identity==="color_name_without_explicit_code";
+    normalized.aifColorIdentitySource=identity;
+    if(mode==="name" && normalized.aifColorSourceUnverified===true) normalized.aifColorConflict="Régebben mentett színadat: az eredeti Excel-színnév nem bizonyítható. Olvasd be újra az Excel-fájlt, vagy ellenőrizd és add meg kézzel a tényleges színt.";
     const sourceSize = firstNonEmptyText(normalized.supplierSize, normalized.supplier_size, normalized.size, (row as any).supplier_size);
     const brandSize = brandSizeCodeForNormalized({ ...normalized, size: sourceSize, supplierSize: sourceSize }) as any;
     if (brandSize?.size_name) {
@@ -2472,7 +2557,7 @@ function AllInIncomingReception(_props: Props) {
     const n = row.normalized || {};
     const brand = brandForNormalized(n);
     const code = String((n as any).colorCode || (n as any).supplierColorCode || "").trim();
-    if (!brand || !code) return "";
+    if (!brand || !code || (n as any)._aifColorCodeFromName===true || colorModeForNormalized(n)==="name") return "";
     if (brandColorCodeForNormalized(n)) return "";
     return `${brand.name || brand.code} / ${code}`;
   }
@@ -2497,6 +2582,7 @@ function AllInIncomingReception(_props: Props) {
       colorName: firstNonEmptyText(row?.normalized?.colorName, row?.color_name, row?.colorName),
     } as Record<string, unknown>;
 
+    if (row?.status === "committed" && n.colorName) return cell(n.colorName);
     const brandColor = brandColorCodeForNormalized(n) as any;
     if (brandColor) return cell(brandColor.color_name_ro || brandColor.color_name || n.colorName || n.colorCode);
 
@@ -2633,6 +2719,7 @@ function AllInIncomingReception(_props: Props) {
       normalized,
     }) as AifParsedRow;
 
+    if (row?.status === "committed") return {...row,...rowForMeta};
     const mapped = normalizeImportedRowsWithMeta([rowForMeta])[0] || rowForMeta;
     return { ...row, ...mapped };
   }
@@ -2758,7 +2845,7 @@ function AllInIncomingReception(_props: Props) {
   useEffect(() => {
     if (!rows.length) return;
     setRows((current) => normalizeImportedRowsWithMeta(current));
-  }, [activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes]);
+  }, [activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes, brandColorModes]);
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
   const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r, sizeTypes, brandSizeCodes).length > 0).length, [rows, sizeTypes, brandSizeCodes]);
@@ -2861,7 +2948,7 @@ function AllInIncomingReception(_props: Props) {
   ].filter(Boolean);
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white placeholder:text-red-100/60 shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
   const disabledExchangeRateInput = "h-11 w-full cursor-not-allowed rounded-[13px] border border-white/12 bg-gradient-to-b from-[#2b3647]/70 to-[#283344]/70 px-3 text-sm text-white/38 caret-transparent outline-none opacity-75 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] placeholder:text-transparent focus:border-white/12 focus:ring-0 font-normal";
-  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && approvedBarcodeConflicts.length === 0 && receptionReady);
+  const canSaveApprovedRows = Boolean(brandColorModesReady && !brandColorModeSaving && supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && approvedBarcodeConflicts.length === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
     return workbench.columns.reduce((sum, c) => sum + c.warnings.length + (c.field !== "ignore" && c.confidence < 60 ? 1 : 0), 0) + workbench.warnings.length;
@@ -2887,6 +2974,13 @@ function AllInIncomingReception(_props: Props) {
         else if (field === "size") normalized[field] = normalizeAifSizeValue(value);
         else normalized[field] = value;
         if (field === "gender") normalized._manualGender = Boolean(value);
+        if (field === "colorName" || field === "colorCode") {
+          normalized.aifColorInputCaptured=true;
+          normalized.aifColorSourceUnverified=false;
+          if(field==="colorName") normalized.aifSourceColorName=value;
+          else normalized.aifSourceColorCode=value;
+          normalized.aifColorIdentitySource="";
+        }
 
         if (field === "brandCode") {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
@@ -3041,7 +3135,7 @@ function AllInIncomingReception(_props: Props) {
           normalized.categoryName = category ? categoryLabel(category) : normalized.categoryName;
         }
         if (touched) changed += 1;
-        return touched ? { ...row, normalized } : row;
+        return touched ? applyProductCodeAndBrandColor({ ...row, normalized }) : row;
       })
     );
     if (scope === "approved") setMessage(`${changed} kijelölt sor besorolása frissítve.`);
@@ -3644,11 +3738,15 @@ function AllInIncomingReception(_props: Props) {
   }
 
   async function loadMeta() {
-    const [meta, typeData, currencyData] = await Promise.all([
+    const [meta, typeData, currencyData, colorModeData] = await Promise.all([
       apiAifMeta(),
       apiAifListLocationTypes({ includeInactive: true }),
       apiAifListCurrencies({ includeInactive: true }),
+      fetch("/api/aif/brand-color-import-settings",{credentials:"include",cache:"no-store"}).then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||"Színbeállítások nem elérhetők.");return d;}).catch(()=>null),
     ]);
+    setBrandColorModesReady(Boolean(colorModeData));
+    if(colorModeData) {setBrandColorModes(colorModeData.modes||{});setBrandColorModeError("");}
+    else setBrandColorModeError("A központi színbeállítások nem tölthetők be. Frissítsd az oldalt import előtt.");
     const activeSuppliers = meta.suppliers.filter((x) => x.is_active);
     const activeLocations = meta.locations.filter((x) => x.is_active);
     const allTypes = typeData.items || meta.locationTypes || [];
@@ -4057,12 +4155,15 @@ function AllInIncomingReception(_props: Props) {
       return;
     }
 
+    if(!brandColorModesReady || brandColorModeSaving) {setMessage("A központi színbeállításokat előbb be kell tölteni.");return;}
     setBusy(true);
     setMessage("");
     try {
-      const rowsForSave = selectedRows
-        .map(rowWithSalesMeta)
-        .map(compactAifImportRowForSave);
+      const resolvedRows=selectedRows.map(rowWithSalesMeta);
+      if(resolvedRows.some(r=>aifRowErrors(r,sizeTypes,brandSizeCodes).length)) throw new Error("Az aktuális szín- vagy termékadat hibás. Ellenőrizd a kijelölt sorokat.");
+      const resolvedConflicts=findImportBarcodeConflicts(resolvedRows);
+      if(resolvedConflicts.length) throw new Error(importBarcodeConflictMessage(resolvedConflicts));
+      const rowsForSave = resolvedRows.map(compactAifImportRowForSave);
       const chunks = buildAifImportRowChunks(rowsForSave);
       if (!chunks.length) {
         setMessage("Nincs menthető terméksor. Jelölj ki legalább egy hibátlan sort.");
@@ -6446,6 +6547,16 @@ function AllInIncomingReception(_props: Props) {
                 <IncomingSmartSelect value={defaultGender} onChange={setDefaultGender} placeholder="Nincs alapértelmezett nem" options={[{ value: "", label: "Nincs alapértelmezett nem" }, ...activeGenderTypes.map((g) => ({ value: String(g.code), label: g.name }))]} />
               </label>
             </div>
+            {defaultBrandCode && (()=>{
+              const selectedBrand=activeBrands.find(b=>String(b.code||b.id)===defaultBrandCode);
+              if(!selectedBrand) return null;
+              const mode=colorModeForNormalized({brandCode:selectedBrand.code,brandName:selectedBrand.name});
+              return <div className="mt-3 grid items-end gap-2 rounded-xl border border-[#8ce7e2]/20 bg-[#293548]/65 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div><p className="text-xs text-[#d7fffd]">{selectedBrand.name || selectedBrand.code} · Színazonosítás</p><p className="mt-1 text-[10px] text-white/55">Márkánként mentett szabály. A meglévő készletet nem módosítja.</p></div>
+                <IncomingSmartSelect value={mode} options={IMPORT_COLOR_MODE_OPTIONS} disabled={busy||brandColorModeSaving||!brandColorModesReady} placeholder="Színazonosítás" onChange={v=>void saveBrandColorMode(String(selectedBrand.id),v as ImportColorMode)} />
+              </div>;
+            })()}
+            {brandColorModeError ? <p role="alert" className="mt-2 text-xs text-amber-100">{brandColorModeError}</p>:null}
             <div className="mt-3 flex flex-wrap gap-2">
               <button className={neutralBtn} onClick={() => applyImportDefaults("missing")} disabled={busy || !rows.length} type="button">Hiányzó besorolás kitöltése</button>
               <button className={neutralBtn} onClick={() => applyImportDefaults("approved")} disabled={busy || !approvedCount} type="button">Kijelölt sorokra</button>
@@ -6894,7 +7005,7 @@ function AllInIncomingReception(_props: Props) {
                             </span>
                           ) : null}
                         </span>
-                        <input className={`${previewInput} w-full`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} />
+                        <input className={`${previewInput} w-full`} value={valueString((n as any)._aifColorCodeFromName ? "" : n.colorCode)} disabled={colorModeForNormalized(n)==="name"} placeholder={(n as any)._aifColorCodeFromName ? "Név alapján" : ""} title={(n as any)._aifColorCodeFromName ? "Nincs beszállítói színkód; belső azonosító: "+valueString(n.colorCode):"Beszállítói színkód"} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} />
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel}>Méret</span>
