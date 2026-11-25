@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 import { createPortal } from "react-dom";
 import {
   AlertCircle, Archive, ArrowLeft, ArrowUpRight, CalendarDays, Check, CheckCircle2,
-  ChevronLeft, ChevronRight, Download, Eye, Facebook, FileText, Gift,
+  ChevronLeft, ChevronRight, Clock, Download, Eye, Facebook, FileText, Gift,
   History, Info, Loader2, Lock, Pencil, Play, Plus, Printer, RefreshCw, Search,
   ShieldCheck, Sparkles, Trophy, Upload, Users, X,
 } from "lucide-react";
@@ -150,12 +150,128 @@ function SubmitButton({ busy, children, className = "aif-gw-btn aif-gw-btn--prim
   return <button type="submit" className={className} disabled={busy || disabled}>{busy && <Loader2 size={17} className="aif-gw-spin" />}{children}</button>;
 }
 
+const DEADLINE_MONTHS = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"];
+const DEADLINE_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"];
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+function calendarDateKey(date: Date) {
+  return `${String(date.getUTCFullYear()).padStart(4, "0")}-${twoDigits(date.getUTCMonth() + 1)}-${twoDigits(date.getUTCDate())}`;
+}
+function bucharestToday() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+function deadlineParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, y, m, d, h, min] = match;
+  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  if (Number(y) < 1900 || calendarDateKey(date) !== `${y}-${m}-${d}` || Number(h) > 23 || Number(min) > 59) return null;
+  return { date: `${y}-${m}-${d}`, year: Number(y), month: Number(m) - 1, hour: h, minute: min };
+}
+function deadlineLabel(value: string) {
+  const parts = deadlineParts(value);
+  if (!parts) return "Dátum és idő kiválasztása";
+  return `${parts.date.replace(/-/g, ". ")}. · ${parts.hour}:${parts.minute}`;
+}
+function calendarDays(year: number, month: number) {
+  const first = new Date(Date.UTC(year, month, 1));
+  const start = 1 - ((first.getUTCDay() + 6) % 7);
+  return Array.from({ length: 42 }, (_, i) => new Date(Date.UTC(year, month, start + i)));
+}
+
+// The draft is a Bucharest wall-clock value, not the browser's local timezone.
+// The server continues to validate and convert exactly the same YYYY-MM-DDTHH:mm payload.
+function DeadlinePicker({ value, onChange, open, setOpen, disabled }: {
+  value: string; onChange: (value: string) => void; open: boolean; setOpen: (value: boolean) => void; disabled: boolean;
+}) {
+  const panelId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const today = bucharestToday();
+  const [date, setDate] = useState(today);
+  const [hour, setHour] = useState("23");
+  const [minute, setMinute] = useState("59");
+  const [month, setMonth] = useState(() => Number(today.slice(5, 7)) - 1);
+  const [year, setYear] = useState(() => Number(today.slice(0, 4)));
+  const days = calendarDays(year, month);
+  const draft = `${date}T${hour}:${minute}`;
+  const showDate = (key: string) => { setDate(key); setYear(Number(key.slice(0, 4))); setMonth(Number(key.slice(5, 7)) - 1); };
+  const close = () => { setOpen(false); triggerRef.current?.focus({ preventScroll: true }); triggerRef.current?.scrollIntoView({ block: "nearest" }); };
+  const toggle = () => {
+    if (open) { close(); return; }
+    const saved = deadlineParts(value);
+    showDate(saved?.date || today);
+    setHour(saved?.hour || "23"); setMinute(saved?.minute || "59");
+    setOpen(true);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const node = panelRef.current;
+    if (!node) return;
+    // Keep the panel inside the existing modal scroll container; no extra popup or body scroll.
+    node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    node.querySelector<HTMLButtonElement>("[aria-pressed=true]")?.focus({ preventScroll: true });
+  }, [open]);
+  const shift = (delta: number) => {
+    const next = new Date(Date.UTC(year, month + delta, 1));
+    if (next.getUTCFullYear() < 1900 || next.getUTCFullYear() > 9999) return;
+    setYear(next.getUTCFullYear()); setMonth(next.getUTCMonth());
+  };
+  const escape = (event: React.KeyboardEvent) => { if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); } };
+  const adjust = (field: "hour" | "minute", delta: number) => {
+    if (field === "hour") setHour(twoDigits((Number(hour) + delta + 24) % 24));
+    else setMinute(twoDigits((Number(minute) + delta + 60) % 60));
+  };
+  return <>
+    <div className="aif-gw-field aif-gw-deadline-field">
+      <span>Jelentkezési határidő</span>
+      <button ref={triggerRef} type="button" className={`aif-gw-deadline-trigger${open ? " is-open" : ""}${value ? " has-value" : ""}`} aria-label={`Jelentkezési határidő: ${deadlineLabel(value)}`} aria-expanded={open} aria-controls={open ? panelId : undefined} disabled={disabled} onClick={toggle} onKeyDown={escape}>
+        <CalendarDays size={17} /><span>{deadlineLabel(value)}</span><ChevronRight size={15} className="aif-gw-deadline-chevron" />
+      </button>
+      <small>Romániai idő (24 órás). Lezárás kézzel.</small>
+    </div>
+    {open && <section ref={panelRef} id={panelId} className="aif-gw-deadline-panel" aria-label="Dátum és idő kiválasztása" onKeyDown={escape}>
+      <div className="aif-gw-deadline-head"><div><CalendarDays size={17} /><strong>Jelentkezési határidő</strong></div><button type="button" className="aif-gw-icon-btn" onClick={close} aria-label="Naptár bezárása"><X size={17} /></button></div>
+      <div className="aif-gw-deadline-content">
+        <div className="aif-gw-calendar">
+          <div className="aif-gw-calendar-nav">
+            <button type="button" className="aif-gw-icon-btn" aria-label="Előző hónap" onClick={() => shift(-1)} disabled={year === 1900 && month === 0}><ChevronLeft size={19} /></button>
+            <strong aria-live="polite">{year}. {DEADLINE_MONTHS[month]}</strong>
+            <button type="button" className="aif-gw-icon-btn" aria-label="Következő hónap" onClick={() => shift(1)} disabled={year === 9999 && month === 11}><ChevronRight size={19} /></button>
+          </div>
+          <div className="aif-gw-calendar-grid">
+            {DEADLINE_WEEKDAYS.map((day, i) => <span key={day} className={`aif-gw-calendar-weekday${i > 4 ? " is-weekend" : ""}`}>{day}</span>)}
+            {days.map((day) => {
+              const key = calendarDateKey(day), selected = key === date, outside = day.getUTCMonth() !== month;
+              return <button key={key} type="button" disabled={day.getUTCFullYear() < 1900 || day.getUTCFullYear() > 9999} aria-label={`${day.getUTCFullYear()}. ${DEADLINE_MONTHS[day.getUTCMonth()]} ${day.getUTCDate()}.`} aria-pressed={selected} aria-current={key === today ? "date" : undefined} className={`aif-gw-calendar-day${outside ? " is-outside" : ""}${selected ? " is-selected" : ""}${key === today ? " is-today" : ""}`} onClick={() => showDate(key)}>{day.getUTCDate()}</button>;
+            })}
+          </div>
+          <div className="aif-gw-calendar-bottom"><button type="button" className="aif-gw-text-btn" onClick={() => showDate(today)}>Ma</button><span><i /> Mai nap</span></div>
+        </div>
+        <div className="aif-gw-deadline-time">
+          <h3><Clock size={17} /> Időpont <small>24 órás</small></h3>
+          <div className="aif-gw-clock-controls">
+            <div><button type="button" onClick={() => adjust("hour", 1)} aria-label="Óra növelése">+</button><label><span>Óra</span><select aria-label="Óra" value={hour} onChange={(event) => setHour(event.target.value)}>{Array.from({ length: 24 }, (_, i) => <option key={i} value={twoDigits(i)}>{twoDigits(i)}</option>)}</select></label><button type="button" onClick={() => adjust("hour", -1)} aria-label="Óra csökkentése">−</button></div>
+            <b>:</b>
+            <div><button type="button" onClick={() => adjust("minute", 1)} aria-label="Perc növelése">+</button><label><span>Perc</span><select aria-label="Perc" value={minute} onChange={(event) => setMinute(event.target.value)}>{Array.from({ length: 60 }, (_, i) => <option key={i} value={twoDigits(i)}>{twoDigits(i)}</option>)}</select></label><button type="button" onClick={() => adjust("minute", -1)} aria-label="Perc csökkentése">−</button></div>
+          </div>
+          <div className="aif-gw-time-presets">{["12:00", "18:00", "23:59"].map((time) => <button key={time} type="button" aria-pressed={`${hour}:${minute}` === time} onClick={() => { setHour(time.slice(0, 2)); setMinute(time.slice(3)); }}>{time}</button>)}</div>
+          <div className="aif-gw-deadline-preview"><span>Kiválasztott határidő</span><strong>{deadlineLabel(draft)}</strong></div>
+        </div>
+      </div>
+      <footer className="aif-gw-deadline-footer"><button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={() => { onChange(""); close(); }}>Törlés</button><div><button type="button" className="aif-gw-btn aif-gw-btn--secondary" onClick={close}>Mégse</button><button type="button" className="aif-gw-btn aif-gw-btn--primary" disabled={!deadlineParts(draft)} onClick={() => { onChange(draft); close(); }}><Check size={16} /> Beállítás</button></div></footer>
+    </section>}
+  </>;
+}
+
 type EditableFields = {
   title: string; description: string; prize_title: string; prize_image_url: string;
   winners_count: number; reserves_count: number; closes_at_local: string; facebook_post_url: string;
 };
 
 function GameEditor({ game, onClose, onSaved }: { game: GiveawayGame | null; onClose: () => void; onSaved: (game: GiveawayGame) => void }) {
+  const [deadlinePickerOpen, setDeadlinePickerOpen] = useState(false);
   const [form, setForm] = useState<EditableFields>(() => ({
     title: game?.title || "", description: game?.description || "", prize_title: game?.prize_title || "",
     prize_image_url: game?.prize_image_url || "", winners_count: game?.winners_count || 1,
@@ -168,7 +284,7 @@ function GameEditor({ game, onClose, onSaved }: { game: GiveawayGame | null; onC
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const change = (key: keyof EditableFields, value: string | number) => setForm((previous) => ({ ...previous, [key]: value }));
   const submit = async (event: React.FormEvent) => {
-    event.preventDefault(); if (busy) return;
+    event.preventDefault(); if (busy || deadlinePickerOpen) return;
     setError("");
     if (form.prize_image_url && !safeHttpsUrl(form.prize_image_url)) { setError("A nyereményképhez érvényes HTTPS-hivatkozást adj meg."); return; }
     if (form.facebook_post_url) {
@@ -186,21 +302,21 @@ function GameEditor({ game, onClose, onSaved }: { game: GiveawayGame | null; onC
     } catch (problem) { if (mounted.current) setError((problem as Error).message); }
     finally { if (mounted.current) setBusy(false); }
   };
-  return <Modal title={game ? "Játék szerkesztése" : "Új nyereményjáték"} eyebrow="A következő örömteli pillanat" onClose={onClose} busy={busy} wide>
+  return <Modal title={game ? "Játék szerkesztése" : "Új nyereményjáték"} eyebrow="AllInFashion" onClose={onClose} busy={busy} wide>
     <form onSubmit={submit} className="aif-gw-form"><div className="aif-gw-modal-body">
       {error && <Alert>{error}</Alert>}
       <div className="aif-gw-editor-layout"><div className="aif-gw-field-stack">
         <label className="aif-gw-field"><span>Játék neve <em>*</em></span><input autoComplete="off" required maxLength={160} value={form.title} onChange={(event) => change("title", event.target.value)} placeholder="Például: Ünnepi nyereményjáték" /></label>
         <label className="aif-gw-field"><span>Nyeremény <em>*</em></span><input required maxLength={200} value={form.prize_title} onChange={(event) => change("prize_title", event.target.value)} placeholder="Mit nyerhetnek a résztvevők?" /></label>
         <label className="aif-gw-field"><span>Leírás és feltételek</span><textarea rows={4} maxLength={10000} value={form.description} onChange={(event) => change("description", event.target.value)} placeholder="A játék részletei, a részvétel feltételei és az átvétel módja…" /></label>
-      </div><div className="aif-gw-editor-preview"><PrizeVisual imageUrl={form.prize_image_url} title={form.prize_title || "Nyeremény"} large /><label className="aif-gw-field"><span>Nyereménykép hivatkozása</span><input type="url" maxLength={2048} value={form.prize_image_url} onChange={(event) => change("prize_image_url", event.target.value)} placeholder="https://…" /><small>Opcionális HTTPS-kép. Üresen az elegáns trófea jelenik meg.</small></label></div></div>
+      </div><div className="aif-gw-editor-preview"><PrizeVisual imageUrl={form.prize_image_url} title={form.prize_title || "Nyeremény"} large /><label className="aif-gw-field"><span>Nyereménykép hivatkozása</span><input type="url" maxLength={2048} value={form.prize_image_url} onChange={(event) => change("prize_image_url", event.target.value)} placeholder="https://…" /><small>Opcionális HTTPS-kép.</small></label></div></div>
       <div className="aif-gw-form-grid aif-gw-form-grid--three">
         <label className="aif-gw-field"><span>Nyertesek száma</span><input type="number" min={1} max={20} required value={form.winners_count} onChange={(event) => change("winners_count", event.target.value === "" ? "" : Number(event.target.value))} /></label>
         <label className="aif-gw-field"><span>Tartalékok száma</span><input type="number" min={0} max={20} required value={form.reserves_count} onChange={(event) => change("reserves_count", event.target.value === "" ? "" : Number(event.target.value))} /></label>
-        <label className="aif-gw-field"><span>Jelentkezési határidő</span><input type="datetime-local" value={form.closes_at_local} onChange={(event) => change("closes_at_local", event.target.value)} /><small>Bukaresti helyi idő. A lista lezárása kézzel történik.</small></label>
+        <DeadlinePicker value={form.closes_at_local} onChange={(value) => change("closes_at_local", value)} open={deadlinePickerOpen} setOpen={setDeadlinePickerOpen} disabled={busy} />
       </div>
-      <label className="aif-gw-field"><span>Facebook-bejegyzés hivatkozása</span><input type="url" maxLength={2048} value={form.facebook_post_url} onChange={(event) => change("facebook_post_url", event.target.value)} placeholder="https://www.facebook.com/…" /><small>Hivatkozásként mentjük; résztvevőket jelenleg kézi listából vagy CSV-ből lehet hozzáadni.</small></label>
-    </div><footer className="aif-gw-modal-footer"><button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={onClose} disabled={busy}>Mégse</button><SubmitButton busy={busy}><Check size={17} />{game ? "Módosítások mentése" : "Játék létrehozása"}</SubmitButton></footer></form>
+      <label className="aif-gw-field"><span>Facebook-bejegyzés hivatkozása</span><input type="url" maxLength={2048} value={form.facebook_post_url} onChange={(event) => change("facebook_post_url", event.target.value)} placeholder="https://www.facebook.com/…" /><small>Facebook-import még nem aktív.</small></label>
+    </div><footer className="aif-gw-modal-footer"><button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={onClose} disabled={busy}>Mégse</button><SubmitButton busy={busy} disabled={deadlinePickerOpen}><Check size={17} />{game ? "Módosítások mentése" : "Játék létrehozása"}</SubmitButton></footer></form>
   </Modal>;
 }
 
@@ -576,13 +692,13 @@ export default function AllInGiveaways({ onBack }: { onBack: () => void }) {
     <header className="aif-gw-header"><div className="aif-gw-header-left"><button type="button" className="aif-gw-back" onClick={() => { if (selectedId) { setSelectedId(null); setNotice(""); } else onBack(); }} disabled={busy} aria-label={selectedId ? "Vissza a játékokhoz" : "Vissza a kezdőlapra"}><ArrowLeft size={20} /></button><div><p className="aif-gw-eyebrow">ALLINFASHION</p><h1>Nyereményjáték</h1></div></div><div className="aif-gw-header-actions"><button type="button" className="aif-gw-icon-btn" aria-label="Adatok frissítése" title="Adatok frissítése" onClick={() => selectedId ? setDetailVersion((value) => value + 1) : setListVersion((value) => value + 1)} disabled={loading || detailLoading || busy}><RefreshCw size={18} className={loading || detailLoading ? "aif-gw-spin" : ""} /></button>{!selectedId && <button type="button" className="aif-gw-btn aif-gw-btn--primary" onClick={() => setModal({ kind: "editor", game: null })}><Plus size={17} />Új játék</button>}</div></header>
     {!!notice && <div className="aif-gw-notice"><CheckCircle2 size={18} /><span>{notice}</span><button type="button" className="aif-gw-icon-btn" onClick={() => setNotice("")} aria-label="Értesítés bezárása"><X size={16} /></button></div>}
     {!selectedId ? <>
-      <section className="aif-gw-hero"><div className="aif-gw-hero-copy"><p className="aif-gw-eyebrow"><Sparkles size={14} /> EGY KIS IZGALOM. EGY NAGY MOSOLY.</p><h2>Adj teret a<br /><span>szerencsés pillanatoknak.</span></h2><p>Játékok, résztvevők és az a bizonyos nagy pillanat —<br className="aif-gw-wide-only" /> minden egy helyen, átláthatóan.</p><button type="button" className="aif-gw-btn aif-gw-btn--light" onClick={() => setModal({ kind: "editor", game: null })}><Plus size={17} />Nyereményjáték létrehozása<ArrowUpRight size={17} /></button></div><div className="aif-gw-hero-art"><PrizeVisual title="Nyereményjáték" large /><span className="aif-gw-hero-art-label"><Trophy size={14} /> A következő nyertes itt kezdődik.</span></div></section>
+      <section className="aif-gw-hero"><div className="aif-gw-hero-copy"><p className="aif-gw-eyebrow"><Gift size={14} /> ALLINFASHION · MARKETING</p><h2>Nyereményjátékok <span>és sorsolások</span></h2><button type="button" className="aif-gw-btn aif-gw-btn--light" onClick={() => setModal({ kind: "editor", game: null })}><Plus size={17} />Nyereményjáték létrehozása<ArrowUpRight size={17} /></button></div><div className="aif-gw-hero-art"><PrizeVisual title="Nyereményjáték" large /></div></section>
       <section className="aif-gw-overview" aria-label="Játékok áttekintése"><div className="aif-gw-overview-stat"><span className="aif-gw-stat-icon"><Gift size={20} /></span><div><strong>{loading ? "—" : numberText(games.length)}</strong><span>létrehozott játék</span></div></div><div className="aif-gw-overview-stat"><span className="aif-gw-stat-icon aif-gw-stat-icon--teal"><Play size={19} /></span><div><strong>{loading ? "—" : numberText(activeGames)}</strong><span>aktív játék</span></div></div><div className="aif-gw-overview-stat"><span className="aif-gw-stat-icon"><Users size={20} /></span><div><strong>{loading ? "—" : numberText(allParticipants)}</strong><span>rögzített részvétel</span></div></div><div className="aif-gw-overview-stat"><span className="aif-gw-stat-icon aif-gw-stat-icon--gold"><Trophy size={20} /></span><div><strong>{loading ? "—" : numberText(completedGames)}</strong><span>mentett sorsolás</span></div></div></section>
-      <div className="aif-gw-games-heading"><div><p className="aif-gw-eyebrow">Minden játékod egy helyen</p><h2>Játékok</h2></div><label className="aif-gw-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Játék vagy nyeremény keresése…" aria-label="Játék keresése" /></label></div>
+      <div className="aif-gw-games-heading"><div><h2>Játékok</h2></div><label className="aif-gw-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Játék vagy nyeremény keresése…" aria-label="Játék keresése" /></label></div>
       <div className="aif-gw-tabs aif-gw-game-filters" role="group" aria-label="Játékok állapota">{(["all", "draft", "open", "locked", "drawn", "archived"] as const).map((value) => <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? "is-active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "Összes" : STATUS[value].label}<span>{value === "all" ? games.length : games.filter((game) => game.status === value).length}</span></button>)}</div>
       {listError && <Alert>{listError}<button type="button" className="aif-gw-text-btn" onClick={() => setListVersion((value) => value + 1)}>Újrapróbálás</button></Alert>}
-      {loading ? <div className="aif-gw-loading" role="status"><Loader2 className="aif-gw-spin" size={27} /><p>Játékok betöltése…</p></div> : filteredGames.length ? <div className="aif-gw-game-grid">{filteredGames.map((game) => <GameCard key={game.id} game={game} onOpen={() => selectGame(game.id)} />)}</div> : !listError && <section className="aif-gw-empty-state"><div className="aif-gw-empty-icon"><Gift size={33} /></div><p className="aif-gw-eyebrow">{games.length ? "Nincs találat" : "Itt kezdődik az első játék"}</p><h2>{games.length ? "Erre a szűrésre nincs játék." : "Egy nyeremény már elég a kezdéshez."}</h2><p>{games.length ? "Válassz másik állapotot, vagy módosítsd a keresést." : "Hozd létre a játékot, állítsd össze a résztvevőlistát, majd ünnepeljük meg együtt a nyerteseket."}</p>{games.length ? <button type="button" className="aif-gw-btn aif-gw-btn--secondary" onClick={() => { setFilter("all"); setSearch(""); }}>Szűrés törlése</button> : <button type="button" className="aif-gw-btn aif-gw-btn--primary" onClick={() => setModal({ kind: "editor", game: null })}><Plus size={17} />Első játék létrehozása</button>}</section>}
-      <aside className="aif-gw-facebook-panel"><span className="aif-gw-facebook-icon"><Facebook size={22} /></span><div><h3>Facebook-kapcsolat <span className="aif-gw-soft-badge">Nincs csatlakoztatva</span></h3><p>A Facebook-résztvevők automatikus beolvasása egy későbbi fázisban érkezik. Most ellenőrzött kézi vagy CSV-listával dolgozhatsz.{metaError ? " A kapcsolat állapotának lekérdezése jelenleg nem sikerült." : ""}</p></div><span className="aif-gw-upcoming">Később</span></aside>
+      {loading ? <div className="aif-gw-loading" role="status"><Loader2 className="aif-gw-spin" size={27} /><p>Játékok betöltése…</p></div> : filteredGames.length ? <div className="aif-gw-game-grid">{filteredGames.map((game) => <GameCard key={game.id} game={game} onOpen={() => selectGame(game.id)} />)}</div> : !listError && <section className="aif-gw-empty-state"><div className="aif-gw-empty-icon"><Gift size={33} /></div><h2>{games.length ? "Nincs találat" : "Még nincs nyereményjáték"}</h2>{games.length ? <button type="button" className="aif-gw-btn aif-gw-btn--secondary" onClick={() => { setFilter("all"); setSearch(""); }}>Szűrés törlése</button> : <button type="button" className="aif-gw-btn aif-gw-btn--primary" onClick={() => setModal({ kind: "editor", game: null })}><Plus size={17} />Első játék létrehozása</button>}</section>}
+      <aside className="aif-gw-facebook-panel"><span className="aif-gw-facebook-icon"><Facebook size={22} /></span><div><h3>Facebook-kapcsolat <span className="aif-gw-soft-badge">Nincs csatlakoztatva</span></h3><p>Résztvevőimport: kézi lista vagy CSV.{metaError ? " A kapcsolat állapotának lekérdezése jelenleg nem sikerült." : ""}</p></div><span className="aif-gw-upcoming">Később</span></aside>
     </> : <>
       {detailError && <Alert>{detailError}<button type="button" className="aif-gw-text-btn" onClick={() => setDetailVersion((value) => value + 1)} disabled={busy}>Adatok frissítése</button></Alert>}
       {detailLoading ? <div className="aif-gw-loading" role="status"><Loader2 className="aif-gw-spin" size={27} /><p>A játék betöltése…</p></div> : detail && current ? <>
@@ -598,7 +714,7 @@ export default function AllInGiveaways({ onBack }: { onBack: () => void }) {
         <div className="aif-gw-workflow" aria-label="Játék folyamat"><div className={current.status === "draft" ? "is-current" : "is-done"}><span>{current.status === "draft" ? "1" : <Check size={15} />}</span><p>Előkészítés</p></div><i /><div className={current.status === "open" ? "is-current" : current.locked_at ? "is-done" : ""}><span>{current.locked_at ? <Check size={15} /> : "2"}</span><p>Résztvevők</p></div><i /><div className={current.status === "locked" ? "is-current" : current.drawn_at ? "is-done" : ""}><span>{current.drawn_at ? <Check size={15} /> : "3"}</span><p>Sorsolás</p></div><i /><div className={detail.draw ? "is-done" : ""}><span>{detail.draw ? <Check size={15} /> : "4"}</span><p>Eredmény</p></div></div>
         {current.status === "locked" && <div className="aif-gw-locked-note"><Lock size={20} /><div><strong>A lista lezárva. Minden készen áll.</strong><p>{numberText(current.eligible_count)} jogosult résztvevőből {current.winners_count} nyertest és {current.reserves_count} külön tartalékot sorsolunk. Az eredményt a bemutatás előtt elmentjük.</p></div><button type="button" className="aif-gw-btn aif-gw-btn--gold" onClick={() => void drawGame()} disabled={busy}><Play size={17} />Indulhat a sorsolás</button></div>}
         {current.status === "archived" && <Alert tone="info">Ez a játék archivált. A résztvevők, az előzmények és a korábban mentett eredmény továbbra is megtekinthetők.</Alert>}
-        {detail.draw && <section className="aif-gw-panel aif-gw-results"><div className="aif-gw-panel-heading"><div><p className="aif-gw-eyebrow">Egy emlékezetes pillanat</p><h2><Trophy size={22} />A sorsolás eredménye</h2><p>{formatGiveawayDate(detail.draw.drawn_at)} · {numberText(detail.draw.eligible_count)} jogosult résztvevő</p></div><div className="aif-gw-result-actions"><button type="button" className="aif-gw-btn aif-gw-btn--secondary" onClick={printReport}><Printer size={16} />Jegyzőkönyv / PDF</button><button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={exportCsv}><Download size={16} />CSV</button></div></div><div className="aif-gw-results-grid"><div><h3 className="aif-gw-result-label"><Trophy size={16} />Nyertesek</h3><SelectionList items={detail.draw.winners} /></div>{detail.draw.reserves.length > 0 && <div><h3 className="aif-gw-result-label aif-gw-result-label--muted"><Users size={16} />Tartalékok, sorrendben</h3><SelectionList items={detail.draw.reserves} reserves /></div>}</div><div className="aif-gw-result-proof"><ShieldCheck size={16} /><div><strong>Az eredmény véglegesen elmentve.</strong><span>A bemutatás újra megnyitható; ugyanennek a sorsolásnak az eredményét mutatja.</span><details><summary>Ellenőrzési adatok</summary><dl><dt>Sorsolás azonosítója</dt><dd>{detail.draw.id}</dd><dt>Lezárt lista ellenőrzőazonosítója</dt><dd>{detail.draw.snapshot_hash}</dd><dt>Rögzítette</dt><dd>{formatGiveawayActor(detail.draw.actor)}</dd></dl></details></div></div></section>}
+        {detail.draw && <section className="aif-gw-panel aif-gw-results"><div className="aif-gw-panel-heading"><div><h2><Trophy size={22} />A sorsolás eredménye</h2><p>{formatGiveawayDate(detail.draw.drawn_at)} · {numberText(detail.draw.eligible_count)} jogosult résztvevő</p></div><div className="aif-gw-result-actions"><button type="button" className="aif-gw-btn aif-gw-btn--secondary" onClick={printReport}><Printer size={16} />Jegyzőkönyv / PDF</button><button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={exportCsv}><Download size={16} />CSV</button></div></div><div className="aif-gw-results-grid"><div><h3 className="aif-gw-result-label"><Trophy size={16} />Nyertesek</h3><SelectionList items={detail.draw.winners} /></div>{detail.draw.reserves.length > 0 && <div><h3 className="aif-gw-result-label aif-gw-result-label--muted"><Users size={16} />Tartalékok, sorrendben</h3><SelectionList items={detail.draw.reserves} reserves /></div>}</div><div className="aif-gw-result-proof"><ShieldCheck size={16} /><div><strong>Az eredmény véglegesen elmentve.</strong><span>A bemutatás újra megnyitható; ugyanennek a sorsolásnak az eredményét mutatja.</span><details><summary>Ellenőrzési adatok</summary><dl><dt>Sorsolás azonosítója</dt><dd>{detail.draw.id}</dd><dt>Lezárt lista ellenőrzőazonosítója</dt><dd>{detail.draw.snapshot_hash}</dd><dt>Rögzítette</dt><dd>{formatGiveawayActor(detail.draw.actor)}</dd></dl></details></div></div></section>}
         <ParticipantsPanel detail={detail} onImport={() => setModal({ kind: "import" })} onEligibility={(participant) => setModal({ kind: "eligibility", participant })} />
         <HistoryPanel detail={detail} />
         <footer className="aif-gw-detail-footer"><p><ShieldCheck size={16} />Kézzel vagy CSV-ből összeállított, adminisztrátor által ellenőrzött résztvevőlista.</p>{current.status !== "archived" && <button type="button" className="aif-gw-btn aif-gw-btn--ghost" onClick={() => setModal({ kind: "archive" })} disabled={busy}><Archive size={16} />Játék archiválása</button>}</footer>
