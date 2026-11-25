@@ -3573,7 +3573,22 @@ type WarehouseRelabelPromptRow = {
   priceChange: WarehouseLabelPriceChange;
   // Nincs automatikus választás: a régi készlet árát soronként jóvá kell hagyni.
   approvedPrice: WarehouseRelabelPriceChoice | null;
+  // Szerveren már mentett döntést nem szabad pusztán a címkepótlás miatt újraírni.
+  alreadyApproved?: boolean;
 };
+
+// A jóváhagyás és a nyomtatás két külön állapot. A szerver az előbbit tárolja,
+// ezért az újranyitáskor visszaadott extra mennyiség lehet még nyomtatandó is.
+function warehouseApprovedRelabelCopies(row?: WarehouseLabelStockCheckRow | null) {
+  return row?.priceChange?.approvedPriceChoice === "new"
+    ? Math.max(0, Math.floor(n(row.relabelMaxCopies)))
+    : 0;
+}
+
+function warehouseRelabelPromptNeeded(row: WarehouseLabelStockCheckRow) {
+  return Boolean(row.priceChange && n(row.relabelMaxCopies) > 0 &&
+    (row.relabelRequired || warehouseApprovedRelabelCopies(row) > 0));
+}
 
 type WarehouseLabelTemplate = {
   name: string;
@@ -13222,6 +13237,8 @@ export default function AllInWarehouse() {
         reducedProducts: 0,
         removedLabels: 0,
         priceChanges: [] as WarehouseLabelStockCheckRow[],
+        approvedExtrasById: {} as Record<string, number>,
+        appliedExtrasById: {} as Record<string, number>,
       };
     }
 
@@ -13236,6 +13253,8 @@ export default function AllInWarehouse() {
 
     const copiesById: Record<string, number> = {};
     const limitsById: Record<string, number> = {};
+    const approvedExtrasById: Record<string, number> = {};
+    const appliedExtrasById: Record<string, number> = {};
     const zeroStockVariantIds: string[] = [];
     let reducedProducts = 0;
     let removedLabels = 0;
@@ -13246,9 +13265,11 @@ export default function AllInWarehouse() {
       const row = byId.get(id);
       if (!row) continue;
       const baseMaxCopies = Math.max(0, Math.floor(n(row.baseMaxCopies ?? row.maxCopies)));
-      const relabelMaxCopies = Math.max(0, Math.floor(n(row.relabelMaxCopies)));
+      const relabelMaxCopies = warehouseApprovedRelabelCopies(row);
       const relabelRequested = Math.max(0, Math.floor(n(relabelExtraOverride[id])));
       const relabelCopies = Math.min(relabelRequested, relabelMaxCopies);
+      approvedExtrasById[id] = relabelMaxCopies;
+      appliedExtrasById[id] = relabelCopies;
       const maxCopies = baseMaxCopies + relabelCopies;
       limitsById[id] = maxCopies;
 
@@ -13280,8 +13301,9 @@ export default function AllInWarehouse() {
       return next;
     });
 
-    const priceChanges = rows.filter((row) => Boolean(row.relabelRequired && n(row.relabelMaxCopies) > 0 && row.priceChange));
-    return { copiesById, zeroStockVariantIds, reducedProducts, removedLabels, priceChanges };
+    const priceChanges = rows.filter(warehouseRelabelPromptNeeded);
+    return { copiesById, zeroStockVariantIds, reducedProducts, removedLabels, priceChanges,
+      approvedExtrasById, appliedExtrasById };
   }
 
   function barcodeForLabelItem(item: InventoryItem, detailItem?: Record<string, any> | null) {
@@ -13421,11 +13443,14 @@ export default function AllInWarehouse() {
     setLabelDetailsBusy(true);
     try {
       await ensureInvoiceHistoricalTitlesForItems(selectedLabelItems as Array<PersistedSelectedWorkItem & Record<string, any>>);
-      const stockCheck = await refreshLabelStockLimits(selectedLabelItems, false);
+      // Új megnyitás: ne örököljünk egy másik számláról vagy nyomtatásból extra darabszámot.
+      setLabelRelabelExtraById({});
+      const stockCheck = await refreshLabelStockLimits(selectedLabelItems, false, {});
       const resolvedDetailMap: Record<string, DetailResponse> = { ...labelDetailMap };
+      const priceChangeIds = new Set(stockCheck.priceChanges.map((row) => String(row.variantId || "")));
       const missingIds = selectedLabelItems
         .map((item) => String(item.variant_id || ""))
-        .filter((id) => id && !resolvedDetailMap[id]);
+        .filter((id) => id && (!resolvedDetailMap[id] || priceChangeIds.has(id)));
 
       if (missingIds.length) {
         const loaded = await Promise.all(
@@ -13440,8 +13465,21 @@ export default function AllInWarehouse() {
         );
         for (const row of loaded) {
           if (row.detail) resolvedDetailMap[row.id] = row.detail;
+          else if (priceChangeIds.has(row.id)) {
+            throw new Error("Az átárazott termék aktuális ára nem ellenőrizhető. Nyisd meg újra a címkelistát.");
+          }
         }
         setLabelDetailMap(resolvedDetailMap);
+      }
+      // Régi PMP alapján ne nyomtassunk plusz címkét, ha azóta ismét megváltozott az ár.
+      for (const row of stockCheck.priceChanges) {
+        if (row.priceChange?.approvedPriceChoice !== "new") continue;
+        const detail = resolvedDetailMap[String(row.variantId || "")]?.item;
+        const current = priceNumber(detail?.sell_price ?? detail?.sellPrice);
+        const approved = priceNumber(row.priceChange.newSellPrice);
+        if (current === null || approved === null || Math.round(current * 100) !== Math.round(approved * 100)) {
+          throw new Error(`A ${row.priceChange.productTitle || row.variantId} jóváhagyott ára időközben megváltozott. Ellenőrizd az aktuális árat és az átárazási bizonylatot; régi címkét nem készítünk.`);
+        }
       }
 
       const missingBarcodeItems = selectedLabelItems.filter((item) => {
@@ -13454,7 +13492,8 @@ export default function AllInWarehouse() {
           variantId: String(row.variantId || ""),
           relabelMaxCopies: Math.max(0, Math.floor(n(row.relabelMaxCopies))),
           priceChange: row.priceChange || {},
-          approvedPrice: null,
+          approvedPrice: row.priceChange?.approvedPriceChoice === "new" ? "new" as const : null,
+          alreadyApproved: row.priceChange?.approvedPriceChoice === "new",
         })).filter((row) => row.variantId && row.relabelMaxCopies > 0));
         setLabelRelabelPromptOpen(true);
         setLabelComposerOpen(false);
@@ -13479,7 +13518,7 @@ export default function AllInWarehouse() {
   }
 
   function openRelabelPriceChoice(row: WarehouseRelabelPromptRow) {
-    if (labelDetailsBusy || labelRelabelPriceSubmitLockRef.current) return;
+    if (labelDetailsBusy || labelRelabelPriceSubmitLockRef.current || row.alreadyApproved) return;
     setLabelRelabelPriceTargetId(row.variantId);
     setLabelRelabelPriceDraft(row.approvedPrice);
     setLabelRelabelPriceError("");
@@ -13498,7 +13537,7 @@ export default function AllInWarehouse() {
   async function approveRelabelPriceChoice() {
     if (labelRelabelPriceSubmitLockRef.current || !labelRelabelPriceDraft) return;
     const row = labelRelabelPromptRows.find((entry) => entry.variantId === labelRelabelPriceTargetId);
-    if (!row) return;
+    if (!row || row.alreadyApproved) return;
 
     const oldPrice = priceNumber(row.priceChange.oldSellPrice);
     const newPrice = priceNumber(row.priceChange.newSellPrice);
@@ -13593,17 +13632,20 @@ export default function AllInWarehouse() {
     setLabelDetailsBusy(true);
     try {
       const checked = await refreshLabelStockLimits(selectedLabelItems, false, extraMap);
-      setLabelRelabelExtraById(extraMap);
+      setLabelRelabelExtraById(checked.appliedExtrasById);
       setLabelRelabelPromptOpen(false);
       setLabelRelabelPromptRows([]);
       setLabelComposerOpen(true);
-      const extraLabels = Object.values(extraMap).reduce((sum, value) => sum + Math.max(0, Math.floor(n(value))), 0);
+      const extraLabels = Object.values(checked.appliedExtrasById).reduce((sum, value) => sum + Math.max(0, Math.floor(n(value))), 0);
       if (extraLabels > 0) {
         setMessage(`${extraLabels} új áras címkét hozzáadtam a régi készlet átárazásához. Az árak a jóváhagyott érték szerint kerülnek nyomtatásra.`);
       } else if (checked.removedLabels > 0) {
         setMessage(`A friss készlet alapján ${checked.removedLabels} címkét kihagytam ${checked.reducedProducts} terméknél.`);
       } else {
-        setMessage("A régi készletre nem kell további címkét nyomtatni. Az új bevételezés az aktuálisan jóváhagyott árral nyomtatható.");
+        const excludedExtras = Object.values(checked.approvedExtrasById).reduce((sum, value) => sum + value, 0);
+        setMessage(excludedExtras > 0
+          ? `Csak az új áru címkéi: a ${excludedExtras} jóváhagyott átárazási címkét most nem kéred. Ellenőrizd, hogy korábban már elkészültek-e.`
+          : "Az új bevételezés az aktuális árral nyomtatható; nincs jóváhagyott plusz címke.");
       }
     } catch (error) {
       // Ne veszítsük el a jóváhagyott döntéseket, ha a készletellenőrzés hibázik.
@@ -13875,7 +13917,10 @@ export default function AllInWarehouse() {
     const displayedInvoiceQty = Math.max(0, Math.floor(n(incomingInvoiceQty || selectedInvoiceQty || invoiceLabelCopiesForItem(row.item))));
     const server = labelStockCheckById[id] || null;
     const submittedQty = Math.max(0, Math.floor(n(server?.invoiceQty)));
-    const allowedQty = Math.max(0, Math.floor(n(server?.baseMaxCopies ?? server?.maxCopies)));
+    const baseAllowedQty = Math.max(0, Math.floor(n(server?.baseMaxCopies ?? server?.maxCopies)));
+    const approvedExtraQty = warehouseApprovedRelabelCopies(server);
+    const allowedQty = baseAllowedQty + approvedExtraQty;
+    const expectedQty = displayedInvoiceQty + approvedExtraQty;
     return {
       id,
       barcode: row.barcode,
@@ -13885,9 +13930,12 @@ export default function AllInWarehouse() {
       size: row.size,
       displayedInvoiceQty,
       submittedQty,
+      baseAllowedQty,
+      approvedExtraQty,
+      expectedQty,
       allowedQty,
       copies: row.copies,
-      deficit: Math.max(0, displayedInvoiceQty - row.copies),
+      deficit: Math.max(0, expectedQty - row.copies),
       mode: String(server?.mode || ""),
       verifiedQty: Math.max(0, Math.floor(n(server?.verifiedReceptionQty))),
       outgoingQty: Math.max(0, Math.floor(n(server?.outgoingSinceReception))),
@@ -13899,10 +13947,12 @@ export default function AllInWarehouse() {
     acc.displayed += row.displayedInvoiceQty;
     acc.submitted += row.submittedQty;
     acc.allowed += row.allowedQty;
+    acc.approvedExtra += row.approvedExtraQty;
+    acc.expected += row.expectedQty;
     acc.deficit += row.deficit;
     if (row.deficit > 0) acc.affected += 1;
     return acc;
-  }, { displayed: 0, submitted: 0, allowed: 0, deficit: 0, affected: 0 });
+  }, { displayed: 0, submitted: 0, allowed: 0, approvedExtra: 0, expected: 0, deficit: 0, affected: 0 });
   const labelInvoiceQuantityAuditVisible = !labelCopiesImportedFromCsv &&
     (Boolean(selectedInvoiceFilterOption) || Boolean(incomingFocus?.batchId) || labelInvoiceAuditTotals.submitted > 0) &&
     labelInvoiceAuditTotals.displayed > 0;
@@ -14000,6 +14050,17 @@ export default function AllInWarehouse() {
       setMessage(error instanceof Error
         ? `Nyomtatás leállítva: ${error.message}`
         : "Nyomtatás leállítva, mert a friss készlet nem ellenőrizhető.");
+      return;
+    }
+
+    const changedApproval = selectedLabelItems.some((item) => {
+      const id = String(item.variant_id || "");
+      return warehouseApprovedRelabelCopies(labelStockCheckById[id]) !== (stockCheck.approvedExtrasById[id] || 0);
+    });
+    if (changedApproval) {
+      if (trackedPrint) setLabelPrintFlow(null);
+      setLabelComposerOpen(false);
+      setMessage("Az átárazási címkék száma időközben megváltozott. Nyisd meg újra a címkelistát és ellenőrizd a példányszámokat; a nyomtatás nem indult el.");
       return;
     }
 
@@ -16640,11 +16701,11 @@ export default function AllInWarehouse() {
                   <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#b9fffb]/30 bg-[#2a8d8b] text-white shadow-[0_12px_30px_rgba(42,141,139,.28)] sm:h-12 sm:w-12"><RefreshCw size={21} /></span>
                   <div className="min-w-0">
                     <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/72">Árváltozás • régi készlet</p>
-                    <h3 className="mt-1 text-lg leading-snug text-white sm:text-xl">Melyik ár legyen érvényes a készleten?</h3>
-                    <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/70">Kattints a termék sorára, és egy külön ablakban válaszd ki a régi vagy az új eladási árat. A jóváhagyott ár a rendszerbe is mentődik. Új árat választva a korábbi készlethez is készül új címke.</p>
+                    <h3 className="mt-1 text-lg leading-snug text-white sm:text-xl">Átárazási címkék ellenőrzése</h3>
+                    <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-white/70">A még nyitott árdöntéseket a terméksorra kattintva hagyd jóvá. A korábbi jóváhagyások megmaradnak. A jóváhagyás nem igazolja a fizikai nyomtatást: a plusz címkéket csak akkor kérd, ha még szükségesek.</p>
                   </div>
                 </div>
-                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-white/[0.07] text-white hover:bg-white/[0.12] disabled:opacity-40" type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)} aria-label="Csak az új bevételezés címkéi"><X size={17} /></button>
+                <button className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.14] bg-white/[0.07] text-white hover:bg-white/[0.12] disabled:opacity-40" type="button" disabled={labelDetailsBusy} onClick={() => { setLabelRelabelPromptOpen(false); setLabelRelabelPromptRows([]); }} aria-label="Átárazási ellenőrzés bezárása"><X size={17} /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
                 <div className="space-y-2.5">
@@ -16657,7 +16718,7 @@ export default function AllInWarehouse() {
                       <button
                         key={row.variantId}
                         type="button"
-                        disabled={labelDetailsBusy}
+                        disabled={labelDetailsBusy || row.alreadyApproved}
                         onClick={() => openRelabelPriceChoice(row)}
                         aria-label={`${change.productTitle || change.productCode || "Termék"}: ár kiválasztása`}
                         className={`grid w-full grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border px-3 py-3 text-left transition sm:grid-cols-[48px_minmax(0,1fr)_auto] sm:px-3.5 ${isNew ? "border-[#7bd7d4]/55 bg-[#244e56] shadow-[0_8px_22px_rgba(17,24,39,.18)]" : isOld ? "border-amber-200/30 bg-[#424956]" : "border-white/[0.12] bg-[#3e495b] hover:border-[#7bd7d4]/50 hover:bg-[#465266]"} disabled:cursor-wait disabled:opacity-65`}
@@ -16677,7 +16738,7 @@ export default function AllInWarehouse() {
                           </div>
                           <div className={`mt-1.5 flex items-center gap-1 text-[11px] ${isNew ? "text-[#bff8f5]" : isOld ? "text-amber-100" : "text-white/58"}`}>
                             {row.approvedPrice ? <CheckCircle2 size={13} /> : <ChevronDown size={13} className="-rotate-90" />}
-                            {isNew ? `Új ár jóváhagyva • +${row.relabelMaxCopies} új címke` : isOld ? "Régi ár jóváhagyva • nincs extra címke" : "Ár kiválasztása és jóváhagyása"}
+                            {isNew ? `${row.alreadyApproved ? "Korábban jóváhagyva" : "Új ár jóváhagyva"} • +${row.relabelMaxCopies} átárazási címke` : isOld ? "Régi ár jóváhagyva • nincs extra címke" : "Ár kiválasztása és jóváhagyása"}
                           </div>
                         </div>
                         <div className="col-span-2 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-2.5 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
@@ -16699,8 +16760,8 @@ export default function AllInWarehouse() {
                   {labelRelabelApprovedCount < labelRelabelPromptRows.length ? <span className="ml-2 text-amber-100">({labelRelabelPromptRows.length - labelRelabelApprovedCount} döntés hiányzik)</span> : null}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button className={btnSoft} type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)}>Csak az új áru</button>
-                  <button className={primaryBtn} type="button" disabled={labelDetailsBusy || labelRelabelApprovedCount !== labelRelabelPromptRows.length} onClick={() => void continueLabelComposerAfterRelabel(true)}>{labelDetailsBusy ? <RefreshCw size={15} className="animate-spin" /> : <Printer size={15} />} Jóváhagyott árakkal tovább</button>
+                  <button className={btnSoft} type="button" disabled={labelDetailsBusy} onClick={() => void continueLabelComposerAfterRelabel(false)}>Csak az új áru (plusz nélkül)</button>
+                  <button className={primaryBtn} type="button" disabled={labelDetailsBusy || labelRelabelApprovedCount !== labelRelabelPromptRows.length} onClick={() => void continueLabelComposerAfterRelabel(true)}>{labelDetailsBusy ? <RefreshCw size={15} className="animate-spin" /> : <Printer size={15} />} Új áru + átárazási címkék</button>
                 </div>
               </div>
             </div>
@@ -17910,11 +17971,13 @@ export default function AllInWarehouse() {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
                   <span className="font-medium text-white">Számlás címkék ellenőrzése</span>
                   <span className="tabular-nums text-white/84">Számlán: <b>{labelInvoiceAuditTotals.displayed} db</b></span>
-                  <span className="tabular-nums text-white/84">API-nak átadva: <b>{labelInvoiceAuditTotals.submitted} db</b></span>
-                  <span className="tabular-nums text-white/84">Szerver által engedve: <b>{labelInvoiceAuditTotals.allowed} db</b></span>
+                  <span className="tabular-nums text-[#d7fffd]">Jóváhagyott átárazás: <b>+{labelInvoiceAuditTotals.approvedExtra} db</b></span>
+                  <span className="tabular-nums text-white/84">Teljes címkeigény: <b>{labelInvoiceAuditTotals.expected} db</b></span>
+                  <span className="tabular-nums text-white/84">Szerver által engedve (pluszokkal): <b>{labelInvoiceAuditTotals.allowed} db</b></span>
                   <span className="tabular-nums text-white/84">Nyomtatásra: <b>{labelPrintItems.length} db</b></span>
-                  {labelInvoiceAuditTotals.deficit > 0 ? <span className="tabular-nums font-medium text-amber-100">Eltérés: −{labelInvoiceAuditTotals.deficit} címke / {labelInvoiceAuditTotals.affected} variáns</span> : <span className="text-[#d7fffd]">Nincs címkehiány.</span>}
+                  {labelInvoiceAuditTotals.deficit > 0 ? <span className="tabular-nums font-medium text-amber-100">A teljes listához képest: −{labelInvoiceAuditTotals.deficit} címke / {labelInvoiceAuditTotals.affected} variáns</span> : <span className="text-[#d7fffd]">Mennyiség rendben.</span>}
                 </div>
+                {labelInvoiceAuditTotals.approvedExtra > 0 && <p className="mt-1.5 text-[11px] text-white/65">Az átárazási darabok a szerveren jóváhagyott mennyiségek, nem a ténylegesen még hiányzó papírcímkék. Pótláskor csak a hiányzókat nyomtasd.</p>}
                 {labelInvoiceAuditTotals.deficit > 0 && (
                   <details className="mt-2 rounded-lg border border-amber-100/18 bg-black/15 p-2.5">
                     <summary className="cursor-pointer font-medium text-amber-50">Miért maradt ki címke? {labelInvoiceAuditTotals.affected} érintett termék részletei</summary>
@@ -17923,7 +17986,7 @@ export default function AllInWarehouse() {
                         <div key={row.id} className="rounded-lg border border-white/[0.08] bg-[#334155] px-2.5 py-2 text-white/82">
                           <p className="text-[11px] text-white">{row.title} • {row.productCode} • {row.color} • {row.size}</p>
                           <p className="mt-1 font-mono text-[10px] text-white/58">{row.barcode}</p>
-                          <p className="mt-1 tabular-nums text-[11px]">Számla: {row.displayedInvoiceQty} • API: {row.submittedQty} • Limit: {row.allowedQty} • Címke: {row.copies} • <b className="text-amber-100">Hiányzik: {row.deficit}</b></p>
+                          <p className="mt-1 tabular-nums text-[11px]">Számla: {row.displayedInvoiceQty} • API: {row.submittedQty} • Átárazás: +{row.approvedExtraQty} • Teljes igény: {row.expectedQty} • Limit: {row.allowedQty} • Címke: {row.copies} • <b className="text-amber-100">Eltérés: {row.deficit}</b></p>
                           <p className="mt-1 text-[10px] text-white/55">Mód: {row.mode || "nincs adat"} • Receptióban igazolt: {row.verifiedQty} • Valódi kimenő: {row.outgoingQty} • Helyi készlet: {row.localQty} • Összes készlet: {row.currentQty}</p>
                         </div>
                       ))}
@@ -18154,6 +18217,9 @@ export default function AllInWarehouse() {
                           <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • Színkód: {row.color || "-"} • {row.size}</p>
                           <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}{row.render.ok ? ` • ${row.render.symbology === "ean13" ? "EAN-13" : row.render.symbology === "ean8" ? "EAN-8" : "Code128"}` : ""}</p>
                           {row.snCod ? <p className="mt-1 truncate font-mono text-[10px] tracking-[0.035em] text-[#bfe9e6]/72">S/N/COD · {row.snCod}</p> : null}
+                          {warehouseApprovedRelabelCopies(labelStockCheckById[row.id]) > 0 && (
+                            <p className="mt-1.5 text-[11px] text-[#bff8f5]">Jóváhagyott átárazás: +{warehouseApprovedRelabelCopies(labelStockCheckById[row.id])} db • ebből a jelenlegi limitbe bevonva: {Math.min(warehouseApprovedRelabelCopies(labelStockCheckById[row.id]), Math.max(0, Math.floor(n(labelRelabelExtraById[row.id]))))} db</p>
+                          )}
                           {!row.render.ok && (
                             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">
                               <span className="text-xs text-rose-100">{row.render.error}</span>
