@@ -284,6 +284,7 @@ function saleTypeBadge(value: string, balanceDue?: unknown) {
 
 type AdminRecentSaleExtended = AifAdminShopRecentSale & {
   originalSoldAt?: string | null;
+  exchangeReturnOnly?: boolean;
   settlementAmount?: number | null;
   settlementPaymentId?: string | null;
   customerPaymentId?: string | null;
@@ -302,6 +303,10 @@ function settlementInfo(sale: AifAdminShopRecentSale) {
 
 function isPaymentSettlement(sale: AifAdminShopRecentSale) {
   return String((sale as any)?.recordType || "") === "payment_settlement";
+}
+
+function isReturnOnly(sale: AifAdminShopRecentSale) {
+  return settlementInfo(sale).exchangeReturnOnly === true;
 }
 
 function settlementTypeLabel(sale: AifAdminShopRecentSale) {
@@ -329,6 +334,19 @@ function SalePriceBreakdown({
   const discountText = discount > 0.005
     ? `${discountPercent > 0.005 ? `−${discountPercent.toFixed(1)}% • ` : ""}−${money(discount)}`
     : "Nincs";
+
+  if (isReturnOnly(sale)) return (
+    <div className={`${compact ? "w-[184px]" : "w-[210px]"} ml-auto overflow-hidden rounded-xl border border-white/10 bg-[#293548]/72 text-[10px]`}>
+      <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+        <span className="text-white/55">Visszahozott érték</span>
+        <span className="whitespace-nowrap tabular-nums text-white">{money(sale.lineTotal)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-2 border-t border-white/10 px-2.5 py-2">
+        <span className="text-[#bff8f5]/70">Különbözet</span>
+        <span className="whitespace-nowrap tabular-nums text-[#d7fffd]">{money(sale.exchangeDifference ?? sale.total)}</span>
+      </div>
+    </div>
+  );
 
   return (
     <div className={`${compact ? "w-[184px]" : "w-[210px]"} ml-auto overflow-hidden rounded-xl border border-white/10 bg-[#293548]/72 text-[10px] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]`}>
@@ -915,7 +933,7 @@ function AdminExchangeDetails({ locationCode, exchangeId }: { locationCode: stri
       {[
         ["Visszahozott érték", exchange.returnCredit],
         ["Elvitt érték kedvezmény után", exchange.replacementTotal],
-        [difference > 0.005 ? "Különbözet · vevő ráfizetése" : difference < -0.005 ? "Különbözet · vevő javára" : "Értékazonos csere", Math.abs(difference)],
+        [difference > 0.005 ? "Különbözet · vevő ráfizetése" : difference < -0.005 ? "Különbözet · vevő javára" : detail.lines.length ? "Értékazonos csere" : "Pénzügyi különbözet", Math.abs(difference)],
       ].map(([label, amount]) => <div key={String(label)} className="rounded-xl bg-white/[0.04] px-3 py-2">
         <p className="text-[11px] text-white/55">{label}</p><p className="mt-1 text-lg tabular-nums text-white">{money(Number(amount))}</p>
       </div>)}
@@ -1035,7 +1053,7 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
     return (
       <span
         className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#9bc8ff]/38 bg-[#3978b9]/18 text-[#cfe5ff]"
-        title="Korábbi vásárlás fizetési eseménye • nincs új készletmozgás"
+        title="Hiteles vásárlás fizetési eseménye • nincs új készletmozgás"
         aria-label="Fizetési esemény"
       >
         <WalletCards size={15} />
@@ -1337,12 +1355,13 @@ function SalesVolumeMetricButton({
 }
 
 function SalesVolumeCard({
-  transactions, itemsSold, previousTransactions, previousItemsSold,
+  transactions, itemsSold, previousTransactions, previousItemsSold, settledCreditItems,
 }: {
   transactions: number;
   itemsSold: number;
   previousTransactions: number;
   previousItemsSold: number;
+  settledCreditItems: number;
 }) {
   const [transactionsView, setTransactionsView] = useState<"value" | "percent">("value");
   const [itemsView, setItemsView] = useState<"value" | "percent">("value");
@@ -1357,13 +1376,13 @@ function SalesVolumeCard({
       </div>
       <div className="relative mt-auto grid min-w-0 grid-cols-2 gap-2 pt-2">
         <SalesVolumeMetricButton
-          label="Eladások"
+          label="Új eladások"
           icon={ReceiptText}
           view={transactionsView}
           value={integer(transactions)}
           delta={percentChange(transactions, previousTransactions)}
           onClick={() => setTransactionsView((current) => current === "value" ? "percent" : "value")}
-          title="Eladások darabszáma / százalékos változás"
+          title="Új eladások / százalékos változás (a hitelbefizetés nem új tranzakció)"
         />
         <SalesVolumeMetricButton
           label="Eladott termékek"
@@ -1372,9 +1391,10 @@ function SalesVolumeCard({
           value={`${integer(itemsSold)} db`}
           delta={percentChange(itemsSold, previousItemsSold)}
           onClick={() => setItemsView((current) => current === "value" ? "percent" : "value")}
-          title="Eladott darabszám / százalékos változás"
+          title="Eladott darabszám, a teljesen rendezett hiteles termékekkel együtt / százalékos változás"
         />
       </div>
+      {settledCreditItems > 0 ? <p className="relative mt-2 text-[10px] leading-tight text-[#bff8f5]/75" title="A hiteles termék teljes rendezésekor egyszer kerül a darabszámba">Ebből rendezett hitel: {integer(settledCreditItems)} db</p> : null}
     </article>
   );
 }
@@ -1802,6 +1822,7 @@ export default function AllInAdminMagazinDashboard({
   const [showHistoricalCreditRows, setShowHistoricalCreditRows] = useState(false);
   const [eventLogRowNumberDescending, setEventLogRowNumberDescending] = useState(true);
   const [expandedExchangeKey, setExpandedExchangeKey] = useState<string | null>(null);
+  const [expandedSettlementKey, setExpandedSettlementKey] = useState<string | null>(null);
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [saleLineNoteThreads, setSaleLineNoteThreads] = useState<Record<string, AifShopSaleLineNoteThread>>({});
   const [saleLineNoteTarget, setSaleLineNoteTarget] = useState<AifAdminShopRecentSale | null>(null);
@@ -2113,7 +2134,8 @@ export default function AllInAdminMagazinDashboard({
   const receiptLines = useMemo(() => {
     if (!receiptTarget) return [] as AifAdminShopRecentSale[];
     const matching = (data?.recentSales || []).filter(
-      (sale) => sale.saleNumber === receiptTarget.saleNumber,
+      (sale) => !isPaymentSettlement(sale) && sale.saleId === receiptTarget.saleId
+        && (sale.recordType || "sale") === (receiptTarget.recordType || "sale"),
     );
     return matching.length ? matching : [receiptTarget];
   }, [data?.recentSales, receiptTarget]);
@@ -2198,14 +2220,14 @@ export default function AllInAdminMagazinDashboard({
     [data?.recentSales, showCreditRowsInEventLog, showHistoricalCreditRows],
   );
   const eventLogProductCount = useMemo(
-    () => eventLogSales.filter((sale) => !isPaymentSettlement(sale)).length,
+    () => eventLogSales.filter((sale) => !isPaymentSettlement(sale) && !isReturnOnly(sale)).length,
     [eventLogSales],
   );
   const eventLogRowNumbers = useMemo(() => {
     const numbers = new Map<string, number>();
     let ordinal = 0;
     for (const sale of eventLogSales) {
-      if (isPaymentSettlement(sale)) continue;
+      if (isPaymentSettlement(sale) || isReturnOnly(sale)) continue;
       ordinal += 1;
       numbers.set(
         String(sale.lineId || sale.id || ordinal),
@@ -2631,7 +2653,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Bruttó"
             value={money(summary?.salesBeforeDiscount)}
-            hint="Napi elszámolási bruttó • korábbi tartozások befizetésével"
+            hint="Kedvezmény előtt • hitelbefizetésekkel"
             icon={CircleDollarSign}
             current={numberValue(summary?.salesBeforeDiscount)}
             previous={numberValue(previous?.salesBeforeDiscount)}
@@ -2640,7 +2662,7 @@ export default function AllInAdminMagazinDashboard({
           <MetricCard
             title="Napi bevétel"
             value={money(summary?.revenue)}
-            hint="TVA-val, kedvezmény után • hitel nélkül"
+            hint="TVA-val, kedvezmény után • befizetésekkel"
             icon={CircleDollarSign}
             current={numberValue(summary?.revenue)}
             previous={numberValue(previous?.revenue)}
@@ -2651,6 +2673,7 @@ export default function AllInAdminMagazinDashboard({
             itemsSold={numberValue(summary?.itemsSold)}
             previousTransactions={numberValue(previous?.transactions)}
             previousItemsSold={numberValue(previous?.itemsSold)}
+            settledCreditItems={numberValue((summary as (AifAdminShopOverviewResponse["summary"] & { settledCreditItems?: number }) | undefined)?.settledCreditItems)}
           />
           <MetricCard
             title="Kedvezmény"
@@ -2796,13 +2819,13 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Csak a kiválasztott üzleti eladások</h2>
               </div>
               <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-3 py-1 text-[10px] text-[#cffffd]/70">
-                Hitel nélkül
+                Rendezett hitelekkel
               </span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {[
-                ["Eladott • hitel nélkül", `${integer(summary?.itemsSold)} db`, "text-[#bff8f5]"],
-                ["Eladás • hitel nélkül", integer(summary?.transactions), "text-white"],
+                ["Eladott • rendezett hitelekkel", `${integer(summary?.itemsSold)} db`, "text-[#bff8f5]"],
+                ["Eladások • új tranzakciók", integer(summary?.transactions), "text-white"],
                 ["Fizetve", money(summary?.paidTotal), "text-emerald-100"],
                 ["Kedvezmény", money(summary?.discountTotal), "text-amber-50"],
               ].map(([title, value, tone]) => (
@@ -2823,7 +2846,7 @@ export default function AllInAdminMagazinDashboard({
                 <h2 className="mt-1 text-base">Napi forgalom alakulása</h2>
               </div>
               <div className="flex items-center gap-4 text-[10px] text-white/48">
-                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#49d2ca]" /> Forgalom • hitel nélkül</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#49d2ca]" /> Forgalom • befizetésekkel</span>
                 <span>{data?.period.from} → {data?.period.to}</span>
               </div>
             </div>
@@ -2860,7 +2883,7 @@ export default function AllInAdminMagazinDashboard({
           <div className={`${card} overflow-hidden`}>
             <div className="border-b border-white/10 px-4 py-3">
               <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Csapat</p>
-              <h2 className="mt-1 text-base">Eladók teljesítménye • hitel nélkül</h2>
+              <h2 className="mt-1 text-base">Eladók teljesítménye • rendezett hitelekkel</h2>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[760px] border-collapse text-xs">
@@ -2940,7 +2963,8 @@ export default function AllInAdminMagazinDashboard({
                     const lineNoteThread = !settlement ? saleLineNoteThreads[String(sale.lineId || "")] || null : null;
                     const productNoteText = String(lineNoteThread?.notes?.slice(-1)[0]?.note || lineNoteThread?.saleNote || "").trim();
                     const hasProductNote = Boolean(productNoteText || lineNoteThread?.notes?.length);
-                    const rowNumber = settlement
+                    const returnOnly = isReturnOnly(sale);
+                    const rowNumber = settlement || returnOnly
                       ? null
                       : eventLogRowNumbers.get(String(sale.lineId || sale.id || index)) ?? null;
                     const isExchange = !settlement && (sale.recordType === "exchange" || sale.saleType === "exchange");
@@ -2948,6 +2972,9 @@ export default function AllInAdminMagazinDashboard({
                     const exchangeKey = `${locationCode}:${applied.from}:${applied.to}:${applied.employee}:${exchangeId}:${sale.lineId || index}`;
                     const exchangeExpanded = expandedExchangeKey === exchangeKey;
                     const exchangeRegionId = `admin-exchange-${sale.lineId || sale.id || index}`;
+                    const settlementKey = `${locationCode}:${applied.from}:${applied.to}:${sale.lineId || sale.id || index}`;
+                    const settlementExpanded = settlement && expandedSettlementKey === settlementKey;
+                    const settlementRegionId = `admin-settlement-${sale.lineId || sale.id || index}`;
                     return (
                     <Fragment key={`${sale.recordType || "sale"}:${sale.lineId || sale.id || index}`}>
                     <tr
@@ -2966,6 +2993,8 @@ export default function AllInAdminMagazinDashboard({
                           >
                             {rowNumber}
                           </span>
+                        ) : returnOnly ? (
+                          <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-xl border border-amber-200/25 bg-amber-400/10 px-2 text-[9px] text-amber-100" title="Visszáru, nem új termékeladás">VÁ</span>
                         ) : (
                           <span
                             className="inline-flex h-8 min-w-8 items-center justify-center rounded-xl border border-[#9bc8ff]/30 bg-[#3978b9]/14 px-2 text-[9px] text-[#d9ecff]"
@@ -2995,7 +3024,7 @@ export default function AllInAdminMagazinDashboard({
                             {settlement ? (
                               <div className="mt-2 flex max-w-[268px] items-start gap-1.5 rounded-lg border border-[#9bc8ff]/25 bg-[#3978b9]/12 px-2 py-1.5 text-[10px] leading-[1.45] text-[#d9ecff]">
                                 <WalletCards size={12} className="mt-0.5 shrink-0 text-[#9bc8ff]" />
-                                <span className="min-w-0 break-words">Korábbi vásárlás befizetése. Nem új eladás, nincs készletmozgás.</span>
+                                <span className="min-w-0 break-words">{settlementMeta.originalSoldAt && sale.soldAt && localIsoDate(new Date(settlementMeta.originalSoldAt)) === localIsoDate(new Date(sale.soldAt)) ? "Aznapi hitel rendezése." : "Korábbi vásárlás befizetése."} Nem új eladás, nincs készletmozgás.</span>
                               </div>
                             ) : sale.dailyCategory === "credit" ? (
                               <div className="mt-2 flex max-w-[268px] items-start gap-1.5 rounded-lg border border-rose-200/22 bg-rose-500/8 px-2 py-1.5 text-[10px] leading-[1.45] text-rose-100/85">
@@ -3045,13 +3074,19 @@ export default function AllInAdminMagazinDashboard({
                           <button type="button" aria-expanded={exchangeExpanded} aria-controls={exchangeRegionId}
                             onClick={() => setExpandedExchangeKey(exchangeExpanded ? null : exchangeKey)}
                             className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border border-[#8ee6e2]/20 bg-[#2a8d8b]/20 px-2.5 text-xs text-[#cffffd] transition hover:bg-[#2a8d8b]/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8ee6e2]">
-                            <ArrowRightLeft size={13} />Csere<ChevronDown size={13} className={exchangeExpanded ? "rotate-180" : ""} />
+                            <ArrowRightLeft size={13} />{returnOnly ? "Visszáru" : "Csere"}<ChevronDown size={13} className={exchangeExpanded ? "rotate-180" : ""} />
+                          </button>
+                        ) : settlement ? (
+                          <button type="button" aria-expanded={settlementExpanded} aria-controls={settlementRegionId}
+                            onClick={() => setExpandedSettlementKey(settlementExpanded ? null : settlementKey)}
+                            className="inline-flex min-h-8 items-center justify-center gap-1 rounded-lg border border-[#9bc8ff]/35 bg-[#3978b9]/15 px-2 text-[10px] text-[#d9ecff] transition hover:bg-[#3978b9]/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#9bc8ff]">
+                            <WalletCards size={12} /> Hitelbefizetés <ChevronDown size={12} className={settlementExpanded ? "rotate-180" : ""} />
                           </button>
                         ) : <span
                           className={`inline-flex max-w-full items-center justify-center rounded-lg border px-2 py-1.5 text-[10px] leading-tight ${settlement
                             ? "whitespace-nowrap border-[#9bc8ff]/35 bg-[#3978b9]/15 text-[#d9ecff]"
                             : saleTypeBadge(sale.saleType, sale.balanceDue)}`}
-                          title={settlement ? "Korábbi vásárlás tartozásának befizetése" : settlementTypeLabel(sale)}
+                          title={settlement ? "Hiteles vásárlás tartozásának befizetése" : settlementTypeLabel(sale)}
                         >
                           {settlementTypeLabel(sale)}
                         </span>}
@@ -3070,8 +3105,10 @@ export default function AllInAdminMagazinDashboard({
                       </td>
                       <td className="w-[142px] min-w-[142px] px-2 py-3 align-middle">
                         <div className="flex min-w-0 flex-col items-center justify-center gap-2">
-                          {settlement ? (
-                            <span className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#9bc8ff]/38 bg-[#3978b9]/14 px-2 py-1 text-center text-[10px] leading-[1.3] text-[#d9ecff]" title="Korábbi vásárlás befizetési eseménye, nem új eladás">
+                          {returnOnly ? (
+                            <span className="inline-flex items-center justify-center gap-1 rounded-lg border border-amber-200/25 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-100"><RotateCcw size={12} /> Visszavéve</span>
+                          ) : settlement ? (
+                            <span className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#9bc8ff]/38 bg-[#3978b9]/14 px-2 py-1 text-center text-[10px] leading-[1.3] text-[#d9ecff]" title="Hiteles vásárlás befizetési eseménye, nem új eladás">
                               <CheckCircle2 size={12} className="shrink-0" /> Rögzítve
                             </span>
                           ) : (
@@ -3086,6 +3123,7 @@ export default function AllInAdminMagazinDashboard({
                                 || sale.settlementMethod || ""
                             ).trim().toLowerCase();
 
+                            if (returnOnly) return <span className="text-[10px] text-white/55">{numberValue(sale.exchangeDifference) === 0 ? "0 pénzügyi különbözet" : "Részletek a lenyílóban"}</span>;
                             if (sale.dailyCategory === "credit") {
                               return (
                                 <span className="inline-flex items-center justify-center rounded-lg border border-red-300/40 bg-[#E21C2A] px-2 py-1 text-center text-[10px] leading-[1.3] text-white">
@@ -3109,7 +3147,10 @@ export default function AllInAdminMagazinDashboard({
                         <div className="flex flex-col items-center justify-center gap-1.5">
                           <SaleRowActionMenu
                             sale={sale}
-                            onReceipt={setReceiptTarget}
+                            onReceipt={(selected) => {
+                              if (returnOnly) setExpandedExchangeKey(exchangeKey);
+                              else setReceiptTarget(selected);
+                            }}
                             onDelete={(sale) => {
                               setDeleteError("");
                               setDeleteTarget(sale);
@@ -3133,6 +3174,24 @@ export default function AllInAdminMagazinDashboard({
                         </div>
                       </td>
                     </tr>
+                    {settlementExpanded ? (
+                      <tr className="border-t border-[#9bc8ff]/15 bg-[#293548]">
+                        <td colSpan={10} className="p-3">
+                          <div id={settlementRegionId} role="region" aria-label="Hitelbefizetés részletei" className="rounded-2xl border border-[#9bc8ff]/20 bg-[#243245] p-3 sm:p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#cfe5ff]">
+                              <span className="flex items-center gap-2"><WalletCards size={15} /> {sale.saleNumber} · {sale.productTitle || "Termék"}</span>
+                              <span>{sale.customerName || "Nincs kliens megadva"}</span>
+                            </div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                              {[["Eredeti eladás", dateTime(settlementMeta.originalSoldAt)], ["Befizetés", dateTime(sale.soldAt)], ["Terméksori befizetés", money(settlementMeta.settlementAmount)], ["Rögzítette", sale.actor || "–"]].map(([label,value]) => (
+                                <div key={label} className="min-w-0 rounded-xl bg-white/[0.04] px-3 py-2"><p className="text-[10px] text-white/55">{label}</p><p className="mt-1 break-words text-sm tabular-nums text-white">{value}</p></div>
+                              ))}
+                            </div>
+                            <p className="mt-2 text-[11px] text-white/55">{settlementMeta.settlementApproximate ? "Régi befizetés: arányos terméksori felosztás. " : ""}A befizetés nem új eladás és nem mozgat készletet.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
                     {isExchange && exchangeExpanded ? (
                       <tr className="border-t border-[#8ee6e2]/10 bg-[#293548]">
                         <td colSpan={10} className="p-3">
@@ -3151,7 +3210,7 @@ export default function AllInAdminMagazinDashboard({
                 <div className="px-4 py-12 text-center">
                   <ReceiptText className="mx-auto text-[#7bd7d4]/70" size={28} />
                   <p className="mt-2 text-sm text-white">Nincs eladási vagy fizetési esemény ebben az időszakban.</p>
-                  <p className="mt-1 text-xs text-white/42">{showHistoricalCreditRows ? "Itt az adott nap hitellel elvitt termékei látszanak, a későbbi rendezések nélkül." : "A lista az eladásokat, cseréket és a korábbi vásárlások későbbi rendezéseit is mutatja."}</p>
+                  <p className="mt-1 text-xs text-white/42">{showHistoricalCreditRows ? "Itt az adott nap hitellel elvitt termékei látszanak, a későbbi rendezések nélkül." : "A lista az eladásokat, cseréket, visszárukat és az aznapi vagy későbbi hitelbefizetéseket is mutatja."}</p>
                 </div>
               ) : null}
             </div>
