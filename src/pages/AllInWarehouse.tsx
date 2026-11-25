@@ -8175,6 +8175,10 @@ export default function AllInWarehouse() {
   const labelBarcodeInFlightRef = useRef<Set<string>>(new Set());
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [labelPrintFlow, setLabelPrintFlow] = useState<WarehouseLabelPrintFlow | null>(null);
+  // AIF_LABEL_PRINT_LOCK: az első kattintáskor, még az első await előtt foglaljuk le.
+  // Nem egy termékhez vagy számlához kötött tiltás: lezárás után ismét nyomtatható.
+  const labelPrintLockRef = useRef<"printing" | "confirm" | "clearing" | null>(null);
+  const [labelPrintBusy, setLabelPrintBusy] = useState(false);
   const [labelStockLimitById, setLabelStockLimitById] = useState<Record<string, number>>({});
   const [labelStockCheckById, setLabelStockCheckById] = useState<Record<string, WarehouseLabelStockCheckRow>>({});
   const [labelRelabelExtraById, setLabelRelabelExtraById] = useState<Record<string, number>>({});
@@ -13003,11 +13007,15 @@ export default function AllInWarehouse() {
   }
 
   async function clearLabelSelectionIds(idsInput: Iterable<string>, source: "manual" | "printed") {
+    if (labelCleanupBusy || (source === "printed" ? labelPrintLockRef.current !== "confirm" : Boolean(labelPrintLockRef.current))) return;
+    if (source === "printed") labelPrintLockRef.current = "clearing";
+    let confirmationResolved = false;
     const ids = Array.from(new Set(Array.from(idsInput, (value) => String(value || "").trim()).filter(Boolean)));
     if (!ids.length) {
       setLabelClearConfirmOpen(false);
       setLabelPrintFlow(null);
       setMessage("A címkelista már üres.");
+      if (source === "printed") labelPrintLockRef.current = null;
       return;
     }
 
@@ -13029,6 +13037,7 @@ export default function AllInWarehouse() {
       setLabelClearConfirmOpen(false);
       setLabelPrintFlow(null);
       setLabelComposerOpen(false);
+      confirmationResolved = true;
       if (remainingLabelCount === 0) setSelectedWorkPanel(null);
 
       const noun = source === "printed" ? "feldolgozott tételt" : "terméket";
@@ -13038,12 +13047,20 @@ export default function AllInWarehouse() {
           : `${ids.length} ${noun} levettem a helyi címkelistáról, de a szerveres kijelölés mentése nem sikerült. Frissítés után ellenőrizd a listát.`
       );
     } finally {
+      if (source === "printed") labelPrintLockRef.current = confirmationResolved ? null : "confirm";
       setLabelCleanupBusy(false);
     }
   }
 
+  function keepLabelListAfterPrint() {
+    if (labelPrintLockRef.current !== "confirm" || labelCleanupBusy) return;
+    labelPrintLockRef.current = null;
+    setLabelPrintFlow(null);
+    setMessage("A címkelistát megtartottam. Így tudsz újranyomtatni vagy ellenőrizni, ha valami nem jött ki rendesen.");
+  }
+
   function requestClearAllLabelSelections() {
-    if (!selectedLabelItems.length || labelCleanupBusy) return;
+    if (!selectedLabelItems.length || labelCleanupBusy || labelPrintLockRef.current) return;
     setLabelClearConfirmOpen(true);
   }
 
@@ -13426,6 +13443,7 @@ export default function AllInWarehouse() {
   }
 
   async function openLabelComposer() {
+    if (labelPrintLockRef.current || labelCleanupBusy) return;
     setLabelCopiesImportedFromCsv(false);
     setLabelCopiesUploadStatus(null);
     setLabelPrintFlow(null);
@@ -14023,9 +14041,31 @@ export default function AllInWarehouse() {
   }, [labelW, labelH]);
 
   async function printGeneratedLabels(options: { testOnly?: boolean } = {}) {
+    if (labelPrintLockRef.current || labelCleanupBusy || labelDetailsBusy || labelPrintFlow) return;
+    labelPrintLockRef.current = "printing";
+    setLabelPrintBusy(true);
+    try {
+      const sent = await runGeneratedLabelPrint(options);
+      if (sent && !options.testOnly) {
+        // A böngésző visszatért, de a teljes csomagot még vissza kell igazolni.
+        labelPrintLockRef.current = "confirm";
+        setLabelPrintFlow((current) => current ? { ...current, phase: "confirm", progress: 100 } : current);
+      } else {
+        setLabelPrintFlow(null);
+      }
+    } catch (error) {
+      setLabelPrintFlow(null);
+      setMessage(error instanceof Error && error.message ? `A nyomtatás nem indult el: ${error.message}` : "A nyomtatás nem indult el.");
+    } finally {
+      if (labelPrintLockRef.current === "printing") labelPrintLockRef.current = null;
+      setLabelPrintBusy(false);
+    }
+  }
+
+  async function runGeneratedLabelPrint(options: { testOnly?: boolean }) {
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
-      return;
+      return false;
     }
 
     const trackedPrint = !options.testOnly;
@@ -14050,7 +14090,7 @@ export default function AllInWarehouse() {
       setMessage(error instanceof Error
         ? `Nyomtatás leállítva: ${error.message}`
         : "Nyomtatás leállítva, mert a friss készlet nem ellenőrizhető.");
-      return;
+      return false;
     }
 
     const changedApproval = selectedLabelItems.some((item) => {
@@ -14061,7 +14101,7 @@ export default function AllInWarehouse() {
       if (trackedPrint) setLabelPrintFlow(null);
       setLabelComposerOpen(false);
       setMessage("Az átárazási címkék száma időközben megváltozott. Nyisd meg újra a címkelistát és ellenőrizd a példányszámokat; a nyomtatás nem indult el.");
-      return;
+      return false;
     }
 
     const safeRows = labelRowsForPrint.map((row) => ({
@@ -14073,7 +14113,7 @@ export default function AllInWarehouse() {
       if (trackedPrint) setLabelPrintFlow(null);
       const first = invalidRows[0];
       setMessage(`${invalidRows.length} termék címkéje nem nyomtatható, mert nincs mentett, érvényes bárkód. Első érintett: ${first.title || first.id}.`);
-      return;
+      return false;
     }
 
     const safePrintItems: WarehouseLabelPrintItem[] = [];
@@ -14105,7 +14145,7 @@ export default function AllInWarehouse() {
     if (!printItems.length) {
       if (trackedPrint) setLabelPrintFlow(null);
       setMessage("A friss készletellenőrzés után nincs nyomtatható címke. Az elfogyott vagy kivett tételeket 0 darabra állítottam.");
-      return;
+      return false;
     }
 
     const printedVariantIds = Array.from(new Set(printItems.map((item) => String(item.variantId || "").trim()).filter(Boolean)));
@@ -14175,7 +14215,7 @@ export default function AllInWarehouse() {
       iframe.remove();
       if (trackedPrint) setLabelPrintFlow(null);
       setMessage("A böngésző nem engedte megnyitni a nyomtatási keretet.");
-      return;
+      return false;
     }
 
     let cleaned = false;
@@ -14183,47 +14223,69 @@ export default function AllInWarehouse() {
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      if (cleanupTimer) window.clearTimeout(cleanupTimer);
+      if (cleanupTimer !== undefined) window.clearTimeout(cleanupTimer);
       iframe.remove();
     };
 
-    printWindow.addEventListener("afterprint", cleanup, { once: true });
-    printDocument.open();
-    printDocument.write(printHtml);
-    printDocument.close();
+    try {
+      printWindow.addEventListener("afterprint", cleanup, { once: true });
+      printDocument.open();
+      printDocument.write(printHtml);
+      printDocument.close();
 
-    if (trackedPrint) {
-      setLabelPrintFlow((current) => current ? { ...current, progress: 70 } : current);
-    }
-
-    const runPrint = () => {
-      void printDocument.documentElement.offsetHeight;
-      void printDocument.body?.offsetHeight;
       if (trackedPrint) {
-        setLabelPrintFlow((current) => current ? { ...current, phase: "printing", progress: 94 } : current);
+        setLabelPrintFlow((current) => current ? { ...current, progress: 70 } : current);
       }
 
-      window.setTimeout(() => {
-        try {
-          printWindow.focus();
-          printWindow.print();
-          if (!cleaned) cleanupTimer = window.setTimeout(cleanup, 60000);
-          if (trackedPrint) {
-            setLabelPrintFlow((current) => current ? { ...current, phase: "confirm", progress: 100 } : current);
+      // Várjuk meg a tényleges print() hívást. Az előkészítés és a késleltetett
+      // callback között sem szabad feloldani a nyomtatási zárat.
+      return await new Promise<boolean>((resolve, reject) => {
+        let started = false;
+        let fallbackTimer: number | undefined;
+        const runPrint = () => {
+          // Az iframe RAF-je és a tartalék időzítő közül csak az első indíthat.
+          if (started) return;
+          started = true;
+          if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+          try {
+            if (cleaned) throw new Error("A nyomtatási keret idő előtt bezárult.");
+            void printDocument.documentElement.offsetHeight;
+            void printDocument.body?.offsetHeight;
+            if (trackedPrint) {
+              setLabelPrintFlow((current) => current ? { ...current, phase: "printing", progress: 94 } : current);
+            }
+            printWindow.focus();
+            printWindow.print();
+            if (!cleaned) cleanupTimer = window.setTimeout(cleanup, 60000);
+            resolve(true);
+          } catch (error) {
+            cleanup();
+            reject(error);
           }
-        } catch (error) {
-          cleanup();
-          if (trackedPrint) setLabelPrintFlow(null);
-          setMessage(error instanceof Error && error.message ? `A nyomtatás nem indult el: ${error.message}` : "A nyomtatás nem indult el.");
-        }
-      }, trackedPrint ? 120 : 0);
-    };
+        };
 
-    printWindow.requestAnimationFrame(() => {
-      printWindow.requestAnimationFrame(() => {
-        window.setTimeout(runPrint, labelPrintMode === "zebra" ? 120 : 0);
+        // Régi böngészőben vagy rejtett iframe-nél a RAF elmaradhat.
+        // A tartalék NEM új nyomtatás: ugyanazt az egyszer futó callbacket hívja.
+        fallbackTimer = window.setTimeout(runPrint, 1800);
+        try {
+          printWindow.requestAnimationFrame(() => {
+            if (started) return;
+            try {
+              printWindow.requestAnimationFrame(() => {
+                if (!started) window.setTimeout(runPrint, (labelPrintMode === "zebra" ? 120 : 0) + (trackedPrint ? 120 : 0));
+              });
+            } catch {
+              // A tartalék időzítő továbbra is aktív.
+            }
+          });
+        } catch {
+          // A fenti tartalék időzítő ilyenkor is biztosítja az egyszeri indítást.
+        }
       });
-    });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
   }
 
   function WarehouseZebraLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
@@ -17926,7 +17988,7 @@ export default function AllInWarehouse() {
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/[0.12] bg-[#3f4959] px-4 text-sm text-white/88 transition hover:bg-[#485467] disabled:cursor-not-allowed disabled:opacity-45"
                   type="button"
                   disabled={labelCleanupBusy}
-                  onClick={() => { setLabelPrintFlow(null); setMessage("A címkelistát megtartottam. Így tudsz újranyomtatni vagy ellenőrizni, ha valami nem jött ki rendesen."); }}
+                  onClick={keepLabelListAfterPrint}
                 >
                   <Printer size={16} /> Nem, maradjon a lista
                 </button>
@@ -17948,21 +18010,21 @@ export default function AllInWarehouse() {
                 <h2 className="mt-1 text-lg text-white">{labelRowsForPrint.length} termék • {labelPrintItems.length} címke</h2>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><ArrowLeft size={15} /> Vissza</button>
+                <button className={btnSoft} onClick={() => { if (!labelPrintLockRef.current) setLabelComposerOpen(false); }} disabled={labelPrintBusy || Boolean(labelPrintFlow)} type="button"><ArrowLeft size={15} /> Vissza</button>
                 <button
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/30 bg-rose-500/12 px-3 text-xs text-rose-50 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-45 font-normal"
                   onClick={requestClearAllLabelSelections}
-                  disabled={!selectedLabelItems.length || labelCleanupBusy}
+                  disabled={!selectedLabelItems.length || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)}
                   type="button"
                   title="Csak a Vonalkód / címke listát üríti. A termékek és a készlet nem törlődnek."
                 >
                   <Trash2 size={14} /> Minden kijelölés törlése
                 </button>
                 {labelPrintMode === "zebra" ? (
-                  <button className={btnSoft} onClick={() => void printGeneratedLabels({ testOnly: true })} disabled={!labelPrintReady || labelCleanupBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A teszthez is minden termékhez mentett, egyedi bárkód kell." : "Egyetlen 40×46 mm-es tesztcímke nyomtatása"} type="button"><Printer size={15} /> Teszt 1 címke</button>
+                  <button className={btnSoft} onClick={() => void printGeneratedLabels({ testOnly: true })} disabled={!labelPrintReady || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A teszthez is minden termékhez mentett, egyedi bárkód kell." : "Egyetlen 40×46 mm-es tesztcímke nyomtatása"} type="button"><Printer size={15} /> Teszt 1 címke</button>
                 ) : null}
-                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => void printGeneratedLabels()} disabled={!labelPrintReady || labelCleanupBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Printer size={15} /> {labelPrintMode === "zebra" ? `Nyomtatás Zebra (${labelPrintItems.length})` : "Nyomtatás A4"}</button>
-                <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><X size={15} /> Bezárás</button>
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => void printGeneratedLabels()} disabled={!labelPrintReady || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Printer size={15} /> {labelPrintBusy ? "Nyomtatás folyamatban…" : labelPrintMode === "zebra" ? `Nyomtatás Zebra (${labelPrintItems.length})` : "Nyomtatás A4"}</button>
+                <button className={btnSoft} onClick={() => { if (!labelPrintLockRef.current) setLabelComposerOpen(false); }} disabled={labelPrintBusy || Boolean(labelPrintFlow)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
@@ -18189,7 +18251,7 @@ export default function AllInWarehouse() {
                       <button
                         className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/46 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
                         onClick={() => labelCopiesUploadRef.current?.click()}
-                        disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
+                        disabled={labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)}
                         type="button"
                       ><FileText size={14} /> Pótló CSV betöltése</button>
                     </div>
@@ -18434,7 +18496,7 @@ export default function AllInWarehouse() {
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/30 bg-rose-500/12 px-3 text-xs text-rose-50 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-45 font-normal"
                       onClick={requestClearAllLabelSelections}
                       type="button"
-                      disabled={!selectedLabelItems.length || labelCleanupBusy}
+                      disabled={!selectedLabelItems.length || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)}
                       title="Csak a címke munkalistát üríti. A termékek és a készlet nem törlődnek."
                     >
                       <Trash2 size={14} /> Minden kijelölés törlése
@@ -18443,12 +18505,12 @@ export default function AllInWarehouse() {
                       <input
                         type="checkbox"
                         checked={labelPreprint}
-                        disabled={labelDetailsBusy || labelCleanupBusy || Boolean(labelPrintFlow)}
+                        disabled={labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)}
                         onChange={(e) => setLabelPreprint(e.target.checked)}
                       />
                       Előzetes címkenyomtatás
                     </label>
-                    <button className={primaryBtn} onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy || labelCleanupBusy}>
+                    <button className={primaryBtn} onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)}>
                       <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Címkék előkészítése"}
                     </button>
                   </>
