@@ -3189,6 +3189,82 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
 
+  // AIF_IMPORT_CATEGORY_SOURCE_V32_20261126
+  const AIF_EXACT_IMPORT_TYPE_GROUPS = {
+    caciula: ["accesorii_caciula", "caciula", "caciuli", "sapka", "sapkak", "beanie", "beanies", "fes", "fesuri"],
+    sapca: ["accesorii_sepci", "sapca", "sepci", "baseball cap", "baseball caps"],
+    bluza: ["imbracaminte_bluza", "bluza", "bluze", "bluz", "bluzok"],
+    blugi: ["imbracaminte_blugi", "blugi", "jeans", "farmer", "farmernadrag"],
+    pantaloni: ["imbracaminte_pantaloni", "pantaloni", "pantalon", "nadrag", "pants", "trousers"],
+    rochie: ["imbracaminte_rochie", "rochie", "rochii", "rochita", "dress", "ruha"],
+    trening: ["imbracaminte_treninguri", "trening", "treninguri", "tracksuit"],
+    geaca: ["jachete_jachete", "geaca", "geci", "jacheta", "jachete", "dzseki", "dzsekik", "jacket"],
+    palton: ["palton", "paltoane", "kabát", "kabátok", "coat"],
+    body: ["body", "bodyuri", "body-uri", "bodysuit", "bodysuits"],
+    elastic_de_par: ["elastic de par", "elastice de par", "hajgumi", "hair tie"],
+  };
+  const aifSourceTypeHeaders = ["RODESCR","RO DESCR","RO_DESCR"];
+  const aifSourceMainCategoryHeaders = ["CATEGORIE","CATEGORIE / APP / ACC","CATEGORY","CATEGORIA","CATEGORIE PRODUS","PRODUCT CATEGORY"];
+  function aifImportSourceType(n, raw) {
+    return text(rawValueByHeaders(raw,aifSourceTypeHeaders) || n?.aifSourceProductType);
+  }
+  function aifExactImportCategory(candidates, value) {
+    const key=normCode(value);
+    const matches=candidates.filter(c=>[c.id,c.code].some(v=>normCode(v)===key));
+    return key && matches.length===1 ? matches[0] : null;
+  }
+  function aifStrictImportCategorySelection(n, source, categories) {
+    const active=categories.filter(c=>c.is_active!==false);
+    const roots=active.filter(c=>!c.parent_id);
+    const subs=active.filter(c=>c.parent_id && roots.some(p=>String(p.id)===String(c.parent_id)));
+    const parentOf=c=>roots.find(p=>String(p.id)===String(c?.parent_id))||null;
+    const sourceKey=normCode(source);
+    if (n._manualCategory || n._manualSubCategory) {
+      const sub=aifExactImportCategory(subs,n.subCategoryCode||n.subcategoryCode);
+      const main=aifExactImportCategory(roots,n.categoryCode||n.parentCategoryCode);
+      if(sub && (!n._manualCategory || !main || String(sub.parent_id)===String(main.id))) return {main:parentOf(sub),sub,error:''};
+      return {main,sub:null,error:source ? `A(z) ${source} forrástípushoz válassz érvényes alkategóriát.` : ''};
+    }
+    const known=Object.entries(AIF_EXACT_IMPORT_TYPE_GROUPS).find(([k,aliases])=>[k,...aliases].some(v=>normCode(v)===sourceKey));
+    const keys=new Set([source,...(known?.[1]||[])].map(normCode).filter(Boolean));
+    const values=c=>[c.id,c.code,c.name_ro,c.name_hu,...(Array.isArray(c.aliases)?c.aliases:[])];
+    const preferred=known?.[1]?.[0];
+    const preferredSub=preferred && preferred.includes('_') ? aifExactImportCategory(subs,preferred):null;
+    const direct=subs.filter(c=>values(c).some(v=>normCode(v)===sourceKey));
+    const semantic=subs.filter(c=>values(c).some(v=>keys.has(normCode(v))));
+    const matches=direct.length ? direct:semantic;
+    const sub=preferredSub||(matches.length===1?matches[0]:null);
+    if(sub) return {main:parentOf(sub),sub,error:''};
+    if(known?.[0]==='elastic_de_par' && !matches.length) {
+      const main=aifExactImportCategory(roots,'ACCESORII');
+      if(main) return {main,sub:null,error:''};
+    }
+    return {main:null,sub:null,error:matches.length>1 ? `Nem egyértelmű alkategória: ${source}. Válassz a törzsadatokból.` : `Ismeretlen alkategória: ${source}. Válassz a törzsadatokból.`};
+  }
+  async function resolveImportedSourceClassification(client,n,raw) {
+    const source=aifImportSourceType(n,raw);
+    if(!source && !n._manualCategory && !n._manualSubCategory) return null;
+    if(source) {
+      n.aifSourceProductType=source;
+      n.aifProductTypeFromSource=source;
+      n.sourceProductType=source;
+    }
+    const originalMain=rawValueByHeaders(raw,aifSourceMainCategoryHeaders);
+    if(originalMain) n.aifSourceMainCategory=originalMain;
+    const r=await client.query(`SELECT id,code,name_ro,name_hu,aliases,parent_id,is_active FROM aif_categories WHERE COALESCE(is_active,true)=true`);
+    const {main,sub,error}=aifStrictImportCategorySelection(n,source,r.rows);
+    // Do not retain stale UUIDs, codes or aliases from the parser.
+    n.categoryId=n.category_id=n.parentCategoryId=n.parent_category_id=main?.id||null;
+    n.categoryCode=n.category_code=n.parentCategoryCode=n.parent_category_code=main?.code||null;
+    n.categoryName=n.category_name=n.parentCategoryName=n.parent_category_name=main?.name_ro||null;
+    n.subcategoryId=n.subcategory_id=n.subCategoryId=n.sub_category_id=sub?.id||null;
+    n.subcategoryCode=n.subcategory_code=n.subCategoryCode=n.sub_category_code=sub?.code||null;
+    n.subcategoryName=n.subcategory_name=n.subCategoryName=n.sub_category_name=sub?.name_ro||null;
+    if(source || sub) n.productType=n.product_type=(n._manualCategory||n._manualSubCategory)&&sub ? sub.name_ro : source||n.productType||sub?.name_ro||null;
+    if(error) n.aifCategoryConflict=error; else delete n.aifCategoryConflict;
+    return error||null;
+  }
+
   // A COLECTIE=FASHION nem terméktípus. A RODESCR és a tényleges alkategória az.
   // A HAJGUMI/ELASTIC DE PAR kiegészítő, nem ruha (ROCHIE).
   const AIF_IMPORTED_PRODUCT_TYPES = Object.freeze({
@@ -3202,7 +3278,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
   function correctImportedClassification(normalized, sourceRaw = null) {
     if (!normalized || typeof normalized !== "object") return normalized;
-    const originalType = rawValueByHeaders(sourceRaw, ["RODESCR", "RO DESCR", "RO_DESCR"]);
+    const originalType = aifImportSourceType(normalized, sourceRaw);
+    if (originalType) {
+      // The async resolver uses the actual active category and its actual parent.
+      normalized.aifSourceProductType=originalType;
+      normalized.aifProductTypeFromSource=originalType;
+      normalized.sourceProductType=originalType;
+      const sourceMain=rawValueByHeaders(sourceRaw,aifSourceMainCategoryHeaders);
+      if(sourceMain) normalized.aifSourceMainCategory=sourceMain;
+      return normalized;
+    }
+    if(normalized._manualCategory || normalized._manualSubCategory) return normalized;
     const fromRaw = normCode(originalType);
     const fromTitle = normCode(normalized.titleRo || normalized.title_ro);
     const suppliedType = normCode(normalized.productType || normalized.product_type);
@@ -3887,6 +3973,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       genderRaw: emptyToNull(src.genderRaw || src.gender_raw || rawGender || src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name),
       gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender || "unisex"),
       _manualGender: src._manualGender === true,
+      _manualCategory: src._manualCategory === true,
+      _manualSubCategory: src._manualSubCategory === true,
+      aifSourceProductType: emptyToNull(src.aifSourceProductType || rawValueByHeaders(raw,aifSourceTypeHeaders)),
+      aifSourceMainCategory: emptyToNull(src.aifSourceMainCategory || rawValueByHeaders(raw,aifSourceMainCategoryHeaders)),
+      sourceProductType: emptyToNull(src.sourceProductType),
+      aifProductTypeFromSource: emptyToNull(src.aifProductTypeFromSource),
+      sourceCategory: emptyToNull(src.sourceCategory),
+      sourceSubCategory: emptyToNull(src.sourceSubCategory),
       productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
       season: aifSeasonFromSource(src.season ?? src.sezon ?? src.szezon ?? src.seasonName ?? rawSeason),
       _seasonExplicit: aifSeasonExplicit(raw, src),
@@ -5939,9 +6033,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return true;
   }
 
-  async function enrichNormalizedRow(client, nr, {skipColor=false,legacyColor=false}={}) {
+  async function enrichNormalizedRow(client, nr, {skipColor=false,legacyColor=false,skipClassification=false}={}) {
     if (nr?.normalized) {
-      correctImportedClassification(nr.normalized, nr.raw);
+      if (!skipClassification) {
+        correctImportedClassification(nr.normalized, nr.raw);
+        const categoryError=await resolveImportedSourceClassification(client,nr.normalized,nr.raw);
+        if(categoryError) {nr.errors=[...(nr.errors||[]),categoryError];nr.status='error';}
+      }
       if(legacyColor) {
         applyLegacyProductCodeSplit(nr.normalized,nr.raw);
         const mapped=await applyLegacyBrandColorCodeMapping(client,nr.normalized);
@@ -11000,6 +11098,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
         applySalesTvaSettingsToNormalized(normalized, salesTvaSettings);
         correctImportedClassification(normalized, row.raw);
+        const categoryError=await resolveImportedSourceClassification(client,normalized,row.raw);
+        if(categoryError) throw Object.assign(new Error(categoryError),{statusCode:409,code:'import_category_source_conflict'});
         applyProductCodeSplit(normalized, row.raw);
         normalized.gender = canonicalGender(normalized.gender);
         await applyBrandColorCodeMapping(client,normalized);
@@ -12088,7 +12188,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
-      await enrichNormalizedRow(client, nr, {skipColor:isCommitted && !colorEdited});
+      await enrichNormalizedRow(client, nr, {skipColor:isCommitted && !colorEdited,skipClassification:isCommitted});
       if(isCommitted && !colorEdited) {
         for(const key of ['colorName','colorCode','supplierColorCode','colorHex','color_name','color_code','supplier_color_code','brandColorCodeId','colorTypeCode','aifColorInputCaptured','aifSourceColorCode','aifSourceColorName','aifColorImportMode','aifColorIdentitySource','_aifColorCodeFromName','aifColorConflict','aifColorSourceUnverified']) {
           if(Object.prototype.hasOwnProperty.call(storedColors,key)) nr.normalized[key]=storedColors[key]; else delete nr.normalized[key];
