@@ -15,6 +15,7 @@ import {
   ChevronUp,
   CheckCircle,
   Eye,
+  EyeOff,
   FileText,
   RefreshCw,
   Save,
@@ -454,10 +455,11 @@ function parseReceptionPaymentAmount(value: string): number | null {
   return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric * 100) / 100 : null;
 }
 function ReceptionPaymentBadge({
-  item, onClick, disabled = false, compact = false,
+  item, onClick, purchaseValuesVisible, disabled = false, compact = false,
 }: {
   item: AifReceptionSummary;
   onClick: () => void;
+  purchaseValuesVisible: boolean;
   disabled?: boolean;
   compact?: boolean;
 }) {
@@ -466,7 +468,7 @@ function ReceptionPaymentBadge({
   const paid = receptionPaidAmount(item);
   const left = receptionRemainingAmount(item);
   const extra = state === "partial"
-    ? `Fizetve ${money(paid, item.currency_code)} · hátra ${money(left, item.currency_code)}`
+    ? (purchaseValuesVisible ? `Fizetve ${money(paid, item.currency_code)} · hátra ${money(left, item.currency_code)}` : "")
     : state === "paid" && item.paid_on ? `Kifizetve: ${dateText(item.paid_on)}` : "";
   return (
     <button type="button" onClick={onClick} disabled={disabled}
@@ -478,7 +480,7 @@ function ReceptionPaymentBadge({
       <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full border border-white/40" style={{backgroundColor:color,boxShadow:`0 0 0 2px ${color}28`}} />
       <span className="min-w-0 flex-1">
         <span className="block whitespace-normal [overflow-wrap:anywhere] text-[12px] font-medium leading-4 text-white">{RECEPTION_PAYMENT_LABELS[state]}</span>
-        {state === "partial" && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">Hátra: {money(left, item.currency_code)}</span>}
+        {state === "partial" && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[10px] font-normal leading-4 text-white/75">Hátra: <ReceptionPurchaseValue visible={purchaseValuesVisible} value={left} currency={item.currency_code} /></span>}
         {state === "paid" && item.paid_on && <span className="block whitespace-normal [overflow-wrap:anywhere] text-[12px] font-normal leading-4 tabular-nums text-white/85">{dateText(item.paid_on)}</span>}
       </span>
     </button>
@@ -791,6 +793,16 @@ function n(v: unknown): number {
 function money(v: unknown, currency?: string | null): string {
   const x = n(v);
   return `${x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
+}
+
+// AIF_RECEPTION_PURCHASE_VISIBILITY: ugyanaz a szemkapcsoló-minta, mint a Raktárban.
+// Rejtett állapotban csak fix helyettesítő szöveg kerül a DOM-ba, nem a valódi összeg.
+function ReceptionPurchaseValue({ visible, value, currency }: { visible: boolean; value: unknown; currency?: string | null }) {
+  if (visible) return <span>{money(value, currency)}</span>;
+  return <span className="inline-flex max-w-full select-none items-center gap-1" title="Beszerzési érték rejtve">
+    <span aria-hidden="true" className="inline-block whitespace-nowrap rounded-md bg-white/10 px-2 text-white/65 blur-[3px]">••••••</span>
+    <span className="sr-only">Beszerzési érték rejtve</span>
+  </span>;
 }
 
 function dateText(v?: string | null) {
@@ -2072,6 +2084,7 @@ function openReceptionVerificationPdf(
 export default function AllInReceptions(_props: Props) {
   const [meta, setMeta] = useState<AifMeta | null>(null);
   const [items, setItems] = useState<AifReceptionSummary[]>([]);
+  const [purchaseValuesVisible, setPurchaseValuesVisible] = useState(false);
   const [detail, setDetail] = useState<AifReceptionDetail | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [rowDrafts, setRowDrafts] = useState<Record<string, Record<string, unknown>>>({});
@@ -3122,6 +3135,16 @@ export default function AllInReceptions(_props: Props) {
               <p className="mt-0.5 text-[11px] leading-snug text-white/52">Számlás bevételezések, export és részletezés.</p>
             </div>
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button
+                className={purchaseValuesVisible ? headerPrimaryBtn : headerBtnSoft}
+                onClick={() => setPurchaseValuesVisible((current) => !current)}
+                type="button"
+                aria-label="Beszerzési értékek megjelenítése"
+                aria-pressed={purchaseValuesVisible}
+                title={purchaseValuesVisible ? "Beszerzési értékek elrejtése" : "Beszerzési értékek megjelenítése"}
+              >
+                {purchaseValuesVisible ? <EyeOff size={15} /> : <Eye size={15} />} {purchaseValuesVisible ? "Beszerzés látszik" : "Beszerzés rejtve"}
+              </button>
               <button className={headerBtnSoft} onClick={() => void exportFilteredReceptionsPdf()} disabled={busy} type="button" title="A jelenlegi szűrés PDF exportja">
                 <img src={RECEPTIONS_PDF_ICON_URL} alt="" className="h-[17px] w-[17px] shrink-0 object-contain" /> PDF
               </button>
@@ -3211,7 +3234,7 @@ export default function AllInReceptions(_props: Props) {
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Receptiók</p><p className="mt-0.5 text-lg text-white">{totals.count}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Terméksor</p><p className="mt-0.5 text-lg text-white">{totals.lines}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-0.5 text-lg text-white">{totals.qty}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white">{money(totals.value)}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white"><ReceptionPurchaseValue visible={purchaseValuesVisible} value={totals.value} /></p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Jelenlegi eladási érték</p><p className="mt-0.5 text-lg text-[#d7fffd]">{money(totals.salesValueRon, "RON")}</p></div>
             <div className="rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 py-1.5"><p className="text-xs uppercase tracking-[0.06em] text-white/72">Eladási TVA</p><p className="mt-0.5 text-lg text-white">{salesTvaText}</p></div>
           </div>
@@ -3278,13 +3301,13 @@ export default function AllInReceptions(_props: Props) {
                         </div>
                       </td>
                       <td className="px-2 py-2.5 text-right tabular-nums">
-                        <span className="block whitespace-normal text-[12px] font-medium text-white">{money(r.invoice_gross, r.currency_code)}</span>
-                        <span className="mt-1 block whitespace-normal text-[10px] font-normal text-white">Nettó: {money(receptionNetInvoiceValue(r), r.currency_code)}</span>
+                        <span className="block whitespace-normal text-[12px] font-medium text-white"><ReceptionPurchaseValue visible={purchaseValuesVisible} value={r.invoice_gross} currency={r.currency_code} /></span>
+                        <span className="mt-1 block whitespace-normal text-[10px] font-normal text-white">Nettó: <ReceptionPurchaseValue visible={purchaseValuesVisible} value={receptionNetInvoiceValue(r)} currency={r.currency_code} /></span>
                       </td>
                       <td className="whitespace-normal px-2 py-2.5 text-right text-[12px] font-medium tabular-nums text-white">{money(receptionCurrentSalesTotalRon(r), "RON")}</td>
                       <td className="px-1 py-2.5 text-center text-[12px] font-medium tabular-nums text-white">{r.total_qty || 0}</td>
                       <td className="px-1 py-2.5 text-center"><span className={`inline-flex max-w-full items-center justify-center whitespace-normal rounded-full border border-transparent px-2 py-1 leading-4 text-[11px] font-medium ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span></td>
-                      <td className="px-1 py-2.5"><ReceptionPaymentBadge item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/></td>
+                      <td className="px-1 py-2.5"><ReceptionPaymentBadge item={r} purchaseValuesVisible={purchaseValuesVisible} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/></td>
                       <td className="py-2 pl-2 pr-[18px]"><div className="flex w-full items-center justify-end gap-1.5">
                         <button className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/12 bg-white/[0.045] text-white/75 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7bd7d4]/60 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => openDetail(r.id)} disabled={busy} type="button" title={r.status === "committed" ? "Adatok" : "Folytatás"} aria-label="Receptió megnyitása"><Eye size={13}/></button>
                         <ReceptionActionsMenu disabled={busy} canDelete={Boolean(r.can_delete)} onVerification={() => void exportReceptionVerificationPdf(r.id)} onPdf={() => void exportReceptionPdf(r.id)} onDelete={() => setDeleteTarget(r)} />
@@ -3312,13 +3335,13 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                   <div className="mt-2 grid min-w-0 grid-cols-2 gap-2 text-xs [&>div]:min-w-0 [&>div]:[overflow-wrap:anywhere]">
                     <div className={statCard}><p className="text-[12px] uppercase text-white">Számla dátuma</p><p>{dateText(r.invoice_date)}</p><p className="mt-1.5 text-[12px] font-medium text-white">Bevételezés: {dateText(r.reception_date)}</p></div>
-                    <div className={statCard}><p className="text-[12px] uppercase text-white">Nettó érték</p><p>{money(receptionNetInvoiceValue(r), r.currency_code)}</p></div>
-                    <div className={statCard}><p className="text-[12px] uppercase text-white">Végösszeg</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Nettó érték</p><p><ReceptionPurchaseValue visible={purchaseValuesVisible} value={receptionNetInvoiceValue(r)} currency={r.currency_code} /></p></div>
+                    <div className={statCard}><p className="text-[12px] uppercase text-white">Végösszeg</p><p><ReceptionPurchaseValue visible={purchaseValuesVisible} value={r.invoice_gross} currency={r.currency_code} /></p></div>
                     <div className={statCard}><p className="text-[12px] uppercase text-white">Darab</p><p>{r.total_qty || 0}</p></div>
                     <div className="col-span-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-4"><p className="text-[11px] uppercase text-[#cffffd]/70">Jelenlegi eladási érték (RON)</p><p className="mt-1 text-base tabular-nums text-[#eaffff]">{money(receptionCurrentSalesTotalRon(r), "RON")}</p>{Math.round(receptionCurrentSalesTotalRon(r) * 100) !== Math.round(receptionSalesTotalRon(r) * 100) ? <p className="mt-1 text-[12px] text-white">Receptiókori: {money(receptionSalesTotalRon(r), "RON")}</p> : null}</div>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
-                    <ReceptionPaymentBadge compact item={r} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/>
+                    <ReceptionPaymentBadge compact item={r} purchaseValuesVisible={purchaseValuesVisible} disabled={paymentSaving || r.status === "cancelled"} onClick={() => openReceptionPayment(r)}/>
                     <div className="flex min-w-0 items-center gap-2">
                     <button
                             className={r.status === "committed" ? tinyIconBtn : tinyBtn}
