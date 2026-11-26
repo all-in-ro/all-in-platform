@@ -680,11 +680,30 @@ function aifJsonByteSize(value: unknown) {
   return json.length;
 }
 
+// AIF_CONFIRMED_MAYO_MODEL_CODE_V33_20261126
+function correctConfirmedMayoModelCode(n: Record<string, any>, fallback: unknown = "") {
+  const mayo = [n.brandCode,n.brand_code,n.brandName,n.brand_name]
+    .some(v=>snCodHeaderKey(v).replace(/_/g,"")==="mayochix");
+  const code = String(n.supplierProductCode || n.supplier_product_code || n.productCode || n.product_code || n.modelCode || n.model_code || fallback || "").trim();
+  if (!mayo || !/^31473850(?:-01)?$/.test(code)) return n;
+  const corrected = code === "31473850-01" ? "314173850-01" : "314173850";
+  n.aifOriginalSupplierProductCode = code;
+  n.supplierProductCode = corrected;
+  if (n.supplier_product_code !== undefined) n.supplier_product_code = corrected;
+  for (const k of ["productCode","product_code"]) {
+    if (String(n[k] ?? "").trim() === code) n[k] = corrected;
+  }
+  n.modelCode = "314173850";
+  if (n.model_code !== undefined) n.model_code = "314173850";
+  return n;
+}
+
 function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
   const normalized = row?.normalized && typeof row.normalized === "object" ? row.normalized : {};
   const raw = row?.raw && typeof row.raw === "object" ? row.raw : {};
   const keepKeys = [
     "supplierProductCode", "supplier_product_code", "modelCode", "model_code", "productCode", "product_code",
+    "aifOriginalSupplierProductCode",
     "supplierVariantCode", "supplier_variant_code", "supplierColorCode", "supplier_color_code", "supplierSize", "supplier_size",
     "snCod", "sn_cod", "customsTariffCode", "customs_tariff_code", "tariffCode", "tariff_code", "hsCode", "hs_code",
     "titleRo", "title_ro", "productName", "product_name", "brandCode", "brand_code", "brandName", "brand_name",
@@ -2567,6 +2586,7 @@ function AllInIncomingReception(_props: Props) {
     if (rawMaterial && !String(normalized.material || normalized.composition || "").trim()) normalized.material = String(rawMaterial).trim();
     const rawBarcode = rawValueByHeader(row, ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "COD BARE", "COD DE BARE"]);
     if (rawBarcode && !String(normalized.barcode || "").trim()) normalized.barcode = String(rawBarcode).trim();
+    correctConfirmedMayoModelCode(normalized, rawProductCode);
     const sourceProductCode = normalized.supplierProductCode || normalized.productCode || normalized.modelCode || rawProductCode;
     const split = splitCodProdus(sourceProductCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
