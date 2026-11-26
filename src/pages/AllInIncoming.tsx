@@ -549,8 +549,9 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
       if (isColorCodeHeader(col.header)) return { ...col, field: COLOR_CODE_FIELD, label: "Színkód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (headerMatchesAny(col.header,COLOR_NAME_HEADER_ALIASES)) return { ...col, field: COLOR_NAME_FIELD, label: "Színnév", confidence: Math.max(Number(col.confidence || 0),100), warnings: [] };
       if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
-      if (isSubCategoryHeader(col.header)) return { ...col, field: SUB_CATEGORY_FIELD, label: "Alkategória / terméktípus", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isProductTypeHeader(col.header)) return { ...col, field: PRODUCT_TYPE_FIELD, label: "Import terméktípus / RODESCR", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if ((analysis.columns || []).some(c => isProductTypeHeader(c.header)) && ["colectie", "colectia", "colectie_produs", "colectie_street", "collection", "product_collection"].includes(snCodHeaderKey(col.header))) return { ...col, field: IGNORE_FIELD, label: "Kihagyás (kollekció, nem kategória)", confidence: 100, warnings: [] };
+      if (isSubCategoryHeader(col.header)) return { ...col, field: SUB_CATEGORY_FIELD, label: "Alkategória / terméktípus", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isDescriptionHeader(col.header)) return { ...col, field: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isMaterialHeader(col.header)) return { ...col, field: MATERIAL_FIELD, label: "Összetétel", confidence: Math.max(Number(col.confidence || 0), 92), warnings: [] };
       return col;
@@ -614,7 +615,9 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
       if (value) {
         normalized.productType = value;
         normalized.product_type = value;
-        normalized.sourceProductType = normalized.sourceProductType || value;
+        normalized.sourceProductType = value;
+        if (!["fashion","apparel","street","casual","sport"].includes(snCodHeaderKey(value))) normalized.aifSourceProductType = value;
+        else delete normalized.aifSourceProductType;
       }
     }
     if (buyPriceColumn) {
@@ -689,6 +692,7 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     "subCategoryCode", "sub_category_code", "subcategoryCode", "subcategory_code", "subCategoryName", "sub_category_name", "subcategoryName", "subcategory_name",
     "sourceCategory", "sourceCategoryCode", "sourceCategoryName", "sourceSubCategory", "sourceSubCategoryCode", "sourceSubCategoryName",
     "gender", "genderRaw", "_manualGender", "productType", "product_type", "season", "collection", "colectie",
+    "aifSourceProductType", "aifSourceMainCategory", "aifProductTypeFromSource", "sourceProductType", "_manualCategory", "_manualSubCategory",
     "descriptionRo", "description_ro", "description", "material", "composition", "imageUrl", "image_url", "barcode", "supplierBarcode",
     "colorCode", "color_code", "supplierColorCode", "colorName", "color_name", "colorHex", "color_hex", "brandColorCodeId", "colorTypeCode",
     "aifColorInputCaptured", "aifColorSourceUnverified", "aifSourceColorCode", "aifSourceColorName", "aifColorImportMode", "aifColorIdentitySource", "_aifColorCodeFromName", "source",
@@ -712,6 +716,11 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     raw: {
       source: "aif_compact_import",
       __rowNo: rawRowNo,
+      ...Object.fromEntries(Object.entries(raw).filter(([key]) => [
+        "rodescr", "ro_descr", "categorie", "categorie_app_acc", "category", "categoria", "categorie_produs", "product_category",
+        "subcategorie", "sub_category", "subcategory", "alcategorie", "alkategoria", "colectie", "colectie_street", "collection",
+        "tip_produs", "product_type", "type", "model_type"
+      ].includes(snCodHeaderKey(key)))),
     },
     normalized: nextNormalized,
   };
@@ -1456,7 +1465,7 @@ function normMatchKey(value: unknown) {
 }
 
 const sourceCategoryAliases: Record<string, string[]> = {
-  apparel: ["imbracaminte", "îmbrăcăminte", "haine", "ruhazat", "ruházat", "ruha", "clothing", "apparel"],
+  apparel: ["imbracaminte", "îmbrăcăminte", "haine", "ruhazat", "ruházat", "clothing", "apparel"],
   tricou: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees", "training tee"],
   tricouri: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees"],
   pantaloni: ["pantaloni", "nadrag", "nadrág", "pants", "trousers"],
@@ -1466,7 +1475,8 @@ const sourceCategoryAliases: Record<string, string[]> = {
   jacheta: ["jacheta", "jachetă", "geaca", "geacă", "jacket", "kabát", "dzseki"],
   vesta: ["vesta", "vestă", "vest", "melleny", "mellény"],
   incaltaminte: ["incaltaminte", "încălțăminte", "pantofi", "adidasi", "adidași", "shoes", "sneakers", "cipő", "cipo"],
-  rochie: ["rochie", "rochii", "dress", "ruha"],
+  rochie: ["rochie", "rochii", "rochita", "dress", "ruha"],
+  caciula: ["caciula", "caciuli", "sapka", "sapkak", "beanie", "beanies", "fes", "fesuri"],
   fusta: ["fusta", "fustă", "fuste", "skirt", "szoknya"],
   geanta: ["geanta", "geantă", "genti", "genți", "bag", "táska", "taska"],
   curea: ["curea", "belt", "öv", "ov"],
@@ -1703,6 +1713,8 @@ function aifRowErrors(row: AifParsedRow, sizeTypes: AifSizeTypeLike[] = [], bran
   const errors = (baseAifRowErrors(normalizedRow) || []) as string[];
   const colorConflict=String((normalizedRow.normalized as any)?.aifColorConflict||"");
   if(colorConflict) errors.push(colorConflict);
+  const categoryConflict=String((normalizedRow.normalized as any)?.aifCategoryConflict||"");
+  if(categoryConflict) errors.push(categoryConflict);
   if (!isAcceptedAifSize(sizeValueForRow(normalizedRow), sizeTypes, brandSizeCodes)) return errors;
   return errors.filter((error: unknown) => !isSizeValidationError(error));
 }
@@ -1722,7 +1734,7 @@ function savedRowRawObject(row: any) {
 }
 
 function mainCategoryRawValue(row: any) {
-  return firstNonEmptyText(rawValueByHeader(row, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]));
+  return firstNonEmptyText(rawValueByHeader(row, ["CATEGORIE", "CATEGORIE / APP / ACC", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]));
 }
 
 function categoryParentId(c?: AifCategoryOption | null) {
@@ -1747,6 +1759,84 @@ function findCategoryByCandidates(candidates: unknown[], categories: AifCategory
     }
   }
   return best;
+}
+
+// AIF_IMPORT_CATEGORY_SOURCE_V32_20261126
+// RODESCR is a concrete product type, unlike Apparel/Fashion. Never use a
+// fuzzy match inside the supplier's generic parent to override this value.
+const AIF_EXACT_IMPORT_TYPE_GROUPS: Record<string, string[]> = {
+    caciula: ["accesorii_caciula", "caciula", "caciuli", "sapka", "sapkak", "beanie", "beanies", "fes", "fesuri"],
+    sapca: ["accesorii_sepci", "sapca", "sepci", "baseball cap", "baseball caps"],
+    bluza: ["imbracaminte_bluza", "bluza", "bluze", "bluz", "bluzok"],
+    blugi: ["imbracaminte_blugi", "blugi", "jeans", "farmer", "farmernadrag"],
+    pantaloni: ["imbracaminte_pantaloni", "pantaloni", "pantalon", "nadrag", "pants", "trousers"],
+    rochie: ["imbracaminte_rochie", "rochie", "rochii", "rochita", "dress", "ruha"],
+    trening: ["imbracaminte_treninguri", "trening", "treninguri", "tracksuit"],
+    geaca: ["jachete_jachete", "geaca", "geci", "jacheta", "jachete", "dzseki", "dzsekik", "jacket"],
+    palton: ["palton", "paltoane", "kabát", "kabátok", "coat"],
+    body: ["body", "bodyuri", "body-uri", "bodysuit", "bodysuits"],
+    elastic_de_par: ["elastic de par", "elastice de par", "hajgumi", "hair tie"],
+  };
+function incomingSourceType(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, AIF_RODESCR_HEADERS), row?.normalized?.aifSourceProductType);
+}
+function incomingExactCategory(candidates: AifCategoryOption[], value: unknown) {
+  const key = normMatchKey(value);
+  const matches = candidates.filter(c => [c.id,c.code].some(v => normMatchKey(v) === key));
+  return key && matches.length === 1 ? matches[0] : null;
+}
+function incomingStrictSourceCategory(row: any, categories: AifCategoryOption[]) {
+  const n = row?.normalized || {};
+  const source = incomingSourceType(row);
+  if (!source && !n._manualCategory && !n._manualSubCategory) return null;
+  const active = categories.filter(c => c.is_active !== false);
+  const roots = active.filter(c => !categoryParentId(c));
+  const subs = active.filter(c => roots.some(p => String(p.id) === categoryParentId(c)));
+  const parentOf = (c: AifCategoryOption | null) => roots.find(p => String(p.id) === categoryParentId(c)) || null;
+  const sourceKey = normMatchKey(source);
+  const known = Object.entries(AIF_EXACT_IMPORT_TYPE_GROUPS).find(([k,aliases]) => [k,...aliases].some(v => normMatchKey(v) === sourceKey));
+  const keys = new Set([source, ...(known?.[1] || [])].map(normMatchKey).filter(Boolean));
+  if (n._manualCategory || n._manualSubCategory) {
+    const sub = incomingExactCategory(subs, n.subCategoryCode || n.subcategoryCode);
+    const main = incomingExactCategory(roots, n.categoryCode || n.parentCategoryCode);
+    if (sub && (!n._manualCategory || !main || categoryParentId(sub) === String(main.id))) return {source,main:parentOf(sub),sub,error:""};
+    return {source, main, sub:null, error:source ? `A(z) ${source} forrástípushoz válassz érvényes alkategóriát.` : ""};
+  }
+  // A törzskód elsőbbsége csak egyértelmű, aktív alkategória esetén érvényes.
+  const preferred = known?.[1]?.[0];
+  const preferredSub = preferred && preferred.includes("_") ? incomingExactCategory(subs, preferred) : null;
+  const direct = subs.filter(c => categoryAliasValues(c).some(v => normMatchKey(v) === sourceKey));
+  const semantic = subs.filter(c => categoryAliasValues(c).some(v => keys.has(normMatchKey(v))));
+  const matches = direct.length ? direct : semantic;
+  const sub = preferredSub || (matches.length === 1 ? matches[0] : null);
+  if (sub) return {source, main:parentOf(sub), sub, error:""};
+  // Historical hair-tie import intentionally allowed an accessory without a subcategory.
+  if (known?.[0] === "elastic_de_par" && !matches.length) {
+    const main = incomingExactCategory(roots,"ACCESORII");
+    if (main) return {source,main,sub:null,error:""};
+  }
+  const main = incomingExactCategory(roots, n.categoryCode || n.parentCategoryCode) || null;
+  return {source,main,sub:null,error:matches.length > 1
+    ? `Nem egyértelmű alkategória: ${source}. Válassz a törzsadatokból.`
+    : `Ismeretlen alkategória: ${source}. Válassz a törzsadatokból.`};
+}
+function applyIncomingStrictCategory(n: Record<string, any>, selection: NonNullable<ReturnType<typeof incomingStrictSourceCategory>>) {
+  const {source,main,sub,error}=selection;
+  if (source) {
+    n.aifSourceProductType=source;
+    n.aifProductTypeFromSource=source;
+    n.sourceProductType=source;
+  }
+  for (const key of ["categoryId","category_id","parentCategoryId","parent_category_id","subcategoryId","subcategory_id","subCategoryId","sub_category_id"]) delete n[key];
+  const mainCode=main ? String(main.code || main.id) : "";
+  const subCode=sub ? String(sub.code || sub.id) : "";
+  n.categoryCode=n.category_code=n.parentCategoryCode=n.parent_category_code=mainCode;
+  n.categoryName=n.category_name=n.parentCategoryName=n.parent_category_name=main ? (main.name_ro || categoryLabel(main)) : "";
+  n.subCategoryCode=n.subcategoryCode=n.sub_category_code=n.subcategory_code=subCode;
+  n.subCategoryName=n.subcategoryName=n.sub_category_name=n.subcategory_name=sub ? (sub.name_ro || categoryLabel(sub)) : "";
+  if (source || sub) n.productType=n.product_type=(n._manualCategory || n._manualSubCategory) && sub ? (sub.name_ro || categoryLabel(sub)) : source || n.productType || sub?.name_ro || "";
+  if (error) n.aifCategoryConflict=error; else delete n.aifCategoryConflict;
+  return n;
 }
 
 function mainCategoryCandidatesForRow(row: any) {
@@ -1781,10 +1871,8 @@ function subCategoryCandidatesForRow(row: any) {
     (normalized as any).productType,
     (normalized as any).product_type,
     rawProductTypeValue(row),
-    // Régi előnézeti sorból jöhetett alkategória a categoryCode alatt, ezt még felismerjük, de csak alkategóriák között.
-    (normalized as any).categoryCode,
-    (normalized as any).categoryName,
-  ].filter((x) => String(x ?? "").trim());
+    // A főkategória csak akkor lehet alkategória-jelölt, ha tényleg nem főkategória.
+  ].filter((x) => String(x ?? "").trim() && !["apparel","fashion","street","casual","sport","imbracaminte","ruhazat","clothing","accesorii","accessories"].includes(normMatchKey(x)));
 }
 
 function categoryCandidatesForRow(row: any) {
@@ -1802,6 +1890,8 @@ function categoryColumnAsSubCategoryCandidatesForRow(row: any, categories: AifCa
 }
 
 function findMainCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  const strict = incomingStrictSourceCategory(row,categories);
+  if (strict) return strict.main;
   const mainCategories = categories.filter((c) => !isSubcategoryOption(c));
   const subCategories = categories.filter(isSubcategoryOption);
   const directMain = findCategoryByCandidates(mainCategoryCandidatesForRow(row), mainCategories);
@@ -1815,6 +1905,8 @@ function findMainCategoryForRow(row: any, categories: AifCategoryOption[]) {
 }
 
 function findSubCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  const strict = incomingStrictSourceCategory(row,categories);
+  if (strict) return strict.sub;
   const subCategories = categories.filter(isSubcategoryOption);
   const main = findMainCategoryForRow(row, categories);
   const mainId = main?.id ? String(main.id) : "";
@@ -2775,7 +2867,15 @@ function AllInIncomingReception(_props: Props) {
         if (sourceGender) normalized.genderRaw = normalized.genderRaw || sourceGender;
       }
 
-      const mainCategoryRaw = firstNonEmptyText(mainCategoryRawValue(rowWithCode), normalized.parentCategoryCode, normalized.parentCategoryName);
+      const originalMainCategory = mainCategoryRawValue(rowWithCode);
+      if (originalMainCategory) normalized.aifSourceMainCategory = originalMainCategory;
+      const strictCategory = incomingStrictSourceCategory({...rowWithCode, normalized},activeCategories);
+      if (strictCategory) {
+        applyIncomingStrictCategory(normalized,strictCategory);
+        return normalizeAifRowSize({...rowWithCode,normalized}) as AifParsedRow;
+      }
+      delete normalized.aifCategoryConflict;
+      const mainCategoryRaw = firstNonEmptyText(originalMainCategory, normalized.parentCategoryCode, normalized.parentCategoryName);
       if (mainCategoryRaw) {
         normalized.sourceCategory = normalized.sourceCategory || mainCategoryRaw;
         normalized.parentCategoryName = normalized.parentCategoryName || mainCategoryRaw;
@@ -3005,6 +3105,7 @@ function AllInIncomingReception(_props: Props) {
           const currentSub = activeCategories.find((c) => (c.code || c.id) === normalized.subCategoryCode || (c.code || c.id) === normalized.subcategoryCode);
           const parentId = category?.id ? String(category.id) : "";
           if (currentSub && parentId && categoryParentId(currentSub) && categoryParentId(currentSub) !== parentId) {
+            normalized._manualSubCategory = false;
             normalized.subCategoryCode = "";
             normalized.subcategoryCode = "";
             normalized.subCategoryName = "";
@@ -3043,7 +3144,7 @@ function AllInIncomingReception(_props: Props) {
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
         if (field === "customsTariffCode") assignCustomsTariffCode(normalized as Record<string, any>, value);
         const updatedRow = applyProductCodeAndBrandColor({ ...row, normalized });
-        return field === "productType" ? (normalizeImportedRowsWithMeta([updatedRow])[0] || updatedRow) : updatedRow;
+        return ["productType","categoryCode","subCategoryCode"].includes(field) ? (normalizeImportedRowsWithMeta([updatedRow])[0] || updatedRow) : updatedRow;
       })
     );
   }
@@ -6977,8 +7078,8 @@ function AllInIncomingReception(_props: Props) {
                         <IncomingSmartSelect compact value={mainCategoryValue} onChange={(value) => updateRowField(globalIndex, "categoryCode", value)} placeholder="Nincs" ariaLabel="Főkategória" options={[{ value: "", label: "Nincs" }, ...(mainCategories.length ? mainCategories : activeCategories.filter((c) => !isSubcategoryOption(c))).map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
                       </label>
                       <label className={previewField}>
-                        <span className={compactFieldLabel} title="Alkategória / terméktípus">Alkat. / típus</span>
-                        <IncomingSmartSelect compact value={subCategoryValue} onChange={(value) => updateRowField(globalIndex, "subCategoryCode", value)} placeholder="Nincs" ariaLabel="Alkategória / terméktípus" options={[{ value: "", label: "Nincs" }, ...subCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
+                        <span className={compactFieldLabel} title={incomingSourceType(r) ? `Eredeti RODESCR: ${incomingSourceType(r)}` : "Alkategória / terméktípus"}>Alkat. / típus</span>
+                        <IncomingSmartSelect compact value={subCategoryValue} onChange={(value) => updateRowField(globalIndex, "subCategoryCode", value)} placeholder="Nincs" invalid={Boolean((n as any).aifCategoryConflict)} ariaLabel="Alkategória / terméktípus" options={[{ value: "", label: "Nincs" }, ...subCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel}>Nem</span>
