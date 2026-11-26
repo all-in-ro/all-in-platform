@@ -8151,6 +8151,8 @@ export default function AllInWarehouse() {
   const [labelPreprint, setLabelPreprint] = useState(false);
   const [labelPrintMode, setLabelPrintMode] = useState<WarehouseLabelPrintMode>(() => readWarehouseLabelPrintMode());
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
+  // Csak az aktuális címkenyomtatáshoz: nem módosítja a termék eladási árát.
+  const [labelTemporaryPrices, setLabelTemporaryPrices] = useState<Record<string, string>>({});
   const labelCopiesUploadRef = useRef<HTMLInputElement | null>(null);
   const [labelCopiesUploadStatus, setLabelCopiesUploadStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [labelCopiesImportedFromCsv, setLabelCopiesImportedFromCsv] = useState(false);
@@ -13446,6 +13448,7 @@ export default function AllInWarehouse() {
     if (labelPrintLockRef.current || labelCleanupBusy) return;
     setLabelCopiesImportedFromCsv(false);
     setLabelCopiesUploadStatus(null);
+    setLabelTemporaryPrices({});
     setLabelPrintFlow(null);
     setLabelClearConfirmOpen(false);
     setLabelRelabelPriceTargetId("");
@@ -13902,7 +13905,11 @@ export default function AllInWarehouse() {
         officialColorFromTypes(firstWarehouseText(detailItem.color_name, item.color_name), colorTypes) ||
         officialColorRo(firstWarehouseText(detailItem.color_name, item.color_name));
       const currentPrice = firstWarehouseValue(detailItem.sell_price, detailItem.sellPrice, item.sell_price, (item as any).sellPrice);
-      const price = currentPrice == null ? "" : String(currentPrice);
+      const originalPrice = currentPrice == null ? "" : String(currentPrice);
+      const temporaryPrice = labelTemporaryPrices[id];
+      const price = temporaryPrice === undefined ? originalPrice : temporaryPrice.trim().replace(",", ".");
+      const priceValid = temporaryPrice === undefined || (/^\d+(?:[.,]\d{1,2})?$/.test(temporaryPrice.trim()) && Number(price) >= 0 && Number.isFinite(Number(price)));
+
       return {
         item,
         id,
@@ -13919,11 +13926,14 @@ export default function AllInWarehouse() {
         productCode: labelProductCodeForItem(mergedLabelItem),
         snCod: itemSnCod(mergedLabelItem),
         price,
+        originalPrice,
+        priceValid,
+        temporaryPriceEdited: temporaryPrice !== undefined,
         stockQty: Math.floor(n(item.total_qty)),
         render: labelBarcodeSvg(barcode, 52),
       };
     });
-  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, labelPreprint, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap, labelStockLimitById, labelPreprint, invoiceHistoricalTitlesByReception, selectedInvoiceFilterOption, invoiceDisplayTitleByVariantId, colorTypes, brandColorCodes, brands, labelTemporaryPrices]);
 
   // A címkenyomtatóba kerülő végső példányszámok tételes ellenőrzése.
   // Számlánként szétválasztjuk a felületi mennyiséget, a szerverhez elküldött
@@ -14008,7 +14018,8 @@ export default function AllInWarehouse() {
     return out;
   }, [labelRowsForPrint]);
 
-  const labelPrintReady = labelPrintItems.length > 0 && labelInvalidRows.length === 0;
+  const labelInvalidPriceRows = labelRowsForPrint.filter((row) => row.copies > 0 && !row.priceValid);
+  const labelPrintReady = labelPrintItems.length > 0 && labelInvalidRows.length === 0 && labelInvalidPriceRows.length === 0;
 
   const labelPrintPages = useMemo(() => {
     const pages: WarehouseLabelPrintItem[][] = [];
@@ -14063,6 +14074,10 @@ export default function AllInWarehouse() {
   }
 
   async function runGeneratedLabelPrint(options: { testOnly?: boolean }) {
+    if (labelInvalidPriceRows.length) {
+      setMessage("A nyomtatás nem indult el: javítsd a pirossal jelölt címkeárat (legfeljebb 2 tizedesjegy).");
+      return false;
+    }
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return false;
@@ -18023,7 +18038,7 @@ export default function AllInWarehouse() {
                 {labelPrintMode === "zebra" ? (
                   <button className={btnSoft} onClick={() => void printGeneratedLabels({ testOnly: true })} disabled={!labelPrintReady || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A teszthez is minden termékhez mentett, egyedi bárkód kell." : "Egyetlen 40×46 mm-es tesztcímke nyomtatása"} type="button"><Printer size={15} /> Teszt 1 címke</button>
                 ) : null}
-                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => void printGeneratedLabels()} disabled={!labelPrintReady || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Printer size={15} /> {labelPrintBusy ? "Nyomtatás folyamatban…" : labelPrintMode === "zebra" ? `Nyomtatás Zebra (${labelPrintItems.length})` : "Nyomtatás A4"}</button>
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => void printGeneratedLabels()} disabled={!labelPrintReady || labelDetailsBusy || labelCleanupBusy || labelPrintBusy || Boolean(labelPrintFlow)} title={labelInvalidPriceRows.length ? "Érvénytelen ideiglenes címkeár." : labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Printer size={15} /> {labelPrintBusy ? "Nyomtatás folyamatban…" : labelPrintMode === "zebra" ? `Nyomtatás Zebra (${labelPrintItems.length})` : "Nyomtatás A4"}</button>
                 <button className={btnSoft} onClick={() => { if (!labelPrintLockRef.current) setLabelComposerOpen(false); }} disabled={labelPrintBusy || Boolean(labelPrintFlow)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
@@ -18317,7 +18332,27 @@ export default function AllInWarehouse() {
                             </div>
                           )}
                         </div>
-                        <div className="col-span-2 md:col-span-1">
+                        <div className="col-span-2 grid gap-2 md:col-span-1">
+                          <div>
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <span className="text-[11px] uppercase tracking-[0.05em] text-white/55">Címkeár · RON</span>
+                              {row.temporaryPriceEdited ? (
+                                <button type="button" className="text-[10px] text-[#9ce9e3] underline-offset-2 hover:underline" title="Adatbázisban szereplő ár visszaállítása" onClick={() => setLabelTemporaryPrices((current) => { const next = { ...current }; delete next[row.id]; return next; })}>Visszaállítás</button>
+                              ) : null}
+                            </div>
+                            <div className={`flex h-9 items-center overflow-hidden rounded-xl border bg-[#303a4c] ${row.priceValid ? row.temporaryPriceEdited ? "border-[#7bd7d4]/65" : "border-white/[0.14]" : "border-rose-400"}`}>
+                              <input
+                                type="text" inputMode="decimal" aria-label={`${row.title} ideiglenes címkeára RON`}
+                                className="h-full min-w-0 flex-1 bg-transparent px-3 text-right text-sm tabular-nums text-white outline-none"
+                                value={labelTemporaryPrices[row.id] ?? row.originalPrice}
+                                onChange={(event) => setLabelTemporaryPrices((current) => ({ ...current, [row.id]: event.target.value }))}
+                                disabled={labelPrintBusy || Boolean(labelPrintFlow)}
+                              />
+                              <span className="pr-3 text-[11px] text-white/50">RON</span>
+                            </div>
+                            {row.temporaryPriceEdited ? <p className={`mt-1 text-[10px] ${row.priceValid ? "text-[#9ce9e3]" : "text-rose-200"}`}>{row.priceValid ? "Csak erre a nyomtatásra, nincs mentés." : "Érvénytelen ár: 0 vagy pozitív szám, max. 2 tizedes."}</p> : null}
+                          </div>
+                          <div>
                           <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
                           <div className="flex h-9 overflow-hidden rounded-xl border border-white/[0.14] bg-[#303a4c]">
                             <button className="flex h-full w-10 items-center justify-center border-r border-white/[0.12] bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
@@ -18328,6 +18363,7 @@ export default function AllInWarehouse() {
                               disabled={labelInt(labelCopies[row.id], row.copies, 0, 999) >= (labelPreprint ? 999 : (labelStockLimitById[row.id] ?? 999))}
                               type="button"
                             >+</button>
+                          </div>
                           </div>
                         </div>
                       </div>
