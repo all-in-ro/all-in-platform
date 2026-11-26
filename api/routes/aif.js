@@ -3144,8 +3144,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     n.aifColorSourceUnverified = source==='aif_compact_import' && !rawCode && !rawName && !generated && Boolean(suffix && existing && normCode(existing)===normCode(suffix));
     n.aifColorInputCaptured = true;
   }
+  // AIF_CONFIRMED_MAYO_MODEL_CODE_V33_20261126
+  // A 31473850(-01) a felhasználó által igazolt elírás, nem új modell.
+  // Csak ennél a márkánál és ennél a teljes kódnál normalizálunk.
+  function correctConfirmedMayoModelCode(n) {
+    if (!n || typeof n !== 'object') return n;
+    const mayo = [n.brandCode,n.brand_code,n.brandName,n.brand_name]
+      .some(v => normCode(v).replace(/_/g,'') === 'mayochix');
+    const code = text(n.supplierProductCode || n.supplier_product_code || n.productCode || n.product_code || n.modelCode || n.model_code);
+    if (!mayo || !/^31473850(?:-01)?$/.test(code)) return n;
+    const corrected = code === '31473850-01' ? '314173850-01' : '314173850';
+    n.aifOriginalSupplierProductCode = code;
+    n.supplierProductCode = corrected;
+    if (n.supplier_product_code !== undefined) n.supplier_product_code = corrected;
+    for (const k of ['productCode','product_code']) {
+      if (text(n[k]) === code) n[k] = corrected;
+    }
+    n.modelCode = '314173850';
+    if (n.model_code !== undefined) n.model_code = '314173850';
+    return n;
+  }
+
   function applyProductCodeSplit(normalized, sourceRaw = null) {
     if (!normalized || typeof normalized !== 'object') return normalized;
+    correctConfirmedMayoModelCode(normalized);
     const split=splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
     if (split.fullCode) normalized.supplierProductCode=normalized.supplierProductCode || split.fullCode;
     if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode)===String(split.fullCode))) normalized.modelCode=split.modelCode;
@@ -3976,6 +3998,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       _manualCategory: src._manualCategory === true,
       _manualSubCategory: src._manualSubCategory === true,
       aifSourceProductType: emptyToNull(src.aifSourceProductType || rawValueByHeaders(raw,aifSourceTypeHeaders)),
+      aifOriginalSupplierProductCode: emptyToNull(src.aifOriginalSupplierProductCode),
       aifSourceMainCategory: emptyToNull(src.aifSourceMainCategory || rawValueByHeaders(raw,aifSourceMainCategoryHeaders)),
       sourceProductType: emptyToNull(src.sourceProductType),
       aifProductTypeFromSource: emptyToNull(src.aifProductTypeFromSource),
@@ -11294,6 +11317,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                normalized=$5::jsonb,
                sell_price_ron=COALESCE($6::numeric,sell_price_ron),
                supplier_color_code=$7,
+               supplier_product_code=CASE WHEN $8::text IS NOT NULL THEN $8 ELSE supplier_product_code END,
                updated_at=now()
            WHERE id=$1`,
           [
@@ -11304,6 +11328,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             JSON.stringify(normalized),
             normalized.aifPriceDecisionApplied === 'keep_existing' ? normalized.sellPrice : null,
             normalized.supplierColorCode || null,
+            /^31473850(?:-01)?$/.test(text(normalized.aifOriginalSupplierProductCode)) &&
+              /^314173850(?:-01)?$/.test(text(normalized.supplierProductCode)) &&
+              [normalized.brandCode, normalized.brandName].some(v=>normCode(v).replace(/_/g,'')==='mayochix')
+              ? normalized.supplierProductCode : null,
           ]
         );
 
