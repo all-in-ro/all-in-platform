@@ -18280,12 +18280,12 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
-                      <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/[0.10] bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
+                      <div key={row.id} className="grid min-w-0 grid-cols-[56px_minmax(0,1fr)] items-start gap-x-3 gap-y-2.5 rounded-xl border border-white/[0.10] bg-[#465163] p-3">
                         <div className="self-start md:self-center" title={row.imageUrl ? "Rámutatásra nagyítás" : "Ehhez a termékhez nincs mentett kép"}>
                           <WarehouseProductImage
                             src={row.imageUrl}
                             alt={row.title}
-                            thumbClassName="h-16 w-16 rounded-xl bg-white"
+                            thumbClassName="h-14 w-14 rounded-xl bg-white"
                             iconSize={20}
                           />
                         </div>
@@ -18332,18 +18332,18 @@ export default function AllInWarehouse() {
                             </div>
                           )}
                         </div>
-                        <div className="col-span-2 grid gap-2 md:col-span-1">
-                          <div>
-                            <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="col-span-2 grid min-w-0 grid-cols-2 gap-3 border-t border-white/[0.08] pt-2.5">
+                          <div className="min-w-0">
+                            <div className="mb-1 flex min-w-0 flex-wrap items-center justify-between gap-1">
                               <span className="text-[11px] uppercase tracking-[0.05em] text-white/55">Címkeár · RON</span>
                               {row.temporaryPriceEdited ? (
                                 <button type="button" className="text-[10px] text-[#9ce9e3] underline-offset-2 hover:underline" title="Adatbázisban szereplő ár visszaállítása" onClick={() => setLabelTemporaryPrices((current) => { const next = { ...current }; delete next[row.id]; return next; })}>Visszaállítás</button>
                               ) : null}
                             </div>
-                            <div className={`flex h-9 items-center overflow-hidden rounded-xl border bg-[#303a4c] ${row.priceValid ? row.temporaryPriceEdited ? "border-[#7bd7d4]/65" : "border-white/[0.14]" : "border-rose-400"}`}>
+                            <div className={`flex h-9 min-w-0 w-full items-center overflow-hidden rounded-xl border bg-[#303a4c] ${row.priceValid ? row.temporaryPriceEdited ? "border-[#7bd7d4]/65" : "border-white/[0.14]" : "border-rose-400"}`}>
                               <input
                                 type="text" inputMode="decimal" aria-label={`${row.title} ideiglenes címkeára RON`}
-                                className="h-full min-w-0 flex-1 bg-transparent px-3 text-right text-sm tabular-nums text-white outline-none"
+                                className="h-full w-full min-w-0 flex-1 bg-transparent px-2 text-right text-sm tabular-nums text-white outline-none"
                                 value={labelTemporaryPrices[row.id] ?? row.originalPrice}
                                 onChange={(event) => setLabelTemporaryPrices((current) => ({ ...current, [row.id]: event.target.value }))}
                                 disabled={labelPrintBusy || Boolean(labelPrintFlow)}
@@ -18352,13 +18352,13 @@ export default function AllInWarehouse() {
                             </div>
                             {row.temporaryPriceEdited ? <p className={`mt-1 text-[10px] ${row.priceValid ? "text-[#9ce9e3]" : "text-rose-200"}`}>{row.priceValid ? "Csak erre a nyomtatásra, nincs mentés." : "Érvénytelen ár: 0 vagy pozitív szám, max. 2 tizedes."}</p> : null}
                           </div>
-                          <div>
+                          <div className="min-w-0">
                           <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
-                          <div className="flex h-9 overflow-hidden rounded-xl border border-white/[0.14] bg-[#303a4c]">
-                            <button className="flex h-full w-10 items-center justify-center border-r border-white/[0.12] bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
-                            <input className="h-full min-w-0 flex-1 bg-transparent px-2 text-center text-sm tabular-nums text-white outline-none" value={String(labelInt(labelCopies[row.id], row.copies, 0, 999))} inputMode="numeric" onChange={(e) => updateLabelCopies(row.id, e.target.value)} />
+                          <div className="flex h-9 min-w-0 w-full overflow-hidden rounded-xl border border-white/[0.14] bg-[#303a4c]">
+                            <button className="flex h-full w-8 shrink-0 items-center justify-center border-r border-white/[0.12] bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
+                            <input className="h-full w-full min-w-0 flex-1 bg-transparent px-1 text-center text-sm tabular-nums text-white outline-none" value={String(labelInt(labelCopies[row.id], row.copies, 0, 999))} inputMode="numeric" onChange={(e) => updateLabelCopies(row.id, e.target.value)} />
                             <button
-                              className="flex h-full w-10 items-center justify-center border-l border-white/[0.12] bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
+                              className="flex h-full w-8 shrink-0 items-center justify-center border-l border-white/[0.12] bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-35"
                               onClick={() => adjustLabelCopies(row.id, 1)}
                               disabled={labelInt(labelCopies[row.id], row.copies, 0, 999) >= (labelPreprint ? 999 : (labelStockLimitById[row.id] ?? 999))}
                               type="button"
